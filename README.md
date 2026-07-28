@@ -52,6 +52,8 @@ prefix = "yourname"   # branches you create get `yourname/<id>-<slug>`
 
 Everything else is optional and section-gated: add `[deploy.sst]`, `[issue_tracker.linear]`, `[ai]`, or `[github.events]` to turn on that integration; omit it and the related rows hide themselves. The loader validates everything at startup and prints every missing or malformed field at once.
 
+For multiple repositories, put shared personal defaults in the user config and add a `.wt.toml` at each repository root. Running `wt` within a repository recursively merges its nearest `.wt.toml` over the user config, so repository-specific paths and settings win.
+
 The full reference — every option, default, the `[[actions]]` menu, and `[[automations]]` — is in **[docs/configuration.md](docs/configuration.md)**.
 
 ## Use

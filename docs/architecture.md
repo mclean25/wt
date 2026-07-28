@@ -127,7 +127,7 @@ Per-worktree destroy logs live one level up at `~/.cache/wt/logs/<slug>-*.log`; 
 
 These define contracts; touching them ripples. Read them first:
 
-- `src/core/config.ts` — schema, defaults, validation ([reference](configuration.md)). Fail-fast loader, one aggregated error. Optional sections (`sst`, `linear`, `ai`) are `null` when absent; `requireSst()` is the typed boundary for SST-only paths.
+- `src/core/config.ts` — schema, defaults, validation ([reference](configuration.md)). The user config is recursively overlaid by the nearest `.wt.toml`; arrays replace whole, and `WT_REPO_CONFIG` preserves selection across child processes. Fail-fast loader, one aggregated error. Optional sections (`sst`, `linear`, `ai`) are `null` when absent; `requireSst()` is the typed boundary for SST-only paths. Pure discovery/merge helpers live in `src/core/config-layer.ts`.
 - `src/tui/rows/types.ts` — the `RowModule` contract; `src/tui/rows/index.ts` — the registry.
 - `src/tui/hooks/useWorktreeRows.ts` — per-worktree field aggregator (`FieldState<T>` carries `error`).
 - `src/core/diff/` — graceful-degradation diff compactor for the AI pipeline (`parts.ts` parses, `render.ts` transforms per mode, `fit.ts` runs the priority-aware greedy reducer). Cache keys are SHA-256 prefixes of the *unfiltered* diff so filter tweaks don't invalidate prior summaries.

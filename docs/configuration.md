@@ -1,14 +1,41 @@
 # Configuration reference
 
-`wt` reads a single TOML file, resolved in this order:
+`wt` first reads a user TOML file, resolved in this order:
 
 1. `$WT_CONFIG` (explicit path override)
 2. `$XDG_CONFIG_HOME/wt/config.toml`
 3. `~/.config/wt/config.toml`
 
-The loader is fail-fast: it validates everything at startup and exits with **one aggregated error message** listing every missing or malformed field. There is no hot reload — edits require restarting `wt`.
+It then searches from the current directory upward for the nearest `.wt.toml` and recursively merges that repository config over the user config. This lets one user config hold personal defaults while each repository supplies its own clone, worktree root, trunk branch, integrations, actions, and other overrides. Run `wt` from within the repository you want to manage.
 
-Only three fields are required. Everything else has a generic default or is an optional integration that turns on when its section is present.
+TOML tables merge by key. Scalar values and arrays replace the user value completely, so a repository's `[[actions]]` or `[[automations]]` list is authoritative when present. `$WT_CONFIG` selects a different user config; it does not disable repository overrides. Internally, `wt` carries the selected repository file into child processes with `$WT_REPO_CONFIG`, which also provides an explicit repository-config path for scripts that cannot preserve the invocation directory.
+
+For example, shared personal defaults can live in `~/.config/wt/config.toml`:
+
+```toml
+[branch]
+prefix = "yourname"
+
+[ui]
+mode = "classic"
+```
+
+Each repository can then provide the required paths and any project-specific settings in `.wt.toml`:
+
+```toml
+[paths]
+main_clone    = "~/Code/project-a"
+worktree_root = "~/Code/project-a-wt"
+
+[branch]
+base = "develop"
+```
+
+The repository file may be committed when its values are useful to every contributor, or ignored when it contains machine-specific paths.
+
+The loader is fail-fast: it validates the merged result at startup and exits with **one aggregated error message** listing every missing or malformed field. A user config file must exist, but required fields may come from either layer. There is no hot reload; edits require restarting `wt`.
+
+Only three fields are required in the merged result. Everything else has a generic default or is an optional integration that turns on when its section is present.
 
 ```toml
 [paths]

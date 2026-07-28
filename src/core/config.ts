@@ -1,10 +1,15 @@
 /**
  * Config loader.
  *
- * Reads `config.toml` from (in order):
+ * Reads the user `config.toml` from (in order):
  *   1. `$WT_CONFIG` (explicit override)
  *   2. `$XDG_CONFIG_HOME/wt/config.toml`
  *   3. `~/.config/wt/config.toml`
+ *
+ * It then searches from the current directory upward for `.wt.toml`
+ * and recursively merges that repository config over the user config.
+ * Arrays replace wholesale. `WT_REPO_CONFIG` carries the selected file
+ * into child processes whose working directory changes (notably hub/tmux).
  *
  * Required fields have no default — the loader collects every missing
  * or malformed field and exits with one human-readable error before
@@ -23,6 +28,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { BackendKind } from "./backend/types.ts";
+import {
+  mergeConfig,
+  repositoryConfigPath,
+  REPOSITORY_CONFIG_ENV,
+  type RawConfig,
+} from "./config-layer.ts";
 
 const HOME = homedir();
 
@@ -547,7 +558,7 @@ function configPath(): { path: string; present: boolean } {
   return { path: p, present: existsSync(p) };
 }
 
-type Raw = Record<string, unknown>;
+type Raw = RawConfig;
 
 function obj(v: unknown): Raw | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Raw) : null;
@@ -621,7 +632,7 @@ function loadRaw(path: string, present: boolean, errs: Errors): Raw {
     const parsed = Bun.TOML.parse(text);
     return obj(parsed) ?? {};
   } catch (err) {
-    errs.add(`failed to parse: ${(err as Error).message}`);
+    errs.add(`failed to parse ${path}: ${(err as Error).message}`);
     return {};
   }
 }
@@ -1127,10 +1138,19 @@ function parseRequires(
 function load(): { cfg: Config; path: string } {
   const { path, present } = configPath();
   const errs = new Errors();
-  const raw = loadRaw(path, present, errs);
+  const userRaw = loadRaw(path, present, errs);
+  const repository = repositoryConfigPath();
+  let raw = userRaw;
+  let sourcePath = path;
+  if (repository) {
+    const repositoryRaw = loadRaw(repository, existsSync(repository), errs);
+    raw = mergeConfig(userRaw, repositoryRaw);
+    sourcePath = repository;
+    process.env[REPOSITORY_CONFIG_ENV] = repository;
+  }
   const cfg = build(raw, errs);
-  errs.flush(path);
-  return { cfg, path };
+  errs.flush(sourcePath);
+  return { cfg, path: sourcePath };
 }
 
 const loaded = load();
