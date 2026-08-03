@@ -18,7 +18,7 @@ import { actionRegistry } from "../../core/actions.ts";
 import { config, type PullRequestTarget } from "../../core/config.ts";
 import { effectiveBaseOrTrunk } from "../../core/git.ts";
 import { getHarness, HARNESSES, type HarnessId } from "../../core/harness/index.ts";
-import { linearUrlForSlug } from "../../core/linear.ts";
+import { issueUrlForSlug } from "../../core/issue-tracker.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { eventsOutputId, indexOfOutput } from "../../core/outputs.ts";
@@ -874,13 +874,13 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       return;
     }
     if (isPlainLetter(k, "i")) {
-      const url = linearUrlForSlug(current.wt.slug);
+      const url = issueUrlForSlug(current.wt.slug);
       if (!url) {
-        rowLog.event.warn("no linear id in slug");
+        rowLog.event.warn("no issue URL (needs an id in the slug + [issue_tracker] url_template)");
         return;
       }
       void openUrlHidingTerminal(url);
-      rowLog.event.info("opened linear");
+      rowLog.event.info("opened issue");
       return;
     }
     if (isPlainLetter(k, "s")) {

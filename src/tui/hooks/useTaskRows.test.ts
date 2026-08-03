@@ -58,7 +58,7 @@ describe("buildPrSignals", () => {
       reviewRequests: 0,
       requestedReviewers: [],
       suggestedReviewers: [],
-      rabbit: { state: "none", unresolved: 0 },
+      reviewBot: { state: "none", unresolved: 0 },
       autoMerge: null,
       comments: [],
       unresolvedThreads: 0,

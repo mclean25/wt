@@ -13,17 +13,63 @@ import type {
 
 const log = createLogger("[backend:rift]");
 
-/** True when the `rift` binary is on PATH. */
+/** True when the `rift` binary is on the process PATH. */
 export function riftAvailable(): boolean {
   return Bun.which("rift") !== null;
 }
 
-function ensureRiftInstalled(): void {
-  if (riftAvailable()) return;
+/**
+ * Resolved rift executable, memoized for the process lifetime. `null`
+ * caches "not found" too — PATH doesn't change under a running wt.
+ */
+let cachedRiftBin: string | null | undefined;
+
+/**
+ * Locate the rift executable. The process PATH wins; when wt was
+ * spawned from a lean environment (launchd, an editor task, an agent
+ * harness) that PATH often misses user-level bins like `~/.bun/bin`, so
+ * fall back to asking the user's login shell. `whence -p` (zsh) /
+ * `type -P` (bash) are tried before `command -v` so a shell *function*
+ * named rift (a common wrapper) can't shadow the real binary with an
+ * un-execable answer; any non-absolute result is discarded for the same
+ * reason.
+ */
+export async function resolveRiftBin(): Promise<string | null> {
+  if (cachedRiftBin !== undefined) return cachedRiftBin;
+  if (riftAvailable()) {
+    cachedRiftBin = "rift";
+    return cachedRiftBin;
+  }
+  const shell = process.env.SHELL || "/bin/bash";
+  const probe =
+    "whence -p rift 2>/dev/null || type -P rift 2>/dev/null || command -v rift 2>/dev/null";
+  // Bounded: a login shell sources the user's full profile, which can
+  // legitimately block (an ssh-add prompt, a slow hook) — never let the
+  // probe hang a worktree create/remove.
+  const r = await run([shell, "-lc", probe], { timeoutMs: 10_000 }).catch((err) => {
+    log.warn("rift login-shell probe failed", {
+      shell,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  });
+  const out = r?.stdout.trim().split("\n").pop()?.trim() ?? "";
+  cachedRiftBin = out.startsWith("/") && existsSync(out) ? out : null;
+  if (cachedRiftBin) {
+    log.info("resolved rift via login shell", { path: cachedRiftBin, shell });
+  }
+  return cachedRiftBin;
+}
+
+async function requireRiftBin(): Promise<string> {
+  const bin = await resolveRiftBin();
+  if (bin) return bin;
+  const shell = process.env.SHELL || "/bin/bash";
   throw new Error(
-    "rift backend selected but `rift` is not on PATH. Install it " +
-      "(`npm i -g rift-snapshot`) or set `[backend] kind = \"git-worktree\"` " +
-      "in your wt config.",
+    "rift backend selected but the `rift` executable was not found — searched " +
+      `PATH (${process.env.PATH ?? "unset"}) and \`${shell} -lc 'command -v rift'\`. ` +
+      "Install it (`npm i -g rift-snapshot`) or set `[backend] kind = \"git-worktree\"` " +
+      "in your wt config. (The lookup result is cached; restart wt after installing.)",
   );
 }
 
@@ -65,12 +111,13 @@ export function listRiftWorktreePaths(worktreeRoot: string): string[] {
  * pays a rift subprocess just to launch.
  */
 async function ensureRiftInit(
+  rift: string,
   mainClone: string,
   onLog?: (line: string) => void,
 ): Promise<void> {
   if (isRiftWorktree(mainClone)) return;
   onLog?.("rift init (registering main clone)");
-  const r = await run(["rift", "init", "--here"], { cwd: mainClone });
+  const r = await run([rift, "init", "--here"], { cwd: mainClone });
   if (r.exitCode !== 0) {
     // Two first-ever creates can pass the marker check above before either
     // writes it, then race `rift init` — the loser exits non-zero with a
@@ -159,11 +206,11 @@ export const riftBackend: WorktreeBackend = {
 
   async create(input: BackendCreateInput): Promise<void> {
     const { path, branch, slug, baseRef, baseSourcePath, mainClone, onLog } = input;
-    ensureRiftInstalled();
-    await ensureRiftInit(mainClone, onLog);
+    const rift = await requireRiftBin();
+    await ensureRiftInit(rift, mainClone, onLog);
 
     const into = dirname(path);
-    const createArgs = ["rift", "create", "--name", slug, "--into", into, "--copy-all"];
+    const createArgs = [rift, "create", "--name", slug, "--into", into, "--copy-all"];
     onLog?.(`rift create --copy-all → ${basename(path)}`);
     let created = await run(createArgs, { cwd: mainClone });
     // rift's registry is global and outlives the directory: a checkout
@@ -180,7 +227,7 @@ export const riftBackend: WorktreeBackend = {
       !existsSync(path)
     ) {
       onLog?.("pruning stale rift registry entry, retrying");
-      await run(["rift", "gc"], { cwd: mainClone });
+      await run([rift, "gc"], { cwd: mainClone });
       created = await run(createArgs, { cwd: mainClone });
     }
     if (created.exitCode !== 0) {
@@ -209,23 +256,27 @@ export const riftBackend: WorktreeBackend = {
       await materializeBranch({ path, branch, baseRef, baseSourcePath, onLog });
     } catch (err) {
       onLog?.(`rolling back partial rift checkout ${basename(path)}`);
-      await run(["rift", "remove", path], { cwd: mainClone }).catch(() => {});
-      await run(["rift", "gc"], { cwd: mainClone }).catch(() => {});
+      await run([rift, "remove", path], { cwd: mainClone }).catch(() => {});
+      await run([rift, "gc"], { cwd: mainClone }).catch(() => {});
       throw err;
     }
   },
 
   async remove(input: BackendRemoveInput): Promise<BackendRemoveResult> {
     const { path, force, mainClone, onLog } = input;
-    if (!riftAvailable()) {
-      return { ok: false, message: "rift is not on PATH" };
+    const rift = await resolveRiftBin();
+    if (!rift) {
+      return {
+        ok: false,
+        message: "rift executable not found (searched process PATH and the login shell)",
+      };
     }
     // Mirror the git-worktree backend's force plumbing: when wt has already
     // cleared its own dirty/unpushed guard (a forced `wt rm`), pass rift's
     // `--force` too. rift trashes a dirty created checkout without it today,
     // but this keeps the two backends symmetric and future-proofs against a
     // rift version that refuses a dirty checkout. Harmless on a clean one.
-    const args = force ? ["rift", "remove", "--force", path] : ["rift", "remove", path];
+    const args = force ? [rift, "remove", "--force", path] : [rift, "remove", path];
     onLog?.(`rift remove${force ? " --force" : ""} ${basename(path)}`);
     const r = await run(args, { cwd: mainClone });
     if (r.exitCode !== 0 && existsSync(path)) {
@@ -233,7 +284,7 @@ export const riftBackend: WorktreeBackend = {
     }
     // `rift remove` only trashes the subtree; reclaim the disk now. gc is
     // best-effort — the checkout is already gone from its path either way.
-    const gc = await run(["rift", "gc"], { cwd: mainClone });
+    const gc = await run([rift, "gc"], { cwd: mainClone });
     if (gc.exitCode !== 0) {
       onLog?.(`rift gc warning: ${(gc.stderr || gc.stdout || "").trim()}`);
     }

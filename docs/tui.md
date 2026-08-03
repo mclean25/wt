@@ -5,7 +5,7 @@
 ## Layout
 
 - **List pane** (left): one line per worktree — slug, status glyphs, PR/CI badges, session indicators — grouped into sections, with stacks rendered as trees. A pinned "review requests" section surfaces PRs waiting on your review.
-- **Details pane** (right): the configured rows (`[ui].rows` in [configuration.md](configuration.md#ui)) for the selected worktree — branch, base, Linear issue, stage, PR, sessions, git state — then a rebase-state block (restacking / mid-rebase / conflict with the clashing files) when something is moving, plus the AI-generated title/description band when `[ai]` is configured.
+- **Details pane** (right): the configured rows (`[ui].rows` in [configuration.md](configuration.md#ui)) for the selected worktree — branch, base, tracker issue, stage, PR, sessions, git state — then a rebase-state block (restacking / mid-rebase / conflict with the clashing files) when something is moving, plus the AI-generated title/description band when `[ai]` is configured.
 - **Bottom pane**: live outputs — harness sessions, action runs, event feeds. Auto-follows the selected row; `'` picks an output explicitly, `[` / `]` cycle, `Esc` returns to auto-follow.
 - **Footer**: key legend, or a text prompt when one is active (`n` local new-worktree, `Ctrl+N` remote new-worktree, `L` rename section).
 
@@ -33,10 +33,10 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning when dirty/unpushed) |
 | `c` | clean all merged/gone worktrees (confirm) |
 | `a` | archive / restore the row |
-| `i` | open the Linear issue |
+| `i` | open the tracker issue (needs `[issue_tracker]` with a URL template) |
 | `s` | open the deployed stage URL |
 | `t` | regenerate the AI summary |
-| `y` | yank menu — copy branch (`b`), stage (`s`), stage URL (`S`), path (`p`), slug (`n`), issue URL (`i`), PR URL (`r`) |
+| `y` | yank menu — copy branch (`b`), stage (`s`), stage URL (`S`), path (`p`), slug (`n`), issue URL or bare id (`i`), PR URL (`r`) |
 | `r` / `Ctrl+R` | refresh / hard refresh (clear caches, confirm) |
 
 When the SSH host is sleeping or offline, its last-known worktrees remain in

@@ -9,7 +9,7 @@ import type { KeyEvent } from "@opentui/core";
 
 import { config } from "../../core/config.ts";
 import { createLogger } from "../../core/logger.ts";
-import { linearUrlForSlug } from "../../core/linear.ts";
+import { issueUrlForSlug } from "../../core/issue-tracker.ts";
 import type { RemovedWorktree } from "../../core/wtstate.ts";
 import { isPlainLetter } from "../app-helpers.ts";
 import { openUrlHidingTerminal } from "../../core/macos.ts";
@@ -81,13 +81,13 @@ export function handleRemovedViewKey(k: KeyEvent, ctx: RemovedViewKeysCtx): void
         return;
       }
       if (isPlainLetter(k, "i")) {
-        const url = linearUrlForSlug(entry.slug);
+        const url = issueUrlForSlug(entry.slug);
         if (!url) {
-          removedLog.event.warn("no linear id in slug");
+          removedLog.event.warn("no issue URL (needs an id in the slug + [issue_tracker] url_template)");
           return;
         }
         void openUrlHidingTerminal(url);
-        removedLog.event.info("opened linear");
+        removedLog.event.info("opened issue");
         return;
       }
       if (k.sequence === "y") {

@@ -16,7 +16,7 @@ export type RemoteWorktreeSummary = {
   statusOp: string | null;
   dirty: boolean;
   unpushed: number;
-  linearUrl: string | null;
+  issueUrl: string | null;
 };
 
 const STATUS_KINDS = new Set<string>(Object.values(StatusKind));
@@ -97,7 +97,7 @@ export function parseRemoteWorktrees(
         row.unpushed >= 0
           ? row.unpushed
           : 0,
-      linearUrl: typeof row.linear_url === "string" ? row.linear_url : null,
+      issueUrl: typeof row.issue_url === "string" ? row.issue_url : null,
     };
   });
 }

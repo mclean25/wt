@@ -1,15 +1,17 @@
 import { memo, useMemo } from "react";
 
-import type {
-  MergeQueueEntry,
-  MergeQueueState,
-  PrChecks,
-  PrReview,
-  PullRequest,
-  RabbitStatus,
+import { config } from "../../core/config.ts";
+import {
+  type MergeQueueEntry,
+  type MergeQueueState,
+  type PrChecks,
+  type PrReview,
+  type PullRequest,
+  REVIEW_BOT_NONE,
+  type ReviewBotStatus,
 } from "../../core/types.ts";
 import { pluralize } from "../../core/text.ts";
-import { checkBadge, prStateBadge, rabbitBadge, reviewBadge } from "../badges.ts";
+import { checkBadge, prStateBadge, reviewBadge, reviewBotBadge } from "../badges.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { NF } from "../icons.ts";
 import { theme } from "../theme.ts";
@@ -38,25 +40,35 @@ function reviewLabel(r: PrReview): { glyph: string; text: string; fg: string } |
   return { ...badge, text };
 }
 
-// Glyph/color from `rabbitBadge`; this only adds the details-pane
+// CodeRabbit keeps its themed "carrots / grazing / resting" vocabulary;
+// any other configured bot gets neutral prose.
+const BOT_WHIMSY = config.reviewBot.login === "coderabbitai";
+
+// Glyph/color from `reviewBotBadge`; this only adds the details-pane
 // `full`/`tiny` prose. Draft-hide lives at the `buildPrSegments` call
-// site, not here.
-function rabbitLabel(
-  rb: RabbitStatus,
+// site, not here. A stale review (checklist bots don't re-run on push)
+// says so instead of implying the current head was reviewed.
+function reviewBotLabel(
+  rb: ReviewBotStatus,
 ): { glyph: string; full: string; tiny: string; fg: string } | null {
-  const badge = rabbitBadge(rb);
+  const badge = reviewBotBadge(rb);
   if (!badge) return null;
+  const staleSuffix = rb.stale ? " (old head)" : "";
   switch (rb.state) {
     case "unresolved":
       return {
         ...badge,
-        full: pluralize(rb.unresolved, "carrot"),
+        full: `${pluralize(rb.unresolved, BOT_WHIMSY ? "carrot" : "issue")}${staleSuffix}`,
         tiny: String(rb.unresolved),
       };
     case "pending":
-      return { ...badge, full: "grazing", tiny: "" };
+      return { ...badge, full: BOT_WHIMSY ? "grazing" : "reviewing", tiny: "" };
     case "clean":
-      return { ...badge, full: "resting", tiny: "" };
+      return {
+        ...badge,
+        full: `${BOT_WHIMSY ? "resting" : "reviewed"}${staleSuffix}`,
+        tiny: "",
+      };
     default:
       return null;
   }
@@ -149,7 +161,7 @@ function buildPrSegments(
   } else if (pr.autoMerge && pr.state === "OPEN") {
     // Occupies the queue slot (mutually exclusive with a real queue
     // entry) but ranks dead last — highest tier, so it compacts and
-    // drops before checks, review, and rabbit. Auto-merge is "armed but
+    // drops before checks, review, and the review bot. Auto-merge is "armed but
     // idle" (waiting on preconditions), the least load-bearing signal on
     // the line, so it's the first thing to yield when space is tight.
     // Dimmer color than `queue mergeable` for the same reason.
@@ -215,10 +227,10 @@ function buildPrSegments(
       segs.push({ key: "checks", tier: 3, modes });
     }
 
-    // Review before rabbit: human review is the primary signal, CR
-    // is the supplementary "second review" — left-to-right reading
-    // order mirrors that priority and the list-pane cluster's
-    // [cr] [review] [pr] arrangement (which reads pr-first
+    // Review before the bot: human review is the primary signal, the
+    // review bot is the supplementary "second review" — left-to-right
+    // reading order mirrors that priority and the list-pane cluster's
+    // [bot] [review] [pr] arrangement (which reads pr-first
     // right-to-left, putting review adjacent to the PR icon there).
     if (!pr.isDraft) {
       const rv = reviewLabel(pr.review);
@@ -241,11 +253,10 @@ function buildPrSegments(
       }
     }
 
-    // Hide rabbit on drafts. Mirrors the review gate above for
-    // symmetry — CR is essentially a second review, and on drafts CR's
-    // "review skipped" outcome is currently misreported as "resting"
-    // by the rollup.
-    const rb = !pr.isDraft ? rabbitLabel(pr.rabbit) : null;
+    // Hide the bot on drafts. Mirrors the review gate above for
+    // symmetry — the bot is essentially a second review, and on drafts
+    // a "review skipped" outcome would misreport as clean.
+    const rb = !pr.isDraft ? reviewBotLabel(pr.reviewBot ?? REVIEW_BOT_NONE) : null;
     if (rb) {
       const modes = [
         {
@@ -268,7 +279,7 @@ function buildPrSegments(
         });
       }
       modes.push({ width: 0, render: () => null });
-      segs.push({ key: "rabbit", tier: 5, modes });
+      segs.push({ key: "reviewbot", tier: 5, modes });
     }
   }
 

@@ -33,7 +33,7 @@ base = "develop"
 
 The repository file may be committed when its values are useful to every contributor, or ignored when it contains machine-specific paths.
 
-The loader is fail-fast: it validates the merged result at startup and exits with **one aggregated error message** listing every missing or malformed field. A user config file must exist, but required fields may come from either layer. There is no hot reload; edits require restarting `wt`.
+The loader is fail-fast: it validates the merged result at startup and exits with **one aggregated error message** listing every missing or malformed field. A user config file must exist, but required fields may come from either layer. When `[paths]` is missing and no `.wt.toml` was found from the current directory upward, the error names both candidate homes — run `wt` inside the repo, or keep `[paths]` in the user config as the fallback. There is no hot reload; edits require restarting `wt`.
 
 Only three fields are required in the merged result. Everything else has a generic default or is an optional integration that turns on when its section is present.
 
@@ -115,6 +115,9 @@ Preview-stage naming, used by the SST integration and stage URLs.
 | key | required | default | meaning |
 |---|---|---|---|
 | `env_files_to_copy` | no | `[".env"]` | Files copied from the main clone into each new worktree during setup. |
+| `install_command` | no | *(auto-detect)* | Dependency install run in a fresh `git-worktree` checkout, via `$SHELL -lc`. Unset ⇒ detect the package manager from the checkout's lockfile (`bun.lock`/`bun.lockb` → `bun install`, `pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn install`, `package-lock.json`/`npm-shrinkwrap.json` → `npm install`); no lockfile ⇒ the install is skipped with a note. The `rift` backend never installs — packages ride the CoW clone. |
+
+`install_command` caveats: the same command is also used verbatim for the main-clone dependency sync ([backends.md](backends.md)), so it must not rewrite the committed lockfile (use a frozen/`ci` variant) — auto-detection picks frozen variants for that path on its own. The command string is echoed into logs and the activity pane, so don't embed secrets in it. And like `[[actions]]`/`[[automations]]`, it executes automatically — a `.wt.toml` is trusted config, so don't point `wt` at repository config you don't control.
 
 ## `[backend]` — optional
 
@@ -129,11 +132,11 @@ Selects how a new worktree is materialized on disk. Omit the whole section for t
 kind = "rift"
 ```
 
-The `rift` backend needs the `rift` binary on `PATH` (`npm i -g rift-snapshot`); wt runs `rift init` on the main clone lazily at first create. Existing checkouts of the other kind keep working after a flip — the backend that owns a checkout is detected from disk (a `.rift` marker) at removal, never stored. Under `rift`, packages arrive via the CoW clone, so wt skips its own `pnpm install` and the `--no-install` flag is ignored.
+The `rift` backend needs the `rift` binary (`npm i -g rift-snapshot`); wt runs `rift init` on the main clone lazily at first create. wt looks for the executable on its own `PATH` first, then asks your login shell (`$SHELL -lc`) — so a wt spawned from a lean environment (launchd, an editor task) still finds a `~/.bun/bin/rift` that only your shell profile adds, and a shell *function* named `rift` can't shadow the real binary. Existing checkouts of the other kind keep working after a flip — the backend that owns a checkout is detected from disk (a `.rift` marker) at removal, never stored. Under `rift`, packages arrive via the CoW clone, so wt skips its own install step and the `--no-install` flag is ignored.
 
 ## `[deploy.sst]` — optional integration
 
-Omit the whole section to disable SST awareness (the stage row, `wt stages`, deploy detection). When present, all three keys are required.
+Omit the whole section to disable SST awareness entirely — the stage row, `wt stages`, deploy detection, and the per-worktree stage pinning during `wt new` (no `.sst/stage` file is written, and the create output drops its stage line). When present, all three keys are required.
 
 | key | required | default | meaning |
 |---|---|---|---|
@@ -142,13 +145,29 @@ Omit the whole section to disable SST awareness (the stage row, `wt stages`, dep
 | `aws_profile` | **yes** | — | AWS CLI profile with read access to the state bucket. |
 | `auto_regen_paths` | no | `["sst-env.d.ts"]` | Files in the main clone that `sst` runs regenerate; restored before fetches so they never show as dirt. |
 
-## `[issue_tracker.linear]` — optional integration
+## `[issue_tracker]` — optional integration
 
-Omit to disable the Linear row and Linear PR deep-links.
+Omit the section entirely to hide the `issue` row. The section's mere presence surfaces the issue id parsed from the branch slug (`michael/coz-1883-fix` → `COZ-1883`) as an unlinked value — useful when your tracker has no per-task URLs. Add `url_template` (or the Linear preset) to turn the id into a deep link, which also powers the `i` open-issue key and the `y i` yank.
+
+```toml
+# Bare id display only — no per-task URLs exist:
+[issue_tracker]
+
+# Generic tracker with task URLs:
+[issue_tracker]
+url_template = "https://tracker.example.com/browse/{id}"
+
+# Linear preset (derives url_template = "linear://<workspace>/issue/{id}"):
+[issue_tracker.linear]
+workspace = "acme"
+```
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `workspace` | **yes** | — | Linear workspace slug; issue URLs are constructed as `https://linear.app/<workspace>/issue/<id>` from the branch slug (no API calls, no token). |
+| `url_template` | no | *(unset)* | URL with an `{id}` placeholder, substituted with the uppercased issue id parsed from the slug (no API calls, no token). Wins over the Linear preset when both are set. |
+| `linear.workspace` | no | — | Linear preset: derives `url_template = "linear://<workspace>/issue/{id}"` (the desktop-app deep-link scheme). |
+
+Id parsing itself is driven by the slug shape (`[a-z]+-\d+`), independent of `[branch] id_pattern`.
 
 ## `[ai]` — optional integration
 
@@ -182,9 +201,44 @@ Summaries are content-addressed by a hash of the diff, so identical diffs (acros
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `ignored_checks` | no | `[]` | Glob patterns (case-insensitive, `*` wildcard only) matched against check names; matching contexts are dropped from the PR checks rollup so non-CI bots (CodeRabbit etc.) don't flip the badge. |
+| `ignored_checks` | no | `[]` | Glob patterns (case-insensitive, `*` wildcard only) matched against check names; matching contexts are dropped from the PR checks rollup so non-CI checks don't flip the badge. The configured `[review_bot]`'s `check_contexts` are always excluded automatically — no need to repeat them here. |
 | `default_reviewer` | no | *(unset)* | GitHub login requested by the `E` ("ship it") chord (mark ready + request reviewer + arm auto-merge). Unset disables the reviewer leg. |
 | `pr_target` | no | `"github"` | Where `p` opens PRs: `"github"` keeps GitHub URLs, `"linear"` rewrites them to Linear Reviews deep-links. `g p` / `l p` always open GitHub / Linear explicitly. |
+
+## `[review_bot]` — the bot-review track
+
+The badge/row/automation track for an automated PR reviewer. Omit the whole section for the default **CodeRabbit** preset — the exact behavior wt always had. Configure it to point the track at any other bot; the bot's own check contexts are always excluded from the CI rollup (an advisory reviewer must never flip the checks badge — it has its own badge).
+
+Two "unresolved" models, selected by `unresolved_via`:
+
+- `"threads"` (default, CodeRabbit-shaped): unresolved = review threads opened by `login` that aren't resolved.
+- `"checklist"`: the bot posts a summary comment carrying a `- [ ]` task list; unresolved = unticked boxes in the latest summary comment (ticking a box in the GitHub UI is how items are accepted/dismissed). Use this when the bot posts via `github-actions[bot]` — that login is shared by every workflow, so the comment shape (`summary_marker`) is the discriminator.
+
+```toml
+# Example: an in-repo GitHub Actions "Codex review" workflow
+[review_bot]
+name           = "Codex"
+login          = "github-actions"   # "[bot]" suffix optional
+check_contexts = ["Codex code review", "Post Codex review", "Announce review started"]
+unresolved_via = "checklist"
+summary_marker = "### 🤖 Codex review"
+pending_marker = "🤖 ⏳ Codex review started"
+rerun_command  = "/codex-review"
+```
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `name` | no | `"CodeRabbit"` | Display name (built-in re-run action label). |
+| `login` | checklist: **yes** | `"coderabbitai"` | The bot's comment/thread author login. A trailing `[bot]` is ignored when matching (GraphQL reports app logins without it). Required in checklist mode — the CodeRabbit default would silently match nothing. |
+| `check_contexts` | no | threads: `["CodeRabbit"]`, checklist: `[]` | Glob patterns for the bot's check contexts / workflow job names. Drive pending-vs-done detection and are auto-excluded from the CI rollup — set them whenever the bot runs as checks/jobs so an advisory run can't flip the CI badge. |
+| `unresolved_via` | no | `"threads"` | `"threads"` or `"checklist"` (see above). |
+| `summary_marker` | checklist: **yes** | — | Body prefix identifying the bot's summary comment. |
+| `pending_marker` | no | *(unset)* | Body prefix of the bot's "review started" ack comment. An ack newer than the latest summary shows as *pending* — needed for comment-triggered re-runs, whose check runs never attach to the PR head. |
+| `rerun_command` | no | *(unset)* | PR comment body that re-triggers a review. When set, a built-in "Re-run *name* review" action appears in the `!` picker (it posts the comment via `gh`). |
+
+Checklist-mode bots typically don't re-run on push, so a review can lag the branch head. wt detects this (the latest summary comment predates the head commit) and marks the state **stale**: the details row shows `(old head)` and a stale *clean* dims instead of showing green. Badge states: pending (running / re-run acked), unresolved (with count), clean, none — unresolved wins over a concurrent re-run, since old findings still need addressing. Checkbox counting skips fenced code blocks, so a suggestion block quoting checkbox syntax doesn't inflate the count. One sizing note: the summary comment is found within the PR's most recent 30 comments — on an extremely chatty PR whose last 30 comments postdate the bot's summary, the badge reads as if the bot never ran.
+
+The badge keeps the carrot glyph for CodeRabbit and switches to a robot glyph for any other login.
 
 ## `[github.events]` — optional webhook daemon
 
@@ -208,7 +262,7 @@ Omit for classic poll-only behavior. When present, the `wt events` daemon accept
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `rows` | no | `["branch", "base", "linear", "stage", "pr", "claude", "git"]` | Detail-pane row order. Available ids: `branch`, `base`, `path`, `linear`, `stage`, `pr`, `claude`, `git`. Unknown ids are ignored; omitted ones are hidden. A row also hides itself when its integration isn't configured (e.g. `linear` without `[issue_tracker.linear]`). The rebase state (restacking / mid-rebase / conflict + files) isn't a row — it renders as a fixed block below the rows, above the AI summary. |
+| `rows` | no | `["branch", "base", "issue", "stage", "pr", "claude", "git"]` | Detail-pane row order. Available ids: `branch`, `base`, `path`, `issue` (legacy alias: `linear`), `stage`, `pr`, `claude`, `git`. Unknown ids are ignored; omitted ones are hidden. A row also hides itself when its integration isn't configured (e.g. `issue` without `[issue_tracker]`). The rebase state (restacking / mid-rebase / conflict + files) isn't a row — it renders as a fixed block below the rows, above the AI summary. |
 | `mode` | no | `"classic"` | Which TUI a bare `wt` launches: `"classic"` (the three-pane worktree TUI) or `"hub"` (the tmux-hosted task-inbox layout, see [hub.md](hub.md)). Both modes read/write identical on-disk state; `wt classic` / `wt hub` force a mode regardless of this setting. |
 | `hub_background` | no | `"#1E1E2E"` | `#RRGGBB` background color for hub mode's task pane and the outer tmux server's pane-border paint (see [hub.md](hub.md)). Defaults to the built-in Catppuccin Mocha base; set it to match your own terminal theme if you don't use that palette. |
 
@@ -279,7 +333,7 @@ settle_seconds   = 300
 | key | required | default | meaning |
 |---|---|---|---|
 | `id` | **yes** | — | Unique rule id (used in fire-key bookkeeping and logs). |
-| `on` | **yes** | — | Trigger: `pr.checks.failed`, `rabbit.unresolved` (CodeRabbit threads), `review.changes_requested`, `pr.conflict`, `wt.merged` (a non-stacked worktree landed), `stack.parent_merged` (a stack member's parent landed). |
+| `on` | **yes** | — | Trigger: `pr.checks.failed`, `review_bot.unresolved` (the `[review_bot]`'s findings; `rabbit.unresolved` is a legacy alias), `review.changes_requested`, `pr.conflict`, `wt.merged` (a non-stacked worktree landed), `stack.parent_merged` (a stack member's parent landed). |
 | `run` | **yes** | — | An `[[actions]]` id, or a builtin: `builtin:restack` (only valid with `stack.parent_merged`), `builtin:clean` (any single-worktree trigger). |
 | `busy` | no | `"queue"` | When the worktree isn't quiescent at delivery time: `queue` holds the intent until it settles, `skip` drops it. |
 | `cooldown_minutes` | no | *(none)* | Minimum minutes between dispatches per (rule, worktree). |

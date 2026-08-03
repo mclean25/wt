@@ -15,8 +15,9 @@ import {
 } from "./wtstate.ts";
 import { getBackend, getBackendForPath } from "./backend.ts";
 import { config } from "./config.ts";
+import { resolveInstallCommand } from "./install.ts";
 import { branchExists, git, gitQuiet, originBranchExists, revParse } from "./git.ts";
-import { LINEAR_ID_RE, LINEAR_URL_RE } from "./linear.ts";
+import { LINEAR_ID_RE, LINEAR_URL_RE } from "./issue-tracker.ts";
 import { lockLabel, lockStatus, tryAcquireLock } from "./locks.ts";
 import { runStreaming } from "./proc.ts";
 import { computeStage, dirSlug, slugify } from "./stage.ts";
@@ -255,28 +256,41 @@ export async function createWorktree(
       }
     }
 
-    handle.phase("pinning sst stage");
-    const sstDir = join(path, ".sst");
-    mkdirSync(sstDir, { recursive: true });
-    writeFileSync(join(sstDir, "stage"), `${stage}\n`);
-    opts.onLog?.(`pinned sst stage → ${stage}`);
+    // Stage pinning only means something with an SST integration —
+    // without [deploy.sst] nothing can ever read the pinned name
+    // (`wt stages` refuses, the stage row hides), so skip the write and
+    // the log line rather than reporting work that did nothing.
+    if (config.sst) {
+      handle.phase("pinning sst stage");
+      const sstDir = join(path, ".sst");
+      mkdirSync(sstDir, { recursive: true });
+      writeFileSync(join(sstDir, "stage"), `${stage}\n`);
+      opts.onLog?.(`pinned sst stage → ${stage}`);
+    }
 
     // The rift backend copies packages across via its CoW clone
     // (`--copy-all`), so wt's own install is redundant — packages are
-    // always present without a fresh `pnpm install`, and any lockfile
-    // sync is left to rift's `.rift.toml` postcreate hooks. `--no-install`
+    // always present without a fresh install, and any lockfile sync is
+    // left to rift's `.rift.toml` postcreate hooks. `--no-install`
     // / `runInstall` is therefore a no-op here (ignored, not an error).
     if (backend.id === "rift") {
-      opts.onLog?.("packages copied via rift clone (skipping pnpm install)");
+      opts.onLog?.("packages copied via rift clone (skipping install)");
     } else if (opts.runInstall !== false) {
-      handle.phase("pnpm install");
-      opts.onLog?.("pnpm install...");
-      const code = await runStreaming(["pnpm", "install"], {
-        cwd: path,
-        onLine: (line) => opts.onLog?.(line),
-      });
-      if (code !== 0) {
-        throw new Error(`pnpm install exit ${code}`);
+      const install = resolveInstallCommand(path);
+      if (!install) {
+        opts.onLog?.(
+          "no lockfile found — skipping install (set [lifecycle] install_command to override)",
+        );
+      } else {
+        handle.phase(install.label);
+        opts.onLog?.(`${install.label}...`);
+        const code = await runStreaming(install.argv, {
+          cwd: path,
+          onLine: (line) => opts.onLog?.(line),
+        });
+        if (code !== 0) {
+          throw new Error(`${install.label} exit ${code}`);
+        }
       }
     }
   } finally {

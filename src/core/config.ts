@@ -51,8 +51,70 @@ export type SstConfig = {
   autoRegenPaths: readonly string[];
 };
 
-export type LinearConfig = {
-  workspace: string;
+/**
+ * Optional issue-tracker integration (`[issue_tracker]`). Presence of
+ * the section (even empty) surfaces the issue id parsed from the branch
+ * slug in the `issue` row; `url_template` upgrades the bare id into a
+ * deep link. `[issue_tracker.linear]` is a preset that derives the
+ * template from a Linear workspace slug.
+ */
+export type IssueTrackerConfig = {
+  /**
+   * URL template containing an `{id}` placeholder, substituted with the
+   * uppercased issue id (`COZ-1883`). Null when no template is
+   * configured or derivable — the issue row then shows the bare id.
+   */
+  urlTemplate: string | null;
+};
+
+export type ReviewBotUnresolvedVia = "threads" | "checklist";
+
+/**
+ * Review-bot track configuration (`[review_bot]`). The badge/row/trigger
+ * that used to be hardcoded to CodeRabbit; the CodeRabbit shape remains
+ * the default when the section is absent, so existing setups are
+ * unchanged. Two "unresolved" models:
+ *
+ *   - `"threads"` (CodeRabbit): unresolved = review threads opened by
+ *     `login` that aren't resolved.
+ *   - `"checklist"` (e.g. a GitHub-Actions Codex reviewer): the bot
+ *     posts a summary comment (identified by `summary_marker`) carrying
+ *     a `- [ ]` task list; unresolved = unticked boxes in the latest
+ *     summary comment. Needed when the bot posts via
+ *     `github-actions[bot]`, a login shared with every other workflow —
+ *     comment shape is the only reliable discriminator.
+ *
+ * `check_contexts` are additionally excluded from the PR checks rollup:
+ * the bot has its own badge, and an advisory reviewer must never flip
+ * the CI badge red.
+ */
+export type ReviewBotConfig = {
+  /** Display name — used in row prose and the built-in re-run action. */
+  name: string;
+  /** Comment/thread author login. A trailing `[bot]` is ignored when matching. */
+  login: string;
+  /**
+   * Glob patterns (case-insensitive, `*` only) matching the bot's check
+   * contexts / job names. Drives pending-vs-done detection and is
+   * auto-excluded from the CI checks rollup.
+   */
+  checkContexts: readonly string[];
+  unresolvedVia: ReviewBotUnresolvedVia;
+  /** Checklist mode: body prefix identifying the bot's summary comment. */
+  summaryMarker: string | null;
+  /**
+   * Checklist mode, optional: body prefix of the bot's "review started"
+   * ack comment. An ack newer than the latest summary renders as
+   * `pending` — needed for comment-triggered re-runs whose check runs
+   * never attach to the PR head.
+   */
+  pendingMarker: string | null;
+  /**
+   * PR comment body that re-triggers a review (e.g. `/codex-review`).
+   * When set, a built-in "Re-run <name> review" action appears in the
+   * `!` picker alongside user-configured actions.
+   */
+  rerunCommand: string | null;
 };
 
 /** Optional SSH target whose own wt instance owns remote worktrees. */
@@ -310,7 +372,11 @@ export type ActionDef =
  * `tui/automation-rules.ts` for the exact predicate + fire-key shape):
  *
  *   "pr.checks.failed"        — open PR's checks rollup is failing.
- *   "rabbit.unresolved"       — CodeRabbit has unresolved threads.
+ *   "review_bot.unresolved"   — the configured review bot has
+ *                               unresolved findings (threads or
+ *                               checklist items, per `[review_bot]`).
+ *                               "rabbit.unresolved" is accepted as a
+ *                               legacy alias in config files.
  *   "review.changes_requested"— a human review requested changes.
  *   "pr.conflict"             — merge-tree probe says the branch
  *                               conflicts with its effective base.
@@ -323,7 +389,7 @@ export type ActionDef =
  */
 export type AutomationTrigger =
   | "pr.checks.failed"
-  | "rabbit.unresolved"
+  | "review_bot.unresolved"
   | "review.changes_requested"
   | "pr.conflict"
   | "wt.merged"
@@ -397,6 +463,16 @@ export type Config = {
   };
   lifecycle: {
     envFilesToCopy: readonly string[];
+    /**
+     * Dependency-install command run in a fresh git-worktree checkout
+     * (the rift backend skips installs — packages ride the CoW clone).
+     * Executed via `$SHELL -lc` so pipes and PATH additions work. Null
+     * (the default) auto-detects from the checkout's lockfile:
+     * bun.lock(b) → bun, pnpm-lock.yaml → pnpm, yarn.lock → yarn,
+     * package-lock.json / npm-shrinkwrap.json → npm; no lockfile skips
+     * the install with a note.
+     */
+    installCommand: string | null;
   };
   /**
    * How new worktrees are materialized on disk. `git-worktree` (default)
@@ -408,7 +484,8 @@ export type Config = {
    */
   backend: { kind: BackendKind };
   sst: SstConfig | null;
-  linear: LinearConfig | null;
+  issueTracker: IssueTrackerConfig | null;
+  reviewBot: ReviewBotConfig;
   remote: RemoteConfig | null;
   ai: AiConfig | null;
   diff: DiffConfig;
@@ -496,12 +573,21 @@ const GENERIC_DEFAULTS = {
   github: {
     prTarget: "github" as const satisfies PullRequestTarget,
   },
+  // CodeRabbit preset — the shape the review-bot track hardcoded before
+  // it was configurable. `[review_bot]` absent ⇒ exactly the old behavior.
+  reviewBot: {
+    name: "CodeRabbit",
+    login: "coderabbitai",
+    checkContexts: ["CodeRabbit"] as const,
+    unresolvedVia: "threads" as const satisfies ReviewBotUnresolvedVia,
+  },
   ui: {
     // No "conflict" entry: the rebase lifecycle renders as a dedicated
     // block below the rows, not a definition row (see
     // `panels/details/rebase-block.tsx`). Old configs listing it are
-    // harmless — unknown ids drop silently at resolve time.
-    rows: ["branch", "base", "linear", "stage", "pr", "claude", "git"] as const,
+    // harmless — unknown ids drop silently at resolve time. "linear" is
+    // accepted as a legacy alias for "issue" at resolve time.
+    rows: ["branch", "base", "issue", "stage", "pr", "claude", "git"] as const,
     // Catppuccin Mocha base — matches the owner's Alacritty theme
     // (`~/.dotfiles/alacritty`) and `applyHubPalette`'s prior hardcode.
     hubBackground: "#1E1E2E",
@@ -611,11 +697,18 @@ class Errors {
     this.add(`${section}.${key} must be one of: ${allowed.join(", ")}`);
     return fallback;
   }
-  flush(configFile: string): void {
+  /** True when any recorded error message starts with `prefix`. */
+  has(prefix: string): boolean {
+    return this.list.some((l) => l.startsWith(prefix));
+  }
+  flush(configFile: string, hints: readonly string[] = []): void {
     if (this.list.length === 0) return;
     const lines = this.list.map((l) => `  - ${l}`).join("\n");
+    const hintLines = hints.length > 0
+      ? `\n${hints.map((h) => `hint: ${h}`).join("\n")}\n`
+      : "";
     process.stderr.write(
-      `wt: invalid config at ${configFile}\n${lines}\n` +
+      `wt: invalid config at ${configFile}\n${lines}\n${hintLines}` +
         `\nSee src/core/config.ts for the full schema.\n`,
     );
     process.exit(1);
@@ -676,6 +769,7 @@ function build(raw: Raw, errs: Errors): Config {
   const stageDomain = errs.optStrOrNull(stage, "domain");
 
   const envFiles = strArr(lifecycle?.env_files_to_copy, GENERIC_DEFAULTS.lifecycle.envFilesToCopy);
+  const installCommand = errs.optStrOrNull(lifecycle, "install_command");
 
   // Worktree backend — opt-in. Absent section (or absent key) means the
   // default `git-worktree`; `rift` switches new creates to CoW clones.
@@ -700,9 +794,57 @@ function build(raw: Raw, errs: Errors): Config {
       autoRegenPaths: strArr(sstRaw.auto_regen_paths, GENERIC_DEFAULTS.sst.autoRegenPaths),
     };
 
-  const linear: LinearConfig | null = linearRaw === null
-    ? null
-    : { workspace: errs.reqStr(linearRaw, "issue_tracker.linear", "workspace") };
+  // [issue_tracker] presence alone enables the issue row (bare parsed
+  // id); an explicit url_template — or the [issue_tracker.linear]
+  // preset, which derives one from the workspace — upgrades it to a
+  // deep link. An explicit template wins over the preset.
+  let issueTracker: IssueTrackerConfig | null = null;
+  if (tracker !== null) {
+    const explicitTemplate = errs.optStrOrNull(tracker, "url_template");
+    if (explicitTemplate && !explicitTemplate.includes("{id}")) {
+      errs.add("issue_tracker.url_template must contain the {id} placeholder");
+    }
+    let urlTemplate = explicitTemplate;
+    if (!urlTemplate && linearRaw !== null) {
+      const workspace = errs.reqStr(linearRaw, "issue_tracker.linear", "workspace");
+      // linear:// deep-link scheme — opens the desktop app directly.
+      urlTemplate = `linear://${workspace}/issue/{id}`;
+    }
+    issueTracker = { urlTemplate };
+  }
+
+  // [review_bot] — absent means the CodeRabbit preset, preserving the
+  // previously-hardcoded default behavior. Checklist mode has no sane
+  // CodeRabbit-shaped fallbacks: the login and summary marker identify a
+  // *different* bot, so both must be explicit, and the check-context
+  // default flips to "none" rather than inheriting CodeRabbit's.
+  const reviewBotRaw = obj(raw.review_bot);
+  const reviewBotVia = errs.optEnum(
+    reviewBotRaw,
+    "review_bot",
+    "unresolved_via",
+    ["threads", "checklist"] as const satisfies readonly ReviewBotUnresolvedVia[],
+    GENERIC_DEFAULTS.reviewBot.unresolvedVia,
+  );
+  const isChecklist = reviewBotVia === "checklist";
+  const reviewBot: ReviewBotConfig = {
+    name: errs.optStr(reviewBotRaw, "name", GENERIC_DEFAULTS.reviewBot.name),
+    login: (isChecklist
+      ? errs.reqStr(reviewBotRaw, "review_bot", "login")
+      : errs.optStr(reviewBotRaw, "login", GENERIC_DEFAULTS.reviewBot.login)
+    ).replace(/\[bot\]$/, ""),
+    checkContexts: strArr(
+      reviewBotRaw?.check_contexts,
+      isChecklist ? [] : GENERIC_DEFAULTS.reviewBot.checkContexts,
+    ),
+    unresolvedVia: reviewBotVia,
+    summaryMarker: errs.optStrOrNull(reviewBotRaw, "summary_marker"),
+    pendingMarker: errs.optStrOrNull(reviewBotRaw, "pending_marker"),
+    rerunCommand: errs.optStrOrNull(reviewBotRaw, "rerun_command"),
+  };
+  if (isChecklist && !reviewBot.summaryMarker) {
+    errs.add('review_bot.summary_marker is required when unresolved_via = "checklist"');
+  }
 
   const remoteHost = remoteRaw === null
     ? ""
@@ -827,10 +969,11 @@ function build(raw: Raw, errs: Errors): Config {
     },
     branch: { prefix: branchPrefix, base: branchBase, idPattern, slugMaxLen },
     stage: { prefix: stagePrefix, defaultPersonal: stageDefault, domain: stageDomain },
-    lifecycle: { envFilesToCopy: envFiles },
+    lifecycle: { envFilesToCopy: envFiles, installCommand },
     backend: { kind: backendKind },
     sst,
-    linear,
+    issueTracker,
+    reviewBot,
     remote,
     ai,
     diff,
@@ -843,12 +986,16 @@ function build(raw: Raw, errs: Errors): Config {
 
 const VALID_TRIGGERS = new Set<AutomationTrigger>([
   "pr.checks.failed",
-  "rabbit.unresolved",
+  "review_bot.unresolved",
   "review.changes_requested",
   "pr.conflict",
   "wt.merged",
   "stack.parent_merged",
 ]);
+/** Legacy trigger spellings, normalized before validation. */
+const TRIGGER_ALIASES: Record<string, AutomationTrigger> = {
+  "rabbit.unresolved": "review_bot.unresolved",
+};
 const DEFAULT_SETTLE_SECONDS = 120;
 // Merge-driven triggers are un-flappy, and the typical next step (review
 // the next member, mark it ready) wants the restack done promptly — keep
@@ -889,7 +1036,8 @@ function parseAutomations(
       errs.add(`${tag}.id "${id}" is duplicated`);
       continue;
     }
-    const on = entry.on;
+    const onRaw = entry.on;
+    const on = typeof onRaw === "string" ? TRIGGER_ALIASES[onRaw] ?? onRaw : onRaw;
     if (typeof on !== "string" || !VALID_TRIGGERS.has(on as AutomationTrigger)) {
       errs.add(`${tag}.on must be one of: ${[...VALID_TRIGGERS].join(", ")}`);
       continue;
@@ -1149,7 +1297,18 @@ function load(): { cfg: Config; path: string } {
     process.env[REPOSITORY_CONFIG_ENV] = repository;
   }
   const cfg = build(raw, errs);
-  errs.flush(sourcePath);
+  // `[paths]` naturally lives in a repository `.wt.toml`; a bare `wt`
+  // outside any repo then fails with "paths.main_clone is required" and
+  // no clue where the field was expected. Name both candidate homes.
+  const hints: string[] = [];
+  if (!repository && errs.has("paths.")) {
+    hints.push(
+      `no .wt.toml was found from ${process.cwd()} upward — [paths] can live in a ` +
+        `repository .wt.toml (run wt inside that repo) or in ${path} as the fallback ` +
+        `used everywhere else`,
+    );
+  }
+  errs.flush(sourcePath, hints);
   return { cfg, path: sourcePath };
 }
 

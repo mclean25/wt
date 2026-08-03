@@ -21,16 +21,26 @@ status — is backend-agnostic and lives in `lifecycle.ts` / `worktree.ts`.
 `clonefile` on macOS, btrfs snapshots / reflinks on Linux). It's
 near-instant even on a large repo, and with `--copy-all` it brings
 `node_modules` across **for free** — so a rift checkout has packages
-installed the moment it exists, with no `pnpm install`. wt passes
+installed the moment it exists, with no install step. wt passes
 `--copy-all` always; the `--no-install` flag (`runInstall`) is a no-op
 for this backend.
 
+wt looks for the `rift` executable on its own `PATH` first, then falls
+back to asking the user's login shell (`$SHELL -lc`, via `whence -p` /
+`type -P` so a shell function named `rift` can't shadow the binary).
+That keeps the backend working when wt is spawned from a lean
+environment — launchd, an editor task, an agent harness — whose `PATH`
+misses user-level bins like `~/.bun/bin`.
+
 The copy is only as fresh as the main clone it's cloned from, so wt keeps
 the main clone's `node_modules` in sync with trunk: whenever a fetch
-fast-forwards the main clone and the pulled commits changed
-`pnpm-lock.yaml`, wt runs `pnpm install --frozen-lockfile` there (see
-`syncMainDeps` in `core/worktree.ts`). It's gated on the lockfile actually
-changing, `--frozen-lockfile` keeps the main clone clean, and the
+fast-forwards the main clone and the pulled commits changed the repo's
+lockfile, wt runs the detected package manager's frozen install there —
+`pnpm install --frozen-lockfile`, `npm ci`, `bun install
+--frozen-lockfile`, `yarn install --frozen-lockfile`, or the `[lifecycle]
+install_command` override (see `syncMainDeps` in `core/worktree.ts` and
+`core/install.ts`). It's gated on the lockfile actually
+changing, the frozen variant keeps the main clone clean, and the
 background fetch interval does it ahead of time — so a rift checkout
 copies an up-to-date `node_modules` without any per-create install. (This
 runs for the git-worktree backend too; it's plain main-clone hygiene.) A
@@ -141,7 +151,7 @@ mutation points — don't spread backend branching across the flows.
 - **Postcreate hooks see the clone-time HEAD, not the target branch.**
   `.rift.toml` hooks run inside `rift create`, before wt switches onto the
   branch — so the working tree is at the main clone's commit (detached).
-  Fine for lockfile-sync hooks (`pnpm install`); a branch-name-sensitive
+  Fine for lockfile-sync hooks (a package-manager install); a branch-name-sensitive
   hook won't see the final branch.
 - **`--keep-branch` can't preserve an unpushed rift branch.** A rift
   branch lives only in the clone's `.git`; removing the checkout destroys

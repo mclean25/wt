@@ -10,7 +10,7 @@ import { baseRow } from "./base.tsx";
 import { branchRow } from "./branch.tsx";
 import { claudeRow } from "./claude.tsx";
 import { gitRow } from "./git.tsx";
-import { linearRow } from "./linear.tsx";
+import { issueRow } from "./issue.tsx";
 import { pathRow } from "./path.tsx";
 import { prRow } from "./pr.tsx";
 import { stageRow } from "./stage.tsx";
@@ -26,7 +26,7 @@ const REGISTRY: readonly RowModule[] = [
   branchRow,
   baseRow,
   pathRow,
-  linearRow,
+  issueRow,
   stageRow,
   prRow,
   claudeRow,
@@ -34,6 +34,9 @@ const REGISTRY: readonly RowModule[] = [
 ];
 
 const BY_ID = new Map(REGISTRY.map((m) => [m.id, m]));
+// Legacy id from before the issue-tracker generalization; configs
+// listing "linear" keep working.
+BY_ID.set("linear", issueRow);
 
 /**
  * Resolve configured ids to modules in the user's chosen order.

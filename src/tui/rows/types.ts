@@ -9,7 +9,7 @@
  * never live inside a row: ordering, the trailing staleness glyph,
  * and inline error display once retries are exhausted.
  *
- * Pure-derived rows (branch, path, linear) declare no sources. They
+ * Pure-derived rows (branch, path, issue) declare no sources. They
  * never show staleness or errors because there's no fetch behind
  * them — the data comes straight off the worktree record.
  */
@@ -37,7 +37,7 @@ export type RowContext = {
    * Visible cell budget for the row's value column — pane width minus
    * borders, padding, label, and the reserved trailing-glyph slot.
    * Rows that compact via `fitSegments` should pass this in; simple
-   * rows (branch/path/linear) can ignore it.
+   * rows (branch/path/issue) can ignore it.
    */
   valueWidth: number;
 };

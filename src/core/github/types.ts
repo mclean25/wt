@@ -43,6 +43,7 @@ export type GqlPrNode = {
   commits: {
     nodes: Array<{
       commit: {
+        committedDate?: string | null;
         statusCheckRollup: { contexts: { nodes: RawCheck[] } } | null;
       };
     }>;
@@ -53,6 +54,7 @@ export type GqlPrNode = {
       author: GqlCommentAuthor;
       body: string;
       createdAt: string;
+      updatedAt?: string | null;
     }>;
   } | null;
   reviews: {

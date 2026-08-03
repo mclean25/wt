@@ -47,12 +47,14 @@ export const NF = {
 	lightbulb: "\u{F0EB}", // nf-fa-lightbulb_o  — review changes_requested (suggestions)
 	eye: "\u{F441}", // nf-oct-eye               — review pending (orange) / unrequested (dim)
 
-	// CodeRabbit badge — single whimsy glyph (carrot, on-theme with the
-	// "carrots / grazing / resting" vocab in pr.tsx); state is conveyed
-	// by color since the carrot has no clean state-specific variants.
-	// This is the deliberate "color-only" exception called out in
-	// `badges.ts` rule #1's "if possible" caveat.
+	// Review-bot badge — single glyph, state conveyed by color since
+	// neither has clean state-specific variants. This is the deliberate
+	// "color-only" exception called out in `badges.ts` rule #1's "if
+	// possible" caveat. The carrot is CodeRabbit whimsy (on-theme with
+	// the "carrots / grazing / resting" vocab in pr.tsx); any other
+	// configured [review_bot] gets the generic robot.
 	carrot: "\u{EF3B}", // nf-md-carrot
+	robot: "\u{F06A9}", // nf-md-robot — generic review bot
 
 	// Rebase-conflict pre-flight: HEAD won't merge/rebase cleanly onto its
 	// base. Warning triangle (distinct from the CI `checkFail` x_circle so

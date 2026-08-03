@@ -4,6 +4,7 @@ import { basename, isAbsolute, join, relative } from "node:path";
 import { listRiftWorktreePaths } from "./backend.ts";
 import { config } from "./config.ts";
 import { git, branchIsGone, branchIsMerged, effectiveBaseOrTrunk, gitQuiet, gitRun, localBranchExists } from "./git.ts";
+import { resolveMainSyncInstall } from "./install.ts";
 import { lockAge, lockLabel, lockStatus, tryAcquireLock, type LockHandle } from "./locks.ts";
 import { createLogger } from "./logger.ts";
 import { latestLogFor } from "./logs.ts";
@@ -429,15 +430,8 @@ export async function fetchOrigin(opts: { onWarn?: (msg: string) => void } = {})
 }
 
 /**
- * The lockfile whose change gates a main-clone dependency sync. wt already
- * assumes pnpm (createWorktree runs `pnpm install`); in a repo without this
- * file the gate never fires, so the whole feature is inert there.
- */
-const MAIN_DEPS_LOCKFILE = "pnpm-lock.yaml";
-
-/**
  * After the main clone fast-forwards to fresh trunk, reinstall deps IF the
- * pulled commits changed the pnpm lockfile — so the main clone's
+ * pulled commits changed the repo's lockfile — so the main clone's
  * `node_modules` never drifts behind trunk. This matters most for the
  * `rift` backend, which CoW-copies the main clone's `node_modules` into
  * every new worktree (a stale main clone = stale worktrees); it's also
@@ -446,28 +440,35 @@ const MAIN_DEPS_LOCKFILE = "pnpm-lock.yaml";
  * clone stays synced in the background, so a `wt new` right after usually
  * finds nothing to install and stays fast.
  *
- * Gated on the lockfile actually changing, so the common no-dep-change
- * pull pays only one cheap `git diff --name-only`. `--frozen-lockfile`
- * keeps the install from rewriting the committed lockfile, which would
- * dirty the main clone and break the next fast-forward. Best-effort: a
- * failed install warns to the activity pane and never fails the fetch.
+ * The package manager (and the lockfile whose change gates the sync)
+ * comes from `resolveMainSyncInstall` — the `[lifecycle] install_command`
+ * override or lockfile detection; a repo with neither makes the feature
+ * inert. Gated on the lockfile actually changing, so the common
+ * no-dep-change pull pays only one cheap `git diff --name-only`. The
+ * frozen install variant keeps the committed lockfile untouched, which
+ * would otherwise dirty the main clone and break the next fast-forward.
+ * Best-effort: a failed install warns to the activity pane and never
+ * fails the fetch.
  */
 async function syncMainDeps(cwd: string, beforeHead: string): Promise<void> {
   const after = (await runOk(["git", "rev-parse", "HEAD"], { cwd })).trim();
   if (!after || after === beforeHead) return; // nothing was pulled
+  const sync = resolveMainSyncInstall(cwd);
+  if (!sync) return; // no lockfile, no override — nothing to keep in sync
   const changed = await runOk(
-    ["git", "diff", "--name-only", beforeHead, after, "--", MAIN_DEPS_LOCKFILE],
+    ["git", "diff", "--name-only", beforeHead, after, "--", ...sync.gateLockfiles],
     { cwd },
   );
   if (!changed.trim()) return; // deps unchanged on trunk — skip the install
 
-  log.event.info(`${MAIN_DEPS_LOCKFILE} changed on trunk — syncing main clone deps`);
-  const code = await runStreaming(["pnpm", "install", "--frozen-lockfile"], { cwd });
+  const lockfile = changed.trim().split("\n")[0];
+  log.event.info(`${lockfile} changed on trunk — syncing main clone deps (${sync.label})`);
+  const code = await runStreaming(sync.argv, { cwd });
   if (code === 0) {
     log.event.ok("main clone deps synced");
   } else {
-    log.warn("main clone dependency sync failed", { cwd, code });
-    log.event.warn(`main clone deps sync failed (pnpm exit ${code}) — run pnpm install there`);
+    log.warn("main clone dependency sync failed", { cwd, code, command: sync.label });
+    log.event.warn(`main clone deps sync failed (${sync.label} exit ${code}) — run it there by hand`);
   }
 }
 

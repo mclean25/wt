@@ -85,7 +85,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "p", label: `open PR in ${PR_TARGET_LABEL}` },
       { key: "g p", label: "open PR in GitHub" },
       { key: "l p", label: "open PR in Linear" },
-      { key: "i", label: "open linear issue" },
+      { key: "i", label: "open tracker issue" },
       { key: "s", label: "open deployed app" },
       { key: "y", label: "yank menu (b/s/S/p/n/i/r)" },
       { key: "t", label: "regenerate AI summary" },

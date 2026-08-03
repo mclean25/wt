@@ -16,13 +16,13 @@ and an independently configured `wt` on that host.
 
 ### `wt ls`
 
-List all non-main worktrees (slug, stage, PR, status).
+List all non-main worktrees (slug, stage when `[deploy.sst]` is configured, PR, status).
 
-- `--json` — machine-readable array (slug, branch, path, stage, status, dirty, linear_url, …).
+- `--json` — machine-readable array (slug, branch, path, stage, status, dirty, issue_id, issue_url, …).
 
 ### `wt new <linear-url|id|branch|slug>`
 
-Create a worktree from a Linear URL/ID, an existing branch name, or a bare slug. Runs the full setup: fetch, checkout (`git worktree add`, or a `rift` clone — see [backends.md](backends.md)), env-file copy, SST stage pin, package install.
+Create a worktree from a Linear URL/ID, an existing branch name, or a bare slug. Runs the full setup: fetch, checkout (`git worktree add`, or a `rift` clone — see [backends.md](backends.md)), env-file copy, SST stage pin (only with `[deploy.sst]` configured), package install (detected from the lockfile, or `[lifecycle] install_command`).
 
 - `--slug <s>` — explicit slug when creating from a Linear id.
 - `--base <ref>` — fork base to branch from (recorded; see `wt base`).

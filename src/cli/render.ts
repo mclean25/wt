@@ -1,5 +1,5 @@
 import { pickPrForWorktree, pullRequestOpenUrl } from "../core/github.ts";
-import { linearUrlForSlug } from "../core/linear.ts";
+import { issueUrlForSlug } from "../core/issue-tracker.ts";
 import { isOurStageDeployed } from "../core/stage-safety.ts";
 import { stageUrl } from "../core/stage.ts";
 import type { PullRequest, Status, Worktree } from "../core/types.ts";
@@ -7,7 +7,7 @@ import { StatusKind } from "../core/types.ts";
 import { cyan, dim, green, link, red, visibleWidth, yellow } from "./colors.ts";
 
 export function renderSlugCell(wt: Worktree): string {
-  const url = linearUrlForSlug(wt.slug);
+  const url = issueUrlForSlug(wt.slug);
   return url ? link(cyan(wt.slug), url) : cyan(wt.slug);
 }
 

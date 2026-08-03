@@ -33,7 +33,7 @@
  * consecutive dispatches without the condition ever clearing trips the
  * rule for that worktree until someone actually fixes it).
  *
- * Known asymmetry: push-scoped triggers (checks / rabbit / review /
+ * Known asymmetry: push-scoped triggers (checks / review bot / review /
  * conflict) get a natural retry on the next push (new SHA = new key),
  * but `wt.merged` / `stack.parent_merged` keys never change — a run
  * that launched and FAILED consumes them for good, and the activity
@@ -130,7 +130,7 @@ type ExecuteOutcome = { declined: string | null };
  *  (offline, no token), or a trip would wedge forever. */
 const GITHUB_DRIVEN: ReadonlySet<AutomationTrigger> = new Set([
   "pr.checks.failed",
-  "rabbit.unresolved",
+  "review_bot.unresolved",
   "review.changes_requested",
   "wt.merged",
   "stack.parent_merged",

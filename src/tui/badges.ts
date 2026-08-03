@@ -45,6 +45,7 @@
  *    font renders them 2-cell. The extra space prevents the icon's
  *    right half from overlapping the next char.
  */
+import { config } from "../core/config.ts";
 import type { MergeConflictProbe } from "../core/git.ts";
 import type { DerivedState } from "../core/harness/status.ts";
 import {
@@ -52,7 +53,7 @@ import {
   type PrChecks,
   type PrReview,
   type PullRequest,
-  type RabbitStatus,
+  type ReviewBotStatus,
   type Status,
   StatusKind,
 } from "../core/types.ts";
@@ -187,21 +188,30 @@ export function rebaseBadge(
 }
 
 /**
- * Glyph + color for CodeRabbit state. Single carrot glyph, color-coded:
- * it echoes the human-review palette one notch softer — pending↔grazing
- * (warn), clean↔resting (ok). Unresolved threads are "address these",
- * not a rejection, so info (the magenta "look-here" tier) rather than
- * changes-requested red. Color is load-bearing here — the carrot family
- * has no clean state-specific variants. Null for the quiet `none` state.
+ * The review-bot glyph: CodeRabbit keeps its whimsy carrot; any other
+ * configured `[review_bot]` gets the generic robot.
  */
-export function rabbitBadge(rb: RabbitStatus): Badge | null {
+export const REVIEW_BOT_GLYPH =
+  config.reviewBot.login === "coderabbitai" ? NF.carrot : NF.robot;
+
+/**
+ * Glyph + color for review-bot state. Single glyph, color-coded: it
+ * echoes the human-review palette one notch softer — pending (warn),
+ * clean (ok). Unresolved findings are "address these", not a rejection,
+ * so info (the magenta "look-here" tier) rather than changes-requested
+ * red. Color is load-bearing here — the glyph has no clean
+ * state-specific variants. A stale clean review (checklist bots don't
+ * re-run on push) dims rather than claiming an ok it didn't earn.
+ * Null for the quiet `none` state.
+ */
+export function reviewBotBadge(rb: ReviewBotStatus): Badge | null {
   switch (rb.state) {
     case "unresolved":
-      return { glyph: NF.carrot, fg: theme.info };
+      return { glyph: REVIEW_BOT_GLYPH, fg: theme.info };
     case "pending":
-      return { glyph: NF.carrot, fg: theme.warn };
+      return { glyph: REVIEW_BOT_GLYPH, fg: theme.warn };
     case "clean":
-      return { glyph: NF.carrot, fg: theme.ok };
+      return { glyph: REVIEW_BOT_GLYPH, fg: rb.stale ? theme.fgDim : theme.ok };
     default:
       return null;
   }

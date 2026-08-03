@@ -1,4 +1,9 @@
-import type { ActionDef } from "../config.ts";
+import { type ActionDef, config } from "../config.ts";
+
+/** Single-quote `s` for `$SHELL -lc` so config text can't break out of the argument. */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
 
 /**
  * Built-in actions appended after `config.actions` in the picker. They
@@ -8,13 +13,28 @@ import type { ActionDef } from "../config.ts";
  * other wiring needed; the picker places these between user actions and
  * the trailing "Custom prompt…" sentinel.
  *
- * Intentionally EMPTY: every built-in candidate so far has been
+ * Kept (nearly) empty on purpose: hardcoded candidates so far have been
  * project-specific (e.g. the old `pnpm sst remove` "Remove local"), which
  * belongs in the user's `config.toml`, not baked into the OSS app — the
  * same "no client-app defaults in code" rule the config loader enforces.
- * Keep this for a genuinely repo-agnostic action if one ever earns it.
+ * The review-bot re-run entry below respects that rule: it only exists
+ * when the user configured `[review_bot] rerun_command`, and the config
+ * is what parameterizes it.
  */
-export const BUILTIN_ACTIONS: readonly ActionDef[] = [];
+export const BUILTIN_ACTIONS: readonly ActionDef[] = config.reviewBot.rerunCommand
+  ? [
+      {
+        kind: "shell",
+        id: "review-bot-rerun",
+        name: `Re-run ${config.reviewBot.name} review`,
+        shell: `gh pr comment {{pr}} --body ${shellQuote(config.reviewBot.rerunCommand)}`,
+        affects: ["github"],
+        requires: ["pr"],
+        argPrompt: null,
+        labelExtract: null,
+      },
+    ]
+  : [];
 
 /**
  * Window during which a finished run keeps auto-focusing the bottom

@@ -1,6 +1,6 @@
 /**
  * The right-aligned badge cluster a worktree row shows in the list pane:
- * action-running glyph, deploy bolt, harness session glyph, CodeRabbit /
+ * action-running glyph, deploy bolt, harness session glyph, review-bot /
  * review hints, PR-state (or merge-queue) slot, CI rollup. Extracted from
  * the list panel so the folded section/stack summaries in the details
  * pane render the exact same cluster per member — same glyphs, same
@@ -11,9 +11,9 @@ import {
   type Badge,
   checkBadge,
   prStateBadge,
-  rabbitBadge,
   rebaseBadge,
   reviewBadge,
+  reviewBotBadge,
 } from "./badges.ts";
 import { NF } from "./icons.ts";
 import { theme } from "./theme.ts";
@@ -21,7 +21,7 @@ import { getHarness } from "../core/harness/index.ts";
 import type { HarnessId } from "../core/harness/index.ts";
 import type { DerivedState } from "../core/harness/status.ts";
 import { stateColor } from "./claude-state.ts";
-import type { MergeQueueState } from "../core/types.ts";
+import { type MergeQueueState, REVIEW_BOT_NONE } from "../core/types.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
 
 /**
@@ -53,7 +53,7 @@ export function badgeClusterCells(
   if (actionRunning) cells += 2;
   if (showSessionSlot) cells += 2;
   if (rebase) cells += 2;
-  if (rabbitHint(row)) cells += 2;
+  if (reviewBotHint(row)) cells += 2;
   if (reviewHint(row)) cells += 2;
   // The PR-state slot doubles as the merge-queue slot: a queued PR
   // swaps the PR glyph for the mq indicator and the slot widens to 4
@@ -138,14 +138,14 @@ function reviewHint(row: WorktreeRow): Badge | null {
 }
 
 /**
- * CodeRabbit hint. Glyph/color from `rabbitBadge`; same OPEN/non-draft
+ * Review-bot hint. Glyph/color from `reviewBotBadge`; same OPEN/non-draft
  * gate as review. Draft-hide also sidesteps the "review skipped" →
  * mis-classified-as-clean issue (see `buildPrSegments` in pr.tsx).
  */
-function rabbitHint(row: WorktreeRow): Badge | null {
+function reviewBotHint(row: WorktreeRow): Badge | null {
   const pr = row.pr;
   if (!pr || pr.state !== "OPEN" || pr.isDraft) return null;
-  return rabbitBadge(pr.rabbit);
+  return reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE);
 }
 
 /**
@@ -192,9 +192,9 @@ export function BadgeCluster({
   const mqText = mqGlyph(row);
   const showChecks =
     row.pr && row.pr.state === "OPEN" && row.pr.checks !== "none";
-  const rabbit = rabbitHint(row);
+  const bot = reviewBotHint(row);
   const review = reviewHint(row);
-  const rabbitFg = row.archived || !rabbit ? theme.fgDim : rabbit.fg;
+  const botFg = row.archived || !bot ? theme.fgDim : bot.fg;
   const reviewFg = row.archived || !review ? theme.fgDim : review.fg;
   // Two independent 2-cell slots: action (comment glyph, green) and
   // harness glyph (tinted with the harness's own color). They coexist
@@ -245,14 +245,14 @@ export function BadgeCluster({
           </text>
         </box>
       ) : null}
-      {/* CR and review hints sit immediately to the left of the PR icon
-          so the eye reads "[cr] [review] [pr]" as a tight cluster of
+      {/* Bot and review hints sit immediately to the left of the PR icon
+          so the eye reads "[bot] [review] [pr]" as a tight cluster of
           "what's the state of this PR" signals. Each is omitted entirely
           when its hint helper returns null, so a row with no review
           activity collapses cleanly instead of leaving dead space. */}
-      {rabbit ? (
+      {bot ? (
         <box width={2} flexShrink={0}>
-          <text fg={rabbitFg}>{rabbit.glyph}</text>
+          <text fg={botFg}>{bot.glyph}</text>
         </box>
       ) : null}
       {review ? (

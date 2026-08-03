@@ -16,7 +16,7 @@ describe("parseRemoteWorktrees", () => {
       status_op: "init",
       dirty: false,
       unpushed: 2,
-      linear_url: null,
+      issue_url: null,
     }]), "cachy");
     expect(rows[0]).toEqual({
       hostLabel: "cachy",
@@ -31,7 +31,7 @@ describe("parseRemoteWorktrees", () => {
       statusOp: "init",
       dirty: false,
       unpushed: 2,
-      linearUrl: null,
+      issueUrl: null,
     });
   });
 

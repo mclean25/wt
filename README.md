@@ -19,7 +19,8 @@ Terminal UI for keeping multiple git worktrees in flight at once. Each row shows
 - `aws` CLI with a profile that can read your SST state bucket — when `[deploy.sst]` is configured (stage row + `wt stages`).
 - `zed` CLI — `wt open` and the `o`/`O` keybindings (the editor is not currently configurable).
 - [`revdiff`](https://github.com/umputun/revdiff) — the default F11 diff command. Override `[diff].command` to use `gitu`, `lazygit`, `tig`, a `delta` pipe, etc. instead.
-- Linear — no CLI or token; issue URLs are constructed from branch slugs, and PRs can open in Linear Reviews.
+- Issue tracker — no CLI or token; the issue id is parsed from branch slugs and linked via a URL template (`[issue_tracker]`, with a Linear preset), and PRs can open in Linear Reviews.
+- Review bot — the CodeRabbit badge/automation track, retargetable at any PR-review bot (`[review_bot]`), including checklist-style GitHub Actions reviewers.
 - Coding agents — live sessions are *detected* by reading each agent's local files, no CLI needed; *spawning* from the TUI needs that agent's CLI on PATH (`claude`, `codex`, `opencode`). Claude is the most complete integration; Codex and OpenCode are partial today.
 - An AI provider (OpenAI-compatible endpoint or Gemini) — the generated title + description in the details pane.
 - [`rift`](https://github.com/anomalyco/rift) — an opt-in copy-on-write worktree backend (`[backend] kind = "rift"`): near-instant checkouts that bring `node_modules` across for free. See [docs/backends.md](docs/backends.md).
@@ -50,7 +51,7 @@ worktree_root = "~/Code/your-repo-wt"
 prefix = "yourname"   # branches you create get `yourname/<id>-<slug>`
 ```
 
-Everything else is optional and section-gated: add `[deploy.sst]`, `[issue_tracker.linear]`, `[ai]`, or `[github.events]` to turn on that integration; omit it and the related rows hide themselves. The loader validates everything at startup and prints every missing or malformed field at once.
+Everything else is optional and section-gated: add `[deploy.sst]`, `[issue_tracker]`, `[review_bot]`, `[ai]`, or `[github.events]` to turn on or retarget that integration; omit it and the related rows hide themselves (the review-bot track defaults to CodeRabbit). The loader validates everything at startup and prints every missing or malformed field at once.
 
 For multiple repositories, put shared personal defaults in the user config and add a `.wt.toml` at each repository root. Running `wt` within a repository recursively merges its nearest `.wt.toml` over the user config, so repository-specific paths and settings win.
 

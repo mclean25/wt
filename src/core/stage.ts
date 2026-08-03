@@ -45,8 +45,9 @@ export function dirSlug(branch: string): string {
 /**
  * Deterministic stage name.
  *
- * - With Linear ID prefix: `michael-<num>-<hash6>` (e.g. michael-4888-a1b2c3)
- * - Without:               `michael-<hash10>`
+ * - With an issue-id prefix (per `[branch] id_pattern`):
+ *   `michael-<num>-<hash6>` (e.g. michael-4888-a1b2c3)
+ * - Without: `michael-<hash10>`
  */
 export function computeStage(slug: string): string {
   const slugLower = slug.toLowerCase();

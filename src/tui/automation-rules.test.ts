@@ -34,7 +34,7 @@ function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
     reviewRequests: 0,
     requestedReviewers: [],
     suggestedReviewers: [],
-    rabbit: { state: "none", unresolved: 0 },
+    reviewBot: { state: "none", unresolved: 0 },
     autoMerge: null,
     comments: [],
     unresolvedThreads: 0,
@@ -145,19 +145,31 @@ describe("pr.checks.failed", () => {
   });
 });
 
-describe("rabbit.unresolved", () => {
-  test("fires only while CR threads are unresolved", () => {
-    const r = rule({ id: "auto-rabbit", on: "rabbit.unresolved", run: "rabbit" });
-    const carrots = makeRow("a", {
-      pr: makePr({ rabbit: { state: "unresolved", unresolved: 3 } }),
+describe("review_bot.unresolved", () => {
+  test("fires only while bot findings are unresolved", () => {
+    const r = rule({ id: "auto-rabbit", on: "review_bot.unresolved", run: "rabbit" });
+    const unresolved = makeRow("a", {
+      pr: makePr({ reviewBot: { state: "unresolved", unresolved: 3 } }),
     });
-    const fires = evaluateAutomations([r], [carrots], FRESH);
+    const fires = evaluateAutomations([r], [unresolved], FRESH);
     expect(fires).toHaveLength(1);
+    // ":rabbit:" is frozen for on-disk ledger continuity (see the
+    // review_bot.unresolved case in automation-rules.ts).
     expect(fires[0]!.fireKeys).toEqual(["auto-rabbit:rabbit:a:abc123"]);
     const clean = makeRow("a", {
-      pr: makePr({ rabbit: { state: "clean", unresolved: 0 } }),
+      pr: makePr({ reviewBot: { state: "clean", unresolved: 0 } }),
     });
     expect(evaluateAutomations([r], [clean], FRESH)).toHaveLength(0);
+  });
+
+  test("treats a cache-restored PR without the reviewBot field as none", () => {
+    const r = rule({ id: "auto-rabbit", on: "review_bot.unresolved", run: "rabbit" });
+    const pr = makePr({});
+    // Entries persisted before the rabbit → reviewBot rename lack the
+    // field entirely; the trigger must read that as "no bot state".
+    delete (pr as { reviewBot?: unknown }).reviewBot;
+    const row = makeRow("a", { pr });
+    expect(evaluateAutomations([r], [row], FRESH)).toHaveLength(0);
   });
 });
 

@@ -1,3 +1,4 @@
+import { config } from "../../core/config.ts";
 import { createWorktree, parseInput } from "../../core/lifecycle.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
@@ -83,7 +84,7 @@ export async function run(argv: string[]): Promise<number> {
   if (existing) {
     console.log(yellow(`Worktree already exists for ${branch}`));
     console.log(`  ${dim("path:")}  ${existing.path}`);
-    console.log(`  ${dim("stage:")} ${existing.stage}`);
+    if (config.sst) console.log(`  ${dim("stage:")} ${existing.stage}`);
     if (parsed.open) await openInZed(existing.path);
     return 0;
   }
@@ -102,7 +103,7 @@ export async function run(argv: string[]): Promise<number> {
 
   console.log(green(`✓ created ${bold(cyan(result.slug))}`));
   console.log(`  ${dim("path:")}  ${result.path}`);
-  console.log(`  ${dim("stage:")} ${result.stage}`);
+  if (config.sst) console.log(`  ${dim("stage:")} ${result.stage}`);
 
   if (parsed.open) await openInZed(result.path);
   return 0;

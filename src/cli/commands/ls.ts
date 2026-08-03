@@ -1,5 +1,6 @@
+import { config } from "../../core/config.ts";
 import { fetchPrs } from "../../core/github.ts";
-import { linearUrlForSlug } from "../../core/linear.ts";
+import { issueIdForSlug, issueUrlForSlug } from "../../core/issue-tracker.ts";
 import type { Worktree } from "../../core/types.ts";
 import { StatusKind } from "../../core/types.ts";
 import {
@@ -40,7 +41,8 @@ export async function run(argv: string[]): Promise<number> {
           status_op: st.op ?? null,
           dirty,
           unpushed: dirty ? 0 : await unpushedCommits(w.path),
-          linear_url: linearUrlForSlug(w.slug),
+          issue_id: issueIdForSlug(w.slug),
+          issue_url: issueUrlForSlug(w.slug),
         };
       }),
     );
@@ -62,7 +64,11 @@ export async function run(argv: string[]): Promise<number> {
   const tableRows: Row[] = rows.map((wt, idx) => ({ wt, idx }));
   const table = renderTable(tableRows, [
     { header: "slug", getter: (r) => renderSlugCell((r as Row).wt) },
-    { header: "stage", getter: (r) => renderStageCell((r as Row).wt) },
+    // Stage only means something with an SST integration; a column of
+    // "(not deployed)" on a non-SST repo is pure noise.
+    ...(config.sst
+      ? [{ header: "stage", getter: (r: unknown) => renderStageCell((r as Row).wt) }]
+      : []),
     { header: "pr", getter: (r) => renderPrCell((r as Row).wt, prs) },
     { header: "", getter: (r) => renderStatusCell(statuses[(r as Row).idx]!) },
   ]);

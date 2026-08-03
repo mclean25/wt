@@ -47,9 +47,13 @@ const LOCAL_BRANCHES_TTL_MS = 30_000;
 const RELEVANT_EVENTS = new Set([
   "pull_request",
   "pull_request_review",
-  // Thread resolve/unresolve drives the CodeRabbit "unresolved" badge and
-  // doesn't fire pull_request_review.
+  // Thread resolve/unresolve drives the threads-mode review-bot
+  // "unresolved" badge and doesn't fire pull_request_review.
   "pull_request_review_thread",
+  // PR comments feed the details-pane conversation, and in checklist
+  // mode the review bot's summary comment (and its checkbox ticks,
+  // which arrive as `edited`) IS the unresolved signal.
+  "issue_comment",
   "check_suite",
   "check_run",
   "status",
@@ -126,6 +130,13 @@ export function extractBranches(event: string, payload: unknown): string[] | nul
       // direction. Treat like merge_group: never skip, always refetch.
       case "status":
         return null;
+      // An issue_comment on a PR carries only the PR number, never the
+      // head branch — unscopeable, always refetch. Comments on plain
+      // (non-PR) issues are identifiable (`issue.pull_request` is absent)
+      // and can never affect PR state — return an empty candidate list so
+      // the local-branch gate skips them.
+      case "issue_comment":
+        return p.issue?.pull_request ? null : [];
       // merge_group head_ref is a synthetic `gh-readonly-queue/...` ref, not
       // a worktree branch — never skippable, always refetch for the queue.
       case "merge_group":

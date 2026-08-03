@@ -15,7 +15,7 @@ Fire keys embed the PR's head SHA where relevant: a new push produces a new key 
 | trigger | holds when |
 |---|---|
 | `pr.checks.failed` | the open PR's checks rollup is failing |
-| `rabbit.unresolved` | CodeRabbit has unresolved review threads |
+| `review_bot.unresolved` | the configured [`[review_bot]`](configuration.md#review_bot--the-bot-review-track) has unresolved findings — unresolved threads (CodeRabbit) or unticked checklist boxes, per `unresolved_via`. `rabbit.unresolved` is accepted as a legacy alias |
 | `review.changes_requested` | a human review requested changes |
 | `pr.conflict` | the merge-tree probe says the branch conflicts with its effective base |
 | `wt.merged` | a non-stacked worktree's branch landed (merged / upstream gone / PR merged — the same set the `c` clean sweep uses) |

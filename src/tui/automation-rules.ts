@@ -23,7 +23,7 @@
  */
 import type { AutomationDef, AutomationTrigger } from "../core/config.ts";
 import { pluralize } from "../core/text.ts";
-import { StatusKind } from "../core/types.ts";
+import { REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
 
 import { isCleanCandidate } from "./app-helpers.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
@@ -124,14 +124,19 @@ function evaluateRowTrigger(
         `checks failing on #${pr.number} (${names})`,
       );
     }
-    case "rabbit.unresolved": {
+    case "review_bot.unresolved": {
       const pr = freshOpenPr(row, ctx);
-      if (!pr || pr.rabbit.state !== "unresolved") return null;
+      const rb = pr?.reviewBot ?? REVIEW_BOT_NONE;
+      if (!pr || rb.state !== "unresolved") return null;
+      // The ":rabbit:" segment predates the review_bot rename and is
+      // FROZEN: the on-disk ledger keys existing fires with it, and
+      // changing it would re-dispatch every already-handled fire once
+      // after an upgrade. It's an opaque internal key — never displayed.
       return singleRowFire(
         rule,
         row,
         `${rule.id}:rabbit:${slug}:${pr.headRefOid}`,
-        `${pluralize(pr.rabbit.unresolved, "unresolved carrot")} on #${pr.number}`,
+        `${pluralize(rb.unresolved, "unresolved review-bot finding")} on #${pr.number}`,
       );
     }
     case "review.changes_requested": {

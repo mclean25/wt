@@ -35,16 +35,28 @@ export type PrReview =
   | "none";
 
 /**
- * CodeRabbit review state, derived from the `CodeRabbit` status check
- * and CR-authored review threads. Unresolved threads take precedence
- * over a fresh "pending" — re-runs happen on every push, but old
- * feedback still needs addressing.
+ * Review-bot state (CodeRabbit by default; configurable via
+ * `[review_bot]`), derived from the bot's check contexts plus either
+ * bot-authored review threads (`threads` mode) or the checkbox task
+ * list in its latest summary comment (`checklist` mode). Unresolved
+ * findings take precedence over a fresh "pending" — re-runs happen
+ * routinely, but old feedback still needs addressing.
  */
-export type RabbitStatus = {
+export type ReviewBotStatus = {
   state: "pending" | "unresolved" | "clean" | "none";
-  /** Count of unresolved CR-authored threads. Only meaningful when state === "unresolved". */
+  /** Count of unresolved bot findings. Only meaningful when state === "unresolved". */
   unresolved: number;
+  /**
+   * Checklist mode only: the latest summary comment predates the head
+   * commit's `committedDate` — the bot deliberately doesn't re-run on
+   * push, so its review describes an older diff. The findings are still
+   * actionable; the flag just says "reviewed an older commit".
+   */
+  stale?: boolean;
 };
+
+/** Fallback for PR entries restored from a persisted cache that predates the field. */
+export const REVIEW_BOT_NONE: ReviewBotStatus = { state: "none", unresolved: 0 };
 
 export type SuggestedReviewer = {
   /** GitHub login (user). Teams aren't returned by `suggestedReviewers`. */
@@ -140,8 +152,13 @@ export type PullRequest = {
   requestedReviewers: readonly string[];
   /** GitHub-suggested reviewers based on file ownership and history. */
   suggestedReviewers: readonly SuggestedReviewer[];
-  /** CodeRabbit status — its own track, separate from human reviews. `none` when CR didn't run. */
-  rabbit: RabbitStatus;
+  /**
+   * Review-bot status — its own track, separate from human reviews and
+   * the CI rollup. `none` when the bot didn't run. Optional: entries
+   * restored from the persisted cache predate the rename from `rabbit`;
+   * read via `pr.reviewBot ?? REVIEW_BOT_NONE`.
+   */
+  reviewBot?: ReviewBotStatus;
   /** "Merge when ready" arming state. `null` when not enabled. */
   autoMerge: AutoMerge | null;
   /**
@@ -152,7 +169,7 @@ export type PullRequest = {
    */
   comments: readonly PrComment[];
   /**
-   * Count of unresolved review threads opened by humans (CR / bot threads
+   * Count of unresolved review threads opened by humans (bot threads
    * excluded). Surfaced as a "+N unresolved threads" summary line rather
    * than inlining every thread comment.
    */

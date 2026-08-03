@@ -15,6 +15,12 @@ const log = createLogger("[gh]");
 // mergeQueue block. New PR fields go into PR_FRAGMENT here — never a new
 // query; rate limits and latency are real.
 
+// Comment window. 10 covers the details-pane conversation; checklist
+// review-bot mode ALSO finds the bot's summary comment in this window,
+// so it widens — a summary buried past the window would silently read
+// as "the bot never ran".
+const COMMENT_FETCH_LIMIT = config.reviewBot.unresolvedVia === "checklist" ? 30 : 10;
+
 // Shared fields for each PR. Used by every aliased sub-query below.
 const PR_FRAGMENT = `
 fragment PrFields on PullRequest {
@@ -51,6 +57,7 @@ fragment PrFields on PullRequest {
   commits(last: 1) {
     nodes {
       commit {
+        committedDate
         statusCheckRollup {
           contexts(first: 50) {
             nodes {
@@ -71,11 +78,12 @@ fragment PrFields on PullRequest {
       }
     }
   }
-  comments(last: 10) {
+  comments(last: ${COMMENT_FETCH_LIMIT}) {
     nodes {
       author { login __typename }
       body
       createdAt
+      updatedAt
     }
   }
   reviews(last: 10) {

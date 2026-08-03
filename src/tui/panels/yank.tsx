@@ -1,4 +1,4 @@
-import { linearUrlForSlug } from "../../core/linear.ts";
+import { issueIdForSlug, issueUrlForSlug } from "../../core/issue-tracker.ts";
 import { stageUrl } from "../../core/stage.ts";
 import { Modal } from "../modal.tsx";
 import { theme } from "../theme.ts";
@@ -23,7 +23,13 @@ export function yankItemsFor(row: WorktreeRow): Item[] {
     { key: "S", label: "stage url", value: stageUrlValue },
     { key: "p", label: "path", value: row.wt.path },
     { key: "n", label: "slug", value: row.wt.slug },
-    { key: "i", label: "issue url", value: linearUrlForSlug(row.wt.slug) },
+    // URL when a tracker template is configured; the bare parsed id
+    // (COZ-1883) is still worth yanking without one.
+    {
+      key: "i",
+      label: "issue",
+      value: issueUrlForSlug(row.wt.slug) ?? issueIdForSlug(row.wt.slug),
+    },
     { key: "r", label: "pr url", value: prUrlValue },
   ];
 }

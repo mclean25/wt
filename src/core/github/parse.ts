@@ -1,5 +1,5 @@
 import { config } from "../config.ts";
-import type { PrChecks, PrComment, PrReview, PullRequest, RabbitStatus } from "../types.ts";
+import type { PrChecks, PrComment, PrReview, PullRequest, ReviewBotStatus } from "../types.ts";
 import type {
   GqlCommentAuthor,
   GqlPrNode,
@@ -29,7 +29,14 @@ function compileIgnore(patterns: readonly string[]): (name: string | null | unde
   };
 }
 
-const isIgnoredCheck = compileIgnore(config.github.ignoredChecks);
+// The review bot's own check contexts are excluded from the CI rollup
+// unconditionally: the bot has its own badge and an advisory reviewer
+// must never flip the checks badge — no need to duplicate them in
+// `[github] ignored_checks`.
+const isIgnoredCheck = compileIgnore([
+  ...config.github.ignoredChecks,
+  ...config.reviewBot.checkContexts,
+]);
 
 function checkName(c: RawCheck): string | null | undefined {
   return c.__typename === "CheckRun" ? c.name : c.context;
@@ -93,45 +100,151 @@ export function openPrChecks(state: PullRequest["state"], checks: PrChecks): PrC
   return state === "OPEN" && checks === "none" ? "pending" : checks;
 }
 
-// CodeRabbit's status-check context name and GraphQL author login. Both
-// are user-facing strings owned by CR, not us — if they change, the
-// rabbit badge silently disappears (state: "none") rather than breaking
-// the whole pane. Hardcoded by design; mirrors `~/.claude/skills/rabbit`.
-const CR_CONTEXT = "CodeRabbit";
-const CR_LOGIN = "coderabbitai";
+// Review-bot identity, from `[review_bot]` (CodeRabbit preset when the
+// section is absent). The strings are user-facing values owned by the
+// bot, not us — when they drift, the badge silently disappears
+// (state: "none") rather than breaking the whole pane.
+const BOT = config.reviewBot;
+const isBotContext = compileIgnore(BOT.checkContexts);
 
-function rollupRabbit(
+/**
+ * True when `login` is the configured bot. GraphQL reports app logins
+ * without the `[bot]` suffix REST adds (`github-actions` vs
+ * `github-actions[bot]`); strip it on both sides so either spelling in
+ * config matches. Fast-path the exact match — this runs per thread and
+ * per comment on every fetch.
+ */
+function isBotLogin(login: string | null | undefined): boolean {
+  if (!login) return false;
+  if (login === BOT.login) return true;
+  return login.replace(/\[bot\]$/, "") === BOT.login;
+}
+
+/**
+ * Aggregate state of the bot's own check contexts on the current head:
+ * `pending` when any is still running, `done` when at least one exists
+ * and all completed, null when none are attached to this commit (the
+ * bot never ran here — or ran on an older commit).
+ */
+function botContextState(
+  contexts: RawCheck[] | null | undefined,
+): "pending" | "done" | null {
+  let state: "pending" | "done" | null = null;
+  for (const c of contexts ?? []) {
+    if (!isBotContext(checkName(c))) continue;
+    const pending =
+      c.__typename === "CheckRun"
+        ? !!(c.status && c.status !== "COMPLETED")
+        : c.state === "PENDING" || c.state === "EXPECTED";
+    if (pending) return "pending";
+    state = "done";
+  }
+  return state;
+}
+
+const UNTICKED_BOX_RE = /^\s*- \[ \]/;
+const FENCE_RE = /^\s*(```|~~~)/;
+
+/**
+ * Unticked `- [ ]` items in a summary-comment task list. Fenced code
+ * blocks are skipped — a suggestion block quoting checkbox syntax must
+ * not inflate the count. Indented (nested) checkboxes outside fences DO
+ * count: GitHub renders them as real, tickable boxes. Exported for tests.
+ */
+export function countUntickedBoxes(body: string): number {
+  let n = 0;
+  let inFence = false;
+  for (const line of body.split("\n")) {
+    if (FENCE_RE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence && UNTICKED_BOX_RE.test(line)) n++;
+  }
+  return n;
+}
+
+/**
+ * `checklist` mode: the bot posts a summary comment (identified by
+ * `summary_marker`) whose `- [ ]` task list is the unresolved signal —
+ * ticking a box in the GitHub UI is how items get accepted/dismissed.
+ * Thread resolution is NOT the signal here, and the author login can't
+ * be (it's typically `github-actions`, shared with every workflow).
+ *
+ * Staleness: this kind of bot deliberately skips re-running on push, so
+ * a summary older than the head commit's `committedDate` describes an
+ * older diff — flagged, not hidden. (Check contexts can't carry this
+ * signal: comment-triggered re-runs never attach check runs to the PR
+ * head at all, which is also why `pending` derives from a
+ * `pending_marker` ack comment newer than the latest summary.)
+ *
+ * Comment-edit awareness: the latest summary is picked by `createdAt`
+ * (edits must not promote an older summary over a newer one), but the
+ * ack-vs-summary pending comparison uses the last-touched time so a bot
+ * that updates its summary in place — or a human ticking boxes — counts
+ * as fresher than an earlier ack.
+ */
+function rollupChecklist(
+  contexts: RawCheck[] | null | undefined,
+  comments: GqlPrNode["comments"],
+  headCommittedDate: string | null,
+): ReviewBotStatus {
+  type BotComment = { body: string; createdAt: string; updatedAt?: string | null };
+  let summary: BotComment | null = null;
+  let ack: BotComment | null = null;
+  for (const c of comments?.nodes ?? []) {
+    if (!c?.body || !isBotLogin(c.author?.login)) continue;
+    if (BOT.summaryMarker && c.body.startsWith(BOT.summaryMarker)) {
+      if (!summary || c.createdAt > summary.createdAt) summary = c;
+    } else if (BOT.pendingMarker && c.body.startsWith(BOT.pendingMarker)) {
+      if (!ack || c.createdAt > ack.createdAt) ack = c;
+    }
+  }
+  const touchedAt = (c: BotComment): string =>
+    c.updatedAt && c.updatedAt > c.createdAt ? c.updatedAt : c.createdAt;
+  const stale =
+    summary !== null &&
+    headCommittedDate !== null &&
+    summary.createdAt < headCommittedDate;
+  const unresolved = summary ? countUntickedBoxes(summary.body) : 0;
+  if (unresolved > 0) return { state: "unresolved", unresolved, stale };
+  const rerunning =
+    ack !== null && (!summary || ack.createdAt > touchedAt(summary));
+  if (botContextState(contexts) === "pending" || rerunning) {
+    return { state: "pending", unresolved: 0 };
+  }
+  if (summary) return { state: "clean", unresolved: 0, stale };
+  return { state: "none", unresolved: 0 };
+}
+
+function rollupReviewBot(
   state: PullRequest["state"],
   contexts: RawCheck[] | null | undefined,
   threads: GqlReviewThread[] | null | undefined,
-): RabbitStatus {
+  comments: GqlPrNode["comments"],
+  headCommittedDate: string | null,
+): ReviewBotStatus {
   if (state !== "OPEN") return { state: "none", unresolved: 0 };
+  if (BOT.unresolvedVia === "checklist") {
+    return rollupChecklist(contexts, comments, headCommittedDate);
+  }
 
+  // `threads` mode (CodeRabbit): unresolved bot-authored review threads.
   let unresolved = 0;
   for (const t of threads ?? []) {
     if (t.isResolved) continue;
-    if (t.comments.nodes[0]?.author?.login === CR_LOGIN) unresolved++;
+    if (isBotLogin(t.comments.nodes[0]?.author?.login)) unresolved++;
   }
   // Unresolved feedback takes precedence over a fresh re-run — pushes
-  // re-trigger CR routinely and the old threads are still what needs
-  // addressing.
+  // re-trigger the bot routinely and the old threads are still what
+  // needs addressing.
   if (unresolved > 0) return { state: "unresolved", unresolved };
 
-  // Find CR's status-check context to distinguish "still running" from
-  // "done with no findings" from "never ran / not configured".
-  let crContextState: "pending" | "done" | null = null;
-  for (const c of contexts ?? []) {
-    const name = c.__typename === "CheckRun" ? c.name : c.context;
-    if (name !== CR_CONTEXT) continue;
-    if (c.__typename === "CheckRun") {
-      crContextState = c.status && c.status !== "COMPLETED" ? "pending" : "done";
-    } else {
-      crContextState = c.state === "PENDING" || c.state === "EXPECTED" ? "pending" : "done";
-    }
-    break;
-  }
-  if (crContextState === "pending") return { state: "pending", unresolved: 0 };
-  if (crContextState === "done") return { state: "clean", unresolved: 0 };
+  // The bot's check context distinguishes "still running" from "done
+  // with no findings" from "never ran / not configured".
+  const ctxState = botContextState(contexts);
+  if (ctxState === "pending") return { state: "pending", unresolved: 0 };
+  if (ctxState === "done") return { state: "clean", unresolved: 0 };
   return { state: "none", unresolved: 0 };
 }
 
@@ -226,16 +339,17 @@ const COMMENT_LIMIT = 10;
 
 /**
  * A human authored this — has a login, isn't a GraphQL `Bot`, and isn't
- * CodeRabbit (which posts as a user-shaped app on some installs, so the
- * `Bot` check alone can miss it). CR has its own badge + thread count and
- * would otherwise drown the human conversation.
+ * the configured review bot (which posts as a user-shaped app on some
+ * installs, so the `Bot` check alone can miss it). The bot has its own
+ * badge + finding count and would otherwise drown the human
+ * conversation.
  */
 function isHumanAuthor(
   a: GqlCommentAuthor,
 ): a is { login: string; __typename?: string } {
   if (!a?.login) return false;
   if (a.__typename === "Bot") return false;
-  if (a.login === CR_LOGIN) return false;
+  if (isBotLogin(a.login)) return false;
   return true;
 }
 
@@ -267,8 +381,8 @@ function extractComments(pr: GqlPrNode): PrComment[] {
 
 /**
  * Count of unresolved review threads opened by a human. Reuses the
- * thread nodes already fetched for the CR rollup; a thread's opener is
- * its first comment's author.
+ * thread nodes already fetched for the review-bot rollup; a thread's
+ * opener is its first comment's author.
  */
 function countUnresolvedHumanThreads(
   threads: GqlReviewThread[] | null | undefined,
@@ -283,8 +397,8 @@ function countUnresolvedHumanThreads(
 }
 
 export function nodeToPr(pr: GqlPrNode): PullRequest {
-  const contexts =
-    pr.commits.nodes[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? null;
+  const headCommit = pr.commits.nodes[0]?.commit;
+  const contexts = headCommit?.statusCheckRollup?.contexts?.nodes ?? null;
   const threads = pr.reviewThreads?.nodes ?? null;
   const requestedReviewers = extractRequestedReviewers(pr.reviewRequests);
   return {
@@ -305,7 +419,13 @@ export function nodeToPr(pr: GqlPrNode): PullRequest {
       hasStaleChangesRequest(pr.reviews, requestedReviewers),
     ),
     reviewRequests: pr.reviewRequests?.totalCount ?? 0,
-    rabbit: rollupRabbit(pr.state, contexts, threads),
+    reviewBot: rollupReviewBot(
+      pr.state,
+      contexts,
+      threads,
+      pr.comments,
+      headCommit?.committedDate ?? null,
+    ),
     requestedReviewers,
     suggestedReviewers: extractSuggestedReviewers(pr.suggestedReviewers),
     autoMerge: pr.autoMergeRequest
