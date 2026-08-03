@@ -14,7 +14,9 @@ export type { HistoryEntry } from "./actions/history.ts";
 export { evaluateActionRequirements } from "./actions/requirements.ts";
 export { applyVars } from "./actions/template.ts";
 export {
+  ALL_BUILTIN_ACTIONS,
   BUILTIN_ACTIONS,
+  PINNED_BUILTIN_ACTIONS,
   RECENT_WINDOW_MS,
   MAX_RETAINED_RUNS,
   CUSTOM_ACTION_ID,

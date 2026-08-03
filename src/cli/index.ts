@@ -10,6 +10,7 @@ import * as logsCmd from "./commands/logs.ts";
 import * as openCmd from "./commands/open.ts";
 import * as baseCmd from "./commands/base.ts";
 import * as claudeCmd from "./commands/claude.ts";
+import * as devCmd from "./commands/dev.ts";
 import * as restackCmd from "./commands/restack.ts";
 import * as skillsCmd from "./commands/skills.ts";
 import * as eventsCmd from "./commands/events.ts";
@@ -40,6 +41,7 @@ commands:
   classic     launch the classic three-pane TUI regardless of [ui] mode
   base        show / set / clear a worktree's recorded fork base
   claude      drive a worktree's Claude Code session (send / ls / kill)
+  dev         start / stop / inspect a worktree's [dev_server]
 
 Run \`wt <command> --help\` for per-command options where available.`;
 
@@ -62,6 +64,7 @@ const RUNNERS: Record<string, Runner> = {
   _session: sessionExecCmd.run,
   base: baseCmd.run,
   claude: claudeCmd.run,
+  dev: devCmd.run,
   _destroy: destroyCmd.run,
   hub: hubCmd.run,
   // `wt classic` forces the classic TUI even when `[ui] mode = "hub"`.

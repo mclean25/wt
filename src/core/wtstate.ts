@@ -22,6 +22,7 @@ export { parseWtState, WT_STATE_DIR, readWtState } from "./wtstate/io.ts";
 
 export {
   advanceBaseAnchor,
+  claimDevPort,
   clearSlugState,
   moveGroupPast,
   placeSlug,
@@ -29,6 +30,7 @@ export {
   renameSection,
   reparentBaseReferences,
   setSlugBase,
+  setSlugDevPort,
   setSlugSection,
   setTaskPinned,
   setTaskSnooze,

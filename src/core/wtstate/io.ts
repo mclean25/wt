@@ -55,6 +55,14 @@ export function parseWtState(raw: unknown): WtState {
           slugs[k]!.baseSha = rec.baseSha;
         }
       }
+      if (
+        typeof rec.devPort === "number" &&
+        Number.isInteger(rec.devPort) &&
+        rec.devPort > 0 &&
+        rec.devPort <= 65_535
+      ) {
+        slugs[k]!.devPort = rec.devPort;
+      }
       if (rec.automationsPaused === true) {
         slugs[k]!.automationsPaused = true;
       }

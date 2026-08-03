@@ -15,6 +15,7 @@ import {
 } from "./wtstate.ts";
 import { getBackend, getBackendForPath } from "./backend.ts";
 import { config } from "./config.ts";
+import { clearDevServerFiles } from "./dev-server.ts";
 import { resolveInstallCommand } from "./install.ts";
 import { branchExists, git, gitQuiet, originBranchExists, revParse } from "./git.ts";
 import { LINEAR_ID_RE, LINEAR_URL_RE } from "./issue-tracker.ts";
@@ -188,6 +189,7 @@ export async function createWorktree(
   clearClaudeNames(slug);
   clearCodexNames(slug);
   clearOpencodeNames(slug);
+  clearDevServerFiles(slug);
 
   try {
     opts.onPhase?.("fetching origin");

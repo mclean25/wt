@@ -145,6 +145,30 @@ Omit the whole section to disable SST awareness entirely — the stage row, `wt 
 | `aws_profile` | **yes** | — | AWS CLI profile with read access to the state bucket. |
 | `auto_regen_paths` | no | `["sst-env.d.ts"]` | Files in the main clone that `sst` runs regenerate; restored before fetches so they never show as dirt. |
 
+## `[dev_server]` — optional per-worktree dev server
+
+Omit to disable. When configured, each worktree can run one supervised dev server: started/stopped from the `!` picker (pinned "dev server" group — `d` starts/restarts, `s` stops; those quick-pick letters are claimed before user `[[actions]]` keys, which fall back to auto-derivation) or `wt dev`, shown in the `dev` row and the bolt badge (the local twin of the SST deploy bolt), opened with `s` (when no SST stage is deployed) and yanked with `y d`.
+
+```toml
+[dev_server]
+command = "npm run dev -- --port {{port}} --strictPort"
+```
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `command` | **yes** | — | Run via `$SHELL -lc` inside the worktree. `{{port}}` substitutes the allocated port (also exported as `$PORT`). Pin the server to it (`--port {{port}} --strictPort` for Vite) — auto-picking servers drift from the recorded port and break hardcoded HMR sockets. |
+| `port_base` | no | `8100` | Start of the port range wt allocates from. |
+| `port_range` | no | `100` | Range size. Each slug gets a stable port, persisted in wtstate and freed when the worktree is destroyed. |
+| `url` | no | `"http://localhost:{{port}}/"` | URL template for the row, `s` open, and yank. |
+
+Semantics:
+
+- **Survives wt restarts.** The server runs in a tmux session (`<slug>-dev`) on the wt-private server, independent of the TUI process.
+- **Crash restart without thrash.** A supervisor loop restarts the command after an exit; three exits within 10s of their start in a row park it as `crashed` (row turns red, logs stay readable via `wt dev logs` or by attaching to the pane). A SIGINT/SIGTERM exit counts as an intentional stop, not a crash.
+- **Start is restart.** Starting an already-running server kills and relaunches it (picking up config edits).
+- **Cleanup is automatic.** The session is killed with the worktree (`wt rm`, `wt clean`) and swept by the startup orphan reaper; the port reservation is freed with the slug's state.
+- Vite note: if `vite.config` hardcodes `server.hmr.port`, remove it — HMR then follows `--port` automatically, which is what makes per-worktree instances hot-reload correctly.
+
 ## `[issue_tracker]` — optional integration
 
 Omit the section entirely to hide the `issue` row. The section's mere presence surfaces the issue id parsed from the branch slug (`michael/coz-1883-fix` → `COZ-1883`) as an unlinked value — useful when your tracker has no per-task URLs. Add `url_template` (or the Linear preset) to turn the id into a deep link, which also powers the `i` open-issue key and the `y i` yank.
@@ -262,7 +286,7 @@ Omit for classic poll-only behavior. When present, the `wt events` daemon accept
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `rows` | no | `["branch", "base", "issue", "stage", "pr", "claude", "git"]` | Detail-pane row order. Available ids: `branch`, `base`, `path`, `issue` (legacy alias: `linear`), `stage`, `pr`, `claude`, `git`. Unknown ids are ignored; omitted ones are hidden. A row also hides itself when its integration isn't configured (e.g. `issue` without `[issue_tracker]`). The rebase state (restacking / mid-rebase / conflict + files) isn't a row — it renders as a fixed block below the rows, above the AI summary. |
+| `rows` | no | `["branch", "base", "issue", "stage", "dev", "pr", "claude", "git"]` | Detail-pane row order. Available ids: `branch`, `base`, `path`, `issue` (legacy alias: `linear`), `stage`, `dev`, `pr`, `claude`, `git`. Unknown ids are ignored; omitted ones are hidden. A row also hides itself when its integration isn't configured (e.g. `issue` without `[issue_tracker]`, `dev` without `[dev_server]`). The rebase state (restacking / mid-rebase / conflict + files) isn't a row — it renders as a fixed block below the rows, above the AI summary. |
 | `mode` | no | `"classic"` | Which TUI a bare `wt` launches: `"classic"` (the three-pane worktree TUI) or `"hub"` (the tmux-hosted task-inbox layout, see [hub.md](hub.md)). Both modes read/write identical on-disk state; `wt classic` / `wt hub` force a mode regardless of this setting. |
 | `hub_background` | no | `"#1E1E2E"` | `#RRGGBB` background color for hub mode's task pane and the outer tmux server's pane-border paint (see [hub.md](hub.md)). Defaults to the built-in Catppuccin Mocha base; set it to match your own terminal theme if you don't use that palette. |
 
@@ -302,9 +326,9 @@ Fields:
 | `name` | both | — (required) | Picker label. |
 | `prompt` / `shell` | — | — | Exactly one must be set; picks the kind. |
 | `target` | prompt only | `"headless"` | `"headless"` or `"session"` (see above). |
-| `affects` | both | prompt: `["git", "github"]`, shell: `[]` | State domains the action mutates; the matching caches are refreshed when the run exits. Tags: `git`, `github`. Explicit `[]` opts out. |
+| `affects` | both | prompt: `["git", "github"]`, shell: `[]` | State domains the action mutates; the matching caches are refreshed when the run exits. Tags: `git`, `github`, `dev` (the worktree's `[dev_server]` state). Explicit `[]` opts out. |
 | `requires` | both | `[]` | Preconditions; unmet entries gray out in the picker with the reason. Tags: `pr` (any PR exists), `pr.ready` (open non-draft PR), `deployed` (this worktree's SST stage is live). |
-| `key` | both | auto-derived | Single-char quick-pick letter in the `!` menu. |
+| `key` | both | auto-derived | Single-char quick-pick letter in the `!` menu. Lowercase only — keys are case-folded and the picker matches `a-z`, so an uppercase key silently degrades to auto-derivation. With `[dev_server]` configured, `d` and `s` are claimed by the pinned built-ins. |
 | `group` | both | ungrouped | Section label; same-group actions cluster under one header. |
 | `arg_prompt` | both | *(unset)* | Label for a per-launch value prompt. Picking the action first shows recent values (from `~/.cache/wt/action-history.json`) plus a "new…" input; the value substitutes `{{arg}}`. |
 | `label_extract` | both | *(unset)* | Regex (source string, no flags) scanned against the run's output; the last per-line match (capture group 1, or the full match) becomes the history label for the `{{arg}}` value. |

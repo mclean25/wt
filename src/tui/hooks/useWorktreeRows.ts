@@ -19,6 +19,7 @@ import {
   stackSectionKey,
   type WtState,
 } from "../../core/wtstate.ts";
+import { type DevServerStatus } from "../../core/dev-server.ts";
 import { useGithub } from "../../state/hooks.ts";
 import { qk } from "../../state/keys.ts";
 import {
@@ -27,6 +28,7 @@ import {
   worktreesQuery,
   wtClaudeQuery,
   wtDeployQuery,
+  wtDevQuery,
   wtDiffContextQuery,
   wtDirtyQuery,
   wtFirstCommitQuery,
@@ -61,6 +63,7 @@ export type WorktreeFields = {
   dirty: FieldState<readonly string[]>;
   lock: FieldState<Partial<LockMeta> | null>;
   deploy: FieldState<boolean>;
+  dev: FieldState<DevServerStatus>;
   merged: FieldState<boolean>;
   gone: FieldState<boolean>;
   sync: FieldState<SyncState>;
@@ -168,6 +171,7 @@ const FIELD_ORDER = [
   "dirty",
   "lock",
   "deploy",
+  "dev",
   "merged",
   "gone",
   "sync",
@@ -528,6 +532,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
     wtDirtyQuery(wt),
     wtLockQuery(wt),
     wtDeployQuery(wt),
+    wtDevQuery(wt),
     wtMergedQuery(wt),
     wtGoneQuery(wt),
     wtSyncQuery(wt, rowLayout.bases[i]!),
@@ -619,12 +624,13 @@ export function useWorktreeRows(): WorktreeRowsResult {
         dirty: reuseField(prev?.fields.dirty, toFieldState(fieldArr[0] as FieldState<readonly string[]>)),
         lock: reuseField(prev?.fields.lock, toFieldState(fieldArr[1] as FieldState<Partial<LockMeta> | null>)),
         deploy: reuseField(prev?.fields.deploy, toFieldState(fieldArr[2] as FieldState<boolean>)),
-        merged: reuseField(prev?.fields.merged, toFieldState(fieldArr[3] as FieldState<boolean>)),
-        gone: reuseField(prev?.fields.gone, toFieldState(fieldArr[4] as FieldState<boolean>)),
-        sync: reuseField(prev?.fields.sync, toFieldState(fieldArr[5] as FieldState<SyncState>)),
-        claude: reuseField(prev?.fields.claude, toFieldState(fieldArr[6] as FieldState<ClaudeStatus>)),
-        gitActivity: reuseField(prev?.fields.gitActivity, toFieldState(fieldArr[7] as FieldState<GitActivity>)),
-        conflict: reuseField(prev?.fields.conflict, toFieldState(fieldArr[8] as FieldState<MergeConflictProbe>)),
+        dev: reuseField(prev?.fields.dev, toFieldState(fieldArr[3] as FieldState<DevServerStatus>)),
+        merged: reuseField(prev?.fields.merged, toFieldState(fieldArr[4] as FieldState<boolean>)),
+        gone: reuseField(prev?.fields.gone, toFieldState(fieldArr[5] as FieldState<boolean>)),
+        sync: reuseField(prev?.fields.sync, toFieldState(fieldArr[6] as FieldState<SyncState>)),
+        claude: reuseField(prev?.fields.claude, toFieldState(fieldArr[7] as FieldState<ClaudeStatus>)),
+        gitActivity: reuseField(prev?.fields.gitActivity, toFieldState(fieldArr[8] as FieldState<GitActivity>)),
+        conflict: reuseField(prev?.fields.conflict, toFieldState(fieldArr[9] as FieldState<MergeConflictProbe>)),
       };
       const nextStatus = deriveStatus(wt, fields);
       const status = prev && statusEq(prev.status, nextStatus) ? prev.status : nextStatus;

@@ -67,6 +67,32 @@ export type IssueTrackerConfig = {
   urlTemplate: string | null;
 };
 
+/**
+ * Optional per-worktree dev server (`[dev_server]`). wt supervises one
+ * long-lived dev-server process per worktree in a tmux session
+ * (`<slug>-dev`), so it survives wt restarts, auto-restarts on crash
+ * (with give-up backoff so it never thrashes), and is torn down with
+ * the worktree. wt owns port allocation: each slug gets a stable port
+ * from `[port_base, port_base + port_range)`, persisted in wtstate and
+ * substituted for `{{port}}` in `command` (also exported as `$PORT`).
+ * Strictly manual — started/stopped from the `!` picker or `wt dev`.
+ */
+export type DevServerConfig = {
+  /**
+   * Shell command run via `$SHELL -lc` inside the worktree.
+   * `{{port}}` substitutes the allocated port; pin the server to it
+   * (e.g. `npm run dev -- --port {{port}} --strictPort`) so the
+   * recorded port and the listening port can't drift.
+   */
+  command: string;
+  /** First port of the allocation range. */
+  portBase: number;
+  /** Size of the allocation range. */
+  portRange: number;
+  /** URL template for the row/open/yank surfaces; `{{port}}` substituted. */
+  urlTemplate: string;
+};
+
 export type ReviewBotUnresolvedVia = "threads" | "checklist";
 
 /**
@@ -268,7 +294,8 @@ export type AiConfig = OpenAiAiConfig | GeminiAiConfig;
  *
  * `affects` declares which state domains the action mutates so the
  * runner can invalidate the matching cache prefixes after the action
- * exits. Defaults: claude actions push commits → `["git", "github"]`;
+ * exits (`git`, `github`, or `dev` — the per-worktree dev-server
+ * state). Defaults: claude actions push commits → `["git", "github"]`;
  * shell actions are opaque → `[]` (opt in explicitly when needed). An
  * explicit `affects = []` opts out entirely — useful for a claude
  * action that just analyzes without writing.
@@ -288,7 +315,7 @@ export type AiConfig = OpenAiAiConfig | GeminiAiConfig;
  * Both arrays are deduped at parse time. See the architecture block
  * in `state/hooks.ts` for the rules these tags participate in.
  */
-export type EffectTag = "git" | "github";
+export type EffectTag = "git" | "github" | "dev";
 export type RequireTag = "pr" | "pr.ready" | "deployed";
 
 /**
@@ -486,6 +513,7 @@ export type Config = {
   sst: SstConfig | null;
   issueTracker: IssueTrackerConfig | null;
   reviewBot: ReviewBotConfig;
+  devServer: DevServerConfig | null;
   remote: RemoteConfig | null;
   ai: AiConfig | null;
   diff: DiffConfig;
@@ -587,7 +615,7 @@ const GENERIC_DEFAULTS = {
     // `panels/details/rebase-block.tsx`). Old configs listing it are
     // harmless — unknown ids drop silently at resolve time. "linear" is
     // accepted as a legacy alias for "issue" at resolve time.
-    rows: ["branch", "base", "issue", "stage", "pr", "claude", "git"] as const,
+    rows: ["branch", "base", "issue", "stage", "dev", "pr", "claude", "git"] as const,
     // Catppuccin Mocha base — matches the owner's Alacritty theme
     // (`~/.dotfiles/alacritty`) and `applyHubPalette`'s prior hardcode.
     hubBackground: "#1E1E2E",
@@ -629,7 +657,7 @@ const GENERIC_DEFAULTS = {
 export const DEFAULT_CLAUDE_AFFECTS: readonly EffectTag[] = ["git", "github"];
 export const DEFAULT_SHELL_AFFECTS: readonly EffectTag[] = [];
 export const DEFAULT_REQUIRES: readonly RequireTag[] = [];
-const VALID_EFFECT_TAGS = new Set<EffectTag>(["git", "github"]);
+const VALID_EFFECT_TAGS = new Set<EffectTag>(["git", "github", "dev"]);
 const VALID_REQUIRE_TAGS = new Set<RequireTag>(["pr", "pr.ready", "deployed"]);
 
 function configPath(): { path: string; present: boolean } {
@@ -846,6 +874,27 @@ function build(raw: Raw, errs: Errors): Config {
     errs.add('review_bot.summary_marker is required when unresolved_via = "checklist"');
   }
 
+  // [dev_server] — optional; presence turns on the per-worktree dev
+  // server (row, bolt, `!` picker builtins, `wt dev`).
+  const devServerRaw = obj(raw.dev_server);
+  let devServer: DevServerConfig | null = null;
+  if (devServerRaw !== null) {
+    const portBase = errs.optNum(devServerRaw, "port_base", 8100);
+    const portRange = errs.optNum(devServerRaw, "port_range", 100);
+    if (!Number.isInteger(portBase) || portBase < 1 || portBase > 65_535) {
+      errs.add("dev_server.port_base must be a port number (1-65535)");
+    }
+    if (!Number.isInteger(portRange) || portRange < 1 || portBase + portRange > 65_536) {
+      errs.add("dev_server.port_range must keep the range within 1-65535");
+    }
+    devServer = {
+      command: errs.reqStr(devServerRaw, "dev_server", "command"),
+      portBase,
+      portRange,
+      urlTemplate: errs.optStr(devServerRaw, "url", "http://localhost:{{port}}/"),
+    };
+  }
+
   const remoteHost = remoteRaw === null
     ? ""
     : errs.reqStr(remoteRaw, "remote", "host");
@@ -974,6 +1023,7 @@ function build(raw: Raw, errs: Errors): Config {
     sst,
     issueTracker,
     reviewBot,
+    devServer,
     remote,
     ai,
     diff,

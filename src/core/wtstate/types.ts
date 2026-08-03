@@ -57,6 +57,13 @@ export type WtSlugState = {
    */
   baseSha?: string;
   /**
+   * Port allocated to this worktree's `[dev_server]` process. Assigned
+   * on first start from the configured range and kept stable so
+   * browser tabs survive restarts; freed when the slug's state is
+   * cleared (worktree destroy / re-create).
+   */
+  devPort?: number;
+  /**
    * Per-worktree opt-out from `[[automations]]` (Ctrl+A in the TUI).
    * Present only when true; the engine skips paused slugs entirely
    * (no fires, no queued intents).

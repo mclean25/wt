@@ -63,8 +63,10 @@ export const HUB_HOME_SESSION = "wt-hub-home";
  *
  * Action sessions are not user-attachable and are not driven by the
  * F-key codepath in this module — `core/tmux/action-sessions.ts` owns their
- * lifecycle. The kind is registered here so `listSessions` and
- * `reapOrphanedSessions` see them uniformly with the other kinds.
+ * lifecycle. Same story for `dev` (the `[dev_server]` supervisor,
+ * owned by `core/dev-server.ts`). Both kinds are registered here so
+ * `listSessions` and `reapOrphanedSessions` see them uniformly with
+ * the other kinds.
  */
 export type SessionKind =
   | "claude"
@@ -72,7 +74,8 @@ export type SessionKind =
   | "opencode"
   | "diff"
   | "shell"
-  | "action";
+  | "action"
+  | "dev";
 
 export const SUFFIX: Record<Exclude<SessionKind, "claude">, string> = {
   codex: "-codex",
@@ -80,6 +83,7 @@ export const SUFFIX: Record<Exclude<SessionKind, "claude">, string> = {
   diff: "-diff",
   shell: "-shell",
   action: "-action",
+  dev: "-dev",
 };
 
 export function harnessIdForKind(kind: SessionKind): HarnessId | null {
@@ -148,8 +152,8 @@ export function shQuote(s: string): string {
  * (a description like "Add codex" or a branch like `eng-1234-codex`
  * slugifies into one) makes its primary claude session
  * indistinguishable from a same-namespace `<bare>-codex` session in
- * tmux. `-codex` and `-opencode` make this materially riskier than
- * the old `-diff`/`-shell` collisions because AI harness names are
+ * tmux. `-codex`, `-opencode`, and `-dev` make this materially riskier
+ * than the old `-diff`/`-shell` collisions because those are
  * plausible branch-description words. The only proper fixes are
  * slug-level validation or moving kinds to a separator that can't
  * appear in slugs. Out of scope here; flagged for a future sweep.

@@ -102,7 +102,7 @@ function scrubStderr(raw: string): string | null {
  */
 export function resolveSessionIdentity(
   slug: string,
-  kind: Exclude<SessionKind, "action">,
+  kind: Exclude<SessionKind, "action" | "dev">,
   managedName: string | null | undefined,
 ): {
   harnessId: HarnessId | null;
@@ -133,7 +133,7 @@ export function resolveSessionIdentity(
  */
 export function buildInnerArgs(params: {
   cwd: string;
-  kind: Exclude<SessionKind, "action">;
+  kind: Exclude<SessionKind, "action" | "dev">;
   harness: Harness | null;
   managedNameNorm: string | null;
   resumeSessionId?: string | null;
@@ -200,7 +200,7 @@ export function wrapInnerArgs(stderrPath: string, innerArgs: string[]): string[]
 export async function attachOrCreate(opts: {
   slug: string;
   cwd: string;
-  kind: Exclude<SessionKind, "action">;
+  kind: Exclude<SessionKind, "action" | "dev">;
   /**
    * For AI harness kinds (`claude` / `codex` / `opencode`). Claude:
    * `null` → primary tmux slot, string → named additional session
@@ -541,7 +541,7 @@ export async function attachOrCreate(opts: {
 export async function ensureSessionDetached(opts: {
   slug: string;
   cwd: string;
-  kind: Exclude<SessionKind, "action">;
+  kind: Exclude<SessionKind, "action" | "dev">;
   managedName?: string | null;
   resumeSessionId?: string | null;
   claudeDisplayName?: string;

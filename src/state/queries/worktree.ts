@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { config } from "../../core/config.ts";
+import { devServerStatus, type DevServerStatus } from "../../core/dev-server.ts";
 import { claudeStatus, type ClaudeStatus } from "../../core/harness/claude/jsonl.ts";
 import { branchIsGone, branchIsMerged, effectiveBaseOrTrunk, firstCommitSubject, invalidateMainFirstParents, mergeConflictProbe, type MergeConflictProbe } from "../../core/git.ts";
 import { gitActivity, type GitActivity } from "../../core/git-activity.ts";
@@ -64,6 +65,21 @@ export const wtDeployQuery = (wt: Pick<Worktree, "slug" | "path">) =>
     queryKey: qk.wt(wt.slug).deploy(),
     queryFn: async (): Promise<boolean> => isOurStageDeployed(wt),
     staleTime: STALE.fast,
+  });
+
+/**
+ * `[dev_server]` state for the slug (tmux session + port probe; cheap
+ * and local). The dev-server start/stop actions carry `affects =
+ * ["dev"]`, whose dispatch invalidates the slug's fields — this
+ * staleTime is the backstop for out-of-band changes (a crash, a
+ * hand-run `wt dev`).
+ */
+export const wtDevQuery = (wt: Pick<Worktree, "slug">) =>
+  queryOptions({
+    queryKey: qk.wt(wt.slug).dev(),
+    queryFn: async (): Promise<DevServerStatus> => devServerStatus(wt.slug),
+    staleTime: STALE.fast,
+    refetchInterval: 15_000,
   });
 
 export const wtMergedQuery = (wt: Pick<Worktree, "slug" | "branch">) =>

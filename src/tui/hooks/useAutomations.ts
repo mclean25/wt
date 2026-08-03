@@ -46,7 +46,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   actionRegistry,
-  BUILTIN_ACTIONS,
+  ALL_BUILTIN_ACTIONS,
   evaluateActionRequirements,
   type ActionDef,
 } from "../../core/actions.ts";
@@ -172,7 +172,7 @@ function pairTarget(fire: AutomationFire): string {
 function resolveActionDef(runId: string): ActionDef | null {
   return (
     config.actions.find((d) => d.id === runId) ??
-    BUILTIN_ACTIONS.find((d) => d.id === runId) ??
+    ALL_BUILTIN_ACTIONS.find((d) => d.id === runId) ??
     null
   );
 }

@@ -92,6 +92,54 @@ export function placeSlug(
  * the slug entry on first write so a brand-new worktree (no manual
  * section/order yet) can still carry its base.
  */
+/**
+ * Atomically claim the first still-unclaimed candidate port for `slug`.
+ * The caller pre-filters `candidates` to OS-level-free ports (async
+ * probes can't run under this sync flock); this re-reads the state
+ * INSIDE the lock so two processes allocating concurrently can't both
+ * persist the same port — the loser sees the winner's claim and takes
+ * the next candidate. Returns the claimed port, or null when every
+ * candidate got claimed in the meantime (caller rescans).
+ */
+export function claimDevPort(slug: string, candidates: readonly number[]): number | null {
+  return withWtStateLock(() => {
+    const state = readWtState();
+    const claimed = new Set<number>();
+    for (const [s, rec] of Object.entries(state.slugs)) {
+      if (s !== slug && rec.devPort !== undefined) claimed.add(rec.devPort);
+    }
+    for (const port of candidates) {
+      if (claimed.has(port)) continue;
+      const next: WtState = { ...state, slugs: { ...state.slugs } };
+      const entry: WtSlugState = { section: null, order: 0, ...state.slugs[slug] };
+      entry.devPort = port;
+      next.slugs[slug] = entry;
+      writeWtState(next);
+      return port;
+    }
+    return null;
+  });
+}
+
+/**
+ * Persist (or clear) the slug's allocated dev-server port. Mirrors
+ * `setSlugBase`'s shape — creates the slug entry on first write, no-op
+ * when clearing a slug with no record.
+ */
+export function setSlugDevPort(slug: string, port: number | null): void {
+  withWtStateLock(() => {
+    const state = readWtState();
+    const prev = state.slugs[slug];
+    if (!prev && port === null) return;
+    const next: WtState = { ...state, slugs: { ...state.slugs } };
+    const entry: WtSlugState = { section: null, order: 0, ...prev };
+    if (port === null) delete entry.devPort;
+    else entry.devPort = port;
+    next.slugs[slug] = entry;
+    writeWtState(next);
+  });
+}
+
 export function setSlugBase(
   slug: string,
   base: { branch: string; sha?: string } | null,

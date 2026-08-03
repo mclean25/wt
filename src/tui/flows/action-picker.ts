@@ -5,6 +5,7 @@
  */
 import {
   BUILTIN_ACTIONS,
+  PINNED_BUILTIN_ACTIONS,
   evaluateActionRequirements,
 } from "../../core/actions.ts";
 import { config } from "../../core/config.ts";
@@ -28,7 +29,9 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
       pr: row?.pr,
       deployed: row?.fields.deploy.data ?? false,
     };
-    const defs = [...config.actions, ...BUILTIN_ACTIONS];
+    // Pinned builtins (dev server) lead, then the user's actions, then
+    // the trailing builtins (review-bot re-run).
+    const defs = [...PINNED_BUILTIN_ACTIONS, ...config.actions, ...BUILTIN_ACTIONS];
     const keyById = assignActionKeys(defs);
     const actionItems = defs.map((def) => ({
       kind: "action" as const,

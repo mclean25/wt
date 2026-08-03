@@ -16,11 +16,13 @@ type Props = { row: WorktreeRow };
 export function yankItemsFor(row: WorktreeRow): Item[] {
   const stageUrlValue =
     row.fields.deploy.data === true ? stageUrl(row.wt.stage) : null;
+  const dev = row.fields.dev.data;
   const prUrlValue = row.pr ? row.pr.url : null;
   return [
     { key: "b", label: "branch", value: row.wt.branch || null },
     { key: "s", label: "stage", value: row.wt.stage },
     { key: "S", label: "stage url", value: stageUrlValue },
+    { key: "d", label: "dev url", value: dev?.running ? dev.url : null },
     { key: "p", label: "path", value: row.wt.path },
     { key: "n", label: "slug", value: row.wt.slug },
     // URL when a tracker template is configured; the bare parsed id

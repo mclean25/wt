@@ -173,6 +173,8 @@ export type SessionClassification = {
   diff: Set<string>;
   shell: Set<string>;
   action: Set<string>;
+  /** `[dev_server]` supervisor sessions (see core/dev-server.ts). */
+  dev: Set<string>;
   /** Local wrapper sessions for REMOTE worktree sessions (hub mode). */
   remote: RemoteWrapperEntry[];
 };
@@ -193,6 +195,7 @@ export function classifySessions(names: Iterable<string>): SessionClassification
   const diff = new Set<string>();
   const shell = new Set<string>();
   const action = new Set<string>();
+  const dev = new Set<string>();
   const remote: RemoteWrapperEntry[] = [];
   for (const name of names) {
     // The reserved hub-home dashboard session isn't a worktree session
@@ -217,6 +220,8 @@ export function classifySessions(names: Iterable<string>): SessionClassification
       shell.add(name.slice(0, -SUFFIX.shell.length));
     } else if (name.endsWith(SUFFIX.action)) {
       action.add(name.slice(0, -SUFFIX.action.length));
+    } else if (name.endsWith(SUFFIX.dev)) {
+      dev.add(name.slice(0, -SUFFIX.dev.length));
     } else {
       const tildeIdx = name.lastIndexOf(CLAUDE_NAMED_SEP);
       if (tildeIdx > 0) {
@@ -230,7 +235,7 @@ export function classifySessions(names: Iterable<string>): SessionClassification
       }
     }
   }
-  return { claude, claudeSlugs, codex, opencode, diff, shell, action, remote };
+  return { claude, claudeSlugs, codex, opencode, diff, shell, action, dev, remote };
 }
 
 /**

@@ -34,9 +34,9 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `c` | clean all merged/gone worktrees (confirm) |
 | `a` | archive / restore the row |
 | `i` | open the tracker issue (needs `[issue_tracker]` with a URL template) |
-| `s` | open the deployed stage URL |
+| `s` | open the deployed stage URL, or the running `[dev_server]` URL when no stage is deployed |
 | `t` | regenerate the AI summary |
-| `y` | yank menu — copy branch (`b`), stage (`s`), stage URL (`S`), path (`p`), slug (`n`), issue URL or bare id (`i`), PR URL (`r`) |
+| `y` | yank menu — copy branch (`b`), stage (`s`), stage URL (`S`), dev-server URL (`d`), path (`p`), slug (`n`), issue URL or bare id (`i`), PR URL (`r`) |
 | `r` / `Ctrl+R` | refresh / hard refresh (clear caches, confirm) |
 
 When the SSH host is sleeping or offline, its last-known worktrees remain in
@@ -71,7 +71,7 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 | `F10` | enter the row's plain shell session; from another session, switch straight to it; press again to return home |
 | `Shift+F10` / `Shift+F11` | kill the shell / diff session (confirm) |
 | `;` | sessions picker — attach (`; ;`), new named claude (`; c`), new codex/opencode (`; x` / `; o`), graceful close (`; d`), kill (`; x` on a session row) |
-| `!` | action picker — run a configured `[[actions]]` entry, `! c` for a custom prompt; `!` on a running action offers to kill it |
+| `!` | action picker — run a configured `[[actions]]` entry, `! c` for a custom prompt; with `[dev_server]` configured the start/stop pair is pinned at the top; `!` on a running action offers to kill it |
 | `,` / `.` / `/` | attach the persistent harness session for the wt repo / main clone / dotfiles |
 | `>` / `O` | open the wt repo / main clone in Zed |
 

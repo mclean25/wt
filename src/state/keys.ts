@@ -98,6 +98,8 @@ export const qk = {
       dirty: () => ["wt", slug, "dirty"] as const,
       lock: () => ["wt", slug, "lock"] as const,
       deploy: () => ["wt", slug, "deploy"] as const,
+      /** `[dev_server]` supervisor state (session + port probe). */
+      dev: () => ["wt", slug, "dev"] as const,
       merged: () => ["wt", slug, "merged"] as const,
       gone: () => ["wt", slug, "gone"] as const,
       /**

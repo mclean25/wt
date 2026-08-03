@@ -71,6 +71,10 @@ List SST stages in the configured state bucket and flag orphans (no matching liv
 - `--yes` / `-y` — skip the destroy confirmation.
 - `--json` — machine-readable `{live, orphaned}`.
 
+### `wt dev <start|stop|status|logs> [<slug>]`
+
+Manage the worktree's `[dev_server]` (see [configuration.md](configuration.md#dev_server--optional-per-worktree-dev-server)). `start` is also restart; `stop` keeps the slug's port reserved; `logs` prints the supervisor pane's recent output. The slug defaults to the worktree containing the current directory.
+
 ### `wt logs [<slug>]`
 
 Tail a destroy log (`tail -F`). No slug ⇒ the most recently modified log.

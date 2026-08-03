@@ -17,7 +17,7 @@ import { useEffect, useRef } from "react";
 import {
   actionRegistry,
   applyVars,
-  BUILTIN_ACTIONS,
+  ALL_BUILTIN_ACTIONS,
   evaluateActionRequirements,
   type ActionDef,
   type ActionVars,
@@ -154,6 +154,12 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
             case "github":
               void rg();
               break;
+            case "dev":
+              // Dev-server start/stop — refresh the slug's per-worktree
+              // fields so the dev row/bolt snap without waiting out the
+              // staleTime. Slug-scoped; no cross-worktree state moved.
+              void inv(run.slug);
+              break;
             default: {
               // Exhaustiveness check — a new EffectTag without a case
               // here would silently skip its invalidation, leaving the
@@ -177,7 +183,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           if (run.status === "succeeded") {
             const def =
               config.actions.find((d) => d.id === run.actionId) ??
-              BUILTIN_ACTIONS.find((d) => d.id === run.actionId) ??
+              ALL_BUILTIN_ACTIONS.find((d) => d.id === run.actionId) ??
               null;
             const label = extractLabel(run.lines, def?.labelExtract ?? null);
             // Suppress redundant labels — when the regex captures the

@@ -15,6 +15,7 @@ import { startCodexEventPolling } from "../core/harness/codex/events.ts";
 import { harnessTailRegistry } from "../core/harness/tail.ts";
 import { startOpencodeEventPolling } from "../core/harness/opencode/events.ts";
 import { createLogger, flushLogger, setEventSink } from "../core/logger.ts";
+import { reapDevServerFiles } from "../core/dev-server.ts";
 import { reapDestroyLogs } from "../core/logs.ts";
 import {
   sessionTailRegistry,
@@ -140,6 +141,7 @@ async function reapStartup(): Promise<void> {
     // always kept (a destroy in flight may still be writing).
     reapShellLogs(live);
     reapDestroyLogs(live);
+    reapDevServerFiles(live);
     // Kill any tmux sessions whose slug no longer exists. Covers the
     // case where a worktree was removed externally (or in a prior wt
     // run that crashed before the destroy hook fired). Session slots

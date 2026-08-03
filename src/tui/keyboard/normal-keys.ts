@@ -884,17 +884,28 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       return;
     }
     if (isPlainLetter(k, "s")) {
-      if (!current.fields.deploy.data) {
-        rowLog.event.warn("not deployed");
+      // Live-environment open: the deployed SST stage when there is
+      // one, else the running [dev_server] — the same either/or the
+      // bolt badge renders.
+      if (current.fields.deploy.data) {
+        const url = stageUrl(current.wt.stage);
+        if (!url) {
+          rowLog.event.warn("no stage domain configured");
+          return;
+        }
+        void openUrlHidingTerminal(url);
+        rowLog.event.info(`opened ${current.wt.stage}`);
         return;
       }
-      const url = stageUrl(current.wt.stage);
-      if (!url) {
-        rowLog.event.warn("no stage domain configured");
+      const dev = current.fields.dev.data;
+      if (dev?.running && dev.url) {
+        void openUrlHidingTerminal(dev.url);
+        rowLog.event.info(`opened dev server (${dev.url})`);
         return;
       }
-      void openUrlHidingTerminal(url);
-      rowLog.event.info(`opened ${current.wt.stage}`);
+      rowLog.event.warn(
+        config.devServer ? "no stage deployed / dev server running" : "not deployed",
+      );
       return;
     }
     if (k.sequence === "y") {

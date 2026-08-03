@@ -36,7 +36,7 @@ export function badgeClusterCells(
   actionRunning: boolean,
   activeHarnessId: HarnessId | undefined,
 ): number {
-  const isDeployed = row.fields.deploy.data ?? false;
+  const isDeployed = boltLit(row);
   const showChecks =
     !!row.pr && row.pr.state === "OPEN" && row.pr.checks !== "none";
   // Action and harness-glyph slots coexist (e.g. a row running an
@@ -128,6 +128,17 @@ function rebaseHint(
 }
 
 /**
+ * The bolt slot lights for either "environment is live" source: an SST
+ * stage deployed for this worktree, or its `[dev_server]` running.
+ * They share the slot because they answer the same question — "is
+ * there a live environment serving this branch" — and never coexist
+ * meaningfully on one repo.
+ */
+function boltLit(row: WorktreeRow): boolean {
+  return (row.fields.deploy.data ?? false) || (row.fields.dev.data?.running ?? false);
+}
+
+/**
  * Human-review hint. Glyph/color from `reviewBadge`; gated to OPEN
  * non-draft PRs (mirrors `reviewLabel` + `buildPrSegments` in pr.tsx).
  */
@@ -182,7 +193,7 @@ export function BadgeCluster({
   const prFg = row.archived ? theme.fgDim : prb.fg;
   const c = checkGlyph(row);
   const checkFg = row.archived ? theme.fgDim : c.fg;
-  const isDeployed = row.fields.deploy.data ?? false;
+  const isDeployed = boltLit(row);
   const deployFg = row.archived
     ? theme.fgDim
     : isDeployed

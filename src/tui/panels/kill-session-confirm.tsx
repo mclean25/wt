@@ -5,7 +5,7 @@ import { theme } from "../theme.ts";
 type Props = {
   slug: string;
   /** Which session kind is being killed — drives the body copy. */
-  sessionKind: Exclude<SessionKind, "action">;
+  sessionKind: Exclude<SessionKind, "action" | "dev">;
 };
 
 const COPY: Record<Props["sessionKind"], { title: string; body: string }> = {
