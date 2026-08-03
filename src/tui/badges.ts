@@ -189,10 +189,12 @@ export function rebaseBadge(
 
 /**
  * The review-bot glyph: CodeRabbit keeps its whimsy carrot; any other
- * configured `[review_bot]` gets the generic robot.
+ * configured `[review_bot]` gets the checklist (deliberately NOT a
+ * robot — the claude harness glyph is nf-md-robot, and an identical
+ * glyph one slot over reads as a phantom second session).
  */
 export const REVIEW_BOT_GLYPH =
-  config.reviewBot.login === "coderabbitai" ? NF.carrot : NF.robot;
+  config.reviewBot.login === "coderabbitai" ? NF.carrot : NF.reviewChecklist;
 
 /**
  * Glyph + color for review-bot state. Single glyph, color-coded: it

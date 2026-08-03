@@ -262,7 +262,7 @@ rerun_command  = "/codex-review"
 
 Checklist-mode bots typically don't re-run on push, so a review can lag the branch head. wt detects this (the latest summary comment predates the head commit) and marks the state **stale**: the details row shows `(old head)` and a stale *clean* dims instead of showing green. Badge states: pending (running / re-run acked), unresolved (with count), clean, none — unresolved wins over a concurrent re-run, since old findings still need addressing. Checkbox counting skips fenced code blocks, so a suggestion block quoting checkbox syntax doesn't inflate the count. One sizing note: the summary comment is found within the PR's most recent 30 comments — on an extremely chatty PR whose last 30 comments postdate the bot's summary, the badge reads as if the bot never ran.
 
-The badge keeps the carrot glyph for CodeRabbit and switches to a robot glyph for any other login.
+The badge keeps the carrot glyph for CodeRabbit and switches to a checklist glyph for any other login (deliberately not a robot — that's the Claude harness session glyph).
 
 ## `[github.events]` — optional webhook daemon
 

@@ -52,9 +52,13 @@ export const NF = {
 	// "color-only" exception called out in `badges.ts` rule #1's "if
 	// possible" caveat. The carrot is CodeRabbit whimsy (on-theme with
 	// the "carrots / grazing / resting" vocab in pr.tsx); any other
-	// configured [review_bot] gets the generic robot.
+	// configured [review_bot] gets the checklist — on-theme with the
+	// checkbox task list that IS the unresolved signal in checklist
+	// mode. NOT a robot glyph: the claude harness glyph already owns
+	// nf-md-robot (U+F06A9), and reusing it put two identical robots in
+	// the list cluster (session glyph + bot badge).
 	carrot: "\u{EF3B}", // nf-md-carrot
-	robot: "\u{F06A9}", // nf-md-robot — generic review bot
+	reviewChecklist: "\u{F45E}", // nf-oct-checklist — generic review bot
 
 	// Rebase-conflict pre-flight: HEAD won't merge/rebase cleanly onto its
 	// base. Warning triangle (distinct from the CI `checkFail` x_circle so
