@@ -36,6 +36,9 @@ reports every missing field at once). The standard install aliases
   bare slug. A bare id attaches to that id's existing branch (or creates
   `michael/coz-1953` if none); giving title words or `--slug` always mints a
   fresh branch — that's how a second worktree for an in-flight id is made.
+  Ids are tracker ids (`COZ-1953`) or `GH-<n>` for a GitHub issue on the
+  repo itself — `gh-970` slugs link to `<origin repo>/issues/970`
+  automatically (the `i` key and `y i` yank).
   `--base <ref>` forks from a non-trunk parent and records it — the record
   that stacks the new worktree on that parent (diff base, TUI grouping,
   restack target).

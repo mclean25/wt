@@ -22,14 +22,56 @@ export function issueIdForSlug(slug: string): string | null {
 }
 
 /**
- * Deep link for the slug's issue id via `[issue_tracker].url_template`
- * (or the `[issue_tracker.linear]` preset). Null when no template is
- * configured or the slug has no id.
+ * A `GH-<n>` id refers to a GitHub issue on this repo — a built-in
+ * convention, not a tracker prefix (GitHub has no team-id prefixes of
+ * its own, so `gh-970` in a slug is unambiguous). It routes to the
+ * origin repo's /issues/<n> instead of `url_template`.
+ */
+const GH_ID_RE = /^GH-(\d+)$/;
+
+/**
+ * Web URL for a git remote (`git@github.com:o/r.git`,
+ * `https://github.com/o/r.git`, `ssh://git@github.com/o/r` →
+ * `https://github.com/o/r`). Null when the shape isn't recognized —
+ * bare host aliases (`work:o/r.git`) don't name a real host, so no URL
+ * is derivable. Exported for tests.
+ */
+export function repoWebUrl(remote: string): string | null {
+  const m =
+    /^(?:git@|ssh:\/\/git@|https?:\/\/)([^/:]+\.[^/:]+)[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(
+      remote.trim(),
+    );
+  return m ? `https://${m[1]}/${m[2]}/${m[3]}` : null;
+}
+
+/** Memoized origin-remote web URL of the main clone (null = underivable). */
+let _mainRepoWebUrl: string | null | undefined;
+function mainRepoWebUrl(): string | null {
+  if (_mainRepoWebUrl === undefined) {
+    const r = Bun.spawnSync(
+      ["git", "-C", config.paths.mainClone, "remote", "get-url", "origin"],
+    );
+    _mainRepoWebUrl =
+      r.exitCode === 0 ? repoWebUrl(r.stdout.toString()) : null;
+  }
+  return _mainRepoWebUrl;
+}
+
+/**
+ * Deep link for the slug's issue id. `GH-<n>` ids link to the origin
+ * repo's GitHub issue; everything else goes through
+ * `[issue_tracker].url_template` (or the `[issue_tracker.linear]`
+ * preset). Null when no link is derivable or the slug has no id.
  */
 export function issueUrlForSlug(slug: string): string | null {
-  const template = config.issueTracker?.urlTemplate;
-  if (!template) return null;
   const id = issueIdForSlug(slug);
   if (!id) return null;
+  const gh = GH_ID_RE.exec(id);
+  if (gh) {
+    const repo = mainRepoWebUrl();
+    return repo ? `${repo}/issues/${gh[1]}` : null;
+  }
+  const template = config.issueTracker?.urlTemplate;
+  if (!template) return null;
   return template.replaceAll("{id}", id);
 }

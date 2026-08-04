@@ -876,7 +876,9 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     if (isPlainLetter(k, "i")) {
       const url = issueUrlForSlug(current.wt.slug);
       if (!url) {
-        rowLog.event.warn("no issue URL (needs an id in the slug + [issue_tracker] url_template)");
+        rowLog.event.warn(
+          "no issue URL (needs an id in the slug; non-GH ids also need [issue_tracker] url_template)",
+        );
         return;
       }
       void openUrlHidingTerminal(url);

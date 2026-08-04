@@ -193,6 +193,8 @@ workspace = "acme"
 
 Id parsing itself is driven by the slug shape (`[a-z]+-\d+`), independent of `[branch] id_pattern`.
 
+**Built-in `GH-` convention:** an id with the `gh` prefix (`michael/gh-970-fix-typo` → `GH-970`) is taken to mean a GitHub issue on this repo and links to `<origin repo>/issues/970`, bypassing `url_template`. The repo URL is derived from the main clone's `origin` remote (ssh, scp, or https forms; bare ssh-config aliases can't be resolved, so those ids render unlinked). No configuration — this works even with a bare `[issue_tracker]` section, and lets GitHub-issue worktrees coexist with tracker-id worktrees.
+
 ## `[ai]` — optional integration
 
 Omit to disable the AI-generated title/brief/description in the details pane. Two providers:
