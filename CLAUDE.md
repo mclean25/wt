@@ -63,4 +63,5 @@ Commit and push directly to `main`. Don't create feature branches, don't open PR
 - **Config loads once at module init.** No hot reload — editing the TOML requires restarting `wt`.
 - **Remote argv never crosses SSH as raw arguments.** OpenSSH reparses its command through the remote login shell (Fish on the first supported host). Route commands through `core/remote-protocol.ts` + the `_remote` entrypoint; do not interpolate user input into the SSH command string.
 - **`Bun.TOML.parse` is built in.** No external TOML lib needed; don't add one.
+- **Never park a process on a bare `await new Promise(() => {})`.** With no other pending handle, Bun spins the event loop at 100% CPU instead of blocking (bun 1.3.14; cost a 19h CPU-time burn in `wt _home`). A long-lived idle process needs a real handle to block on — an inert `setInterval`, or `process.stdin.resume()`. Applies to any new `_`-prefixed pane entrypoint that's meant to just sit there.
 - **macOS-only utilities** (`open`, `pbcopy`, launchd) are assumed. Anything that shells out to them stays guarded by the macOS assumption noted in the README.
