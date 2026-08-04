@@ -13,12 +13,16 @@ targets:
 # wt — worktree CLI/TUI
 
 `wt` is a terminal UI + CLI for keeping multiple git worktrees in flight at
-once. A main clone stays on `main`; active branches live in per-worktree
-checkouts under a configured `worktree_root`. Each row shows live git status, PR
-state, preview-deploy state, issue link, and Claude Code session activity.
+once. A main clone stays on the trunk branch (`[branch] base` — `main` here,
+`staging` on cozee-dev); active branches live in per-worktree checkouts under a
+configured `worktree_root`. Each row shows live git status, PR state,
+preview-deploy state, issue id/link, review-bot state, and coding-agent session
+activity.
 
-Config lives at `~/.config/wt/config.toml` (`wt` refuses to start without it;
-the loader reports every missing field at once). The standard install aliases
+Config lives at `~/.config/wt/config.toml`, with the nearest `.wt.toml` (from
+cwd upward) recursively merged over it for repo-specific settings like the
+trunk branch (`wt` refuses to start without the required fields; the loader
+reports every missing field at once). The standard install aliases
 `wt='~/.wt/bin/wt'`; if `wt` isn't found in a non-interactive shell, invoke
 `~/.wt/bin/wt` directly.
 
@@ -26,9 +30,15 @@ the loader reports every missing field at once). The standard install aliases
 
 - `wt` — interactive TUI (vim keys: `j`/`k`/Enter, `?` for help).
 - `wt ls` — list worktrees.
-- `wt new <input>` — create a worktree (and branch). `--base <ref>` forks from a
-  non-trunk parent and records it — the record that stacks the new worktree on
-  that parent (diff base, TUI grouping, restack target).
+- `wt new <input>` — create a worktree (and branch). Input is an issue id with
+  optional pasted title words (`wt new COZ-1953 fix calendar rendering` →
+  `michael/coz-1953-fix-calendar-rendering`), a tracker URL, a branch, or a
+  bare slug. A bare id attaches to that id's existing branch (or creates
+  `michael/coz-1953` if none); giving title words or `--slug` always mints a
+  fresh branch — that's how a second worktree for an in-flight id is made.
+  `--base <ref>` forks from a non-trunk parent and records it — the record
+  that stacks the new worktree on that parent (diff base, TUI grouping,
+  restack target).
 - `wt rm [slug]` — remove a worktree (optionally its branch).
 - `wt clean` — bulk-remove merged/gone worktrees.
 - `wt doctor [slug]` — health report (dirty, sync, PR, merged).

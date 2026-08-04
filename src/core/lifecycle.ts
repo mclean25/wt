@@ -18,7 +18,7 @@ import { config } from "./config.ts";
 import { clearDevServerFiles } from "./dev-server.ts";
 import { resolveInstallCommand } from "./install.ts";
 import { branchExists, git, gitQuiet, originBranchExists, revParse } from "./git.ts";
-import { LINEAR_ID_RE, LINEAR_URL_RE } from "./issue-tracker.ts";
+import { ISSUE_ID_RE, ISSUE_URL_RE } from "./issue-tracker.ts";
 import { lockLabel, lockStatus, tryAcquireLock } from "./locks.ts";
 import { runStreaming } from "./proc.ts";
 import { computeStage, dirSlug, slugify } from "./stage.ts";
@@ -84,7 +84,6 @@ function escapeRegex(s: string): string {
 
 export type ParseInputOptions = {
   slugHint?: string;
-  promptForSlug?: (id: string) => Promise<string | null>;
   /**
    * Widen the issue-ID search to branches from any author
    * (`<anyone>/<id>-...`). Without this, only `michael/` matches.
@@ -105,12 +104,26 @@ export async function parseInput(
   raw = raw.trim();
   if (!raw) throw new Error("empty input");
 
-  const urlMatch = LINEAR_URL_RE.exec(raw);
-  if (urlMatch && urlMatch[1]) raw = urlMatch[1].toUpperCase();
-
-  if (LINEAR_ID_RE.test(raw)) {
-    const id = raw.toUpperCase();
+  // "<ID> [title words…]" — a leading issue id, optionally followed by
+  // pasted title text that becomes the slug. There is no tracker API:
+  // the id (and title, when the user pastes one) is all wt ever gets.
+  // A leading tracker URL reduces to its id first, so "URL note" and
+  // "ID note" behave identically.
+  const tokens = raw.split(/\s+/);
+  const urlMatch = ISSUE_URL_RE.exec(tokens[0]!);
+  if (urlMatch && urlMatch[1]) tokens[0] = urlMatch[1].toUpperCase();
+  if (ISSUE_ID_RE.test(tokens[0]!)) {
+    const id = tokens[0]!.toUpperCase();
     const idLower = id.toLowerCase();
+    // An explicit slug (--slug, which wins, or inline title words)
+    // always mints a fresh branch — this is deliberately how a SECOND
+    // worktree for an id already in flight gets created. Only a bare
+    // id attaches. Slugified-to-nothing text (e.g. "!!!") counts as
+    // bare — never emit a trailing-dash branch.
+    const slug = slugify(opts.slugHint ?? tokens.slice(1).join(" "));
+    if (slug) {
+      return `${config.branch.prefix}/${idLower}-${slug}`;
+    }
     const found = await findBranchesForIssue(idLower, { anyAuthor: opts.anyAuthor });
     if (found.length === 1) return found[0]!;
     if (found.length > 1) {
@@ -123,23 +136,19 @@ export async function parseInput(
         `Multiple branches for ${id}: ${found.join(", ")}. Pass the branch explicitly.`,
       );
     }
-    if (opts.slugHint) {
-      return `${config.branch.prefix}/${idLower}-${slugify(opts.slugHint)}`;
-    }
-    if (opts.promptForSlug) {
-      const slug = await opts.promptForSlug(id);
-      if (!slug) throw new Error(`no slug provided for ${id}`);
-      return `${config.branch.prefix}/${idLower}-${slugify(slug)}`;
-    }
-    throw new Error(`No branch for ${id}; pass slug or run interactively.`);
+    // No branch yet and no title given: the id alone is the slug.
+    return `${config.branch.prefix}/${idLower}`;
   }
 
-  if (raw.includes("/")) return raw;
+  // Branch-shaped input (single token with a `/`) passes through as-is.
+  if (tokens.length === 1 && raw.includes("/")) return raw;
   // Exact-match escape hatch: if the raw input names a real branch
   // (local or origin), attach to it instead of minting a fresh
   // `michael/<slug>`. Covers non-standard names without a `/`
   // separator (e.g. `worktree-david+eng-4959-...`).
-  if (await branchExists(raw)) return raw;
+  if (tokens.length === 1 && (await branchExists(raw))) return raw;
+  // Anything else — including multiple words ("fix the calendar") —
+  // slugifies into a fresh `<prefix>/<slug>` branch.
   return `${config.branch.prefix}/${slugify(raw)}`;
 }
 

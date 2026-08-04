@@ -20,11 +20,17 @@ List all non-main worktrees (slug, stage when `[deploy.sst]` is configured, PR, 
 
 - `--json` — machine-readable array (slug, branch, path, stage, status, dirty, issue_id, issue_url, …).
 
-### `wt new <linear-url|id|branch|slug>`
+### `wt new <id [title…]|url|branch|slug>`
 
-Create a worktree from a Linear URL/ID, an existing branch name, or a bare slug. Runs the full setup: fetch, checkout (`git worktree add`, or a `rift` clone — see [backends.md](backends.md)), env-file copy, SST stage pin (only with `[deploy.sst]` configured), package install (detected from the lockfile, or `[lifecycle] install_command`).
+Create a worktree from an issue id (optionally followed by pasted title words), a tracker URL, an existing branch name, or a bare slug. Runs the full setup: fetch, checkout (`git worktree add`, or a `rift` clone — see [backends.md](backends.md)), env-file copy, SST stage pin (only with `[deploy.sst]` configured), package install (detected from the lockfile, or `[lifecycle] install_command`).
 
-- `--slug <s>` — explicit slug when creating from a Linear id.
+Issue-id input resolves like this:
+
+- `wt new COZ-1953 fix calendar rendering` — id + title words: always mints a fresh `michael/coz-1953-fix-calendar-rendering`. Providing a title (or `--slug`) is deliberately how a *second* worktree for an in-flight id gets created.
+- `wt new COZ-1953` — bare id: attaches to the one existing branch for that id, offers a picker when several match (interactive shells only — scripted calls error and must pass the branch explicitly), and otherwise creates `michael/coz-1953` (the id alone is the slug).
+- Multiword input without a leading id (`wt new fix the calendar`) slugifies wholesale to `michael/fix-the-calendar`.
+
+- `--slug <s>` — explicit slug when creating from an issue id (equivalent to inline title words; wins when both are given).
 - `--base <ref>` — fork base to branch from (recorded; see `wt base`).
 - `--any` — match branches by any author, not just your `branch.prefix`.
 - `--open` / `--no-open` — open in Zed after creation (default: open when interactive).

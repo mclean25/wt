@@ -145,14 +145,15 @@ export type NewInput =
   | { error: string };
 
 /**
- * Parse the TUI's `new:` prompt value: one positional arg
- * (linear-id | branch | slug), plus optional `--any` / `--base <ref>`.
+ * Parse the TUI's `new:` prompt value: positional words (issue id +
+ * optional pasted title, a branch, or a slug — multiple words join
+ * into one input), plus optional `--any` / `--base <ref>`.
  * Mirrors `wt new` so muscle memory carries over. A `defaultBase` from
  * the `N` keybinding seeds the base; an explicit `--base` overrides.
  */
 export function parseNewInput(raw: string, defaultBase?: string): NewInput {
   const tokens = raw.trim().split(/\s+/).filter(Boolean);
-  let input: string | undefined;
+  const positionals: string[] = [];
   let anyAuthor = false;
   let base = defaultBase;
   for (let i = 0; i < tokens.length; i++) {
@@ -165,14 +166,14 @@ export function parseNewInput(raw: string, defaultBase?: string): NewInput {
       base = next;
     } else if (t.startsWith("--")) {
       return { error: `unknown flag: ${t}` };
-    } else if (input === undefined) {
-      input = t;
     } else {
-      return { error: `unexpected arg: ${t}` };
+      positionals.push(t);
     }
   }
-  if (!input) return { error: "missing input" };
-  return { input, anyAuthor, base };
+  if (positionals.length === 0) return { error: "missing input" };
+  // Multiple words are one input — `COZ-1953 fix calendar` reads as
+  // id + pasted title (parseInput slugifies the tail).
+  return { input: positionals.join(" "), anyAuthor, base };
 }
 
 /**

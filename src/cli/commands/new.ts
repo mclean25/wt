@@ -2,7 +2,7 @@ import { config } from "../../core/config.ts";
 import { createWorktree, parseInput } from "../../core/lifecycle.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
-import { ask, isInteractive, pickIndex } from "../prompt.ts";
+import { isInteractive, pickIndex } from "../prompt.ts";
 import { openInZed } from "../../core/zed.ts";
 
 type Flags = {
@@ -18,27 +18,31 @@ function parse(argv: string[]): Flags | { error: string } {
   let slug: string | undefined;
   let noOpen = false;
   let noInstall = false;
-  let raw: string | undefined;
+  const positionals: string[] = [];
   let any = false;
   let base: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "--slug") slug = argv[++i];
+    if (a === "--slug") {
+      slug = argv[++i];
+      if (!slug) return { error: "--slug requires a value" };
+    }
     else if (a === "--no-open") noOpen = true;
     else if (a === "--open") noOpen = false;
     else if (a === "--no-install") noInstall = true;
     else if (a === "--any") any = true;
     else if (a === "--base") base = argv[++i];
     else if (a.startsWith("--")) return { error: `unknown flag: ${a}` };
-    else if (!raw) raw = a;
-    else return { error: `unexpected arg: ${a}` };
+    else positionals.push(a);
   }
   if (base !== undefined && !base) return { error: "--base requires a ref" };
   return {
     slug,
     open: !noOpen && isInteractive(),
     install: !noInstall,
-    raw,
+    // Multiple positionals are one input: `wt new COZ-1953 fix calendar`
+    // reads as id + pasted title (parseInput slugifies the tail).
+    raw: positionals.length > 0 ? positionals.join(" ") : undefined,
     any,
     base,
   };
@@ -53,7 +57,7 @@ export async function run(argv: string[]): Promise<number> {
   if (!parsed.raw) {
     console.error(
       red(
-        "usage: wt new <linear-url|id|branch|slug> [--slug s] [--any] [--base ref] [--no-open] [--no-install]",
+        "usage: wt new <id [title…]|url|branch|slug> [--slug s] [--any] [--base ref] [--no-open] [--no-install]",
       ),
     );
     return 2;
@@ -64,9 +68,6 @@ export async function run(argv: string[]): Promise<number> {
     branch = await parseInput(parsed.raw, {
       slugHint: parsed.slug,
       anyAuthor: parsed.any,
-      promptForSlug: isInteractive()
-        ? async (id) => ask(`slug for ${id}: `)
-        : undefined,
       promptForChoice: isInteractive()
         ? async (id, branches) => {
             const idx = await pickIndex(branches, `Multiple branches for ${id}:`);
