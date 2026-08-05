@@ -9,6 +9,7 @@ import * as stagesCmd from "./commands/stages.ts";
 import * as logsCmd from "./commands/logs.ts";
 import * as openCmd from "./commands/open.ts";
 import * as baseCmd from "./commands/base.ts";
+import * as issueCmd from "./commands/issue.ts";
 import * as claudeCmd from "./commands/claude.ts";
 import * as devCmd from "./commands/dev.ts";
 import * as restackCmd from "./commands/restack.ts";
@@ -40,6 +41,7 @@ commands:
   hub         launch the task-inbox hub layout (left tasks, right live session)
   classic     launch the classic three-pane TUI regardless of [ui] mode
   base        show / set / clear a worktree's recorded fork base
+  issue       show a worktree's issue links / attach a GitHub issue (--gh)
   claude      drive a worktree's Claude Code session (send / ls / kill)
   dev         start / stop / inspect a worktree's [dev_server]
 
@@ -63,6 +65,7 @@ const RUNNERS: Record<string, Runner> = {
   _remote: remoteExecCmd.run,
   _session: sessionExecCmd.run,
   base: baseCmd.run,
+  issue: issueCmd.run,
   claude: claudeCmd.run,
   dev: devCmd.run,
   _destroy: destroyCmd.run,

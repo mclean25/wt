@@ -63,6 +63,13 @@ export function parseWtState(raw: unknown): WtState {
       ) {
         slugs[k]!.devPort = rec.devPort;
       }
+      if (
+        typeof rec.githubIssue === "number" &&
+        Number.isInteger(rec.githubIssue) &&
+        rec.githubIssue > 0
+      ) {
+        slugs[k]!.githubIssue = rec.githubIssue;
+      }
       if (rec.automationsPaused === true) {
         slugs[k]!.automationsPaused = true;
       }

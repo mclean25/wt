@@ -18,7 +18,7 @@ import { actionRegistry } from "../../core/actions.ts";
 import { config, type PullRequestTarget } from "../../core/config.ts";
 import { effectiveBaseOrTrunk } from "../../core/git.ts";
 import { getHarness, HARNESSES, type HarnessId } from "../../core/harness/index.ts";
-import { issueUrlForSlug } from "../../core/issue-tracker.ts";
+import { issueUrlForSlug, specificIssueUrl } from "../../core/issue-tracker.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { eventsOutputId, indexOfOutput } from "../../core/outputs.ts";
@@ -873,11 +873,28 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       openPrUrl(current.pr.url, current.pr.number, null, current.wt.slug);
       return;
     }
+    // `i` opens the MOST SPECIFIC issue (secondary GitHub issue when
+    // attached, else the primary tracker id); `I` always opens the
+    // primary. Identity displays, specificity acts.
     if (isPlainLetter(k, "i")) {
+      const url = specificIssueUrl(current.wt.slug, current.githubIssue);
+      if (!url) {
+        rowLog.event.warn(
+          "no issue URL (needs an id in the slug or an attached --gh issue)",
+        );
+        return;
+      }
+      void openUrlHidingTerminal(url);
+      rowLog.event.info(
+        current.githubIssue ? `opened gh issue #${current.githubIssue}` : "opened issue",
+      );
+      return;
+    }
+    if (k.sequence === "I") {
       const url = issueUrlForSlug(current.wt.slug);
       if (!url) {
         rowLog.event.warn(
-          "no issue URL (needs an id in the slug; non-GH ids also need [issue_tracker] url_template)",
+          "no primary issue URL (needs an id in the slug; non-GH ids also need [issue_tracker] url_template)",
         );
         return;
       }

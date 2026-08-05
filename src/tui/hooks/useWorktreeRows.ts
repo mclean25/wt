@@ -135,6 +135,12 @@ export type WorktreeRow = {
    * and `sectionIsStack` is true.
    */
   stack: StackRowInfo | null;
+  /**
+   * Secondary GitHub issue number from the slug-state record (`wt new
+   * --gh` / `wt issue --gh`). The primary id stays slug-derived; this
+   * is the most-specific link target for `i` / `y i`.
+   */
+  githubIssue: number | null;
   archived: boolean;
   /**
    * Resolved title with `llm > pr > commit > slug` fallback. Both the
@@ -660,6 +666,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         wt.slug,
         stack?.index ?? stateSlugs[wt.slug]?.order ?? -Infinity,
       );
+      const githubIssue = stateSlugs[wt.slug]?.githubIssue ?? null;
       const llmTitle = aiResults[i]?.title ?? null;
       const llmBrief = aiResults[i]?.brief ?? null;
       const prTitle = pr?.title ?? null;
@@ -689,6 +696,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         prev.status === status &&
         prev.pr === pr &&
         prev.mq === mq &&
+        prev.githubIssue === githubIssue &&
         prev.archived === archived &&
         prev.title === title &&
         prev.titleSource === titleSource &&
@@ -714,6 +722,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         mq,
         stackedOn: stackedOnOut,
         stack: stackOut,
+        githubIssue,
         archived,
         title,
         titleSource,

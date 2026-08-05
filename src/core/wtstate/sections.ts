@@ -232,6 +232,24 @@ export function reparentBaseReferences(
  * Convenience for the common "assign this slug to that section, drop
  * it at the bottom" path used by the picker.
  */
+/**
+ * Attach/detach the secondary GitHub issue number (`wt new --gh`,
+ * `wt issue <slug> --gh <n> | --clear-gh`). Null clears.
+ */
+export function setSlugGithubIssue(slug: string, issue: number | null): void {
+  withWtStateLock(() => {
+    const state = readWtState();
+    const prev = state.slugs[slug];
+    if (!prev && issue === null) return;
+    const next: WtState = { ...state, slugs: { ...state.slugs } };
+    const entry: WtSlugState = { section: null, order: 0, ...prev };
+    delete entry.githubIssue;
+    if (issue !== null) entry.githubIssue = issue;
+    next.slugs[slug] = entry;
+    writeWtState(next);
+  });
+}
+
 export function setSlugSection(slug: string, section: string | null): void {
   placeSlug(slug, section, "bottom");
 }

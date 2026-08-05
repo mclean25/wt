@@ -189,11 +189,14 @@ workspace = "acme"
 | key | required | default | meaning |
 |---|---|---|---|
 | `url_template` | no | *(unset)* | URL with an `{id}` placeholder, substituted with the uppercased issue id parsed from the slug (no API calls, no token). Wins over the Linear preset when both are set. |
+| `prefix` | no | *(unset)* | Required id prefix (lowercase, e.g. `"coz"`) for **new** worktree branches. When set, `wt new GH-970 …` (or any other prefix) fails with guidance instead of minting the branch — a GitHub issue attaches as the *secondary* id (`wt new … --gh <n>` / `wt issue <slug> --gh <n>`), never as the worktree's identity. Attaching to existing branches is exempt. |
 | `linear.workspace` | no | — | Linear preset: derives `url_template = "linear://<workspace>/issue/{id}"` (the desktop-app deep-link scheme). |
 
 Id parsing itself is driven by the slug shape (`[a-z]+-\d+`), independent of `[branch] id_pattern`.
 
-**Built-in `GH-` convention:** an id with the `gh` prefix (`michael/gh-970-fix-typo` → `GH-970`) is taken to mean a GitHub issue on this repo and links to `<origin repo>/issues/970`, bypassing `url_template`. The repo URL is derived from the main clone's `origin` remote (ssh, scp, or https forms; bare ssh-config aliases can't be resolved, so those ids render unlinked). No configuration — this works even with a bare `[issue_tracker]` section, and lets GitHub-issue worktrees coexist with tracker-id worktrees.
+**Built-in `GH-` convention:** an id with the `gh` prefix (`michael/gh-970-fix-typo` → `GH-970`) is taken to mean a GitHub issue on this repo and links to `<origin repo>/issues/970`, bypassing `url_template`. The repo URL is derived from the main clone's `origin` remote (ssh, scp, or https forms; bare ssh-config aliases can't be resolved, so those ids render unlinked). No configuration — this works even with a bare `[issue_tracker]` section. (With `prefix` set, GH-led ids can't *create* worktrees — the supported shape there is the secondary id below.)
+
+**Secondary GitHub issue:** independent of the slug id, a worktree can carry an attached GitHub issue number (`wt new … --gh 970`, `wt issue <slug> --gh 970` — see [cli.md](cli.md)). The issue row shows it after the primary (`COZ-1935 · #970`), and it becomes the most-specific target for `i` / `y i`; `I` / `y I` keep targeting the primary.
 
 ## `[ai]` — optional integration
 

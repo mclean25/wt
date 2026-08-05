@@ -11,18 +11,22 @@ export const issueRow: RowModule = {
   // url_template) shows the bare parsed id; a template links it.
   visible: () => config.issueTracker !== null,
   render: ({ row }) => {
+    // Primary identity first, secondary GitHub issue after — display
+    // reads the primary; the `i` action targets the most specific.
+    const gh = row.githubIssue ? ` · #${row.githubIssue}` : "";
     const url = issueUrlForSlug(row.wt.slug);
     if (url) {
       return (
-        <text fg={theme.accentAlt} wrapMode="none" truncate>
-          {url}
+        <text wrapMode="none" truncate>
+          <span fg={theme.accentAlt}>{url}</span>
+          {gh ? <span fg={theme.fg}>{gh}</span> : null}
         </text>
       );
     }
     const id = issueIdForSlug(row.wt.slug);
-    return id ? (
+    return id || gh ? (
       <text fg={theme.fg} wrapMode="none" truncate>
-        {id}
+        {`${id ?? "—"}${gh}`}
       </text>
     ) : (
       <text fg={theme.fgDim}>—</text>

@@ -1,6 +1,7 @@
 import { config } from "../../core/config.ts";
 import { fetchPrs } from "../../core/github.ts";
-import { issueIdForSlug, issueUrlForSlug } from "../../core/issue-tracker.ts";
+import { githubIssueUrl, issueIdForSlug, issueUrlForSlug } from "../../core/issue-tracker.ts";
+import { readWtState } from "../../core/wtstate.ts";
 import type { Worktree } from "../../core/types.ts";
 import { StatusKind } from "../../core/types.ts";
 import {
@@ -25,6 +26,7 @@ export async function run(argv: string[]): Promise<number> {
   const rows = all.filter((w) => !w.isMain);
 
   if (jsonOut) {
+    const slugStates = readWtState().slugs;
     const payload = await Promise.all(
       rows.map(async (w) => {
         const st = await worktreeStatus(w);
@@ -43,6 +45,10 @@ export async function run(argv: string[]): Promise<number> {
           unpushed: dirty ? 0 : await unpushedCommits(w.path),
           issue_id: issueIdForSlug(w.slug),
           issue_url: issueUrlForSlug(w.slug),
+          gh_issue: slugStates[w.slug]?.githubIssue ?? null,
+          gh_issue_url: slugStates[w.slug]?.githubIssue
+            ? githubIssueUrl(slugStates[w.slug]!.githubIssue!)
+            : null,
         };
       }),
     );

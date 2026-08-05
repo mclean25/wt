@@ -104,3 +104,15 @@ test("clearing: a record written without the fields (simulating a delete) round-
   expect(cleared.slugs.a?.taskPinned).toBeUndefined();
   expect(cleared.slugs.a?.taskSnoozedBucket).toBeUndefined();
 });
+
+test("githubIssue: a positive integer survives the round trip", () => {
+  const state = roundTrip(baseState({ a: { section: null, order: 0, githubIssue: 970 } }));
+  expect(state.slugs.a?.githubIssue).toBe(970);
+});
+
+test("githubIssue: junk values (0, negative, float, string) are dropped", () => {
+  for (const junk of [0, -3, 4.5, "970", null, true]) {
+    const state = roundTrip(baseState({ a: { section: null, order: 0, githubIssue: junk } }));
+    expect(state.slugs.a?.githubIssue).toBeUndefined();
+  }
+});

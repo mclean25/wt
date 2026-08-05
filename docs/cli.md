@@ -26,13 +26,17 @@ Create a worktree from an issue id (optionally followed by pasted title words), 
 
 Issue-id input resolves like this:
 
-- `wt new COZ-1953 fix calendar rendering` — id + title words: always mints a fresh `michael/coz-1953-fix-calendar-rendering`. Providing a title (or `--slug`) is deliberately how a *second* worktree for an in-flight id gets created.
-- `wt new COZ-1953` — bare id: attaches to the one existing branch for that id, offers a picker when several match (interactive shells only — scripted calls error and must pass the branch explicitly), and otherwise creates `michael/coz-1953` (the id alone is the slug).
-- Multiword input without a leading id (`wt new fix the calendar`) slugifies wholesale to `michael/fix-the-calendar`.
+- `wt new COZ-1953 fix calendar rendering` — id + title words mints `michael/coz-1953-fix-calendar-rendering`.
+- `wt new COZ-1953` — bare id mints a fresh branch with a random readable suffix (`michael/coz-1953-cozy-elephant`), so repeat entries just create more worktrees for the same task — that's the intended way to get a second one.
+- `wt new --attach COZ-1953` — attach to that id's *existing* branch instead: one match checks out, several offer a picker (interactive shells only — scripted calls error and must pass the branch explicitly), none is an error.
+- Multiword input without a leading id (`wt new fix the calendar`) slugifies wholesale to `michael/fix-the-calendar` — issue-less worktrees are first-class.
+- With `[issue_tracker] prefix` set (e.g. `"coz"`), a differently-prefixed id (`wt new GH-970 …`) is rejected with guidance: a GitHub issue attaches as the secondary id via `--gh`, never as the worktree's identity.
 
 - `--slug <s>` — explicit slug when creating from an issue id (equivalent to inline title words; wins when both are given).
+- `--gh <n>` — attach GitHub issue `#n` as the worktree's secondary id (see `wt issue`).
+- `--attach` — attach to an existing branch for the id instead of minting a new one.
 - `--base <ref>` — fork base to branch from (recorded; see `wt base`).
-- `--any` — match branches by any author, not just your `branch.prefix`.
+- `--any` — with `--attach`, match branches by any author, not just your `branch.prefix`.
 - `--open` / `--no-open` — open in Zed after creation (default: open when interactive).
 - `--no-install` — skip the package-install step. Ignored under the `rift` backend, which copies packages via its clone.
 
@@ -88,6 +92,10 @@ Tail a destroy log (`tail -F`). No slug ⇒ the most recently modified log.
 ### `wt base <slug>` / `wt base set <slug> <ref>` / `wt base clear <slug>`
 
 Show / record / forget a worktree's fork base — the branch it's based on when that isn't trunk. This record is the stack primitive (see [stacked-prs.md](stacked-prs.md)): the TUI's base row, stack grouping, sync counts, diff, and AI summary all resolve against it, and `wt restack` replays onto it.
+
+### `wt issue <slug>` / `wt issue <slug> --gh <n>` / `wt issue <slug> --clear-gh`
+
+Show or edit a worktree's issue links. The **primary** id is parsed from the slug (`coz-1935-…` → `COZ-1935`) and is never stored or edited here — it's the worktree's identity. The **secondary** GitHub issue is a per-slug record attached with `--gh <n>` (typically after a spec/breakout issue is created mid-work) and detached with `--clear-gh`; it never changes the branch. The TUI's `i` key and `y i` yank treat an attached GitHub issue as the most-specific link target; `I` / `y I` always target the primary. `<slug>` also accepts a branch name. Both ids appear in `wt ls --json` (`issue_id`/`issue_url`, `gh_issue`/`gh_issue_url`).
 
 ## Stacked PRs
 

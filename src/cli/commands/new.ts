@@ -1,6 +1,7 @@
 import { config } from "../../core/config.ts";
 import { createWorktree, parseInput } from "../../core/lifecycle.ts";
 import { listWorktrees } from "../../core/worktree.ts";
+import { setSlugGithubIssue } from "../../core/wtstate.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import { isInteractive, pickIndex } from "../prompt.ts";
 import { openInZed } from "../../core/zed.ts";
@@ -11,6 +12,8 @@ type Flags = {
   install: boolean;
   raw?: string;
   any: boolean;
+  attach: boolean;
+  gh?: number;
   base?: string;
 };
 
@@ -20,6 +23,8 @@ function parse(argv: string[]): Flags | { error: string } {
   let noInstall = false;
   const positionals: string[] = [];
   let any = false;
+  let attach = false;
+  let gh: number | undefined;
   let base: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -31,6 +36,12 @@ function parse(argv: string[]): Flags | { error: string } {
     else if (a === "--open") noOpen = false;
     else if (a === "--no-install") noInstall = true;
     else if (a === "--any") any = true;
+    else if (a === "--attach") attach = true;
+    else if (a === "--gh") {
+      const n = Number(argv[++i]);
+      if (!Number.isInteger(n) || n <= 0) return { error: "--gh requires an issue number" };
+      gh = n;
+    }
     else if (a === "--base") base = argv[++i];
     else if (a.startsWith("--")) return { error: `unknown flag: ${a}` };
     else positionals.push(a);
@@ -44,6 +55,8 @@ function parse(argv: string[]): Flags | { error: string } {
     // reads as id + pasted title (parseInput slugifies the tail).
     raw: positionals.length > 0 ? positionals.join(" ") : undefined,
     any,
+    attach,
+    gh,
     base,
   };
 }
@@ -57,7 +70,7 @@ export async function run(argv: string[]): Promise<number> {
   if (!parsed.raw) {
     console.error(
       red(
-        "usage: wt new <id [title…]|url|branch|slug> [--slug s] [--any] [--base ref] [--no-open] [--no-install]",
+        "usage: wt new <id [title…]|url|branch|slug> [--slug s] [--gh n] [--attach] [--any] [--base ref] [--no-open] [--no-install]",
       ),
     );
     return 2;
@@ -68,6 +81,7 @@ export async function run(argv: string[]): Promise<number> {
     branch = await parseInput(parsed.raw, {
       slugHint: parsed.slug,
       anyAuthor: parsed.any,
+      attach: parsed.attach,
       promptForChoice: isInteractive()
         ? async (id, branches) => {
             const idx = await pickIndex(branches, `Multiple branches for ${id}:`);
@@ -86,6 +100,10 @@ export async function run(argv: string[]): Promise<number> {
     console.log(yellow(`Worktree already exists for ${branch}`));
     console.log(`  ${dim("path:")}  ${existing.path}`);
     if (config.sst) console.log(`  ${dim("stage:")} ${existing.stage}`);
+    if (parsed.gh) {
+      setSlugGithubIssue(existing.slug, parsed.gh);
+      console.log(`  ${dim("gh:")}    #${parsed.gh}`);
+    }
     if (parsed.open) await openInZed(existing.path);
     return 0;
   }
@@ -101,9 +119,11 @@ export async function run(argv: string[]): Promise<number> {
     console.error(red(result.reason));
     return 1;
   }
+  if (parsed.gh) setSlugGithubIssue(result.slug, parsed.gh);
 
   console.log(green(`✓ created ${bold(cyan(result.slug))}`));
   console.log(`  ${dim("path:")}  ${result.path}`);
+  if (parsed.gh) console.log(`  ${dim("gh:")}    #${parsed.gh}`);
   if (config.sst) console.log(`  ${dim("stage:")} ${result.stage}`);
 
   if (parsed.open) await openInZed(result.path);

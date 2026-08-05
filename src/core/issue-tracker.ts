@@ -75,3 +75,24 @@ export function issueUrlForSlug(slug: string): string | null {
   if (!template) return null;
   return template.replaceAll("{id}", id);
 }
+
+/** Web URL for a GitHub issue number on the origin repo (null = repo underivable). */
+export function githubIssueUrl(issue: number): string | null {
+  const repo = mainRepoWebUrl();
+  return repo ? `${repo}/issues/${issue}` : null;
+}
+
+/**
+ * The row's default link target: the MOST SPECIFIC issue. A worktree's
+ * secondary GitHub issue (when attached) is narrower than its tracker
+ * task, so `i` / `y i` prefer it; the tracker id stays the primary
+ * identity (display prefix, branch name) and keeps its own explicit
+ * key (`I` / `y I`).
+ */
+export function specificIssueUrl(
+  slug: string,
+  githubIssue: number | null | undefined,
+): string | null {
+  if (githubIssue) return githubIssueUrl(githubIssue) ?? issueUrlForSlug(slug);
+  return issueUrlForSlug(slug);
+}

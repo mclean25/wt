@@ -65,6 +65,14 @@ export type IssueTrackerConfig = {
    * configured or derivable — the issue row then shows the bare id.
    */
   urlTemplate: string | null;
+  /**
+   * Required id prefix (lowercase, e.g. `"coz"`) for NEW worktree
+   * branches. When set, `wt new GH-970 …` fails with guidance instead
+   * of minting a GH-led branch — a GitHub issue attaches as the
+   * secondary id (`--gh <n>`), never as the worktree's identity.
+   * Attaching to existing branches is exempt. Null = any prefix.
+   */
+  prefix: string | null;
 };
 
 /**
@@ -838,7 +846,11 @@ function build(raw: Raw, errs: Errors): Config {
       // linear:// deep-link scheme — opens the desktop app directly.
       urlTemplate = `linear://${workspace}/issue/{id}`;
     }
-    issueTracker = { urlTemplate };
+    const prefix = errs.optStrOrNull(tracker, "prefix");
+    if (prefix && !/^[a-z]+$/.test(prefix)) {
+      errs.add("issue_tracker.prefix must be lowercase letters (e.g. \"coz\")");
+    }
+    issueTracker = { urlTemplate, prefix: prefix || null };
   }
 
   // [review_bot] — absent means the CodeRabbit preset, preserving the

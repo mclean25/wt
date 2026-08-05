@@ -1,4 +1,8 @@
-import { issueIdForSlug, issueUrlForSlug } from "../../core/issue-tracker.ts";
+import {
+  issueIdForSlug,
+  issueUrlForSlug,
+  specificIssueUrl,
+} from "../../core/issue-tracker.ts";
 import { stageUrl } from "../../core/stage.ts";
 import { Modal } from "../modal.tsx";
 import { theme } from "../theme.ts";
@@ -25,11 +29,19 @@ export function yankItemsFor(row: WorktreeRow): Item[] {
     { key: "d", label: "dev url", value: dev?.running ? dev.url : null },
     { key: "p", label: "path", value: row.wt.path },
     { key: "n", label: "slug", value: row.wt.slug },
-    // URL when a tracker template is configured; the bare parsed id
-    // (COZ-1883) is still worth yanking without one.
+    // `i` mirrors the open key: most specific first (attached GitHub
+    // issue, else tracker URL, else the bare parsed id). `I` is always
+    // the primary tracker issue.
     {
       key: "i",
       label: "issue",
+      value:
+        specificIssueUrl(row.wt.slug, row.githubIssue) ??
+        issueIdForSlug(row.wt.slug),
+    },
+    {
+      key: "I",
+      label: "primary",
       value: issueUrlForSlug(row.wt.slug) ?? issueIdForSlug(row.wt.slug),
     },
     { key: "r", label: "pr url", value: prUrlValue },

@@ -33,15 +33,19 @@ reports every missing field at once). The standard install aliases
 - `wt new <input>` — create a worktree (and branch). Input is an issue id with
   optional pasted title words (`wt new COZ-1953 fix calendar rendering` →
   `michael/coz-1953-fix-calendar-rendering`), a tracker URL, a branch, or a
-  bare slug. A bare id attaches to that id's existing branch (or creates
-  `michael/coz-1953` if none); giving title words or `--slug` always mints a
-  fresh branch — that's how a second worktree for an in-flight id is made.
-  Ids are tracker ids (`COZ-1953`) or `GH-<n>` for a GitHub issue on the
-  repo itself — `gh-970` slugs link to `<origin repo>/issues/970`
-  automatically (the `i` key and `y i` yank).
-  `--base <ref>` forks from a non-trunk parent and records it — the record
-  that stacks the new worktree on that parent (diff base, TUI grouping,
-  restack target).
+  bare slug (issue-less worktrees are first-class). A bare id gets a random
+  readable suffix (`michael/coz-1953-cozy-elephant`), so entering the same id
+  again simply creates another worktree for it; `--attach` instead checks out
+  the id's existing branch. With `[issue_tracker] prefix` set (cozee-dev:
+  `"coz"`), only that prefix may lead a worktree id — a GitHub issue never
+  names a branch; attach it as the SECONDARY id with `--gh <n>` (or later via
+  `wt issue <slug> --gh <n>`). `--base <ref>` forks from a non-trunk parent
+  and records it — the record that stacks the new worktree on that parent
+  (diff base, TUI grouping, restack target).
+- `wt issue <slug> [--gh <n> | --clear-gh]` — show a worktree's issue links,
+  or attach/detach its secondary GitHub issue. The primary id stays parsed
+  from the slug; the attached GH issue becomes the `i`-key / `y i` target
+  (most specific wins), while `I` / `y I` always hit the primary.
 - `wt rm [slug]` — remove a worktree (optionally its branch).
 - `wt clean` — bulk-remove merged/gone worktrees.
 - `wt doctor [slug]` — health report (dirty, sync, PR, merged).

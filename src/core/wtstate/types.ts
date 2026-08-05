@@ -69,6 +69,16 @@ export type WtSlugState = {
    * (no fires, no queued intents).
    */
   automationsPaused?: boolean;
+  /**
+   * GitHub issue number attached to this worktree as its SECONDARY id
+   * — the primary id stays the tracker id parsed from the slug
+   * (`coz-1935-…` → COZ-1935). Set by `wt new --gh <n>` or `wt issue
+   * <slug> --gh <n>`, typically after a spec/breakout issue is created
+   * mid-work (which is why it's state, not part of the branch name:
+   * renaming a pushed branch to encode it would be disruptive). The
+   * TUI's `i`/`y i` treat it as the most-specific link target.
+   */
+  githubIssue?: number;
   /** Task-inbox pin (hub mode): pinned tasks sort above everything. Absent = unpinned. */
   taskPinned?: true;
   /** Bucket name the user snoozed this task at (hub mode). Stale when the derived bucket moves on; readers treat a mismatch as expired. */

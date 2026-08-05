@@ -8,7 +8,7 @@ import { config } from "../../core/config.ts";
 import { createWorktree, parseInput } from "../../core/lifecycle.ts";
 import { createLogger } from "../../core/logger.ts";
 import { runRemoteWt } from "../../core/remote.ts";
-import type { RemovedWorktree } from "../../core/wtstate.ts";
+import { setSlugGithubIssue, type RemovedWorktree } from "../../core/wtstate.ts";
 import { parseNewInput } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import type { RemoteCreation } from "../remote-creation.ts";
@@ -50,11 +50,13 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     }
     newLog.event.info(`resolving ${parsed.input}`);
     if (parsed.anyAuthor) newLog.event.info("searching all authors (--any)");
+    if (parsed.attach) newLog.event.info("attaching to an existing branch (--attach)");
     if (parsed.base) newLog.event.info(`base: ${parsed.base}`);
     let branch: string;
     try {
       branch = await parseInput(parsed.input, {
         anyAuthor: parsed.anyAuthor,
+        attach: parsed.attach,
         promptForChoice: (id, branches) =>
           new Promise<string | null>((resolve) => {
             setModal({
@@ -82,6 +84,10 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       newLog.event.err(result.reason);
       return;
     }
+    if (parsed.gh) {
+      setSlugGithubIssue(result.slug, parsed.gh);
+      newLog.event.info(`gh issue: #${parsed.gh}`);
+    }
     newLog.event.ok(`ready at ${result.path}`);
     void refreshAll();
   }
@@ -100,6 +106,8 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     }
     const args = ["new", parsed.input, "--no-open"];
     if (parsed.anyAuthor) args.push("--any");
+    if (parsed.attach) args.push("--attach");
+    if (parsed.gh) args.push("--gh", String(parsed.gh));
     if (parsed.base) args.push("--base", parsed.base);
 
     const remoteLog = createLogger(`[remote:${remote.label}]`);

@@ -22,6 +22,7 @@ import { ISSUE_ID_RE, ISSUE_URL_RE } from "./issue-tracker.ts";
 import { lockLabel, lockStatus, tryAcquireLock } from "./locks.ts";
 import { runStreaming } from "./proc.ts";
 import { computeStage, dirSlug, slugify } from "./stage.ts";
+import { adjectives, animals, uniqueNamesGenerator } from "unique-names-generator";
 import { safeStage } from "./stage-safety.ts";
 import type { Worktree } from "./types.ts";
 import { fetchOrigin } from "./worktree.ts";
@@ -82,6 +83,26 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Readable random suffix (`cozy-elephant`) for a bare-id `wt new`,
+ * retried until the resulting branch is free. ~29k combos; if all five
+ * draws collide something is deeply wrong, so give up loudly.
+ */
+async function randomFreeSuffix(idLower: string): Promise<string> {
+  for (let i = 0; i < 5; i++) {
+    const suffix = uniqueNamesGenerator({
+      dictionaries: [adjectives, animals],
+      separator: "-",
+      length: 2,
+      style: "lowerCase",
+    });
+    if (!(await branchExists(`${config.branch.prefix}/${idLower}-${suffix}`))) {
+      return suffix;
+    }
+  }
+  throw new Error(`couldn't find a free random slug for ${idLower} (tried 5)`);
+}
+
 export type ParseInputOptions = {
   slugHint?: string;
   /**
@@ -89,6 +110,13 @@ export type ParseInputOptions = {
    * (`<anyone>/<id>-...`). Without this, only `michael/` matches.
    */
   anyAuthor?: boolean;
+  /**
+   * Attach to an existing branch for the id instead of minting a new
+   * one (`--attach`): one match checks out, several go through
+   * `promptForChoice`, none is an error. Without it, an id always
+   * creates a fresh branch (repeat entries = more worktrees).
+   */
+  attach?: boolean;
   /**
    * Pick one when multiple branches match (e.g. pair-programming
    * across authors). If omitted and there are multiple matches,
@@ -115,29 +143,43 @@ export async function parseInput(
   if (ISSUE_ID_RE.test(tokens[0]!)) {
     const id = tokens[0]!.toUpperCase();
     const idLower = id.toLowerCase();
+    if (opts.attach) {
+      const found = await findBranchesForIssue(idLower, { anyAuthor: opts.anyAuthor });
+      if (found.length === 1) return found[0]!;
+      if (found.length > 1) {
+        if (opts.promptForChoice) {
+          const picked = await opts.promptForChoice(id, found);
+          if (!picked) throw new Error(`no branch chosen for ${id}`);
+          return picked;
+        }
+        throw new Error(
+          `Multiple branches for ${id}: ${found.join(", ")}. Pass the branch explicitly.`,
+        );
+      }
+      throw new Error(`No existing branch for ${id} to attach to.`);
+    }
+    // Minting a new branch: the primary id must carry the configured
+    // tracker prefix. A GitHub issue is a SECONDARY id (`--gh <n>`),
+    // never a worktree's identity.
+    const required = config.issueTracker?.prefix;
+    const prefix = idLower.slice(0, idLower.indexOf("-"));
+    if (required && prefix !== required) {
+      throw new Error(
+        `${id} can't lead a worktree ([issue_tracker] prefix = "${required}"). ` +
+          `Use \`wt new ${required.toUpperCase()}-NNNN …${prefix === "gh" ? ` --gh ${id.slice(3)}` : ""}\`, ` +
+          `an issue-less slug, or --attach for an existing branch.`,
+      );
+    }
     // An explicit slug (--slug, which wins, or inline title words)
-    // always mints a fresh branch — this is deliberately how a SECOND
-    // worktree for an id already in flight gets created. Only a bare
-    // id attaches. Slugified-to-nothing text (e.g. "!!!") counts as
-    // bare — never emit a trailing-dash branch.
+    // names the branch; a bare id gets a random readable suffix
+    // (`coz-1234-cozy-elephant`) so repeat entries never collide and
+    // no bare `coz-1234` branch exists to shadow later lookups.
+    // Slugified-to-nothing text (e.g. "!!!") counts as bare.
     const slug = slugify(opts.slugHint ?? tokens.slice(1).join(" "));
     if (slug) {
       return `${config.branch.prefix}/${idLower}-${slug}`;
     }
-    const found = await findBranchesForIssue(idLower, { anyAuthor: opts.anyAuthor });
-    if (found.length === 1) return found[0]!;
-    if (found.length > 1) {
-      if (opts.promptForChoice) {
-        const picked = await opts.promptForChoice(id, found);
-        if (!picked) throw new Error(`no branch chosen for ${id}`);
-        return picked;
-      }
-      throw new Error(
-        `Multiple branches for ${id}: ${found.join(", ")}. Pass the branch explicitly.`,
-      );
-    }
-    // No branch yet and no title given: the id alone is the slug.
-    return `${config.branch.prefix}/${idLower}`;
+    return `${config.branch.prefix}/${idLower}-${await randomFreeSuffix(idLower)}`;
   }
 
   // Branch-shaped input (single token with a `/`) passes through as-is.

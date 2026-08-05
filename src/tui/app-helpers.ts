@@ -141,13 +141,14 @@ export function printableMultiline(sequence: string | undefined): string {
 }
 
 export type NewInput =
-  | { input: string; anyAuthor: boolean; base?: string }
+  | { input: string; anyAuthor: boolean; attach: boolean; gh?: number; base?: string }
   | { error: string };
 
 /**
  * Parse the TUI's `new:` prompt value: positional words (issue id +
  * optional pasted title, a branch, or a slug — multiple words join
- * into one input), plus optional `--any` / `--base <ref>`.
+ * into one input), plus optional `--any` / `--attach` / `--gh <n>` /
+ * `--base <ref>`.
  * Mirrors `wt new` so muscle memory carries over. A `defaultBase` from
  * the `N` keybinding seeds the base; an explicit `--base` overrides.
  */
@@ -155,11 +156,19 @@ export function parseNewInput(raw: string, defaultBase?: string): NewInput {
   const tokens = raw.trim().split(/\s+/).filter(Boolean);
   const positionals: string[] = [];
   let anyAuthor = false;
+  let attach = false;
+  let gh: number | undefined;
   let base = defaultBase;
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;
     if (t === "--any") {
       anyAuthor = true;
+    } else if (t === "--attach") {
+      attach = true;
+    } else if (t === "--gh") {
+      const n = Number(tokens[++i]);
+      if (!Number.isInteger(n) || n <= 0) return { error: "--gh requires an issue number" };
+      gh = n;
     } else if (t === "--base") {
       const next = tokens[++i];
       if (!next) return { error: "--base requires a ref" };
@@ -173,7 +182,7 @@ export function parseNewInput(raw: string, defaultBase?: string): NewInput {
   if (positionals.length === 0) return { error: "missing input" };
   // Multiple words are one input — `COZ-1953 fix calendar` reads as
   // id + pasted title (parseInput slugifies the tail).
-  return { input: positionals.join(" "), anyAuthor, base };
+  return { input: positionals.join(" "), anyAuthor, attach, gh, base };
 }
 
 /**

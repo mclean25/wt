@@ -27,16 +27,17 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 
 | key | action |
 |---|---|
-| `n` / `N` | new local worktree prompt (accepts an issue id + optional title words, a tracker URL, branch, or slug, plus `--any`, `--base <ref>` — same resolution as [`wt new`](cli.md#wt-new-id-titleurlbranchslug)); `N` pre-fills `--base` with the selected row's branch |
+| `n` / `N` | new local worktree prompt (accepts an issue id + optional title words, a tracker URL, branch, or slug, plus `--attach`, `--gh <n>`, `--any`, `--base <ref>` — same resolution as [`wt new`](cli.md#wt-new-id-titleurlbranchslug)); `N` pre-fills `--base` with the selected row's branch |
 | `Ctrl+N` | create on `[remote]`; the worktree stays in this Inbox with a remote glyph, and F10/F11/F12 route that row's sessions over SSH |
 | `o` | open the worktree in Zed |
 | `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning when dirty/unpushed) |
 | `c` | clean all merged/gone worktrees (confirm) |
 | `a` | archive / restore the row |
-| `i` | open the tracker issue (needs `[issue_tracker]` with a URL template) |
+| `i` | open the most specific issue — the attached GitHub issue (`wt issue --gh`) when present, else the primary tracker issue |
+| `I` | open the primary tracker issue (needs `[issue_tracker]` with a URL template, or a `gh-`prefixed slug id) |
 | `s` | open the deployed stage URL, or the running `[dev_server]` URL when no stage is deployed |
 | `t` | regenerate the AI summary |
-| `y` | yank menu — copy branch (`b`), stage (`s`), stage URL (`S`), dev-server URL (`d`), path (`p`), slug (`n`), issue URL or bare id (`i`), PR URL (`r`) |
+| `y` | yank menu — copy branch (`b`), stage (`s`), stage URL (`S`), dev-server URL (`d`), path (`p`), slug (`n`), most-specific issue (`i`), primary tracker issue (`I`), PR URL (`r`) |
 | `r` / `Ctrl+R` | refresh / hard refresh (clear caches, confirm) |
 
 When the SSH host is sleeping or offline, its last-known worktrees remain in

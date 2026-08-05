@@ -31,6 +31,7 @@ export {
   reparentBaseReferences,
   setSlugBase,
   setSlugDevPort,
+  setSlugGithubIssue,
   setSlugSection,
   setTaskPinned,
   setTaskSnooze,
