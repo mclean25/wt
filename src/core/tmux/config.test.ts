@@ -24,6 +24,22 @@ describe("worktree session shortcut routing", () => {
     expect(config).toContain(":extkeys");
   });
 
+  test("OSC 8 hyperlink boundaries are forwarded to the outer terminal", () => {
+    expect(buildConfig()).toContain(
+      "xterm*:hyperlinks,tmux-256color:hyperlinks",
+    );
+  });
+
+  test("mouse selections copy to the macOS clipboard on release", () => {
+    const config = buildConfig();
+    expect(config).toContain(
+      "bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel pbcopy",
+    );
+    expect(config).toContain(
+      "bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel pbcopy",
+    );
+  });
+
   test("private tmux-client exit statuses decode to their targets", () => {
     expect(sessionSwitchTarget(110)).toBe("shell");
     expect(sessionSwitchTarget(111)).toBe("diff");

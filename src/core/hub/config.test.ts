@@ -21,6 +21,22 @@ describe("hub outer tmux config", () => {
     expect(config).toContain(":extkeys");
   });
 
+  test("OSC 8 hyperlink boundaries are forwarded through nested tmux", () => {
+    expect(buildHubConfig()).toContain(
+      "xterm*:hyperlinks,tmux-256color:hyperlinks",
+    );
+  });
+
+  test("mouse selections copy through nested tmux on release", () => {
+    const config = buildHubConfig();
+    expect(config).toContain(
+      "bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel pbcopy",
+    );
+    expect(config).toContain(
+      "bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel pbcopy",
+    );
+  });
+
   test("a plain letter key forwards via a bare M-<key> bind, wrapped in a command group", () => {
     expect(buildHubConfig()).toContain(`bind -n M-j { send-keys -t ${HUB_LEFT_PANE} j }`);
   });

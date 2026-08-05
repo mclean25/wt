@@ -75,6 +75,7 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 | `!` | action picker — run a configured `[[actions]]` entry, `! c` for a custom prompt; with `[dev_server]` configured the start/stop pair is pinned at the top; `!` on a running action offers to kill it |
 | `,` / `.` / `/` | attach the persistent harness session for the wt repo / main clone / dotfiles |
 | `>` / `O` | open the wt repo / main clone in Zed |
+| mouse drag | select text in a wt-managed tmux session and copy it automatically to the macOS clipboard on release |
 
 ### Organize
 
