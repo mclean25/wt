@@ -8,6 +8,7 @@ import { createLogger } from "../logger.ts";
 import { shellLogPath } from "../shell-tail.ts";
 import { killServer, resolveDiffCommand } from "./admin.ts";
 import { ensureConfig, writeConfig } from "./config.ts";
+import { capturesInnerStderr, wrapInnerArgs } from "./inner-process.ts";
 import {
   harnessIdForKind,
   sessionSwitchTarget,
@@ -44,9 +45,9 @@ export function tmuxClientCwd(): string {
 }
 
 /**
- * Where the per-session stderr capture file lives. Stable name keyed
- * on the tmux session name so re-attaches share the same file the
- * original `bash` is still appending to. Created lazily on first attach.
+ * Where harness / diff stderr capture files live. Stable names are
+ * keyed on tmux session name so re-attaches share the file the original
+ * capture wrapper opened. Shell sessions deliberately never write here.
  */
 export function sessionsDir(): string {
   const dir = join(homedir(), ".cache", "wt", "sessions");
@@ -156,30 +157,6 @@ export function buildInnerArgs(params: {
     return [userShell, "-lc", resolveDiffCommand(config.diff.command, base)];
   }
   return [userShell, "-l"];
-}
-
-/**
- * Wrap `innerArgs` in the TMUX-stripping + stderr-capture bash shim
- * every tmux `new-session` spawn in this module uses (see the barrel's
- * header comment for why `$TMUX` gets stripped). `exec` keeps the
- * process tree flat — the inner program inherits bash's pid, no extra
- * hop — and `stderrPath` is passed as `$1` so callers never have to
- * shell-escape it. Shared by `attachOrCreate` and `ensureSessionDetached`.
- */
-export function wrapInnerArgs(stderrPath: string, innerArgs: string[]): string[] {
-  return [
-    "env",
-    "-u",
-    "TMUX",
-    "-u",
-    "TMUX_PANE",
-    "bash",
-    "-c",
-    'p="$1"; shift; exec "$@" 2> "$p"',
-    "_wt_wrap",
-    stderrPath,
-    ...innerArgs,
-  ];
 }
 
 /**
@@ -297,12 +274,12 @@ export async function attachOrCreate(opts: {
       );
     }
   }
-  // Stable per-session-name file for the inner program's stderr.
-  // The bash wrapper below sets this up via `2>` so claude/diff/shell
-  // startup errors (e.g. claude rejecting --session-id when the jsonl
-  // already exists) survive past the tmux pty teardown — without this
-  // they flash to the user's terminal during the spawn-and-die window
-  // and disappear, leaving only "exited (0)" in the activity pane.
+  // Stable per-session-name file used only by harness / diff sessions.
+  // Their wrapper sets this up via `2>` so startup errors (e.g. Claude
+  // rejecting --session-id when the jsonl already exists) survive past
+  // the tmux PTY teardown. Shell stderr stays on the PTY so interactive
+  // prompts remain visible; pipe-pane captures that merged pane output
+  // for the activity pane along with stdout.
   const stderrPath = join(sessionsDir(), `${name}.err`);
 
   // AI harness branches delegate argv to the registered impl. Each
@@ -366,7 +343,7 @@ export async function attachOrCreate(opts: {
           name,
           "-c",
           cwd,
-          ...wrapInnerArgs(stderrPath, innerArgs),
+          ...wrapInnerArgs(kind, stderrPath, innerArgs),
           ";",
           ...pipePaneArgs,
         ];
@@ -429,14 +406,12 @@ export async function attachOrCreate(opts: {
         name,
         "-c",
         cwd,
-        // See header: claude downgrades to 256-color when $TMUX is set.
-        // Wrap the inner program in a tiny bash that redirects stderr
-        // to `stderrPath` before exec'ing (see `wrapInnerArgs`).
-        // `new-session -A` only runs this command on creation —
-        // subsequent re-attaches share the file the original bash is
-        // still appending to. Stdout stays on tmux's pty so the inner
-        // UI renders normally.
-        ...wrapInnerArgs(stderrPath, innerArgs),
+        // See header: Claude downgrades to 256-color when $TMUX is set.
+        // The kind-aware wrapper always strips tmux identity. Harnesses
+        // and diff redirect stderr to `stderrPath`; shell inherits it
+        // through the PTY. `new-session -A` only runs this command on
+        // creation, so subsequent re-attaches keep the original routing.
+        ...wrapInnerArgs(kind, stderrPath, innerArgs),
         ";",
         "set-option",
         "-t",
@@ -504,16 +479,19 @@ export async function attachOrCreate(opts: {
     if (target) return { kind: "switch", target };
     return { kind: "detached" };
   }
-  // Inner program died. Read whatever it wrote to stderr so the
+  // A capture-enabled inner program died. Read whatever it wrote so the
   // caller can surface the actual reason instead of just "exited (N)".
-  // ENOENT here just means the bash redirect never produced any
-  // output, which is the steady state for a clean exit.
+  // Shells skip this even if an older wt version left a same-name .err
+  // file behind; their stderr was visible live and stale text must not
+  // be reported as the reason for this exit.
   let stderrText: string | null = null;
-  try {
-    const raw = readFileSync(stderrPath, "utf8");
-    stderrText = scrubStderr(raw);
-  } catch {
-    // no stderr file — bash never wrote anything, or it was already swept
+  if (capturesInnerStderr(kind)) {
+    try {
+      const raw = readFileSync(stderrPath, "utf8");
+      stderrText = scrubStderr(raw);
+    } catch {
+      // no stderr file — bash never wrote anything, or it was already swept
+    }
   }
   return { kind: "exited", code, stderr: stderrText };
 }
@@ -618,7 +596,7 @@ export async function ensureSessionDetached(opts: {
     name,
     "-c",
     cwd,
-    ...wrapInnerArgs(stderrPath, innerArgs),
+    ...wrapInnerArgs(kind, stderrPath, innerArgs),
   ];
   const tagArgs = ["set-option", "-t", name, "@wt-shortcut", shortcut];
   // Chain every setup command onto the one `tmux` invocation (`;`
