@@ -152,6 +152,10 @@ Omit to disable. When configured, each worktree can run one supervised dev serve
 ```toml
 [dev_server]
 command = "npm run dev -- --port {{port}} --strictPort"
+# pnpm: drop the `--` — pnpm forwards it verbatim to the script, so vite
+# would see `-- --port …`, read the flags as positionals, and silently
+# start on its default port instead of the pinned one:
+#command = "pnpm run dev --port {{port}} --strictPort"
 ```
 
 | key | required | default | meaning |
