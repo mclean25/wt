@@ -25,7 +25,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import type { BackendKind } from "./backend/types.ts";
 import {
@@ -498,6 +498,8 @@ export type Config = {
   };
   lifecycle: {
     envFilesToCopy: readonly string[];
+    /** Glob patterns copied from the main clone into each new worktree. */
+    copyGlobs: readonly string[];
     /**
      * Dependency-install command run in a fresh git-worktree checkout
      * (the rift backend skips installs — packages ride the CoW clone).
@@ -562,6 +564,7 @@ const GENERIC_DEFAULTS = {
   },
   lifecycle: {
     envFilesToCopy: [".env"] as const,
+    copyGlobs: [] as const,
   },
   paths: {
     logDir: join(HOME, ".cache", "wt", "logs"),
@@ -693,6 +696,12 @@ function strArr(v: unknown, fallback: readonly string[]): readonly string[] {
   return out;
 }
 
+function unsafeCopyGlob(pattern: string): boolean {
+  return isAbsolute(pattern) ||
+    /^[a-zA-Z]:[\\/]/.test(pattern) ||
+    pattern.split(/[\\/]+/).includes("..");
+}
+
 class Errors {
   private list: string[] = [];
   add(msg: string) {
@@ -805,6 +814,10 @@ function build(raw: Raw, errs: Errors): Config {
   const stageDomain = errs.optStrOrNull(stage, "domain");
 
   const envFiles = strArr(lifecycle?.env_files_to_copy, GENERIC_DEFAULTS.lifecycle.envFilesToCopy);
+  const copyGlobs = strArr(lifecycle?.copy_globs, GENERIC_DEFAULTS.lifecycle.copyGlobs);
+  if (copyGlobs.some(unsafeCopyGlob)) {
+    errs.add("lifecycle.copy_globs entries must be relative paths without '..' segments");
+  }
   const installCommand = errs.optStrOrNull(lifecycle, "install_command");
 
   // Worktree backend — opt-in. Absent section (or absent key) means the
@@ -1030,7 +1043,7 @@ function build(raw: Raw, errs: Errors): Config {
     },
     branch: { prefix: branchPrefix, base: branchBase, idPattern, slugMaxLen },
     stage: { prefix: stagePrefix, defaultPersonal: stageDefault, domain: stageDomain },
-    lifecycle: { envFilesToCopy: envFiles, installCommand },
+    lifecycle: { envFilesToCopy: envFiles, copyGlobs, installCommand },
     backend: { kind: backendKind },
     sst,
     issueTracker,

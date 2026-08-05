@@ -79,12 +79,15 @@ main_clone = "/local/repo"
 
 [branch]
 base = "develop"
+
+[lifecycle]
+copy_globs = [".agents/**"]
 `);
 
       const configModule = pathToFileURL(join(import.meta.dir, "config.ts")).href;
       const script = `
         const { config } = await import(${JSON.stringify(configModule)});
-        console.log(JSON.stringify({ paths: config.paths, branch: config.branch, rows: config.ui.rows }));
+        console.log(JSON.stringify({ paths: config.paths, branch: config.branch, lifecycle: config.lifecycle, rows: config.ui.rows }));
       `;
       const env: Record<string, string | undefined> = {
         ...process.env,
@@ -102,8 +105,47 @@ base = "develop"
       expect(JSON.parse(result.stdout.toString())).toMatchObject({
         paths: { mainClone: "/local/repo", worktreeRoot: "/global/worktrees" },
         branch: { prefix: "alex", base: "develop" },
+        lifecycle: { copyGlobs: [".agents/**"] },
         rows: ["branch", "git"],
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects copy globs that can escape the main clone", () => {
+    const root = mkdtempSync(join(tmpdir(), "wt-config-copy-globs-"));
+    try {
+      const userConfig = join(root, "config.toml");
+      writeFileSync(userConfig, `
+[paths]
+main_clone = "/repo"
+worktree_root = "/worktrees"
+
+[branch]
+prefix = "alex"
+
+[lifecycle]
+copy_globs = ["/tmp/**", "../secrets/**"]
+`);
+
+      const configModule = pathToFileURL(join(import.meta.dir, "config.ts")).href;
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        WT_CONFIG: userConfig,
+      };
+      delete env[REPOSITORY_CONFIG_ENV];
+      const result = Bun.spawnSync([process.execPath, "-e", `await import(${JSON.stringify(configModule)})`], {
+        cwd: root,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain(
+        "lifecycle.copy_globs entries must be relative paths without '..' segments",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

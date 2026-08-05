@@ -12,7 +12,7 @@ disk. It's the local-materialization axis, selected by `[backend] kind`
 The seam is deliberately narrow: `create` and `remove` are the only two
 filesystem mutation points (`core/backend/`, behind the `core/backend.ts`
 barrel). Everything else wt does to a worktree — the fork-base record,
-`.env` copy, `.sst/stage` pin, upstream wiring, lock, dirty/merged/gone
+env/configured-glob copy, `.sst/stage` pin, upstream wiring, lock, dirty/merged/gone
 status — is backend-agnostic and lives in `lifecycle.ts` / `worktree.ts`.
 
 ## Why rift

@@ -22,7 +22,7 @@ List all non-main worktrees (slug, stage when `[deploy.sst]` is configured, PR, 
 
 ### `wt new <id [title…]|url|branch|slug>`
 
-Create a worktree from an issue id (optionally followed by pasted title words), a tracker URL, an existing branch name, or a bare slug. Runs the full setup: fetch, checkout (`git worktree add`, or a `rift` clone — see [backends.md](backends.md)), env-file copy, SST stage pin (only with `[deploy.sst]` configured), package install (detected from the lockfile, or `[lifecycle] install_command`).
+Create a worktree from an issue id (optionally followed by pasted title words), a tracker URL, an existing branch name, or a bare slug. Runs the full setup: fetch, checkout (`git worktree add`, or a `rift` clone — see [backends.md](backends.md)), env-file and configured-glob copy, SST stage pin (only with `[deploy.sst]` configured), package install (detected from the lockfile, or `[lifecycle] install_command`).
 
 Issue-id input resolves like this:
 

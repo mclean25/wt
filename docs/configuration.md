@@ -115,6 +115,7 @@ Preview-stage naming, used by the SST integration and stage URLs.
 | key | required | default | meaning |
 |---|---|---|---|
 | `env_files_to_copy` | no | `[".env"]` | Files copied from the main clone into each new worktree during setup. |
+| `copy_globs` | no | `[]` | Glob patterns resolved relative to the main clone and copied into each new worktree with their paths preserved. Dotfiles are included except root `.git` metadata, existing destinations are not overwritten, and patterns must be relative without `..` segments. Example: `[".agents/**"]`. |
 | `install_command` | no | *(auto-detect)* | Dependency install run in a fresh `git-worktree` checkout, via `$SHELL -lc`. Unset ⇒ detect the package manager from the checkout's lockfile (`bun.lock`/`bun.lockb` → `bun install`, `pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn install`, `package-lock.json`/`npm-shrinkwrap.json` → `npm install`); no lockfile ⇒ the install is skipped with a note. The `rift` backend never installs — packages ride the CoW clone. |
 
 `install_command` caveats: the same command is also used verbatim for the main-clone dependency sync ([backends.md](backends.md)), so it must not rewrite the committed lockfile (use a frozen/`ci` variant) — auto-detection picks frozen variants for that path on its own. The command string is echoed into logs and the activity pane, so don't embed secrets in it. And like `[[actions]]`/`[[automations]]`, it executes automatically — a `.wt.toml` is trusted config, so don't point `wt` at repository config you don't control.
