@@ -2,8 +2,9 @@ import { join } from "node:path";
 
 import { getHarness, type HarnessId } from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
-import { buildInnerArgs, sessionsDir, tmuxClientCwd, wrapInnerArgs } from "./attach.ts";
+import { buildInnerArgs, sessionsDir, tmuxClientCwd } from "./attach.ts";
 import { ensureConfig } from "./config.ts";
+import { wrapInnerArgs } from "./inner-process.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
 import { capturePane, listAllSessionsRaw, paneTarget, runTmux } from "./process.ts";
 
@@ -105,7 +106,7 @@ async function startHarnessSessionDetached(
         // See attachOrCreate header: claude downgrades to 256-color when
         // $TMUX is set, so strip it before exec'ing. The bash wrapper
         // redirects stderr to a file so a spawn-and-die surfaces a reason.
-        ...wrapInnerArgs(stderrPath, innerArgs),
+        ...wrapInnerArgs(harnessId, stderrPath, innerArgs),
       ],
       {
         // NOT the worktree — the pane cwd comes from `-c`; the client
