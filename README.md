@@ -1,5 +1,7 @@
 # wt
 
+[![Discord](https://img.shields.io/badge/Discord-join%20the%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/DDnxyXQgF7)
+
 Terminal UI for keeping multiple git worktrees in flight at once. Each row shows live status, PR state, preview deployment, issue link, and coding-agent session activity (Claude Code, Codex, OpenCode) for one worktree, so the whole pile of in-progress work is visible on one screen. The details pane can also pull an AI-generated title and description for each branch from a local OpenAI-compatible LLM endpoint or Google's Gemini API.
 
 ![screenshot](docs/screenshot.png)
