@@ -87,6 +87,7 @@ State is push-based: filesystem watchers on git refs, worktree dirs, and wt's ow
 | [docs/stacked-prs.md](docs/stacked-prs.md) | stacked PRs: fork-base records, inferred stacks, `wt restack` |
 | [docs/backends.md](docs/backends.md) | worktree backends: `git-worktree` (default) vs `rift` copy-on-write clones |
 | [docs/architecture.md](docs/architecture.md) | internals: layers, freshness model, module conventions |
+| [docs/discord.md](docs/discord.md) | Discord server wiring: #updates digest, #github feed, badge |
 
 ## Community
 

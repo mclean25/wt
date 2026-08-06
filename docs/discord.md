@@ -1,0 +1,81 @@
+# Discord server wiring
+
+How the wt Discord server (invite: <https://discord.gg/DDnxyXQgF7>, never
+expires) is connected to this repo. Server id: `1534621499665813627` (widget
+enabled — that id is public by design; it powers the README badge).
+
+## Channels
+
+- **#general** — chat.
+- **#updates** — AI-written commit digests, posted by the workflow below.
+  Nothing else posts here.
+- **#github** — raw repo events via a native Discord GitHub webhook (see
+  below). Deliberately excludes pushes so it never overlaps #updates.
+- **#help** — support. Carries a pinned message telling reporters to include
+  `wt doctor` output and the tail of `~/.cache/wt/logs/app/wt-<date>.log`.
+
+## #updates: the commit digest
+
+`.github/workflows/discord-digest.yml` + `.github/scripts/discord-digest.ts`.
+Full mechanics are documented in those files' header comments; the shape:
+
+- Triggers via `workflow_run` when typecheck goes green on `main` (a red tree
+  is never digested; its commits roll into the next green digest).
+- Debounce: the run sleeps 30 minutes inside a `concurrency` group with
+  `cancel-in-progress: true`, so every newer green push cancels the sleeping
+  run and restarts the countdown — one digest per burst. The idle runner is
+  free on public repos; if this repo ever goes private, switch to a cron
+  check instead.
+- "Since when" state is the head SHA of the digest workflow's own last
+  successful run — no tags, no state files.
+- The model (`gpt-5.6-luna`) sees commit titles + bodies only, never diffs.
+  OpenAI failure degrades to posting raw commit titles.
+- Attribution is built in: the embed footer lists commit authors' GitHub
+  logins.
+
+**Actions secrets** (repo Settings → Secrets → Actions): `OPENAI_API_KEY`,
+`DISCORD_UPDATES_WEBHOOK` (the #updates channel webhook URL). These are the
+only Discord-related Actions secrets.
+
+## #github: the raw event feed
+
+A GitHub **repo webhook** (repo Settings → Webhooks — not an Actions secret)
+posting to the #github channel's Discord webhook URL with `/github` appended.
+Registered events: `issues`, `issue_comment`, `pull_request`,
+`pull_request_review`, `fork`, `star` — no `push`. Hook id `662175381`.
+
+To re-register (e.g. after rotating the Discord webhook):
+
+```sh
+gh api repos/micthiesen/wt/hooks -X POST -F active=true -f name=web \
+  -f 'events[]=issues' -f 'events[]=issue_comment' -f 'events[]=pull_request' \
+  -f 'events[]=pull_request_review' -f 'events[]=fork' -f 'events[]=star' \
+  -f 'config[url]=<discord-webhook-url>/github' -f 'config[content_type]=json'
+```
+
+Discord webhook URLs grant post access to the channel — they live only in
+Discord (channel → Integrations → Webhooks), repo webhook settings, and the
+Actions secret; never commit one.
+
+## Repo surfaces pointing at the server
+
+- README badge: live online count via
+  `img.shields.io/discord/<server-id>` (requires the server widget to stay
+  enabled), linking the invite.
+- README **Community** section.
+- Repo homepage (About field) is the invite URL.
+- `.github/ISSUE_TEMPLATE/config.yml` offers the Discord as a contact link on
+  the new-issue page.
+- Logo: `docs/logo.svg` (editable source) → `docs/logo.png` (512px, rounded,
+  transparent corners; rasterize via a Chromium `--headless=new --screenshot`
+  with `--default-background-color=00000000` — macOS Quick Look flattens SVG
+  transparency to white). The square, uncropped variant of the same art is
+  the Discord server icon.
+
+## Deliberately not set up (revisit when the server grows)
+
+- Release flow / release announcements — too heavy for now; the digest covers
+  it.
+- Forum-style #help (needs Community mode) and an opt-in @updates ping role —
+  wait for strangers.
+- Stats/moderation bots, server banner, vanity URL.
