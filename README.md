@@ -86,6 +86,10 @@ State is push-based: filesystem watchers on git refs, worktree dirs, and wt's ow
 | [docs/backends.md](docs/backends.md) | worktree backends: `git-worktree` (default) vs `rift` copy-on-write clones |
 | [docs/architecture.md](docs/architecture.md) | internals: layers, freshness model, module conventions |
 
+## Community
+
+Questions, ideas, or a setup to show off — join the [Discord](https://discord.gg/DDnxyXQgF7).
+
 ## Logs
 
 Every action and error goes to a daily file at `~/.cache/wt/logs/app/wt-YYYY-MM-DD.log` (14-day retention) — a strict superset of what the activity pane shows. Per-worktree destroy logs live at `~/.cache/wt/logs/<slug>-*.log`; `wt logs <slug>` tails the latest.
