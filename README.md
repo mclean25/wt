@@ -67,8 +67,9 @@ The full reference — every option, default, the `[[actions]]` menu, and `[[aut
 `wt` with no arguments launches the TUI; press `?` inside for the full keymap and glyph legend. Subcommands (`wt new`, `wt rm`, `wt clean`, `wt restack`, …) run the same operations one-shot from a shell. An opt-in [hub mode](docs/hub.md) (`wt hub`, or `[ui] mode = "hub"`) swaps in a tmux-hosted task inbox next to an always-live coding-agent session; `wt classic` / `wt hub` switch freely since both share all on-disk state.
 
 An optional `[remote]` SSH target lets `Ctrl+N` create worktrees on a second
-machine while keeping them in the same Inbox; F10/F11/F12 route the selected
-row's shell, diff, or AI session over SSH, and `d` removes it on that host
+machine while keeping them in a server-named section of the same list;
+F10/F11/F12 route the selected row's shell, diff, or AI session over SSH, and
+`d` removes it on that host
 using the same safety checks as a local worktree. See
 [`docs/configuration.md`](docs/configuration.md#remote--optional-ssh-worktree-host).
 

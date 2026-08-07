@@ -28,7 +28,7 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | key | action |
 |---|---|
 | `n` / `N` | new local worktree prompt (accepts an issue id + optional title words, a tracker URL, branch, or slug, plus `--attach`, `--gh <n>`, `--any`, `--base <ref>` — same resolution as [`wt new`](cli.md#wt-new-id-titleurlbranchslug)); `N` pre-fills `--base` with the selected row's branch |
-| `Ctrl+N` | create on `[remote]`; the worktree stays in this Inbox with a remote glyph, and F10/F11/F12 route that row's sessions over SSH |
+| `Ctrl+N` | create on `[remote]`; the worktree appears under the server-named remote section with normal status glyphs, and F10/F11/F12 route that row's sessions over SSH |
 | `o` | open the worktree in Zed |
 | `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning when dirty/unpushed) |
 | `c` | clean all merged/gone worktrees (confirm) |

@@ -24,6 +24,7 @@ import type { DerivedState } from "../../core/harness/status.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import { capitalizeFirst, slugLabel } from "../../core/stage.ts";
 import { STACK_CONNECTOR, stackOrdinalLabel } from "../../core/stack-layout.ts";
+import { StatusKind, type Status } from "../../core/types.ts";
 import type { ActiveSessionGlyph } from "../hooks/useHarnessSessions.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import {
@@ -360,25 +361,35 @@ const FoldedSectionHeader = memo(function FoldedSectionHeader({
 });
 
 /**
- * Transient, non-interactive Inbox row for a checkout owned by the SSH host.
- * It stays visible through install, then the renderer hands off to remote wt.
+ * A checkout owned by the SSH host. Its host identity lives in the section
+ * header; the row uses the same primary status glyph and label treatment as a
+ * local worktree. A transient creation stays visible through install, then
+ * the renderer hands off to the summary returned by remote wt.
  */
-const RemoteCreationRow = memo(function RemoteCreationRow({
+const RemoteRowView = memo(function RemoteRowView({
   entry,
   selected,
-  unavailable,
+  panelWidth,
 }: {
   entry: RemoteListEntry;
   selected: boolean;
-  unavailable: boolean;
+  panelWidth: number;
 }) {
-  const suffix = unavailable
-    ? "host unavailable"
-    : isRemoteSummary(entry)
-    ? entry.statusLabel
+  const status: Status = isRemoteSummary(entry)
+    ? {
+        kind: entry.status,
+        label: entry.statusLabel,
+        age: entry.statusAge ?? undefined,
+        op: entry.statusOp ?? undefined,
+      }
     : entry.status === "creating"
-      ? "creating…"
-      : "ready";
+      ? { kind: StatusKind.Busy, label: "creating", op: "init" }
+      : { kind: StatusKind.Clean, label: "ready" };
+  const marker = statusBadge(status);
+  const rawLabel = remoteEntryLabel(entry);
+  const { id, rest } = slugLabel(rawLabel);
+  const numId = id ? id.replace(/^[A-Z]+-/, "") : null;
+  const label = numId ? `${numId}: ${rest || rawLabel}` : rest || rawLabel;
   return (
     <box
       id={`remote:${remoteEntryKey(entry)}`}
@@ -388,7 +399,7 @@ const RemoteCreationRow = memo(function RemoteCreationRow({
       backgroundColor={selected ? theme.rowSelectedBg : undefined}
     >
       <box width={2} flexShrink={0}>
-        <text fg={theme.info}>{NF.remote}</text>
+        <text fg={marker.fg}>{marker.glyph}</text>
       </box>
       <box width={1} flexShrink={0}>
         <text> </text>
@@ -398,17 +409,19 @@ const RemoteCreationRow = memo(function RemoteCreationRow({
           fg={selected ? theme.fgBright : theme.fg}
           attributes={selected ? TextAttributes.BOLD : 0}
           wrapMode="none"
-          truncate
         >
-          {remoteEntryLabel(entry)}
+          {truncateEnd(label, Math.max(0, panelWidth - 7))}
         </text>
       </box>
-      <text fg={theme.fgDim} wrapMode="none">
-        {` ${entry.hostLabel} · ${suffix}`}
-      </text>
     </box>
   );
 });
+
+const REMOTE_SECTION_PREFIX = "\0remote:";
+
+function remoteSectionKey(entry: RemoteListEntry): string {
+  return `${REMOTE_SECTION_PREFIX}${entry.hostLabel}`;
+}
 
 export function WorktreeList({ items, archivedRows, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, stackSectionLabels, isLoading, remoteUnavailable, scrollHandle }: Props) {
   const hasArchived = archivedRows.length > 0;
@@ -506,23 +519,31 @@ export function WorktreeList({ items, archivedRows, reviewRequests, selectedInde
               ? prev.kind === "wt"
                 ? prev.row.section
                 : prev.kind === "remote"
-                  ? null
+                  ? remoteSectionKey(prev.entry)
                   : prev.sectionKey
               : undefined;
 
             if (item.kind === "remote") {
+              const sectionKey = remoteSectionKey(item.entry);
               return (
                 <Fragment key={`remote:${remoteEntryKey(item.entry)}`}>
-                  {prevSection !== null ? (
+                  {prevSection !== sectionKey ? (
                     <>
                       <box height={1} flexShrink={0} />
-                      <Divider label="Inbox" width={width} />
+                      <Divider
+                        label={item.entry.hostLabel}
+                        width={width}
+                        icon={{
+                          glyph: NF.remote,
+                          fg: remoteUnavailable ? theme.warn : theme.info,
+                        }}
+                      />
                     </>
                   ) : null}
-                  <RemoteCreationRow
+                  <RemoteRowView
                     entry={item.entry}
                     selected={i === selectedIndex}
-                    unavailable={remoteUnavailable}
+                    panelWidth={width}
                   />
                 </Fragment>
               );
