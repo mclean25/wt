@@ -91,6 +91,12 @@ export const qk = {
    * (mtime, size) memo inside the reader covers correctness).
    */
   claudeSummaries: (slug: string) => ["claudeSummaries", slug] as const,
+  /**
+   * Live process/CPU snapshot behind the `P` overlay. Single global
+   * key; sampled only while that overlay is open and never persisted
+   * (a restored snapshot is a previous run's dead pids).
+   */
+  perf: () => ["perf"] as const,
   /** Per-worktree property namespace. */
   wt: (slug: string) =>
     ({

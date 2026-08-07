@@ -15,6 +15,10 @@ export type SimpleModalContext = {
   setModal: Dispatch<SetStateAction<Modal | null>>;
   current: WorktreeRow | undefined;
   refreshTmuxSessions: () => Promise<unknown>;
+  /** Force a fresh perf sample (`r` inside the `P` overlay). */
+  refreshPerf: () => Promise<unknown>;
+  /** Send the current perf snapshot to the wt session, then enter it. */
+  doPerfInvestigate: () => void;
   commitBasePick: (
     item: { label: string; branch: string | null },
     slug: string,

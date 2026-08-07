@@ -58,6 +58,20 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       setModal({ kind: "help", query: "", searching: false });
       return true;
     }
+    // Shift+P — the perf overlay. Sampling is gated on this modal being
+    // open (see perfSnapshotQuery), so opening it starts the 2s poll and
+    // closing it stops it; nothing samples in the background.
+    //
+    // `isShiftedLetter`, not `k.sequence === "P"`: inside hub mode's tmux
+    // the csi-u encoding turns Shift+letter into an escape sequence that
+    // never compares equal to the literal (see the note in hub-keys.ts).
+    // NOTE: hub mode still can't reach this — `P` is already the hub's
+    // pin-task toggle and handleHubKey returns without falling through,
+    // so the overlay is classic-mode only. Documented in docs/tui.md.
+    if (isShiftedLetter(k, "p")) {
+      setModal({ kind: "perf", inject: { kind: "idle" } });
+      return true;
+    }
     if (isPlainLetter(k, "q") || (k.ctrl && k.name === "c")) {
       quit();
       return true;

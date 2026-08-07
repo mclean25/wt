@@ -88,6 +88,11 @@ export function createWtQueryClient(): WtQueryClient {
         // pre-warms a previous run's name set (ghost/missing sessions)
         // until the staleTime refetch — recompute fresh each run instead.
         if (key[0] === "claudeSummaries") return false;
+        // Perf snapshots are a live process table sampled every 2s while
+        // the `P` overlay is open. Restoring one would paint a previous
+        // run's pids (dead, possibly recycled), and persisting at that
+        // cadence is precisely the write amplification this filter guards.
+        if (key[0] === "perf") return false;
         if (key.length < 3 || key[0] !== "wt") return true;
         const slot = key[2];
         return slot !== "lock" && slot !== "claude";

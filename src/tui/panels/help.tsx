@@ -164,6 +164,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "/", label: "enter dotfiles session · F12 to detach" },
       { key: ">", label: "open wt source in zed" },
       { key: "O", label: "open main repo in zed" },
+      { key: "P", label: "perf overlay — CPU/memory for everything downstream of wt" },
       { key: "?", label: "toggle this help" },
       { key: "q / ^C", label: "quit" },
     ],
@@ -227,6 +228,17 @@ const KEY_BLOCKS: Block[] = [
       { key: "[ / ]", label: "cycle prev / next output for this worktree" },
       { key: '"', label: "jump to events for this worktree" },
       { key: "esc", label: "clear focus (return to follow-row auto)" },
+    ],
+  },
+  {
+    kind: "keys",
+    title: "perf overlay (P)",
+    note: "\"is the machine slow because of us?\" — a filtered btop over everything descending from wt or its tmux server, grouped by category and by worktree session. Samples every 2s while open and not at all while closed. %cpu is a lifetime decaying average, so read it as sustained pressure rather than a profile. Classic mode only: in hub mode P is the pin toggle.",
+    items: [
+      { key: "j k", label: "scroll" },
+      { key: "i", label: "send the snapshot to the wt session as a prompt, then enter it" },
+      { key: "r", label: "resample now" },
+      { key: "P / esc / q", label: "close" },
     ],
   },
   {

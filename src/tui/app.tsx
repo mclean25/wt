@@ -5,7 +5,7 @@ import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 
 import { createLogger } from "../core/logger.ts";
 import { config } from "../core/config.ts";
-import { qk, remoteWorktreesQuery, useWtActions } from "../state/index.ts";
+import { perfSnapshotQuery, qk, remoteWorktreesQuery, useWtActions } from "../state/index.ts";
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
 
 import { Details } from "./panels/details.tsx";
@@ -62,6 +62,7 @@ import { makeBaseFlows } from "./flows/base.ts";
 import { makeDestroyFlows } from "./flows/destroy.ts";
 import { makeGithubPrFlows } from "./flows/github-pr.ts";
 import { makeWorktreeCreateFlows } from "./flows/new-worktree.ts";
+import { makePerfFlows } from "./flows/perf-report.ts";
 import { makeReviewerFlows } from "./flows/reviewers.ts";
 import { makeSectionFlows } from "./flows/sections.ts";
 import { makeSessionFlows } from "./flows/sessions.ts";
@@ -153,6 +154,10 @@ export function App({ onExit, hubPane = false }: Props) {
   // items, slug context) lives on its variant. The keyboard handler
   // and JSX both `switch` on `modal.kind`.
   const [modal, setModal] = useState<Modal | null>(null);
+  // Perf sampling runs ONLY while the `P` overlay is up — three
+  // shell-outs every 2s is cheap against the load it measures, but
+  // pointless (and self-defeating) with nothing watching.
+  const perf = useQuery(perfSnapshotQuery({ enabled: modal?.kind === "perf" }));
   // Last section the user moved a row into. Used to default the
   // section-picker cursor — the common case is "moving several
   // adjacent worktrees into the same section", and re-aiming on
@@ -621,6 +626,17 @@ export function App({ onExit, hubPane = false }: Props) {
     : doEnterSlotSession;
   const queryClient = useQueryClient();
 
+  // `i` inside the perf overlay: send the snapshot to the wt-source
+  // session, then enter it. Built per render so it closes over the
+  // latest sample rather than whichever one was current at mount.
+  const { doPerfInvestigate } = makePerfFlows({
+    snapshot: perf.data,
+    primaryHarness,
+    setModal,
+    doEnterSlotSession: effDoEnterSlotSession,
+    toast,
+  });
+
   /**
    * Copy `value` to the clipboard, log + toast appropriately. Used by
    * the yank chord (branch / stage / path); each item picks its own
@@ -719,6 +735,8 @@ export function App({ onExit, hubPane = false }: Props) {
           setModal,
           current,
           refreshTmuxSessions,
+          refreshPerf: () => perf.refetch(),
+          doPerfInvestigate,
           commitBasePick,
           doYank,
           doClean,
@@ -1097,6 +1115,8 @@ export function App({ onExit, hubPane = false }: Props) {
         cleanCandidates={cleanCandidates}
         primaryHarness={primaryHarness}
         buildActionPickerItems={buildActionPickerItems}
+        perfSnapshot={perf.data}
+        perfError={perf.error}
       />
     </box>
   );

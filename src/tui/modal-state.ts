@@ -2,6 +2,7 @@ import type { ActionDef } from "../core/actions.ts";
 import type { HistoryEntry } from "../core/actions.ts";
 import type { RemovedWorktree } from "../core/wtstate.ts";
 import type { ActionPickerState } from "./panels/action-picker.tsx";
+import type { PerfInjectState } from "./panels/perf.tsx";
 import type { MultiPickerItem } from "./panels/picker.tsx";
 import type { SectionPickerItem } from "./panels/section-picker.tsx";
 
@@ -12,6 +13,12 @@ import type { SectionPickerItem } from "./panels/section-picker.tsx";
  */
 export type Modal =
   | { kind: "help"; query: string; searching: boolean }
+  /**
+   * Live perf overlay (`P`). `inject` tracks the `i` send-to-wt-session
+   * flow, which takes seconds (the harness has to settle before the
+   * paste lands) and so needs visible in-progress / failed states.
+   */
+  | { kind: "perf"; inject: PerfInjectState }
   | { kind: "cleanConfirm" }
   | {
       kind: "confirm";

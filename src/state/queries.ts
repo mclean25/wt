@@ -23,5 +23,8 @@ export { claudeUsageQuery, codexUsageQuery, opencodeCostQuery } from "./queries/
 export type { ClaudeRegistryData } from "./queries/claude.ts";
 export { claudeRegistryQuery, claudeSummariesQuery } from "./queries/claude.ts";
 
+export type { PerfSnapshot } from "./queries/perf.ts";
+export { perfSnapshotQuery, PERF_SAMPLE_MS } from "./queries/perf.ts";
+
 export type { StackMember } from "./queries/ai.ts";
 export { wtDiffContextQuery, aiSummaryQuery, buildStackSignature, stackTitleQuery } from "./queries/ai.ts";

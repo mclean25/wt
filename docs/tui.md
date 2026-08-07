@@ -94,6 +94,48 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 | `A` | pause/resume all automations |
 | `Ctrl+A` | pause/resume the selected worktree (or its whole stack) |
 
+### Perf overlay (`P`)
+
+Answers one question: *the machine feels slow — is that us?*
+
+A filtered `btop` scoped to everything descending from the wt process or
+its private tmux server. The headline is a verdict line (wt's share of
+the CPU actually in use, not of installed capacity — the latter reads
+reassuringly small on a 12-core box even when wt owns all of it),
+followed by system meters, a breakdown by category (agents, tests,
+typecheck/lint, dev servers, wt, tmux, shells), a breakdown by worktree
+session, and the heaviest processes both inside and outside wt's tree.
+That last block is the point: when the hog is a browser tab, it says so
+instead of sending you hunting through worktrees.
+
+| key | action |
+|---|---|
+| `P` | open / close |
+| `j` / `k` | scroll |
+| `i` | send the snapshot to the wt-source session (`,`) as an investigation prompt, then enter that session |
+| `r` | resample now |
+
+**Classic mode only.** In [hub mode](hub.md) `P` is already the pin-task
+toggle, so the overlay has no trigger there. Use `wt classic` (or run the
+sampler outside the TUI) if you need it while working in the hub.
+
+Sampling runs only while the overlay is open (every 2s, four shell-outs)
+and stops entirely when it closes — nothing polls in the background, and
+the snapshot is never persisted to the query cache.
+
+Two accuracy notes. CPU percentages come from `ps` `%CPU`, which is a
+**lifetime decaying average, not an instantaneous sample** — a process
+showing 130% may be idle right now. Read it as sustained pressure; the
+overlay is not a profiler. Memory "used" is computed from `vm_stat` as
+active + wired + compressor pages (Activity Monitor's definition) rather
+than `os.freemem()`, which counts only genuinely free pages and so reads
+~90% used on any machine that's been up a while.
+
+Unrelated but adjacent: `WT_PERF=1 bun src/main.ts` arms an event-loop
+lag probe that logs whenever wt's own render thread blocks. That's the
+tool for "j/k feels laggy"; this overlay is the tool for "the whole
+machine feels slow".
+
 ### Removed-worktrees view (`h`)
 
 `j`/`k` navigate, `p` opens the snapshotted PR, `i` the issue, `y` copies the branch, `Enter` restores the worktree (from the branch if it still exists, else fresh), `h`/`Esc` returns.

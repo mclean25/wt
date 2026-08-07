@@ -3,6 +3,7 @@ import type { KeyEvent } from "@opentui/core";
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleHelpKey } from "./help.ts";
+import { handlePerfKey } from "./perf.ts";
 import {
   handleClaudeSessionsNewKey,
   handleClaudeSessionsPickerKey,
@@ -32,6 +33,8 @@ export function handleSimpleModalKey(
   switch (modal.kind) {
     case "help":
       return handleHelpKey(k, modal, ctx);
+    case "perf":
+      return handlePerfKey(k, modal, ctx);
     case "reviewerPicker":
       return handleReviewerPickerKey(k, modal, ctx);
     case "sectionPicker":

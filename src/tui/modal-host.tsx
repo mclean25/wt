@@ -9,6 +9,7 @@
  */
 import { nextAutoName } from "../core/harness/claude/names.ts";
 import { HARNESSES, type HarnessId } from "../core/harness/index.ts";
+import type { PerfSnapshot } from "../core/perf.ts";
 import { actionSkillPrefix, buildActionVars } from "./app-helpers.ts";
 import type { Modal } from "./modal-state.ts";
 import {
@@ -23,6 +24,7 @@ import { HelpOverlay } from "./panels/help.tsx";
 import { KillActionConfirmModal } from "./panels/kill-action-confirm.tsx";
 import { KillSessionConfirmModal } from "./panels/kill-session-confirm.tsx";
 import { OutputsPicker } from "./panels/outputs-picker.tsx";
+import { PerfOverlay } from "./panels/perf.tsx";
 import { ArgPickerModal, MultiPickerModal, PickerModal } from "./panels/picker.tsx";
 import { SectionPickerModal } from "./panels/section-picker.tsx";
 import {
@@ -116,6 +118,8 @@ export function PostFooterModals({
   cleanCandidates,
   primaryHarness,
   buildActionPickerItems,
+  perfSnapshot,
+  perfError,
 }: {
   modal: Modal | null;
   current: WorktreeRow | undefined;
@@ -123,11 +127,22 @@ export function PostFooterModals({
   cleanCandidates: WorktreeRow[];
   primaryHarness: HarnessId;
   buildActionPickerItems: (slug: string) => PickerItem[];
+  /** Undefined until the first sample lands (the overlay shows "sampling…"). */
+  perfSnapshot: PerfSnapshot | undefined;
+  /** Sampler failure, so a broken `ps` doesn't render as an idle machine. */
+  perfError: Error | null;
 }) {
   return (
     <>
       {modal?.kind === "help" ? (
         <HelpOverlay query={modal.query} searching={modal.searching} />
+      ) : null}
+      {modal?.kind === "perf" ? (
+        <PerfOverlay
+          snapshot={perfSnapshot}
+          error={perfError}
+          inject={modal.inject}
+        />
       ) : null}
       {modal?.kind === "cleanConfirm" ? (
         <CleanConfirmModal candidates={cleanCandidates} />

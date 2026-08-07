@@ -1,34 +1,32 @@
 /**
- * Opt-in event-loop-lag probe. Arms only when `WT_PERF` is set in the
- * environment. Samples the event loop on a fixed interval and logs
- * whenever a tick lands later than the threshold — meaning the single
- * JS thread was blocked by synchronous work for that long.
+ * Performance instrumentation. Two unrelated tools that happen to share
+ * the subject:
  *
- * This is the honest metric for the "j/k feels laggy during a refresh"
- * symptom: a blocked tick is a frame the TUI couldn't paint and a
- * keypress it couldn't read. Run `WT_PERF=1 bun src/main.ts` and grep
- * the daily app log for `event-loop blocked` to compare before/after.
+ *  - `loop-lag.ts` — the opt-in (`WT_PERF=1`) event-loop-lag probe. Answers
+ *    "why does j/k feel laggy", i.e. is *wt's own render thread* blocked.
+ *  - `sample.ts` — the process/CPU sampler behind the `P` overlay. Answers
+ *    "why does the machine feel slow", i.e. is anything downstream of wt
+ *    eating the box.
+ *
+ * Split into a directory behind this flat barrel per the module-layout
+ * convention in docs/architecture.md; importers keep using `core/perf.ts`.
  */
-import { createLogger } from "./logger.ts";
 
-const log = createLogger("[perf]");
-const SAMPLE_MS = 100;
-const LAG_THRESHOLD_MS = 50;
+export { startLoopLagProbe } from "./perf/loop-lag.ts";
 
-export function startLoopLagProbe(): () => void {
-  if (!process.env.WT_PERF) return () => {};
-  let last = performance.now();
-  const timer = setInterval(() => {
-    const now = performance.now();
-    const lag = now - last - SAMPLE_MS;
-    last = now;
-    if (lag > LAG_THRESHOLD_MS) {
-      log.warn("event-loop blocked", { lagMs: Math.round(lag) });
-    }
-  }, SAMPLE_MS);
-  log.info("loop-lag probe armed", {
-    sampleMs: SAMPLE_MS,
-    thresholdMs: LAG_THRESHOLD_MS,
-  });
-  return () => clearInterval(timer);
-}
+export {
+  buildPerfInvestigationPrompt,
+  CATEGORY_LABEL,
+  classifyProcess,
+  formatPerfReport,
+  PERF_CATEGORIES,
+  samplePerf,
+  shortCommand,
+} from "./perf/sample.ts";
+export type {
+  PerfBucket,
+  PerfCategory,
+  PerfProc,
+  PerfSession,
+  PerfSnapshot,
+} from "./perf/sample.ts";
