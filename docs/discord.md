@@ -32,6 +32,11 @@ Full mechanics are documented in those files' header comments; the shape:
   OpenAI failure degrades to posting raw commit titles.
 - Attribution is built in: the embed footer lists commit authors' GitHub
   logins.
+- A GitHub Actions outage can wedge a `push`-triggered typecheck run in
+  `queued` indefinitely — `gh run cancel`/`rerun` both error unhelpfully on
+  it ("already completed" / "already running") rather than clearing it. The
+  stuck run itself has no fix; a new push supersedes it and the debounce
+  resumes normally once typecheck runs are getting picked up again.
 
 **Actions secrets** (repo Settings → Secrets → Actions): `OPENAI_API_KEY`,
 `DISCORD_UPDATES_WEBHOOK` (the #updates channel webhook URL). These are the
