@@ -202,9 +202,13 @@ export const REVIEW_BOT_GLYPH =
  * clean (ok). Unresolved findings are "address these", not a rejection,
  * so info (the magenta "look-here" tier) rather than changes-requested
  * red. Color is load-bearing here — the glyph has no clean
- * state-specific variants. A stale clean review (checklist bots don't
- * re-run on push) dims rather than claiming an ok it didn't earn.
- * Null for the quiet `none` state.
+ * state-specific variants. Null for the quiet `none` state.
+ *
+ * A stale clean review stays green. Staleness rides in the details-pane
+ * prose (`reviewed (old head)`) instead: checklist bots that only review
+ * on `opened` make stale the STEADY state, not a transient, so dimming
+ * it made "the bot found nothing" a colour you'd essentially never see —
+ * the badge stopped answering the question it exists to answer.
  */
 export function reviewBotBadge(rb: ReviewBotStatus): Badge | null {
   switch (rb.state) {
@@ -213,8 +217,34 @@ export function reviewBotBadge(rb: ReviewBotStatus): Badge | null {
     case "pending":
       return { glyph: REVIEW_BOT_GLYPH, fg: theme.warn };
     case "clean":
-      return { glyph: REVIEW_BOT_GLYPH, fg: rb.stale ? theme.fgDim : theme.ok };
+      return { glyph: REVIEW_BOT_GLYPH, fg: theme.ok };
     default:
       return null;
   }
+}
+
+/**
+ * Whether the bot badge renders at all for this PR. Shared by the
+ * list-pane cluster and the details-pane segment so the two can't drift.
+ *
+ * The draft gate is mode-specific, because "the bot skipped this draft"
+ * only mimics `clean` in one of the two modes:
+ *
+ * - `threads` (CodeRabbit): clean is inferred from the bot's check
+ *   context completing, and its "review skipped — draft detected" run
+ *   completes exactly like a real one. Hide, or a skipped draft reads
+ *   green.
+ * - `checklist`: clean requires a summary comment the bot actually
+ *   posted, so a skip yields `none` and the badge is already absent.
+ *   Hiding here only suppresses REAL reviews — these bots review on
+ *   `opened` whether or not the PR is a draft.
+ */
+const BOT_SHOWS_ON_DRAFT = config.reviewBot.unresolvedVia === "checklist";
+
+export function showReviewBot(pr: {
+  state: PullRequest["state"];
+  isDraft: boolean;
+}): boolean {
+  if (pr.state !== "OPEN") return false;
+  return !pr.isDraft || BOT_SHOWS_ON_DRAFT;
 }

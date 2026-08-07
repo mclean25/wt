@@ -11,7 +11,13 @@ import {
   type ReviewBotStatus,
 } from "../../core/types.ts";
 import { pluralize } from "../../core/text.ts";
-import { checkBadge, prStateBadge, reviewBadge, reviewBotBadge } from "../badges.ts";
+import {
+  checkBadge,
+  prStateBadge,
+  reviewBadge,
+  reviewBotBadge,
+  showReviewBot,
+} from "../badges.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { NF } from "../icons.ts";
 import { theme } from "../theme.ts";
@@ -253,10 +259,11 @@ function buildPrSegments(
       }
     }
 
-    // Hide the bot on drafts. Mirrors the review gate above for
-    // symmetry — the bot is essentially a second review, and on drafts
-    // a "review skipped" outcome would misreport as clean.
-    const rb = !pr.isDraft ? reviewBotLabel(pr.reviewBot ?? REVIEW_BOT_NONE) : null;
+    // Visibility (incl. the mode-specific draft rule) lives in the
+    // shared `showReviewBot` so this and the list-pane cluster agree.
+    const rb = showReviewBot(pr)
+      ? reviewBotLabel(pr.reviewBot ?? REVIEW_BOT_NONE)
+      : null;
     if (rb) {
       const modes = [
         {

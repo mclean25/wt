@@ -14,6 +14,7 @@ import {
   rebaseBadge,
   reviewBadge,
   reviewBotBadge,
+  showReviewBot,
 } from "./badges.ts";
 import { NF } from "./icons.ts";
 import { theme } from "./theme.ts";
@@ -149,13 +150,12 @@ function reviewHint(row: WorktreeRow): Badge | null {
 }
 
 /**
- * Review-bot hint. Glyph/color from `reviewBotBadge`; same OPEN/non-draft
- * gate as review. Draft-hide also sidesteps the "review skipped" →
- * mis-classified-as-clean issue (see `buildPrSegments` in pr.tsx).
+ * Review-bot hint. Glyph/color from `reviewBotBadge`; visibility (incl.
+ * the mode-specific draft rule) from the shared `showReviewBot`.
  */
 function reviewBotHint(row: WorktreeRow): Badge | null {
   const pr = row.pr;
-  if (!pr || pr.state !== "OPEN" || pr.isDraft) return null;
+  if (!pr || !showReviewBot(pr)) return null;
   return reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE);
 }
 
