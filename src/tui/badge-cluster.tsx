@@ -6,6 +6,11 @@
  * pane render the exact same cluster per member — same glyphs, same
  * colors, same order. Individual glyph/color rules still come from
  * `badges.ts`; this module owns the composition.
+ *
+ * Slot visibility is `ui.hidden_badges` (see `BADGE_SLOTS`), applied via
+ * `shows()`. It only suppresses glyphs here — the details pane keeps
+ * every signal, so hiding a slot declutters the list without losing
+ * information.
  */
 import {
   type Badge,
@@ -23,7 +28,17 @@ import type { HarnessId } from "../core/harness/index.ts";
 import type { DerivedState } from "../core/harness/status.ts";
 import { stateColor } from "./claude-state.ts";
 import { type MergeQueueState, REVIEW_BOT_NONE } from "../core/types.ts";
+import { type BadgeSlot, config } from "../core/config.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
+
+/**
+ * Whether a cluster slot renders, per `ui.hidden_badges`. Every slot
+ * below routes through this — `badgeClusterCells` and the JSX must agree
+ * on which slots are present or the slug column's width is wrong.
+ */
+function shows(slot: BadgeSlot): boolean {
+  return !config.ui.hiddenBadges.has(slot);
+}
 
 /**
  * Cells the badge cluster occupies for a given row. Mirrors the
@@ -38,20 +53,29 @@ export function badgeClusterCells(
   activeHarnessId: HarnessId | undefined,
 ): number {
   const isDeployed = boltLit(row);
+  const showAction = actionRunning && shows("action");
+  const mq = shows("pr") ? row.mq : null;
+  const prSlot = shows("pr") ? row.pr : null;
   const showChecks =
-    !!row.pr && row.pr.state === "OPEN" && row.pr.checks !== "none";
+    shows("checks") &&
+    !!row.pr &&
+    row.pr.state === "OPEN" &&
+    row.pr.checks !== "none";
   // Action and harness-glyph slots coexist (e.g. a row running an
   // action while hosting a live session shows both glyphs).
-  const showSessionSlot = activeHarnessId !== undefined;
+  const showSessionSlot = activeHarnessId !== undefined && shows("session");
   const rebase = rebaseHint(row);
   const hasAnyBadge =
-    actionRunning ||
+    showAction ||
     showSessionSlot ||
     !!rebase ||
-    !!(row.pr || row.mq || isDeployed);
+    !!(prSlot || mq || isDeployed) ||
+    !!reviewBotHint(row) ||
+    !!reviewHint(row) ||
+    showChecks;
   if (!hasAnyBadge) return 0;
   let cells = 2; // leading gap
-  if (actionRunning) cells += 2;
+  if (showAction) cells += 2;
   if (showSessionSlot) cells += 2;
   if (rebase) cells += 2;
   if (reviewBotHint(row)) cells += 2;
@@ -59,8 +83,8 @@ export function badgeClusterCells(
   // The PR-state slot doubles as the merge-queue slot: a queued PR
   // swaps the PR glyph for the mq indicator and the slot widens to 4
   // (icon + space + position digit); otherwise it's the 2-cell PR icon.
-  if (row.mq) cells += 4;
-  else if (row.pr) cells += 2;
+  if (mq) cells += 4;
+  else if (prSlot) cells += 2;
   if (showChecks) cells += 2;
   if (isDeployed) cells += 2;
   return cells;
@@ -125,6 +149,7 @@ function rebaseHint(
   row: WorktreeRow,
   sessionState?: DerivedState,
 ): Badge | null {
+  if (!shows("rebase")) return null;
   return rebaseBadge(row.fields.lock.data, row.fields.conflict.data, sessionState);
 }
 
@@ -136,6 +161,7 @@ function rebaseHint(
  * meaningfully on one repo.
  */
 function boltLit(row: WorktreeRow): boolean {
+  if (!shows("deploy")) return false;
   return (row.fields.deploy.data ?? false) || (row.fields.dev.data?.running ?? false);
 }
 
@@ -145,6 +171,7 @@ function boltLit(row: WorktreeRow): boolean {
  */
 function reviewHint(row: WorktreeRow): Badge | null {
   const pr = row.pr;
+  if (!shows("review")) return null;
   if (!pr || pr.state !== "OPEN" || pr.isDraft) return null;
   return reviewBadge(pr.review);
 }
@@ -155,6 +182,7 @@ function reviewHint(row: WorktreeRow): Badge | null {
  */
 function reviewBotHint(row: WorktreeRow): Badge | null {
   const pr = row.pr;
+  if (!shows("review_bot")) return null;
   if (!pr || !showReviewBot(pr)) return null;
   return reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE);
 }
@@ -199,10 +227,17 @@ export function BadgeCluster({
     : isDeployed
       ? theme.warn
       : theme.fgDim;
-  const mqFg = row.archived || !row.mq ? theme.fgDim : mqColor(row.mq.state);
+  // `pr` covers the shared PR-state / merge-queue slot; hiding it drops
+  // both, since they're one slot that swaps contents.
+  const mq = shows("pr") ? row.mq : null;
+  const prSlot = shows("pr") ? row.pr : null;
+  const mqFg = row.archived || !mq ? theme.fgDim : mqColor(mq.state);
   const mqText = mqGlyph(row);
   const showChecks =
-    row.pr && row.pr.state === "OPEN" && row.pr.checks !== "none";
+    shows("checks") &&
+    !!row.pr &&
+    row.pr.state === "OPEN" &&
+    row.pr.checks !== "none";
   const bot = reviewBotHint(row);
   const review = reviewHint(row);
   const botFg = row.archived || !bot ? theme.fgDim : bot.fg;
@@ -210,18 +245,22 @@ export function BadgeCluster({
   // Two independent 2-cell slots: action (comment glyph, green) and
   // harness glyph (tinted with the harness's own color). They coexist
   // so a row running an action while hosting a live session shows both.
-  const showSessionSlot = activeHarnessId !== undefined;
+  const showAction = actionRunning && shows("action");
+  const showSessionSlot = activeHarnessId !== undefined && shows("session");
   const rebase = rebaseHint(row, sessionState);
   const hasAnyBadge =
-    actionRunning ||
+    showAction ||
     showSessionSlot ||
     !!rebase ||
-    !!(row.pr || row.mq || isDeployed);
+    !!(prSlot || mq || isDeployed) ||
+    !!bot ||
+    !!review ||
+    showChecks;
   if (!hasAnyBadge) return null;
   return (
     <box flexShrink={0} flexDirection="row">
       <text>  </text>
-      {actionRunning ? (
+      {showAction ? (
         <box width={2} flexShrink={0}>
           <text fg={theme.ok}>{NF.comment}</text>
         </box>
@@ -274,11 +313,11 @@ export function BadgeCluster({
       {/* PR-state slot, doubling as the merge-queue slot: a queued PR
           shows the mq indicator (icon + position) in place of the PR
           glyph, widening to 4 cells. */}
-      {row.mq ? (
+      {mq ? (
         <box width={4} flexShrink={0}>
           <text fg={mqFg}>{mqText}</text>
         </box>
-      ) : row.pr ? (
+      ) : prSlot ? (
         <box width={2} flexShrink={0}>
           <text fg={prFg}>{prb.glyph}</text>
         </box>

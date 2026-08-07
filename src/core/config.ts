@@ -534,6 +534,14 @@ export type Config = {
     /** Detail-pane row order. Unknown ids are ignored, missing ones hidden. */
     rows: readonly string[];
     /**
+     * List-pane badge slots to suppress (`ui.hidden_badges`). Opt-out
+     * rather than an ordered allow-list like `rows`: the cluster's
+     * left-to-right order is designed (`[bot] [review] [pr] [checks]`
+     * reads as one "state of this PR" run), and an allow-list would also
+     * hide any slot added in a later version from anyone who set it.
+     */
+    hiddenBadges: ReadonlySet<BadgeSlot>;
+    /**
      * Which TUI a bare `wt` launches. `classic` is the three-pane
      * worktree TUI; `hub` boots the tmux-hosted task-inbox layout
      * (left task pane + live harness pane, see docs/hub.md). Both modes
@@ -553,6 +561,25 @@ export type Config = {
 };
 
 export type TuiMode = "classic" | "hub";
+
+/**
+ * The glyph slots `tui/badge-cluster.tsx` composes, in cluster order.
+ * Named for what they signal, not their glyph — `ui.hidden_badges`
+ * entries are matched against these. The ids double as the validation
+ * set, so a typo fails the load rather than silently doing nothing.
+ */
+export const BADGE_SLOTS = [
+  "action",
+  "rebase",
+  "deploy",
+  "session",
+  "review_bot",
+  "review",
+  "pr",
+  "checks",
+] as const;
+
+export type BadgeSlot = (typeof BADGE_SLOTS)[number];
 
 /** Generic-only defaults. Anything specific to a user/repo lives in `config.toml`. */
 const GENERIC_DEFAULTS = {
@@ -979,6 +1006,16 @@ function build(raw: Raw, errs: Errors): Config {
   };
 
   const rows = strArr(ui?.rows, GENERIC_DEFAULTS.ui.rows);
+  const hiddenBadges = new Set<BadgeSlot>();
+  for (const id of strArr(ui?.hidden_badges, [])) {
+    if ((BADGE_SLOTS as readonly string[]).includes(id)) {
+      hiddenBadges.add(id as BadgeSlot);
+    } else {
+      errs.add(
+        `ui.hidden_badges: unknown badge "${id}" (expected one of ${BADGE_SLOTS.join(", ")})`,
+      );
+    }
+  }
   const uiMode = errs.optEnum(
     ui,
     "ui",
@@ -1055,7 +1092,7 @@ function build(raw: Raw, errs: Errors): Config {
     github,
     actions,
     automations,
-    ui: { rows, mode: uiMode, hubBackground },
+    ui: { rows, hiddenBadges, mode: uiMode, hubBackground },
   };
 }
 
