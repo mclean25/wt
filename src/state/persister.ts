@@ -60,6 +60,13 @@ export function clearPersistedCache(dbPath: string): void {
 export function createSqliteAsyncStorage(dbPath: string): AsyncStorageDb {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath, { create: true });
+  // Two wt instances briefly coexist more often than it seems (a
+  // restart overlapping the old process, a scratch TUI next to the
+  // real one). WAL lets a reader and a writer coexist, and the busy
+  // timeout absorbs write-write collisions instead of throwing
+  // SQLITE_BUSY out of the persister mid-render.
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA busy_timeout = 1500;");
   db.exec(`
     CREATE TABLE IF NOT EXISTS cache (
       id TEXT PRIMARY KEY,
@@ -87,23 +94,47 @@ export function createSqliteAsyncStorage(dbPath: string): AsyncStorageDb {
   // becomes a no-op once shutdown has started.
   let closed = false;
 
+  // Cache persistence is best-effort by definition — a failed write
+  // costs one cold query on the next boot, while an uncaught throw
+  // here surfaces as a raw stack trace painted over the TUI (the
+  // persister invokes storage outside any React error boundary). Log
+  // file-only and move on.
+  function swallow<T>(op: string, fallback: T, fn: () => T): T {
+    try {
+      return fn();
+    } catch (err) {
+      log.warn(`cache ${op} failed`, {
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return fallback;
+    }
+  }
+
   return {
     getItem(key) {
       if (closed) return null;
-      const row = readStmt.get(key);
-      return row ? row.data : null;
+      return swallow("read", null, () => {
+        const row = readStmt.get(key);
+        return row ? row.data : null;
+      });
     },
     setItem(key, value) {
       if (closed) return;
-      writeStmt.run(key, value, Date.now());
+      swallow("write", undefined, () => {
+        writeStmt.run(key, value, Date.now());
+      });
     },
     removeItem(key) {
       if (closed) return;
-      deleteStmt.run(key);
+      swallow("delete", undefined, () => {
+        deleteStmt.run(key);
+      });
     },
     entries() {
       if (closed) return [];
-      return entriesStmt.all().map((r) => [r.id, r.data] as [string, string]);
+      return swallow("scan", [] as Array<[string, string]>, () =>
+        entriesStmt.all().map((r) => [r.id, r.data] as [string, string]),
+      );
     },
     close() {
       if (closed) return;

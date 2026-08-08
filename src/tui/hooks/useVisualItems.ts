@@ -111,7 +111,12 @@ export function useVisualItems({
       const firstWt = visualItems.findIndex(
         (v) => v.kind === "wt" || v.kind === "remote",
       );
-      return firstWt >= 0 ? firstWt : -1;
+      if (firstWt >= 0) return firstWt;
+      // No worktree/remote row visible (e.g. every section folded):
+      // land on the first item of any kind rather than nothing — a
+      // fresh boot over folded sections used to show "No worktree
+      // selected" until the first j.
+      return 0;
     }
     return Math.min(lastIndexRef.current, visualItems.length - 1);
   })();
