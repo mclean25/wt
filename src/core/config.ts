@@ -563,6 +563,15 @@ export type Config = {
      */
     sort: "status" | "manual";
   };
+  skills: {
+    /**
+     * Check bundled agent skills/instructions for pending updates when
+     * the TUI starts, prompting y/n once per update (declines are
+     * remembered per content version). `[skills] startup_check = false`
+     * turns the startup prompt off; `wt skills` stays available.
+     */
+    startupCheck: boolean;
+  };
 };
 
 /**
@@ -1025,6 +1034,13 @@ function build(raw: Raw, errs: Errors): Config {
     "status",
   );
 
+  const skillsRaw = obj(raw.skills);
+  const startupCheckRaw = skillsRaw?.startup_check;
+  if (startupCheckRaw !== undefined && typeof startupCheckRaw !== "boolean") {
+    errs.add("skills.startup_check must be a boolean");
+  }
+  const skills = { startupCheck: startupCheckRaw !== false };
+
   const githubRaw = obj(raw.github);
   const githubEventsRaw = githubRaw ? obj(githubRaw.events) : null;
   const githubEventsSecretFile = githubEventsRaw
@@ -1087,6 +1103,7 @@ function build(raw: Raw, errs: Errors): Config {
     actions,
     automations,
     ui: { rows, hiddenBadges, sort: uiSort },
+    skills,
   };
 }
 

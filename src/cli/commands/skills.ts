@@ -1,252 +1,237 @@
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+/**
+ * `wt skills` — manage the agent skills + instructions wt distributes.
+ *
+ * wt is the single source of truth for its own agent tooling: bundled
+ * skills (`skills/<name>/SKILL.md` in the wt checkout) and a managed
+ * always-on instructions block. This command reports freshness,
+ * syncs updates (the same flow the TUI runs at startup), shows diffs,
+ * and clears the remembered template answers / declines.
+ */
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { run as sh } from "../../core/proc.ts";
+import {
+  buildReports,
+  clearSkillsMemory,
+  detectTargets,
+  extractInstructionsBlock,
+  readSkillsMemory,
+  reportIsActionable,
+  SKILLS_MEMORY_FILE,
+  UNITS,
+  type UnitReport,
+  type UnitState,
+} from "../../core/skills.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
+import { isInteractive } from "../prompt.ts";
+import { runSkillsSync } from "../skills-sync.ts";
 
-/** Bundled skills live at <repo>/skills/<name>/SKILL.md. */
-const SKILLS_ROOT = join(import.meta.dir, "..", "..", "..", "skills");
+const USAGE = `usage: wt skills [status|sync|diff|reset] [options]
 
-const USAGE = `usage: wt skills install [--harness claude|codex|opencode] [--rulesync] [options] [<name>...]
+wt is the single source of the agent skills + instructions it relies
+on. This command keeps the installed copies current across every
+harness on the machine (claude / codex / opencode), following
+symlinks and writing through rulesync pipelines when one manages the
+target (durable source + regenerate, never the generated output).
 
-Install wt's bundled workflow skills (restack, wt) into a harness's
-skills directory. With no <name>, installs all of them.
+  wt skills [status]          freshness of every unit at every target
+  wt skills sync [<name>...]  interactively install/update pending units;
+                              naming a unit explicitly re-offers one you
+                              previously declined
+      --yes / -y              accept every missing/outdated unit, no prompts
+                              (modified/personal copies are still skipped)
+      --force                 non-interactive only: also overwrite modified
+                              copies (interactive runs always ask per copy)
+  wt skills diff <name>       what a sync would change (unified diff; for
+                              the instructions block, old vs new block)
+  wt skills reset             forget remembered template answers + declines
+      --answers | --declines  reset only one of the two
 
-modes (pick one):
-  --harness <h>     copy into the harness's native skills dir, with clean
-                    frontmatter (strips the rulesync-only \`targets:\` key):
-                      claude    -> ~/.claude/skills/<name>
-                      opencode  -> ~/.claude/skills/<name>  (OpenCode reads it)
-                      codex     -> \$CODEX_HOME/skills/<name>  (default ~/.codex/skills)
-  --rulesync        copy the source verbatim into a rulesync skills dir so an
-                    existing rulesync pipeline fans it out to every harness
-                    (default ~/.dotfiles/.rulesync/skills); pair with --build
+The TUI runs the same check at startup ([skills] startup_check,
+default true) and asks y/n once per pending update — a "no" is
+remembered per content version and never re-asked. \`install\` is an
+alias of \`sync\`.`;
 
-options:
-  --dest <dir>      override the destination skills dir (either mode)
-  --build           after --rulesync, run the dotfiles rulesync generator
-                    (<dotfiles>/scripts/rulesync.sh) to regenerate + stow
+const STATE_STYLE: Record<UnitState, { glyph: string; label: string }> = {
+  fresh: { glyph: green("✓"), label: "up to date" },
+  outdated: { glyph: yellow("↑"), label: "update available" },
+  missing: { glyph: cyan("+"), label: "not installed" },
+  modified: { glyph: yellow("~"), label: "local copy differs" },
+  blocked: { glyph: red("✗"), label: "unmanageable" },
+};
 
-The same Claude-style source serves every harness: Claude/OpenCode auto-run a
-skill's \`!\`…\`\` setup blocks; Codex reads them as plain commands to run.`;
-
-type Mode =
-  | { kind: "harness"; harness: string; dest: string }
-  | { kind: "rulesync"; dest: string; build: boolean };
-
-/**
- * Strip the rulesync-only `targets:` block from a SKILL.md's frontmatter so a
- * native (non-rulesync) install carries clean Claude/Codex frontmatter. No-op
- * when absent. Other keys (name, description, argument-hint, user_invocable)
- * are kept — Claude reads them and Codex tolerates them.
- */
-function stripRulesyncKeys(md: string): string {
-  const m = md.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!m) return md;
-  const out: string[] = [];
-  let skipping = false;
-  for (const line of m[1]!.split("\n")) {
-    if (skipping) {
-      // Still inside the (indented) targets list — drop it.
-      if (/^\s+\S/.test(line)) continue;
-      skipping = false;
-    }
-    if (/^targets:/.test(line)) {
-      skipping = true;
-      continue;
-    }
-    out.push(line);
-  }
-  return `---\n${out.join("\n")}\n---\n${m[2]}`;
+function targetName(r: UnitReport): string {
+  const harnesses = r.target.harnesses.join(", ");
+  return r.target.kind === "rulesync"
+    ? `rulesync ${r.target.rulesync.root} (${harnesses})`
+    : `${harnesses}`;
 }
 
-function harnessDest(harness: string): string | null {
-  const home = homedir();
-  switch (harness) {
-    case "claude":
-    case "opencode":
-      return join(home, ".claude", "skills");
-    case "codex":
-      return join(process.env.CODEX_HOME ?? join(home, ".codex"), "skills");
-    default:
-      return null;
+async function status(): Promise<number> {
+  const targets = detectTargets();
+  if (targets.harnesses.length === 0) {
+    console.log(dim("no agent harness dirs found (~/.claude, ~/.codex, ~/.config/opencode)"));
+    return 0;
   }
-}
-
-function bundledSkills(): string[] {
-  if (!existsSync(SKILLS_ROOT)) return [];
-  return readdirSync(SKILLS_ROOT, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && existsSync(join(SKILLS_ROOT, e.name, "SKILL.md")))
-    .map((e) => e.name)
-    .sort();
-}
-
-function installOne(
-  name: string,
-  destRoot: string,
-  transform: (md: string) => string,
-): void {
-  const src = join(SKILLS_ROOT, name);
-  const dest = join(destRoot, name);
-  // Stage into a temp sibling, transform there, then swap into place: the
-  // destination is only removed right before the rename, so a failed copy can't
-  // leave the old skill deleted with nothing in its place, and the rename
-  // replaces a symlinked dest rather than writing through it.
-  const staged = join(destRoot, `.${name}.tmp-${process.pid}`);
-  if (existsSync(staged)) rmSync(staged, { recursive: true, force: true });
-  try {
-    cpSync(src, staged, { recursive: true });
-    const skillPath = join(staged, "SKILL.md");
-    if (existsSync(skillPath)) {
-      writeFileSync(skillPath, transform(readFileSync(skillPath, "utf8")));
-    }
-    // Overwrite: a re-install is an update. (The user opted into clobbering.)
-    if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
-    renameSync(staged, dest);
-  } finally {
-    if (existsSync(staged)) rmSync(staged, { recursive: true, force: true });
+  const memory = readSkillsMemory();
+  const reports = buildReports(targets, memory);
+  console.log(bold("agent skills & instructions"));
+  console.log(dim(`harnesses: ${targets.harnesses.join(", ")}`));
+  let pending = 0;
+  for (const r of reports) {
+    const s = STATE_STYLE[r.state];
+    if (reportIsActionable(r)) pending++;
+    const declined = r.declined ? dim(" (declined for this version)") : "";
+    const detail = r.detail ? dim(` — ${r.detail}`) : "";
+    console.log(
+      `  ${s.glyph} ${bold(r.unit.name.padEnd(13))} ${s.label.padEnd(18)} ${dim(targetName(r))}${declined}${detail}`,
+    );
   }
-}
-
-function parse(argv: string[]): { error: string } | { names: string[]; mode: Mode } {
-  let harness: string | undefined;
-  let rulesync = false;
-  let build = false;
-  let destOverride: string | undefined;
-  const names: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    if (a === "--harness") {
-      const v = argv[++i];
-      if (!v) return { error: "--harness requires a value" };
-      harness = v;
-    } else if (a === "--rulesync") {
-      rulesync = true;
-    } else if (a === "--build") {
-      build = true;
-    } else if (a === "--dest") {
-      const v = argv[++i];
-      if (!v) return { error: "--dest requires a directory" };
-      destOverride = v;
-    } else if (a.startsWith("--")) {
-      return { error: `unknown flag: ${a}` };
-    } else {
-      names.push(a);
+  const answers = Object.entries(memory.answers);
+  if (answers.length > 0) {
+    console.log(dim("\nremembered answers (wt skills reset --answers):"));
+    for (const [k, v] of answers) {
+      console.log(dim(`  ${k} = ${v === "" ? "(empty — fallback text used)" : JSON.stringify(v)}`));
     }
   }
-
-  if (harness && rulesync) return { error: "pick one of --harness or --rulesync, not both" };
-  if (harness && build) return { error: "--build only applies to --rulesync" };
-
-  let mode: Mode;
-  if (harness) {
-    const dest = destOverride ?? harnessDest(harness);
-    if (!dest) return { error: `unknown harness: ${harness} (claude|codex|opencode)` };
-    mode = { kind: "harness", harness, dest };
-  } else if (rulesync) {
-    const dest = destOverride ?? join(homedir(), ".dotfiles", ".rulesync", "skills");
-    mode = { kind: "rulesync", dest, build };
+  console.log();
+  if (pending > 0) {
+    console.log(`${yellow(String(pending))} pending — run ${bold("wt skills sync")}`);
   } else {
-    return { error: "__no_mode__" };
+    console.log(green("everything up to date"));
   }
-  return { names, mode };
+  return 0;
+}
+
+async function diff(name: string | undefined): Promise<number> {
+  if (!name || name === "--help" || name === "-h") {
+    console.log(name ? USAGE : red("usage: wt skills diff <name>"));
+    return name ? 0 : 2;
+  }
+  const targets = detectTargets();
+  const reports = buildReports(targets, readSkillsMemory()).filter(
+    (r) => r.unit.name === name,
+  );
+  if (reports.length === 0) {
+    console.error(red(`unknown unit: ${name} (have: ${UNITS.map((u) => u.name).join(", ")})`));
+    return 2;
+  }
+  const tmpDir = mkdtempSync(join(tmpdir(), "wt-skills-diff-"));
+  try {
+    for (const r of reports) {
+      if (r.state === "fresh") {
+        console.log(`${green("✓")} ${targetName(r)}: up to date`);
+        continue;
+      }
+      if (r.state === "blocked") {
+        console.log(`${red("✗")} ${targetName(r)}: ${r.detail ?? "unmanageable"}`);
+        continue;
+      }
+      const expectedFile = join(tmpDir, `${name}.expected`);
+      writeFileSync(expectedFile, r.expected);
+      console.log(bold(`--- ${targetName(r)} (${r.state})`));
+      // What the diff runs against: the installed skill file, or the
+      // current managed block extracted from the instructions file.
+      let installedFile: string | null = null;
+      if (r.unit.kind === "skill") {
+        installedFile = existsSync(r.path) ? r.path : null;
+      } else if (existsSync(r.path)) {
+        const block = extractInstructionsBlock(readFileSync(r.path, "utf8"));
+        if (block !== null) {
+          installedFile = join(tmpDir, `${name}.installed`);
+          writeFileSync(installedFile, block.body);
+        }
+      }
+      if (installedFile === null) {
+        // Nothing installed yet — the "diff" is the whole expected content.
+        console.log(r.expected);
+        continue;
+      }
+      const d = await sh(["diff", "-u", installedFile, expectedFile]);
+      console.log(d.stdout.trim() === "" ? dim("(differs only by stamp)") : d.stdout);
+    }
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+  return 0;
+}
+
+function reset(argv: string[]): number {
+  let answers = false;
+  let declines = false;
+  for (const a of argv) {
+    if (a === "--answers") answers = true;
+    else if (a === "--declines") declines = true;
+    else if (a === "--help" || a === "-h") {
+      console.log(USAGE);
+      return 0;
+    } else {
+      console.error(red(`unknown flag: ${a}`));
+      return 2;
+    }
+  }
+  if (!answers && !declines) {
+    answers = true;
+    declines = true;
+  }
+  clearSkillsMemory({ answers, declines });
+  const what = [answers ? "answers" : null, declines ? "declines" : null]
+    .filter(Boolean)
+    .join(" + ");
+  console.log(`${green("✓")} cleared ${what} ${dim(`(${SKILLS_MEMORY_FILE})`)}`);
+  if (declines) console.log(dim("previously declined updates will be offered again"));
+  return 0;
+}
+
+async function sync(argv: string[]): Promise<number> {
+  let yes = false;
+  let force = false;
+  const names: string[] = [];
+  for (const a of argv) {
+    if (a === "--yes" || a === "-y") yes = true;
+    else if (a === "--force") force = true;
+    else if (a === "--help" || a === "-h") {
+      console.log(USAGE);
+      return 0;
+    } else if (a.startsWith("-")) {
+      console.error(red(`unknown flag: ${a}\n`));
+      console.error(USAGE);
+      return 2;
+    } else names.push(a);
+  }
+  return runSkillsSync({
+    // Both ends must be a TTY: a redirected stdout would print the
+    // prompts into the redirect while the terminal looks hung.
+    interactive: isInteractive() && !yes,
+    yes,
+    force,
+    names: names.length > 0 ? names : null,
+    startup: false,
+  });
 }
 
 export async function run(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
-  if (!sub || sub === "--help" || sub === "-h") {
+  if (sub === "--help" || sub === "-h") {
     console.log(USAGE);
-    return sub ? 0 : 2;
+    return 0;
   }
-  if (sub !== "install") {
-    console.error(red(`unknown skills subcommand: ${sub}\n`));
-    console.error(USAGE);
-    return 2;
-  }
-
-  const parsed = parse(rest);
-  if ("error" in parsed) {
-    if (parsed.error === "__no_mode__") {
-      console.error(red("specify a mode: --harness <h> or --rulesync\n"));
-      const rs = join(homedir(), ".dotfiles", ".rulesync", "skills");
-      if (existsSync(rs)) {
-        console.error(dim(`(detected a rulesync setup at ${rs} — \`wt skills install --rulesync\` installs through it)`));
-      }
+  switch (sub) {
+    case undefined:
+    case "status":
+      return status();
+    case "sync":
+    case "install": // legacy alias
+      return sync(rest);
+    case "diff":
+      return diff(rest[0]);
+    case "reset":
+      return reset(rest);
+    default:
+      console.error(red(`unknown skills subcommand: ${sub}\n`));
       console.error(USAGE);
       return 2;
-    }
-    console.error(red(parsed.error));
-    return 2;
   }
-
-  const { names, mode } = parsed;
-  const available = bundledSkills();
-  if (available.length === 0) {
-    console.error(red(`no bundled skills found at ${SKILLS_ROOT}`));
-    return 1;
-  }
-  const wanted = names.length > 0 ? names : available;
-  const unknown = wanted.filter((n) => !available.includes(n));
-  if (unknown.length > 0) {
-    console.error(red(`unknown skill(s): ${unknown.join(", ")} (have: ${available.join(", ")})`));
-    return 1;
-  }
-
-  try {
-    mkdirSync(mode.dest, { recursive: true });
-  } catch (e) {
-    console.error(red(`cannot create ${mode.dest}: ${e instanceof Error ? e.message : String(e)}`));
-    return 1;
-  }
-  const transform = mode.kind === "harness" ? stripRulesyncKeys : (md: string) => md;
-  for (const name of wanted) {
-    try {
-      installOne(name, mode.dest, transform);
-    } catch (e) {
-      console.error(red(`failed to install ${name}: ${e instanceof Error ? e.message : String(e)}`));
-      return 1;
-    }
-    console.log(`${green("✓")} ${bold(name)} ${dim("→")} ${join(mode.dest, name)}`);
-  }
-
-  if (mode.kind === "harness") {
-    console.log(
-      dim(
-        mode.harness === "codex"
-          ? "restart Codex to pick up new skills"
-          : `installed for ${mode.harness}`,
-      ),
-    );
-  }
-
-  if (mode.kind === "rulesync" && mode.build) {
-    const dotfiles = dirname(dirname(mode.dest)); // .rulesync/skills -> .rulesync -> root
-    const script = join(dotfiles, "scripts", "rulesync.sh");
-    if (!existsSync(script)) {
-      console.error(yellow(`--build: no generator at ${script}; run your rulesync build manually`));
-      return 0;
-    }
-    console.log(dim(`\nrunning ${script} …`));
-    const r = await sh(["bash", script], { cwd: dotfiles });
-    if (r.stdout.trim()) process.stdout.write(r.stdout.endsWith("\n") ? r.stdout : r.stdout + "\n");
-    if (r.stderr.trim()) process.stderr.write(r.stderr.endsWith("\n") ? r.stderr : r.stderr + "\n");
-    if (r.exitCode !== 0) {
-      console.error(red(`rulesync build failed (exit ${r.exitCode})`));
-      return 1;
-    }
-    console.log(green("✓ rulesync regenerated + stowed"));
-  }
-
-  console.log(`\n${cyan(String(wanted.length))} skill(s) installed.`);
-  return 0;
 }

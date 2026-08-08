@@ -62,7 +62,7 @@ Remove every worktree that is merged or whose remote branch is gone. "Gone" is o
 
 ### `wt doctor [<slug>]`
 
-Health report: working tree, sync vs trunk, SST stage pin + deploy state, node_modules, locks, merged status, PR/CI. One worktree (or the one containing cwd), or all.
+Health report: working tree, sync vs trunk, SST stage pin + deploy state, node_modules, locks, merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, and pending agent-skill updates (`wt skills`).
 
 - `--all` / `-a` — force the full summary table.
 - `--json` — machine-readable.
@@ -124,12 +124,14 @@ On a merge conflict it exits 3 and names the failing branch + backup branch — 
 
 Delete the engine's `backup/restack-*` branches older than `--days` (default all).
 
-### `wt skills install [<name>...]`
+### `wt skills [status|sync|diff|reset]`
 
-Install wt's bundled agent skills (`restack`, a `wt` reference skill). No names ⇒ all.
+Keep wt's bundled agent skills (`wt`, `restack`, `manager`, `start`, `triage`) and the managed instructions block installed and current across every harness on the machine — following symlinks, deduping shared directories, and writing through rulesync pipelines (durable source + regenerate) where one manages the target. See [skills.md](skills.md) for the full model.
 
-- `--harness <claude|codex|opencode>` — copy into that harness's native skills dir.
-- `--rulesync` — copy into a rulesync source dir instead (`--dest` overrides, `--build` regenerates immediately). Mutually exclusive with `--harness`.
+- `wt skills` / `status` — freshness of every unit at every target, plus remembered template answers.
+- `sync [<name>...]` — interactive install/update; the same flow the TUI runs at startup. `--yes` accepts all missing/outdated units without prompting (never touches modified copies); `--force` additionally allows overwriting modified copies. Naming a unit explicitly overrides a remembered decline. `install` is a legacy alias.
+- `diff <name>` — what a sync would change, as a unified diff.
+- `reset [--answers|--declines]` — forget remembered template answers and/or declined updates.
 
 ## Integrations
 

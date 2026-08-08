@@ -199,7 +199,7 @@ workspace = "acme"
 
 Id parsing itself is driven by the slug shape (`[a-z]+-\d+`), independent of `[branch] id_pattern`.
 
-**Built-in `GH-` convention:** an id with the `gh` prefix (`michael/gh-970-fix-typo` → `GH-970`) is taken to mean a GitHub issue on this repo and links to `<origin repo>/issues/970`, bypassing `url_template`. The repo URL is derived from the main clone's `origin` remote (ssh, scp, or https forms; bare ssh-config aliases can't be resolved, so those ids render unlinked). No configuration — this works even with a bare `[issue_tracker]` section. (With `prefix` set, GH-led ids can't *create* worktrees — the supported shape there is the secondary id below.)
+**Built-in `GH-` convention:** an id with the `gh` prefix (`yourname/gh-970-fix-typo` → `GH-970`) is taken to mean a GitHub issue on this repo and links to `<origin repo>/issues/970`, bypassing `url_template`. The repo URL is derived from the main clone's `origin` remote (ssh, scp, or https forms; bare ssh-config aliases can't be resolved, so those ids render unlinked). No configuration — this works even with a bare `[issue_tracker]` section. (With `prefix` set, GH-led ids can't *create* worktrees — the supported shape there is the secondary id below.)
 
 **Secondary GitHub issue:** independent of the slug id, a worktree can carry an attached GitHub issue number (`wt new … --gh 970`, `wt issue <slug> --gh 970` — see [cli.md](cli.md)). The issue row shows it after the primary (`ENG-1935 · #970`), and it becomes the most-specific target for `i` / `y i`; `I` / `y I` keep targeting the primary.
 
@@ -301,6 +301,12 @@ Omit for classic poll-only behavior. When present, the `wt events` daemon accept
 | `rows` | no | `["branch", "base", "issue", "status", "stage", "dev", "pr", "claude", "git"]` | Detail-pane row order. Available ids: `branch`, `base`, `path`, `issue` (legacy alias: `linear`), `status` (the asserted work status: state, risk, age, note), `stage`, `dev`, `pr`, `claude`, `git`. Unknown ids are ignored; omitted ones are hidden. A row also hides itself when its integration isn't configured (e.g. `issue` without `[issue_tracker]`, `dev` without `[dev_server]`). The rebase state (restacking / mid-rebase / conflict + files) isn't a row — it renders as a fixed block below the rows, above the AI summary. |
 | `hidden_badges` | no | `[]` | Glyph slots to suppress from the **list-pane** badge cluster. Ids: `action` (running action), `dirty` (uncommitted-changes pencil), `rebase` (restacking / conflict), `deploy` (SST-or-dev-server bolt), `session` (harness glyph), `review_bot`, `review` (human review), `pr` (PR state, doubling as the merge-queue slot), `checks` (CI rollup). Unknown ids fail the load. Opt-out rather than an ordered allow-list like `rows`, because the cluster's left-to-right order is designed (`[bot] [review] [pr] [checks]` reads as one "state of this PR" run) and an allow-list would hide slots added in later versions. Details-pane segments are unaffected — hiding a badge declutters the list without losing the signal. |
 | `sort` | no | `"status"` | Row ordering inside each list section. `"status"` ranks rows by work-status urgency — `needs-human`, `needs-testing`, `ready`, `review`, `working`, statusless, `todo`, then merged/gone last — with the manual order as the stable tie-break, so same-status rows keep their hand order and `J`/`K` still reorders within a rank (a cross-rank nudge is refused with a hint). With no statuses asserted it's a pure no-op. `"manual"` restores the pure hand order. Stack sections always keep spine order either way. The cursor tracks the worktree, not the position, so a re-sort never moves your selection. |
+
+## `[skills]`
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `startup_check` | no | `true` | Check wt's bundled agent skills + managed instructions block for pending updates when the TUI starts, prompting y/n once per update before the terminal is taken over (so agent sessions spawned from that run see the updates). A "no" is remembered per content version and never re-asked; copies wt didn't install are never overwritten without an explicit yes. `false` disables the startup prompt — `wt skills` keeps working on demand. See [skills.md](skills.md). |
 
 ## `[[actions]]` — the `!` menu
 

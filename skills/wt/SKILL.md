@@ -2,22 +2,21 @@
 name: wt
 description: >-
   Use the `wt` CLI/TUI to manage git worktrees: create, list, inspect, remove,
-  and drive per-worktree Claude Code sessions, plus stacked PRs (worktrees
-  based on other worktrees, restacked with `wt restack`). TRIGGER when the
-  user mentions wt, worktrees, "a wt", stacking, or restacking. For conflict
-  resolution during a restack use the dedicated /restack skill; this is
-  general orientation.
+  and drive per-worktree coding-agent sessions, plus stacked PRs (worktrees
+  based on other worktrees, restacked with `wt restack`) and agent-asserted
+  work statuses (`wt status`). TRIGGER when the user mentions wt, worktrees,
+  "a wt", stacking, or restacking. For conflict resolution during a restack
+  use the dedicated /restack skill; this is general orientation.
 targets:
   - '*'
 ---
 # wt — worktree CLI/TUI
 
 `wt` is a terminal UI + CLI for keeping multiple git worktrees in flight at
-once. A main clone stays on the trunk branch (`[branch] base` — `main` here,
-`staging` on cozee-dev); active branches live in per-worktree checkouts under a
-configured `worktree_root`. Each row shows live git status, PR state,
-preview-deploy state, issue id/link, review-bot state, and coding-agent session
-activity.
+once. A main clone stays on the trunk branch (`[branch] base`); active
+branches live in per-worktree checkouts under a configured `worktree_root`.
+Each row shows live git status, PR state, preview-deploy state, issue
+id/link, review-bot state, work status, and coding-agent session activity.
 
 Config lives at `~/.config/wt/config.toml`, with the nearest `.wt.toml` (from
 cwd upward) recursively merged over it for repo-specific settings like the
@@ -26,27 +25,48 @@ reports every missing field at once). The standard install aliases
 `wt='~/.wt/bin/wt'`; if `wt` isn't found in a non-interactive shell, invoke
 `~/.wt/bin/wt` directly.
 
+## Under `[backend] kind = "rift"`, worktrees are clones
+
+Rift worktrees are copy-on-write **clones**, not git worktrees: each has its
+own `.git` and its own remote-tracking refs, so `git worktree list` in the
+main clone shows only itself. Those refs go stale per-clone. **Run
+`git fetch` inside a worktree before any ahead/behind, merge-base, or
+`origin/<base>..` comparison** — otherwise the numbers describe whatever
+`origin/<base>` pointed at when the clone was cut, and `wt doctor`'s sync
+column reads the same stale refs. Surveying several worktrees means fetching
+in each one.
+
 ## Subcommands
 
 - `wt` — interactive TUI (vim keys: `j`/`k`/Enter, `?` for help).
-- `wt ls` — list worktrees.
+- `wt ls` — list worktrees (`--json` for scripts; includes issue links and
+  work status).
 - `wt new <input>` — create a worktree (and branch). Input is an issue id with
-  optional pasted title words (`wt new COZ-1953 fix calendar rendering` →
-  `michael/coz-1953-fix-calendar-rendering`), a tracker URL, a branch, or a
-  bare slug (issue-less worktrees are first-class). A bare id gets a random
-  readable suffix (`michael/coz-1953-cozy-elephant`), so entering the same id
-  again simply creates another worktree for it; `--attach` instead checks out
-  the id's existing branch. With `[issue_tracker] prefix` set (cozee-dev:
-  `"coz"`), only that prefix may lead a worktree id — a GitHub issue never
-  names a branch; attach it as the SECONDARY id with `--gh <n>` (or later via
-  `wt issue <slug> --gh <n>`). `--base <ref>` forks from a non-trunk parent
-  and records it — the record that stacks the new worktree on that parent
-  (diff base, TUI grouping, restack target).
+  optional pasted title words (`wt new ENG-1953 fix calendar rendering` →
+  `yourname/eng-1953-fix-calendar-rendering`), a tracker URL, a branch, or a
+  bare slug (issue-less worktrees are first-class). Lead with an id or words,
+  never a URL when you also pass title words — the whole URL gets slugified
+  into the branch name. A bare id gets a random readable suffix
+  (`yourname/eng-1953-cozy-elephant`), so entering the same id again simply
+  creates another worktree for it; `--attach` instead checks out the id's
+  existing branch. With `[issue_tracker] prefix` set, only that prefix may
+  lead a worktree id — a GitHub issue never names a branch; attach it as the
+  SECONDARY id with `--gh <n>` (or later via `wt issue <slug> --gh <n>`).
+  `--base <ref>` forks from a non-trunk parent and records it — the record
+  that stacks the new worktree on that parent (diff base, TUI grouping,
+  restack target).
+- `wt status [<slug>] [<state>]` — show or assert the worktree's work status
+  (`todo`/`working`/`review`/`needs-testing`/`needs-human`/`ready`). Built
+  for agents; it prints the rules and expected next steps as you use it.
+  `wt status --all` is the fleet overview.
+- `wt manager send <text…>` — escalate a fleet-level question to the manager
+  session (merge order, cross-branch conflicts, ownership of shared changes).
 - `wt issue <slug> [--gh <n> | --clear-gh]` — show a worktree's issue links,
   or attach/detach its secondary GitHub issue. The primary id stays parsed
   from the slug; the attached GH issue becomes the `i`-key / `y i` target
   (most specific wins), while `I` / `y I` always hit the primary.
-- `wt rm [slug]` — remove a worktree (optionally its branch).
+- `wt rm [slug]` — remove a worktree; it deletes the branch too and takes no
+  flags to control that.
 - `wt clean` — bulk-remove merged/gone worktrees.
 - `wt doctor [slug]` — health report (dirty, sync, PR, merged).
 - `wt open [slug]` — open a worktree in the editor.
@@ -61,7 +81,16 @@ reports every missing field at once). The standard install aliases
 - `wt logs [slug]` — tail background-destroy logs.
 
 Every subcommand runs non-interactively when stdout isn't a TTY. Run
-`wt <command> --help` for per-command options.
+`wt <command> --help` for per-command usage before guessing flags — a guessed
+flag costs a failed call.
+
+**First push from a fresh worktree may need `git push -u origin HEAD`.** wt
+forks the branch off the trunk, so it can inherit
+`branch.<name>.merge = refs/heads/<trunk>`; with `push.default=simple` git
+then refuses ("upstream branch ... does not match the name of your current
+branch"), and `push.autoSetupRemote` can't help because an upstream is
+already set, just to the wrong name. `-u origin HEAD` repoints it once; bare
+`git push` works from then on.
 
 ## Stacked PRs
 
@@ -72,6 +101,29 @@ parents reparent their children automatically (clean/destroy and restack both
 preserve each child's squash-safe anchor), and `wt restack` / the TUI's `R`
 realign the commits. When a restack hits a conflict, use **/restack** to
 resolve it faithfully.
+
+Reach for `wt restack` before hand-rebasing a worktree whose parent has
+landed. A child cut off that parent carries the parent's whole commit stack,
+and if the parent was rebased or squashed on merge those commits are in the
+base branch under different SHAs — a plain `git rebase` replays every
+already-merged commit and buries you in conflicts. Note that base records
+reparent to trunk on their own, so `wt base` reading the trunk branch does
+**not** mean the commits were replayed. When repairing by hand, prove the
+commits are redundant before discarding them: `git cherry origin/<base>
+<branch>` marks patch-id matches `-`, and commits whose conflict resolution
+changed the patch still show `+`, so subject-match those few against the
+base's log. Then `git reset --hard origin/<base>` rather than rebasing.
+
+## Don't suggest cleanup
+
+The human sweeps merged worktrees themselves. Never *proactively* suggest
+`wt clean` or `wt rm`, and never list "clean candidates" in a report — in a
+normal workflow that's noise. Saying a worktree's PR is merged is fine and
+useful; appending "so you can clean it" is not.
+
+Running them is fine when it's actually called for: the human asks you to, or
+you're undoing a worktree you created by mistake. Fix your own mess without
+being told.
 
 ## User Instructions
 

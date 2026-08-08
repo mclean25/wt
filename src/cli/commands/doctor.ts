@@ -6,6 +6,12 @@ import { branchIsMerged, gitQuiet } from "../../core/git.ts";
 import { fetchPrs } from "../../core/github.ts";
 import { humanAge, lockAge, lockLabel, lockStatus } from "../../core/locks.ts";
 import { run as sh } from "../../core/proc.ts";
+import {
+  buildReports,
+  detectTargets,
+  readSkillsMemory,
+  reportIsActionable,
+} from "../../core/skills.ts";
 import { computeStage } from "../../core/stage.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
 import type { Check, CheckStatus, Worktree } from "../../core/types.ts";
@@ -187,6 +193,27 @@ async function checkPr(wt: Worktree): Promise<Check> {
   return mkCheck("pr", status, parts.join(" "));
 }
 
+/**
+ * Machine-level banner: are wt's distributed agent skills/instructions
+ * current? Pure fs reads; guarded so a skills-system bug can't break
+ * doctor's actual job.
+ */
+async function checkSkillsFreshness(): Promise<Check> {
+  try {
+    const reports = buildReports(detectTargets(), readSkillsMemory());
+    const pending = reports.filter(reportIsActionable);
+    if (pending.length === 0) return mkCheck("agent skills", "ok", "up to date");
+    const names = [...new Set(pending.map((r) => r.unit.name))];
+    return mkCheck(
+      "agent skills",
+      "warn",
+      `${names.length} pending (${names.join(", ")}) — run \`wt skills sync\``,
+    );
+  } catch {
+    return mkCheck("agent skills", "info", "check skipped (skills system errored)");
+  }
+}
+
 async function checkMainClone(): Promise<Check> {
   const main = config.paths.mainClone;
   const base = config.branch.base;
@@ -242,21 +269,24 @@ function wtToDict(wt: Worktree, checks: Check[]) {
   };
 }
 
-function renderMainCloneBanner(c: Check): void {
+/** Machine-level one-liner shown above the per-worktree report, only when noteworthy. */
+function renderBanner(c: Check): void {
   if (c.status === "ok") return;
   console.log(`  ${MARKERS[c.status]}  ${bold(c.name.padEnd(14))} ${c.message}`);
 }
 
 async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
-  const [mainBanner, checks] = await Promise.all([
+  const [mainBanner, skillsBanner, checks] = await Promise.all([
     jsonOut ? Promise.resolve(null) : checkMainClone(),
+    jsonOut ? Promise.resolve(null) : checkSkillsFreshness(),
     runAllChecks(wt, true),
   ]);
   if (jsonOut) {
     console.log(JSON.stringify(wtToDict(wt, checks), null, 2));
     return;
   }
-  if (mainBanner) renderMainCloneBanner(mainBanner);
+  if (mainBanner) renderBanner(mainBanner);
+  if (skillsBanner) renderBanner(skillsBanner);
   console.log(`${bold("doctor")} · ${cyan(wt.slug)} ${dim(wt.branch)}`);
   for (const c of checks) {
     console.log(`  ${MARKERS[c.status]}  ${bold(c.name.padEnd(14))} ${c.message}`);
@@ -271,9 +301,10 @@ async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
 
 async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
   const skipPrs = jsonOut;
-  const [prs, mainCheck, allChecks] = await Promise.all([
+  const [prs, mainCheck, skillsCheck, allChecks] = await Promise.all([
     skipPrs ? Promise.resolve(new Map()) : fetchPrs(),
     jsonOut ? Promise.resolve(null) : checkMainClone(),
+    jsonOut ? Promise.resolve(null) : checkSkillsFreshness(),
     Promise.all(wts.map((w) => runAllChecks(w, false))),
   ]);
   if (jsonOut) {
@@ -281,7 +312,8 @@ async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
     console.log(JSON.stringify(out, null, 2));
     return;
   }
-  if (mainCheck) renderMainCloneBanner(mainCheck);
+  if (mainCheck) renderBanner(mainCheck);
+  if (skillsCheck) renderBanner(skillsCheck);
 
   type Row = { wt: Worktree; checks: Check[] };
   const rows: Row[] = wts.map((wt, i) => ({ wt, checks: allChecks[i]! }));

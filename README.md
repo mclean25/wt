@@ -70,6 +70,8 @@ The full reference — every option, default, the `[[actions]]` menu, and `[[aut
 
 The bottom pane defaults to a curated **attention feed** (status transitions, needs-you signals, errors); `"` cycles to the full event firehose. `m` attaches the [manager session](docs/manager.md), the singleton fleet coordinator.
 
+wt also distributes the agent skills and instructions that make all of that work: at startup it offers pending updates y/n (declines remembered per version), following your symlinks and rulesync/dotfiles setup to install them durably for every harness on the machine — see [docs/skills.md](docs/skills.md).
+
 An optional `[remote]` SSH target lets `Ctrl+N` create worktrees on a second
 machine while keeping them in a server-named section of the same list;
 F10/F11/F12 route the selected row's shell, diff, or AI session over SSH, and
@@ -88,6 +90,7 @@ State is push-based: filesystem watchers on git refs, worktree dirs, and wt's ow
 | [docs/configuration.md](docs/configuration.md) | complete config.toml reference |
 | [docs/automations.md](docs/automations.md) | the `[[automations]]` engine: triggers, settle windows, breaker |
 | [docs/fleet.md](docs/fleet.md) | the philosophy: minimal human work, work statuses, and the agency levels |
+| [docs/skills.md](docs/skills.md) | agent skills & instructions distribution: startup updates, rulesync/symlink awareness |
 | [docs/manager.md](docs/manager.md) | the manager session: the singleton fleet coordinator (`m` / `wt manager`) |
 | [docs/github-events.md](docs/github-events.md) | push-based PR/CI updates via a repo webhook |
 | [docs/stacked-prs.md](docs/stacked-prs.md) | stacked PRs: fork-base records, inferred stacks, `wt restack` |

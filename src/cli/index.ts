@@ -34,7 +34,7 @@ commands:
   logs        tail a destroy log
   open        open a worktree in Zed
   restack     rebase a stack of worktrees onto its updated parents
-  skills      install wt's bundled workflow skills into a harness
+  skills      keep wt's agent skills + instructions installed and current
   events      manage the optional GitHub webhook daemon
   remote      enter or run wt on the configured SSH remote
   base        show / set / clear a worktree's recorded fork base

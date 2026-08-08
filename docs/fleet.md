@@ -37,7 +37,8 @@ None of that was visible without opening each session and reading scrollback. Ag
 |---|---|
 | can't see fleet state | the **work-status dot** (leftmost glyph) + the **status-first sort** inside each section — `wt status` / `u`, `[ui] sort` |
 | "done" can't be trusted | statuses are made **trustworthy by construction**: `ready` requires a merge-risk level, medium/high risk require a notable-impacts note, `needs-human` requires saying exactly what's needed. The CLI refuses anything less |
-| agents end without a verdict | the **ownership conventions** (global CLAUDE.md + /start, /cz-test): never end a task without an asserted status |
+| agents end without a verdict | the **ownership conventions** (the wt-managed instructions block + the bundled skills): never end a task without an asserted status |
+| agent config drifts per machine/teammate | wt **distributes its own skills + instructions** ([skills.md](skills.md)): startup y/n updates, rulesync/symlink-aware installs, so nobody hand-maintains agent setup |
 | agents punt testing to the human | agents **own manual testing** — dev env + browser themselves; `needs-testing` means "I still have to verify", never "please test this for me" |
 | needing-me moments get lost | the **escalation ladder**: dot → attention feed (the bottom pane's default) → macOS banner (`builtin:notify` on `needs_human`/`ready`) → manager triage briefing |
 | fleet-level judgment lands on me | the **manager session** (`m`): digests, merge-order calls, unblocking workers, triaging needs-human before the human sees it |

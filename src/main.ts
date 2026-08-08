@@ -30,6 +30,13 @@ async function main(): Promise<number> {
   // No args + TTY → interactive TUI. Every user action runs in-TUI now
   // (no CLI handoff for `new` or `clean`), so this is a single call.
   const { config } = await import("./core/config.ts");
+  // Skills/instructions freshness check BEFORE the TUI takes the
+  // terminal, so accepted updates are live for every agent session
+  // spawned from this run. Silent when nothing is pending.
+  if (config.skills.startupCheck) {
+    const { startupSkillsPrompt } = await import("./cli/skills-sync.ts");
+    await startupSkillsPrompt();
+  }
   const { setWezTermTabTitle } = await import("./core/wezterm.ts");
   await setWezTermTabTitle("wt", config.paths.weztermCli);
   const { runTui } = await import("./tui/runtime.tsx");

@@ -62,6 +62,14 @@ on). If it finishes clean, go to step 3.
 ### 2. Resolve a conflict bail
 On conflict the engine names the failing branch and a `backup/...` branch, and
 leaves the tree clean. In that branch's worktree:
+
+**First, if the branch has several commits touching the conflicted files and
+it will be squash-merged anyway, squash before replaying**
+(`git reset --soft <forkPoint> && git commit`). Replay resolves per commit, so
+an N-commit branch makes you resolve the same textual conflict up to N times;
+one commit means one resolution. Skip this when the individual commits carry
+review history worth keeping.
+
 1. Rebase its commits onto the corrected parent
    (`git rebase --onto <newParent> <oldParent> <branch>`), resolving conflicts
    in-tree. Use the backup branch as the reference for intended content.
