@@ -1048,7 +1048,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       });
       return;
     }
-    if (isPlainLetter(k, "m")) {
+    // Shift+M — auto-merge toggle (plain `m` is the manager session).
+    if (isShiftedLetter(k, "m")) {
       if (!current.pr) {
         toast("no PR for this row", theme.warn, 2000);
         return;

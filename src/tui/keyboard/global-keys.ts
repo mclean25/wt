@@ -17,6 +17,7 @@ import type { FooterMode } from "../panels/footer.tsx";
 import {
   DOTFILES_SLOT,
   MAIN_CLONE_SLOT,
+  MANAGER_SLOT,
   WT_SOURCE_SLOT,
   type SessionSlot,
 } from "../sessions/slots.ts";
@@ -174,6 +175,12 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
     }
     if (k.sequence === "/") {
       doEnterSlotSession(DOTFILES_SLOT);
+      return true;
+    }
+    // `m` — the manager session (fleet coordinator). Global like the
+    // other slots; the old row-scoped auto-merge toggle moved to `M`.
+    if (isPlainLetter(k, "m")) {
+      doEnterSlotSession(MANAGER_SLOT);
       return true;
     }
     if (k.sequence === ">") {

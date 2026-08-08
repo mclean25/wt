@@ -54,7 +54,7 @@ lock. It deletes the remote branch but never destroys an SST stage implicitly.
 | `g p` / `l p` | open the PR explicitly in GitHub / Linear Reviews (1.2s chord) |
 | `e` | mark a draft PR ready (confirm) |
 | `E` | "ship it": mark ready + request `[github].default_reviewer` + arm auto-merge, in one confirm |
-| `m` | toggle auto-merge (enqueues into GitHub's merge queue when one is configured) |
+| `M` | toggle auto-merge (enqueues into GitHub's merge queue when one is configured) |
 | `f` | tail the failing CI checks' logs into the activity pane |
 | `v` | reviewer picker (`Space` toggles, `v v` submits) |
 | `w` | (review-requests section) check the PR's branch out as a worktree |
@@ -74,6 +74,7 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 | `;` | sessions picker — attach (`; ;`), new named claude (`; c`), new codex/opencode (`; x` / `; o`), graceful close (`; d`), kill (`; x` on a session row) |
 | `!` | action picker — run a configured `[[actions]]` entry, `! c` for a custom prompt; with `[dev_server]` configured the start/stop pair is pinned at the top; `!` on a running action offers to kill it |
 | `,` / `.` / `/` | attach the persistent harness session for the wt repo / main clone / dotfiles |
+| `m` | attach the [manager session](manager.md) — the singleton fleet coordinator (auto-merge moved to `M`) |
 | `>` / `O` | open the wt repo / main clone in Zed |
 | mouse drag | select text in a wt-managed tmux session and copy it automatically to the macOS clipboard on release |
 

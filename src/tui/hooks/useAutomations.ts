@@ -415,7 +415,11 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
   function dispatchKind(rule: AutomationFire["rule"]): Executing["kind"] {
     if (rule.run.startsWith("builtin:")) return "builtin";
     const def = resolveActionDef(rule.run);
-    if (def?.kind === "claude" && def.target === "session") return "session";
+    // Manager briefings share session semantics: fire-and-forget
+    // injection with no tracked run.
+    if (def?.kind === "claude" && (def.target === "session" || def.target === "manager")) {
+      return "session";
+    }
     return "headless";
   }
 
@@ -572,11 +576,17 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // period); the per-slug edit-recency half lives in
       // quiesceBlockReason.
       if (now - intent.createdAt < rule.settleSeconds * 1000) continue;
-      // Notifications never touch the worktree, so quiescence is
-      // meaningless for them — and a needs-human fire happens exactly
-      // while the session is non-quiescent (asking). Bypass, don't wait.
-      const blocked =
-        rule.run === "builtin:notify" ? null : quiesceBlockReason(fire, now);
+      // Notifications and manager briefings never touch the worktree,
+      // so quiescence is meaningless for them — and a needs-human fire
+      // happens exactly while the session is non-quiescent (asking).
+      // Bypass, don't wait.
+      const ruleDef = rule.run.startsWith("builtin:")
+        ? null
+        : resolveActionDef(rule.run);
+      const bypassQuiesce =
+        rule.run === "builtin:notify" ||
+        (ruleDef?.kind === "claude" && ruleDef.target === "manager");
+      const blocked = bypassQuiesce ? null : quiesceBlockReason(fire, now);
       if (blocked) {
         if (rule.busy === "skip") {
           markFiresDelivered(fire.fireKeys);
@@ -587,7 +597,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       }
       // Action preconditions (requires tags) — unmet keeps the intent
       // pending; row state may still change (e.g. a draft flips ready).
-      const def = rule.run.startsWith("builtin:") ? null : resolveActionDef(rule.run);
+      const def = ruleDef;
       if (def) {
         const row = ctx.rows.find((r) => r.wt.slug === fire.slug);
         const avail = evaluateActionRequirements(def.requires, {

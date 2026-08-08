@@ -21,7 +21,7 @@ Commit and push directly to `main`. Don't create feature branches, don't open PR
 - `docs/configuration.md` — mirrors the `src/core/config.ts` schema. Any schema/default change updates it.
 - `docs/tui.md` — keymap + panes. Any keybinding change updates it (and `src/tui/panels/help.tsx`, the in-app source of truth).
 - `docs/cli.md` — subcommands + flags. Any CLI change updates it.
-- `docs/automations.md`, `docs/github-events.md`, `docs/stacked-prs.md` — per-feature semantics.
+- `docs/automations.md`, `docs/github-events.md`, `docs/stacked-prs.md`, `docs/manager.md` — per-feature semantics.
 - `docs/discord.md` — the Discord server wiring (#updates digest workflow, #github repo webhook, badge, secrets inventory). Any change to `.github/workflows/discord-digest.yml`, the repo's webhooks, or community surfaces updates it.
 - `README.md` — concise front door; it links out rather than duplicating. Keep it short.
 

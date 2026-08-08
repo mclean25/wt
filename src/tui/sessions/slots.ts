@@ -93,6 +93,23 @@ export const DOTFILES_SLOT: SessionSlot = {
 };
 
 /**
+ * The manager — a singleton fleet-coordinator session (`m` keybind,
+ * `wt manager` CLI). Same slot machinery as the others; what makes it
+ * the manager is its playbook (a skill in the user's harness config)
+ * plus the things wt points at it: `wt manager send`, `[[actions]]`
+ * with `target = "manager"`, and automations briefing it. cwd is the
+ * main clone so `gh`, repo context, and `wt status --all` all work.
+ * Distinct from MAIN_CLONE_SLOT (`.`) — same directory, different
+ * conversation: `.` is "pair on the main repo", this is "run the
+ * fleet".
+ */
+export const MANAGER_SLOT: SessionSlot = {
+  slug: "manager",
+  path: config.paths.mainClone,
+  label: "manager",
+};
+
+/**
  * Every registered slot in display order. Iterated by the session-
  * tail reconcile (to map slot slugs to paths) and the orphan reaper
  * (to whitelist slot slugs).
@@ -101,6 +118,7 @@ export const SESSION_SLOTS: readonly SessionSlot[] = [
   WT_SOURCE_SLOT,
   MAIN_CLONE_SLOT,
   DOTFILES_SLOT,
+  MANAGER_SLOT,
 ];
 
 /** Convenience projection — just the slugs, for set membership tests. */

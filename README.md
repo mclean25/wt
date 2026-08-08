@@ -83,6 +83,7 @@ State is push-based: filesystem watchers on git refs, worktree dirs, and wt's ow
 | [docs/cli.md](docs/cli.md) | every subcommand and flag |
 | [docs/configuration.md](docs/configuration.md) | complete config.toml reference |
 | [docs/automations.md](docs/automations.md) | the `[[automations]]` engine: triggers, settle windows, breaker |
+| [docs/manager.md](docs/manager.md) | the manager session: the singleton fleet coordinator (`m` / `wt manager`) |
 | [docs/github-events.md](docs/github-events.md) | push-based PR/CI updates via a repo webhook |
 | [docs/stacked-prs.md](docs/stacked-prs.md) | stacked PRs: fork-base records, inferred stacks, `wt restack` |
 | [docs/backends.md](docs/backends.md) | worktree backends: `git-worktree` (default) vs `rift` copy-on-write clones |

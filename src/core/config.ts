@@ -346,8 +346,11 @@ type ActionUi = {
  * it first if it isn't running, so the prompt lands in a conversation with
  * existing context and history. Session delivery is fire-and-forget: there's
  * no completion sentinel, so `affects` does not auto-refresh on finish.
+ * `manager` injects into the singleton manager session instead (the fleet
+ * coordinator; see docs/manager.md), prefixed with the originating slug so
+ * the manager knows which worktree the prompt is about.
  */
-export type ClaudeActionTarget = "headless" | "session";
+export type ClaudeActionTarget = "headless" | "session" | "manager";
 
 /**
  * Per-launch user-supplied value collected by the picker before the
@@ -1294,13 +1297,15 @@ function parseActions(raw: unknown, errs: Errors): readonly ActionDef[] {
         errs.add(`${tag}.target is only valid on a claude (prompt) action`);
         continue;
       }
-      if (targetRaw !== "session" && targetRaw !== "headless") {
-        errs.add(`${tag}.target must be "session" or "headless"`);
+      if (targetRaw !== "session" && targetRaw !== "headless" && targetRaw !== "manager") {
+        errs.add(`${tag}.target must be "session", "manager", or "headless"`);
         continue;
       }
     }
     const target: ClaudeActionTarget =
-      targetRaw === "session" ? "session" : "headless";
+      targetRaw === "session" || targetRaw === "manager"
+        ? targetRaw
+        : "headless";
     // `arg_prompt` is a single-line string ("company id") or omitted.
     // Stored as a small object so future extensions (placeholder text,
     // validation, multi-arg) don't churn the schema.

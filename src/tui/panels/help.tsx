@@ -98,7 +98,7 @@ const KEY_BLOCKS: Block[] = [
     kind: "keys",
     title: "pull request",
     items: [
-      { key: "m", label: "merge when ready (toggle auto-merge)" },
+      { key: "M", label: "merge when ready (toggle auto-merge)" },
       { key: "e", label: "exit draft (mark ready for review)" },
       { key: "E", label: "ship: mark ready + request default_reviewer + arm auto-merge" },
       { key: "f", label: "tail failed CI logs (gh run view --log-failed)" },
@@ -163,6 +163,7 @@ const KEY_BLOCKS: Block[] = [
       { key: ",", label: "enter wt source session · F12 to detach" },
       { key: ".", label: "enter main repo session · F12 to detach" },
       { key: "/", label: "enter dotfiles session · F12 to detach" },
+      { key: "m", label: "enter the manager session (fleet coordinator) · F12 to detach" },
       { key: ">", label: "open wt source in zed" },
       { key: "O", label: "open main repo in zed" },
       { key: "P", label: "perf overlay — CPU/memory for everything downstream of wt" },

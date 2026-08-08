@@ -104,6 +104,10 @@ The rules that make statuses trustworthy are enforced here (the TUI's `u` picker
 
 States accept unique prefixes plus `nh`/`nt` aliases. `--clear` drops the record, `--all [--json]` prints the fleet overview (the manager session's eyes). Each record stamps the assert time and HEAD sha, so both the CLI and the details-pane `status` row can flag a status that predates newer commits. Statuses also ride `wt ls --json` (`work_state`/`work_note`/`work_risk`/`work_at`), which carries them across SSH for remote worktrees.
 
+### `wt manager` / `wt manager send <text…>`
+
+Attach the singleton [manager session](manager.md) (create on first use), or inject a message into it — the escalation path for worktree agents and scripts (`wt manager send` cold-starts the session detached when it isn't running; the message lands as its next turn). Same session the TUI's `m` key enters.
+
 ### `wt issue <slug>` / `wt issue <slug> --gh <n>` / `wt issue <slug> --clear-gh`
 
 Show or edit a worktree's issue links. The **primary** id is parsed from the slug (`coz-1935-…` → `COZ-1935`) and is never stored or edited here — it's the worktree's identity. The **secondary** GitHub issue is a per-slug record attached with `--gh <n>` (typically after a spec/breakout issue is created mid-work) and detached with `--clear-gh`; it never changes the branch. The TUI's `i` key and `y i` yank treat an attached GitHub issue as the most-specific link target; `I` / `y I` always target the primary. `<slug>` also accepts a branch name. Both ids appear in `wt ls --json` (`issue_id`/`issue_url`, `gh_issue`/`gh_issue_url`).

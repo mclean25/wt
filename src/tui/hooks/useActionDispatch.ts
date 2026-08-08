@@ -28,6 +28,7 @@ import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { createLogger } from "../../core/logger.ts";
 import { injectIntoSession } from "../../core/tmux.ts";
 import { StatusKind } from "../../core/types.ts";
+import { MANAGER_SLOT } from "../sessions/slots.ts";
 
 import {
   actionSkillPrefix,
@@ -267,6 +268,41 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     // Fire-and-forget: there's no run to track or focus, so we just log
     // progress to the activity pane. The cold-start path can take a few
     // seconds, hence the immediate "sending…" toast.
+    // Manager-target prompt actions inject into the singleton manager
+    // session instead of the worktree's, prefixed with the originating
+    // slug so the manager knows the subject. Same fire-and-forget
+    // semantics as session targets.
+    if (def && def.kind === "claude" && def.target === "manager") {
+      const renderedPrompt = applyVars(def.prompt, vars);
+      const trimmedExtras = applyVars(extras, vars).trim();
+      const body = trimmedExtras
+        ? `${renderedPrompt}\n\n${trimmedExtras}`
+        : renderedPrompt;
+      const fullPrompt = `[re: ${slug}] ${body}`;
+      const sessionLog = createLogger(slug);
+      sessionLog.event.info(`${def.name} → manager session`);
+      toast(`sending ${def.name} to manager…`, theme.info, 2000);
+      void injectIntoSession({
+        slug: MANAGER_SLOT.slug,
+        cwd: MANAGER_SLOT.path,
+        harnessId: primaryHarness,
+        text: fullPrompt,
+      }).then(
+        (res) => {
+          if (res.ok) {
+            sessionLog.event.ok(
+              res.coldStarted
+                ? `started manager session and sent ${def.name}`
+                : `sent ${def.name} to manager`,
+            );
+          } else {
+            sessionLog.event.err(`manager inject failed: ${res.reason}`);
+            toast(`manager inject failed: ${res.reason}`, theme.err, 3000);
+          }
+        },
+      );
+      return { launched: true };
+    }
     if (def && def.kind === "claude" && def.target === "session") {
       const renderedPrompt = applyVars(def.prompt, vars);
       const trimmedExtras = applyVars(extras, vars).trim();
