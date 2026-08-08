@@ -206,6 +206,52 @@ describe("wt.merged", () => {
   });
 });
 
+describe("status.* (work-status triggers)", () => {
+  const STALE: AutomationEvalCtx = { githubFresh: false, isPausedSlug: () => false };
+
+  test("fires on the matching asserted state, keyed by assertion time", () => {
+    const r = rule({ id: "ping", on: "status.needs_human" });
+    const row = makeRow("a", {
+      work: {
+        state: "needs-human",
+        note: "log me into the dev env",
+        at: "2026-08-08T10:00:00Z",
+      },
+    });
+    // Local state — must fire even before any github fetch.
+    const fires = evaluateAutomations([r], [row], STALE);
+    expect(fires).toHaveLength(1);
+    expect(fires[0]!.fireKeys).toEqual(["ping:work:a:2026-08-08T10:00:00Z"]);
+    expect(fires[0]!.detail).toContain("log me into the dev env");
+  });
+
+  test("re-asserting produces a new fire key; other states don't fire", () => {
+    const r = rule({ id: "ping", on: "status.ready" });
+    const first = makeRow("a", {
+      work: { state: "ready", risk: "medium", note: "resync", at: "t1" },
+    });
+    const second = makeRow("a", {
+      work: { state: "ready", risk: "medium", note: "resync", at: "t2" },
+    });
+    const k1 = evaluateAutomations([r], [first], FRESH)[0]!.fireKeys[0];
+    const k2 = evaluateAutomations([r], [second], FRESH)[0]!.fireKeys[0];
+    expect(k1).not.toBe(k2);
+    const wrongState = makeRow("a", { work: { state: "working", at: "t3" } });
+    expect(evaluateAutomations([r], [wrongState], FRESH)).toHaveLength(0);
+    expect(evaluateAutomations([r], [makeRow("a")], FRESH)).toHaveLength(0);
+  });
+
+  test("ready detail carries the risk", () => {
+    const r = rule({ id: "ping", on: "status.ready" });
+    const row = makeRow("a", {
+      work: { state: "ready", risk: "high", note: "not reasonably testable", at: "t" },
+    });
+    expect(evaluateAutomations([r], [row], FRESH)[0]!.detail).toBe(
+      "ready (risk: high) — not reasonably testable",
+    );
+  });
+});
+
 describe("stack.parent_merged", () => {
   const r = rule({
     id: "auto-restack",

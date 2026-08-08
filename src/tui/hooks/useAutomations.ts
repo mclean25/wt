@@ -67,6 +67,7 @@ import {
 import { config, type AutomationTrigger } from "../../core/config.ts";
 import { lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
+import { notifyMacos } from "../../core/notify.ts";
 import { StatusKind } from "../../core/types.ts";
 import { toggleGlobalAutomationsPaused } from "../../core/wtstate.ts";
 import { wtStateQuery } from "../../state/queries.ts";
@@ -393,6 +394,12 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       await latest.current.doCleanSlugs([slug]);
       return { declined: null };
     }
+    if (rule.run === "builtin:notify") {
+      // The attention feed already narrates the transition; this is the
+      // "you're not looking at wt" leg. Detail carries state + note.
+      await notifyMacos(`wt · ${slug}`, fire.detail);
+      return { declined: null };
+    }
     const def = resolveActionDef(rule.run);
     if (!def) throw new Error(`action "${rule.run}" not found in config`);
     const outcome = await latest.current.launchAction(slug, def, "", undefined, {
@@ -565,7 +572,11 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // period); the per-slug edit-recency half lives in
       // quiesceBlockReason.
       if (now - intent.createdAt < rule.settleSeconds * 1000) continue;
-      const blocked = quiesceBlockReason(fire, now);
+      // Notifications never touch the worktree, so quiescence is
+      // meaningless for them — and a needs-human fire happens exactly
+      // while the session is non-quiescent (asking). Bypass, don't wait.
+      const blocked =
+        rule.run === "builtin:notify" ? null : quiesceBlockReason(fire, now);
       if (blocked) {
         if (rule.busy === "skip") {
           markFiresDelivered(fire.fireKeys);

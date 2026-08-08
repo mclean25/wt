@@ -20,8 +20,24 @@ Fire keys embed the PR's head SHA where relevant: a new push produces a new key 
 | `pr.conflict` | the merge-tree probe says the branch conflicts with its effective base |
 | `wt.merged` | a non-stacked worktree's branch landed (merged / upstream gone / PR merged — the same set the `c` clean sweep uses) |
 | `stack.parent_merged` | a stack (worktrees chained by their recorded fork bases — see [stacked-prs.md](stacked-prs.md)) has a merged member with open members stacked on it |
+| `status.needs_human` / `status.needs_testing` / `status.ready` | the worktree's asserted [work status](cli.md#wt-status-slug-state--m-note---risk-r) is that state. Local (wtstate), so no GitHub-freshness gate; the fire key carries the assertion timestamp, so one assertion fires once and re-asserting fires again. Hyphenated spellings (`status.needs-human`) are accepted aliases. Settle defaults to 0 — an assertion is a deliberate write, not flappy derived state |
 
 PR-driven conditions additionally require a **live GitHub fetch this session** — data restored from the persisted cache never fires a rule — and a known `pr.headRefOid` to key the fire against.
+
+## Built-in runs
+
+`run` names either an `[[actions]]` id or a built-in flow:
+
+- `builtin:restack` — the squash-safe stack replay (requires `on = "stack.parent_merged"`).
+- `builtin:clean` — destroy one landed worktree (the `c` sweep for a single row).
+- `builtin:notify` — a macOS `display notification` banner titled `wt · <slug>` carrying the trigger detail (for status triggers: state, risk, note). Notifications never touch the worktree, so they bypass the quiescence gate — a `status.needs_human` fire happens exactly while the session is busy asking. Pairs with any trigger; the canonical use:
+
+```toml
+[[automations]]
+id  = "ping-needs-human"
+on  = "status.needs_human"
+run = "builtin:notify"
+```
 
 ## Dispatch pipeline
 

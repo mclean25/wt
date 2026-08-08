@@ -428,7 +428,13 @@ export type AutomationTrigger =
   | "review.changes_requested"
   | "pr.conflict"
   | "wt.merged"
-  | "stack.parent_merged";
+  | "stack.parent_merged"
+  // Work-status assertions (`wt status`; see core/work-status.ts). Level
+  // conditions like everything else; the fire key carries the assertion
+  // timestamp, so re-asserting the same state re-fires.
+  | "status.needs_human"
+  | "status.needs_testing"
+  | "status.ready";
 
 /**
  * What to do when the target worktree isn't quiescent at delivery time
@@ -441,7 +447,11 @@ export type AutomationTrigger =
 export type AutomationBusyPolicy = "queue" | "skip";
 
 /** `run` targets that dispatch built-in flows instead of an [[actions]] def. */
-export const AUTOMATION_BUILTINS = ["builtin:restack", "builtin:clean"] as const;
+export const AUTOMATION_BUILTINS = [
+  "builtin:restack",
+  "builtin:clean",
+  "builtin:notify",
+] as const;
 export type AutomationBuiltin = (typeof AUTOMATION_BUILTINS)[number];
 
 /**
@@ -1084,10 +1094,17 @@ const VALID_TRIGGERS = new Set<AutomationTrigger>([
   "pr.conflict",
   "wt.merged",
   "stack.parent_merged",
+  "status.needs_human",
+  "status.needs_testing",
+  "status.ready",
 ]);
-/** Legacy trigger spellings, normalized before validation. */
+/** Legacy/alternate trigger spellings, normalized before validation. */
 const TRIGGER_ALIASES: Record<string, AutomationTrigger> = {
   "rabbit.unresolved": "review_bot.unresolved",
+  // The status vocabulary is hyphenated (`wt status needs-human`);
+  // accept the same spelling here rather than punishing consistency.
+  "status.needs-human": "status.needs_human",
+  "status.needs-testing": "status.needs_testing",
 };
 const DEFAULT_SETTLE_SECONDS = 120;
 // Merge-driven triggers are un-flappy, and the typical next step (review
@@ -1098,7 +1115,16 @@ const MERGE_TRIGGERS: ReadonlySet<AutomationTrigger> = new Set([
   "wt.merged",
   "stack.parent_merged",
 ]);
+// Status assertions are deliberate writes (an agent ran `wt status`),
+// not flappy derived state — and their typical run is a notification,
+// where a two-minute "cancellation window" is just a late ping.
+const STATUS_TRIGGERS: ReadonlySet<AutomationTrigger> = new Set([
+  "status.needs_human",
+  "status.needs_testing",
+  "status.ready",
+]);
 function defaultSettleSeconds(on: AutomationTrigger): number {
+  if (STATUS_TRIGGERS.has(on)) return 0;
   return MERGE_TRIGGERS.has(on) ? MERGED_SETTLE_SECONDS : DEFAULT_SETTLE_SECONDS;
 }
 

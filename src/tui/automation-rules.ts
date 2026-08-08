@@ -189,6 +189,29 @@ function evaluateRowTrigger(
         row.pr ? `#${row.pr.number} merged` : "branch landed on trunk",
       );
     }
+    case "status.needs_human":
+    case "status.needs_testing":
+    case "status.ready": {
+      // Work-status assertions are local (wtstate) — no freshness gate.
+      // The fire key carries the assertion timestamp: one fire per
+      // assertion, and re-asserting (new `at`) legitimately re-fires.
+      const want =
+        trigger === "status.needs_human"
+          ? "needs-human"
+          : trigger === "status.needs_testing"
+            ? "needs-testing"
+            : "ready";
+      const work = row.work;
+      if (!work || work.state !== want) return null;
+      const risk = work.risk ? ` (risk: ${work.risk})` : "";
+      const note = work.note ? ` — ${work.note}` : "";
+      return singleRowFire(
+        rule,
+        row,
+        `${rule.id}:work:${slug}:${work.at}`,
+        `${want}${risk}${note}`,
+      );
+    }
     case "stack.parent_merged":
       // Stack-level; handled in evaluateStackTrigger.
       return null;
