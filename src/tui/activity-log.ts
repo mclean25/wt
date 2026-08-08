@@ -44,6 +44,21 @@ class EventLog {
     return full;
   }
 
+  /**
+   * Boot-time backfill from the daily log files — restores what the
+   * pane showed before the last restart (see `activity-backfill.ts`).
+   * Records carry their ORIGINAL timestamps and are placed before any
+   * live events. Call once, before the logger sink starts appending.
+   */
+  seed(records: ReadonlyArray<Omit<WtEvent, "id">>): void {
+    if (records.length === 0) return;
+    const stamped = records.map((r) => ({ ...r, id: this.nextId++ }));
+    this.events = [...stamped, ...this.events].slice(-MAX_EVENTS);
+    const att = stamped.filter(isAttentionWorthy);
+    this.attention = [...att, ...this.attention].slice(-MAX_ATTENTION);
+    this.scheduleNotify();
+  }
+
   // Arrow-bound so React's useSyncExternalStore gets stable refs.
   getSnapshot = (): readonly WtEvent[] => this.events;
   getAttentionSnapshot = (): readonly WtEvent[] => this.attention;

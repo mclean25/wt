@@ -6,8 +6,8 @@
 
 - **List pane** (left): one line per worktree — a work-status dot, slug, PR/CI badges, session indicators — grouped into sections, with stacks rendered as trees. The leftmost slot is the colored **work-status dot** (`wt status` / `u`: red needs-human, yellow needs-testing, green ready, magenta review, cyan working, hollow todo; blank when unasserted), overridden by the loud git states (busy op, missing, gone, merged); uncommitted changes show as a pencil in the right badge cluster. With `[ui] sort = "status"` (default), rows auto-sort inside each section by that urgency — the cursor follows the worktree, not the position. A pinned "review requests" section surfaces PRs waiting on your review.
 - **Details pane** (right): the configured rows (`[ui].rows` in [configuration.md](configuration.md#ui)) for the selected worktree — branch, base, tracker issue, work status (with risk, age, and note), stage, PR, sessions, git state — then a rebase-state block (restacking / mid-rebase / conflict with the clashing files) when something is moving, plus the AI-generated title/description band when `[ai]` is configured.
-- **Bottom pane**: live outputs — harness sessions, action runs, and two event feeds: the curated **attention** feed (status transitions, needs-you signals, errors — the default) and the full firehose. Auto-follows the selected row; `'` picks an output explicitly, `[` / `]` cycle, `"` jumps to attention (again for the firehose), `Esc` returns to auto-follow.
-- **Footer**: key legend, or a text prompt when one is active (`n` local new-worktree, `Ctrl+N` remote new-worktree, `L` rename section).
+- **Bottom pane**: live outputs — harness sessions, action runs, and two event feeds: the curated **attention** feed (status transitions, needs-you signals, errors — the default) and the full firehose. Auto-follows the selected row; `'` picks an output explicitly, `[` / `]` cycle, `"` jumps to attention (again for the firehose), `Esc` returns to auto-follow. The feeds **survive restarts** — at boot they're restored from the daily app log (yesterday + today, up to the buffer caps), so the attention trail is still there after wt (or the machine) bounced. Scroll them with `Ctrl+E`/`Ctrl+Y` (or `Alt+J`/`Alt+K`, or the mouse wheel); the view re-follows the live tail when you return to the bottom.
+- **Footer**: the four special-session indicators, each a unique glyph with its keybinding muted beside it and colored by that session's live state —  `.` the main clone,  `m` the [manager](manager.md) on the left (followed by the main session's latest output line), and  `,` the wt repo,  `/` dotfiles on the right. Replaced by a text prompt when one is active (`n` local new-worktree, `Ctrl+N` remote new-worktree, `L` rename section).
 
 Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the state files — plus the optional [GitHub webhook daemon](github-events.md) — invalidate exactly what changed. `r` re-fetches as a backstop; `Ctrl+R` (with confirm) nukes all cached data and refetches from scratch.
 
@@ -21,6 +21,7 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `g` / `G` | jump to top / bottom |
 | `Tab` | fold/unfold the section under the cursor |
 | `Ctrl+J` / `Ctrl+K` | scroll the details pane |
+| `Ctrl+E` / `Ctrl+Y` | scroll the bottom event feed (also `Alt+J`/`Alt+K`, mouse wheel); re-follows at the bottom |
 | `h` | flip to the removed-worktrees history view |
 
 ### Worktree actions

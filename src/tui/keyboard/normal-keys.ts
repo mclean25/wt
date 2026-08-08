@@ -32,6 +32,7 @@ import {
   resolveDiffBase,
   sessionLaunchBlockedReason,
 } from "../app-helpers.ts";
+import { activityScroll } from "../panels/activity.tsx";
 import { enterDiffSession } from "../sessions/diff.ts";
 import { enterShellSession } from "../sessions/shell.ts";
 import type { HarnessRoute } from "../sessions/worktree.ts";
@@ -376,6 +377,18 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     }
     if (k.ctrl && k.name === "k") {
       detailsScrollRef.current?.scrollBy(-0.85, "viewport");
+      return;
+    }
+    // Ctrl+E / Ctrl+Y (vim scroll) move the BOTTOM pane's event feed —
+    // sticky-bottom releases while scrolled back and re-engages at the
+    // bottom edge. Alt+J / Alt+K are aliases for terminals where the
+    // option key sends meta. Mouse wheel over the pane works natively.
+    if (
+      (k.ctrl && (k.name === "e" || k.name === "y")) ||
+      (k.meta && (k.name === "j" || k.name === "k"))
+    ) {
+      const down = k.name === "e" || k.name === "j";
+      activityScroll.current?.scrollBy(down ? 3 : -3);
       return;
     }
     if (k.name === "j" || k.name === "down") {

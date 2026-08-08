@@ -45,6 +45,7 @@ import type { Worktree } from "../core/types.ts";
 import type { QueryClient } from "@tanstack/react-query";
 
 import { App, type TuiExit } from "./app.tsx";
+import { backfillActivityLog } from "./activity-backfill.ts";
 import { events } from "./activity-log.ts";
 import { attachFetchLogs } from "./fetch-log.ts";
 import { SLOT_SLUGS } from "./sessions/slots.ts";
@@ -166,8 +167,11 @@ async function reapStartup(): Promise<void> {
 }
 
 export async function runTui(): Promise<TuiExit> {
-  // Forward logger.event.* into the activity-pane store. CLI runs leave
-  // this unset, so event-style log calls there go to the file only.
+  // Restore the pane feeds from the daily logs FIRST (a restart must
+  // not wipe the attention trail), then forward live logger.event.*
+  // into the store. CLI runs leave the sink unset, so event-style log
+  // calls there go to the file only.
+  backfillActivityLog();
   setEventSink((e) => {
     events.append(e);
   });

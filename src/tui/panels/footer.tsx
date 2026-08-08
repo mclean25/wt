@@ -1,5 +1,5 @@
 import type { DerivedState } from "../../core/harness/status.ts";
-import { getHarness, type HarnessId } from "../../core/harness/index.ts";
+import type { HarnessId } from "../../core/harness/index.ts";
 import { actionLineFg } from "../action-line-style.ts";
 import { stateColor } from "../claude-state.ts";
 import { useActiveSessionsBySlug } from "../hooks/useHarnessSessions.ts";
@@ -8,8 +8,10 @@ import { useHarnessRun, useSessionRun } from "../hooks/useSessionRun.ts";
 import {
   DOTFILES_SLOT,
   MAIN_CLONE_SLOT,
+  MANAGER_SLOT,
   SESSION_SLOTS,
   WT_SOURCE_SLOT,
+  type SessionSlot,
 } from "../sessions/slots.ts";
 import { theme } from "../theme.ts";
 
@@ -36,27 +38,47 @@ type Props = {
   height?: number;
 };
 
-/** Status color for a slot's robot glyph; dim when no live session. */
+/** Status color for a slot's glyph; dim when no live session. */
 function slotGlyphFg(harnessId: HarnessId, state: DerivedState | null): string {
   return state ? stateColor(harnessId, state) : theme.fgDim;
 }
 
+/**
+ * One special-session indicator: the slot's own glyph (colored by its
+ * live-session state) with its keybinding muted beside it — the key IS
+ * the label, so the four slots stay learnable without words.
+ */
+function SlotBadge({
+  slot,
+  state,
+  primary,
+}: {
+  slot: SessionSlot;
+  state: DerivedState | null;
+  primary: HarnessId;
+}) {
+  return (
+    <text wrapMode="none">
+      <span fg={slotGlyphFg(primary, state)}>{slot.glyph}</span>
+      <span fg={theme.fgDim}> {slot.key}</span>
+    </text>
+  );
+}
+
 export function Footer({ mode, hint }: Props) {
-  // The two tail-less session slots (`,` wt-source and `/` dotfiles) get
-  // permanent status robots bundled at the far right — wt-source first,
-  // dotfiles to its right. No labels: position is the discriminator (the
-  // main-clone slot is represented separately by its tail on the left).
-  // Each robot's glyph AND color follow the TAB-selected primary harness:
-  // a slot keybind always opens the primary harness, so we track that
-  // harness's live session in the slot (not the cross-harness F12 target
-  // the list rows use). TABbing therefore moves both the icon and the
-  // status color together — and a dim glyph means "no live primary-harness
-  // session in this slot", not "no session at all".
+  // Every special session gets a permanent indicator: main (`.`) and
+  // the manager (`m`) on the left where the main tail lives, wt-source
+  // (`,`) and dotfiles (`/`) bundled at the far right. Each slot shows
+  // its OWN glyph (what the session is for) — not the harness robot —
+  // with its keybinding muted beside it. Colors follow the TAB-selected
+  // primary harness's live session in that slot: a slot keybind always
+  // opens the primary harness, so a dim glyph means "no live
+  // primary-harness session here", not "no session at all".
   const primary = usePrimaryHarness();
-  const primaryGlyph = getHarness(primary).glyph;
   const slotSessions = useActiveSessionsBySlug(SESSION_SLOTS, primary, primary);
   const wtState = slotSessions.get(WT_SOURCE_SLOT.slug)?.state ?? null;
   const dotfilesState = slotSessions.get(DOTFILES_SLOT.slug)?.state ?? null;
+  const managerState = slotSessions.get(MANAGER_SLOT.slug)?.state ?? null;
   return (
     <box
       flexShrink={0}
@@ -70,6 +92,7 @@ export function Footer({ mode, hint }: Props) {
         {mode.kind === "legend" ? (
           <MainSlotTail
             state={slotSessions.get(MAIN_CLONE_SLOT.slug)?.state ?? null}
+            managerState={managerState}
           />
         ) : null}
         {mode.kind === "toast" ? (
@@ -94,12 +117,12 @@ export function Footer({ mode, hint }: Props) {
           <text fg={theme.fgDim}>{hint}</text>
         </box>
       ) : null}
-      <box flexShrink={0} marginLeft={1} flexDirection="row">
-        <box width={2} flexShrink={0}>
-          <text fg={slotGlyphFg(primary, wtState)}>{primaryGlyph}</text>
+      <box flexShrink={0} marginLeft={2} flexDirection="row">
+        <box marginRight={2} flexShrink={0}>
+          <SlotBadge slot={WT_SOURCE_SLOT} state={wtState} primary={primary} />
         </box>
-        <box width={2} flexShrink={0}>
-          <text fg={slotGlyphFg(primary, dotfilesState)}>{primaryGlyph}</text>
+        <box flexShrink={0}>
+          <SlotBadge slot={DOTFILES_SLOT} state={dotfilesState} primary={primary} />
         </box>
       </box>
     </box>
@@ -107,22 +130,27 @@ export function Footer({ mode, hint }: Props) {
 }
 
 /**
- * Single-line tail of the main-clone session — the bottom bar's
- * default-mode content. A status-colored robot glyph leads (it stands in
- * for the slot label, so the `main` text is gone), followed directly by
- * the latest `ActionLine` colored per its kind (so an assistant reply
- * reads as plain text, a tool-error as red, etc.). When no session is
- * live or no lines have arrived yet (pre-creation race), falls back to a
- * dim idle hint that still surfaces `.` as the start key and `?` for
- * help. Both the glyph and the trailing tail TEXT follow the TAB-
- * selected primary harness: claude reads its jsonl tail, codex/opencode
- * read their `harnessTailRegistry` trail (rollout jsonl / SQLite). The
- * three tail hooks are all called unconditionally (rules of hooks); we
- * pick the primary's run. A non-primary harness session in the slot
- * lights nothing here — the slot keybind opens the primary, so the bar
- * tracks the primary, same as the slot glyphs above.
+ * Left cluster of the bottom bar's default mode: the main-clone slot's
+ * glyph+key, the manager's glyph+key to its right, then the latest
+ * `ActionLine` from the MAIN session colored per its kind (the tail
+ * belongs to `.` — the manager's conversation is entered, not tailed
+ * here). When no main session is live or no lines have arrived yet
+ * (pre-creation race), falls back to a dim idle hint that still
+ * surfaces `?` for help. Both glyph colors and the tail TEXT follow
+ * the TAB-selected primary harness: claude reads its jsonl tail,
+ * codex/opencode read their `harnessTailRegistry` trail (rollout
+ * jsonl / SQLite). The three tail hooks are all called unconditionally
+ * (rules of hooks); we pick the primary's run. A non-primary harness
+ * session in a slot lights nothing here — the slot keybind opens the
+ * primary, so the bar tracks the primary.
  */
-function MainSlotTail({ state }: { state: DerivedState | null }) {
+function MainSlotTail({
+  state,
+  managerState,
+}: {
+  state: DerivedState | null;
+  managerState: DerivedState | null;
+}) {
   const primary = usePrimaryHarness();
   const claudeRun = useSessionRun(MAIN_CLONE_SLOT.slug, null);
   const codexRun = useHarnessRun(MAIN_CLONE_SLOT.slug, "codex");
@@ -133,26 +161,36 @@ function MainSlotTail({ state }: { state: DerivedState | null }) {
       : primary === "codex"
         ? codexRun
         : opencodeRun;
-  const glyphFg = slotGlyphFg(primary, state);
-  const primaryGlyph = getHarness(primary).glyph;
   const lastLine =
     run && run.lines.length > 0 ? run.lines[run.lines.length - 1] : null;
+  const badges = (
+    <>
+      <box marginRight={2} flexShrink={0}>
+        <SlotBadge slot={MAIN_CLONE_SLOT} state={state} primary={primary} />
+      </box>
+      <box marginRight={2} flexShrink={0}>
+        <SlotBadge slot={MANAGER_SLOT} state={managerState} primary={primary} />
+      </box>
+    </>
+  );
   if (!lastLine) {
     return (
-      <text wrapMode="none" truncate>
-        <span fg={glyphFg}>{primaryGlyph}  </span>
-        <span fg={theme.fgDim}>idle  ·  </span>
-        <span fg={theme.accent}>.</span>
-        <span fg={theme.fgDim}> start  ·  </span>
-        <span fg={theme.accent}>?</span>
-        <span fg={theme.fgDim}> help</span>
-      </text>
+      <>
+        {badges}
+        <text wrapMode="none" truncate>
+          <span fg={theme.fgDim}>idle  ·  </span>
+          <span fg={theme.accent}>?</span>
+          <span fg={theme.fgDim}> help</span>
+        </text>
+      </>
     );
   }
   return (
-    <text wrapMode="none" truncate>
-      <span fg={glyphFg}>{primaryGlyph}  </span>
-      <span fg={actionLineFg(lastLine.kind)}>{lastLine.text}</span>
-    </text>
+    <>
+      {badges}
+      <text wrapMode="none" truncate>
+        <span fg={actionLineFg(lastLine.kind)}>{lastLine.text}</span>
+      </text>
+    </>
   );
 }

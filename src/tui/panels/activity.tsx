@@ -1,7 +1,20 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import type { ScrollBoxRenderable } from "@opentui/core";
 
 import { useAttentionEvents, useEvents, type WtEvent } from "../activity-log.ts";
+import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
 import { theme } from "../theme.ts";
+
+/**
+ * Handle to whichever events scrollbox is currently on screen (the
+ * bottom pane shows exactly one at a time), so the keyboard layer can
+ * scroll it without owning focus — the list panel keeps focus; ctrl+e
+ * / ctrl+y (and alt+j/k) route here. Mouse-wheel scrolling is native
+ * to the scrollbox and needs no wiring.
+ */
+export const activityScroll: { current: ScrollBoxRenderable | null } = {
+  current: null,
+};
 
 function levelFg(level: WtEvent["level"]): string {
   switch (level) {
@@ -40,23 +53,38 @@ function sourceFg(source: string): string {
  */
 function EventsList({
   events,
-  height,
   emptyText,
 }: {
   events: readonly WtEvent[];
-  height: number;
   emptyText: string;
 }) {
-  // Take just the tail that fits. Rendering the entire buffer each
-  // frame is cheap (~500 lines max) but pointless — only the last N
-  // are visible anyway, and flat boxes are ideal for the layout.
-  const visible = events.slice(-Math.max(1, height - 2));
-  if (visible.length === 0) {
+  // Scrollbox with sticky-bottom: follows the live tail like before,
+  // releases when the user scrolls up (wheel, or ctrl+e/ctrl+y via
+  // `activityScroll`), and re-sticks once they return to the bottom.
+  // The full buffer renders as children; viewport culling keeps the
+  // per-frame cost at "what's visible", same as the old tail slice.
+  const listRef = useRef<ScrollBoxRenderable>(null);
+  const scrollRef = useScrollbarNoFlash(listRef);
+  useEffect(() => {
+    activityScroll.current = listRef.current;
+    return () => {
+      if (activityScroll.current === listRef.current) activityScroll.current = null;
+    };
+  }, []);
+  if (events.length === 0) {
     return <text fg={theme.fgDim}>{emptyText}</text>;
   }
   return (
-    <>
-      {visible.map((e) => (
+    <scrollbox
+      ref={scrollRef}
+      scrollY
+      stickyScroll
+      stickyStart="bottom"
+      flexGrow={1}
+      minHeight={0}
+      contentOptions={{ flexDirection: "column" }}
+    >
+      {events.map((e) => (
         // Each event has to stay exactly one row. The prefix
         // (time + source) is grouped into a flexShrink=0 container
         // so flex pressure from a long message can only shrink the
@@ -80,7 +108,7 @@ function EventsList({
           </box>
         </box>
       ))}
-    </>
+    </scrollbox>
   );
 }
 
@@ -90,10 +118,8 @@ function EventsList({
  * `events` output is selected.
  */
 export function ActivityContent({
-  height,
   feed = "firehose",
 }: {
-  height: number;
   /**
    * `attention` shows the curated channel plus any error-level line
    * (an error is attention-worthy wherever it was emitted) from its
@@ -108,7 +134,6 @@ export function ActivityContent({
   return (
     <EventsList
       events={feed === "attention" ? attention : all}
-      height={height}
       emptyText={feed === "attention" ? "(nothing needs you)" : "(no events yet)"}
     />
   );
@@ -122,23 +147,13 @@ export function ActivityContent({
  * non-destroy events for the same slug also land here, but during a
  * destroy the destroy lines dominate by volume.
  */
-export function DestroyContent({
-  slug,
-  height,
-}: {
-  slug: string;
-  height: number;
-}) {
+export function DestroyContent({ slug }: { slug: string }) {
   const events = useEvents();
   const filtered = useMemo(
     () => events.filter((e) => e.source === slug),
     [events, slug],
   );
   return (
-    <EventsList
-      events={filtered}
-      height={height}
-      emptyText="(waiting for destroy output…)"
-    />
+    <EventsList events={filtered} emptyText="(waiting for destroy output…)" />
   );
 }

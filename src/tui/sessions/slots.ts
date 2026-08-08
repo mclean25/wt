@@ -54,6 +54,16 @@ export type SessionSlot = {
    *  prefix; also passed as claude's `claudeDisplayName` so the slot's
    *  /resume entry shows the same word. */
   label: string;
+  /**
+   * Footer glyph — one UNIQUE Nerd Font icon per slot (what the
+   * session is for), deliberately not the harness robot: the four
+   * slots read as positions otherwise. Color still tracks the live
+   * session state. Classic FontAwesome-range codepoints on purpose —
+   * present in every Nerd Font patch.
+   */
+  glyph: string;
+  /** The keybinding that enters this slot, shown muted next to the glyph. */
+  key: string;
 };
 
 /**
@@ -65,6 +75,8 @@ export const WT_SOURCE_SLOT: SessionSlot = {
   slug: WT_SOURCE_SLUG,
   path: WT_REPO_PATH,
   label: "wt",
+  glyph: "\uf0ad", // wrench: working on wt itself
+  key: ",",
 };
 
 /**
@@ -78,6 +90,8 @@ export const MAIN_CLONE_SLOT: SessionSlot = {
   slug: "main",
   path: config.paths.mainClone,
   label: "main",
+  glyph: "\uf015", // home: the main clone
+  key: ".",
 };
 
 /**
@@ -90,6 +104,8 @@ export const DOTFILES_SLOT: SessionSlot = {
   slug: "dotfiles",
   path: join(homedir(), ".dotfiles"),
   label: "dotfiles",
+  glyph: "\uf013", // gear: config/dotfiles
+  key: "/",
 };
 
 /**
@@ -107,6 +123,8 @@ export const MANAGER_SLOT: SessionSlot = {
   slug: "manager",
   path: config.paths.mainClone,
   label: "manager",
+  glyph: "\uf0e8", // sitemap: coordinating the fleet
+  key: "m",
 };
 
 /**

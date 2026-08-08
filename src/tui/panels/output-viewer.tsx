@@ -75,13 +75,12 @@ function OutputContent({ output, height }: { output: Output; height: number }) {
   if (output.kind === "events") {
     return (
       <ActivityContent
-        height={height}
         feed={output.id === eventsOutputId() ? "attention" : "firehose"}
       />
     );
   }
   if (output.kind === "destroy" && output.slug) {
-    return <DestroyContent slug={output.slug} height={height} />;
+    return <DestroyContent slug={output.slug} />;
   }
   if (output.kind === "session" && output.slug) {
     // Both claude and shell tail their tmux pane: claude reads
