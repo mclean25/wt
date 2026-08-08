@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 
 import { config } from "../../core/config.ts";
 import { getHarness } from "../../core/harness/index.ts";
+import type { WorkState } from "../../core/work-status.ts";
+import { workStateColor, workStateGlyph } from "../badges.ts";
 import { STATE_DOT, STATE_FG } from "../claude-state.ts";
 import { NF } from "../icons.ts";
 import { Modal } from "../modal.tsx";
@@ -243,16 +245,32 @@ const STATUS_GLYPHS: GlyphItem[] = [
   { glyph: "  ", color: theme.fgDim, label: "no status asserted", search: "idle clean no status" },
 ];
 
-// The work-status dot (leftmost slot; `wt status` / `u`). One glyph,
-// color carries the state — mirror of `workStateColor` in badges.ts.
-const WORK_STATUS_GLYPHS: GlyphItem[] = [
-  { glyph: NF.dot, color: theme.err, label: "needs-human — blocked on you", search: "needs human blocked status" },
-  { glyph: NF.dot, color: theme.warn, label: "needs-testing — verification pending", search: "needs testing status" },
-  { glyph: NF.dot, color: theme.ok, label: "ready — tested, merge it", search: "ready merge status" },
-  { glyph: NF.dot, color: theme.info, label: "review — findings being addressed", search: "review status" },
-  { glyph: NF.dot, color: theme.accent, label: "working — implementation in flight", search: "working status" },
-  { glyph: NF.dotOutline, color: theme.fgDim, label: "todo — queued, not started", search: "todo status" },
+// The work-status dot (leftmost slot; `wt status` / `u`). Glyph and
+// color come from the same badges.ts helpers the list pane uses, so a
+// recolor or a new state can't silently diverge here; only the prose
+// is hand-written.
+const WORK_STATUS_LABELS: Record<WorkState, string> = {
+  "needs-human": "needs-human — blocked on you",
+  "needs-testing": "needs-testing — verification pending",
+  ready: "ready — tested, merge it",
+  review: "review — findings being addressed",
+  working: "working — implementation in flight",
+  todo: "todo — queued, not started",
+};
+const WORK_STATUS_ORDER: readonly WorkState[] = [
+  "needs-human",
+  "needs-testing",
+  "ready",
+  "review",
+  "working",
+  "todo",
 ];
+const WORK_STATUS_GLYPHS: GlyphItem[] = WORK_STATUS_ORDER.map((state) => ({
+  glyph: workStateGlyph(state),
+  color: workStateColor(state),
+  label: WORK_STATUS_LABELS[state],
+  search: `${state.replace("-", " ")} status`,
+}));
 
 const BADGES: GlyphItem[] = [
   { glyph: NF.pencil, color: theme.warn, label: "uncommitted changes", search: "dirty uncommitted" },

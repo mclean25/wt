@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { config } from "../../core/config.ts";
 import { branchIsMerged, gitQuiet } from "../../core/git.ts";
@@ -9,7 +9,7 @@ import { run as sh } from "../../core/proc.ts";
 import { computeStage } from "../../core/stage.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
 import type { Check, CheckStatus, Worktree } from "../../core/types.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import {
   renderPrCell,
@@ -228,12 +228,7 @@ async function runAllChecks(wt: Worktree, includePr: boolean): Promise<Check[]> 
 }
 
 function currentWorktree(wts: Worktree[]): Worktree | null {
-  const cwd = resolve(process.cwd());
-  for (const w of wts) {
-    const wp = resolve(w.path);
-    if (cwd === wp || cwd.startsWith(wp + "/")) return w;
-  }
-  return null;
+  return worktreeAtCwd(wts);
 }
 
 function wtToDict(wt: Worktree, checks: Check[]) {

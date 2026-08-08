@@ -1,0 +1,95 @@
+import { describe, expect, test } from "bun:test";
+
+import { parseWtState } from "./io.ts";
+
+/**
+ * parseWtState is the tolerant-parse boundary for a hand-editable,
+ * version-drifting file — these tests pin the field-by-field
+ * degradation semantics (a bad field drops, the rest of the record
+ * survives) via plain JSON round-trips, no fs involved.
+ */
+describe("parseWtState", () => {
+  test("round-trips a full slug record including the work status", () => {
+    const state = parseWtState({
+      slugs: {
+        "eng-1-foo": {
+          section: "Now",
+          order: 3,
+          baseBranch: "michael/eng-0-base",
+          baseSha: "abc123",
+          githubIssue: 42,
+          work: {
+            state: "ready",
+            note: "calendar integrations may need a resync",
+            risk: "medium",
+            at: "2026-08-08T12:00:00.000Z",
+            sha: "def456",
+          },
+        },
+      },
+    });
+    expect(state.slugs["eng-1-foo"]).toEqual({
+      section: "Now",
+      order: 3,
+      baseBranch: "michael/eng-0-base",
+      baseSha: "abc123",
+      githubIssue: 42,
+      work: {
+        state: "ready",
+        note: "calendar integrations may need a resync",
+        risk: "medium",
+        at: "2026-08-08T12:00:00.000Z",
+        sha: "def456",
+      },
+    });
+  });
+
+  test("drops a malformed work record without dropping the slug", () => {
+    const state = parseWtState({
+      slugs: {
+        a: { section: null, order: 0, work: { state: "shipped", at: "t" } },
+        b: { section: null, order: 1, work: "ready" },
+      },
+    });
+    expect(state.slugs.a).toEqual({ section: null, order: 0 });
+    expect(state.slugs.b).toEqual({ section: null, order: 1 });
+  });
+
+  test("sanitizes control characters in a persisted note", () => {
+    const state = parseWtState({
+      slugs: {
+        a: {
+          section: null,
+          order: 0,
+          work: { state: "needs-human", note: "log[31m me in", at: "t" },
+        },
+      },
+    });
+    expect(state.slugs.a!.work?.note).toBe("log me in");
+  });
+
+  test("tolerates invalid githubIssue / devPort and legacy hub fields", () => {
+    const state = parseWtState({
+      slugs: {
+        a: {
+          section: "S",
+          order: 1,
+          githubIssue: -5,
+          devPort: 99_999_999,
+          // Removed hub-era fields must be silently dropped, not kept.
+          taskPinned: true,
+          taskSnoozedBucket: "needs-you",
+        },
+      },
+    });
+    expect(state.slugs.a).toEqual({ section: "S", order: 1 });
+  });
+
+  test("empty / garbage input degrades to an empty state", () => {
+    for (const raw of [null, undefined, 42, "x", { slugs: "nope" }]) {
+      const state = parseWtState(raw);
+      expect(state.slugs).toEqual({});
+      expect(Array.isArray(state.sectionsOrder)).toBe(true);
+    }
+  });
+});

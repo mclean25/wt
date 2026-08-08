@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 
-import { useEvents, type WtEvent } from "../activity-log.ts";
+import { useAttentionEvents, useEvents, type WtEvent } from "../activity-log.ts";
 import { theme } from "../theme.ts";
 
 function levelFg(level: WtEvent["level"]): string {
@@ -96,23 +96,18 @@ export function ActivityContent({
   height: number;
   /**
    * `attention` shows the curated channel plus any error-level line
-   * from the firehose (an error is attention-worthy wherever it was
-   * emitted); `firehose` shows everything, both channels — it is the
-   * superset, not the complement.
+   * (an error is attention-worthy wherever it was emitted) from its
+   * own reserved buffer, so firehose churn can't evict a needs-you
+   * line; `firehose` shows everything, both channels — the superset,
+   * not the complement.
    */
   feed?: "attention" | "firehose";
 }) {
-  const events = useEvents();
-  const shown = useMemo(
-    () =>
-      feed === "attention"
-        ? events.filter((e) => e.channel === "attention" || e.level === "err")
-        : events,
-    [events, feed],
-  );
+  const all = useEvents();
+  const attention = useAttentionEvents();
   return (
     <EventsList
-      events={shown}
+      events={feed === "attention" ? attention : all}
       height={height}
       emptyText={feed === "attention" ? "(nothing needs you)" : "(no events yet)"}
     />

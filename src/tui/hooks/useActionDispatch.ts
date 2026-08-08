@@ -219,22 +219,30 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       toast("prompt is empty", theme.warn, 1500);
       return { launched: false, reason: "prompt is empty" };
     }
-    // Refuse if the worktree is being cleaned up (archived the instant a
-    // destroy/clean dispatches, before the flock exists) or mid-destroy /
-    // mid-init (flock held). The archived half matters: a clean/destroy
-    // flips `row.archived` synchronously but the detached `_destroy`
-    // child only grabs the flock a process-spawn later, so `lockStatus`
-    // alone leaves a window where an action would launch into a directory
-    // about to be `git worktree remove --force`d. `launchBlockedReason`
-    // checks both — the same gate every session launch uses.
-    const blocked = launchBlockedReason(row);
-    if (blocked) {
-      toast(`${slug} is ${blocked}`, theme.warn, 2000);
-      return { launched: false, reason: `${slug} is ${blocked}` };
-    }
-    if (row.status.kind === StatusKind.Busy) {
-      toast(`${slug} is busy`, theme.warn, 2000);
-      return { launched: false, reason: `${slug} is busy` };
+    // Manager-target actions never touch the source worktree — they
+    // inject into the manager session and only READ the row for
+    // template vars — so the destroy/busy gates below don't apply
+    // (a needs-human fire happens exactly while the source session is
+    // busy asking; gating on it would decline/retry forever).
+    const isManagerTarget = def?.kind === "claude" && def.target === "manager";
+    if (!isManagerTarget) {
+      // Refuse if the worktree is being cleaned up (archived the instant a
+      // destroy/clean dispatches, before the flock exists) or mid-destroy /
+      // mid-init (flock held). The archived half matters: a clean/destroy
+      // flips `row.archived` synchronously but the detached `_destroy`
+      // child only grabs the flock a process-spawn later, so `lockStatus`
+      // alone leaves a window where an action would launch into a directory
+      // about to be `git worktree remove --force`d. `launchBlockedReason`
+      // checks both — the same gate every session launch uses.
+      const blocked = launchBlockedReason(row);
+      if (blocked) {
+        toast(`${slug} is ${blocked}`, theme.warn, 2000);
+        return { launched: false, reason: `${slug} is ${blocked}` };
+      }
+      if (row.status.kind === StatusKind.Busy) {
+        toast(`${slug} is busy`, theme.warn, 2000);
+        return { launched: false, reason: `${slug} is busy` };
+      }
     }
     if (def) {
       const avail = evaluateActionRequirements(def.requires, {
@@ -260,71 +268,50 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       recordHistoryRun(def.id, arg, null);
       pendingArgs.current.set(`${slug}/${def.id}`, arg);
     }
-    // Session-target prompt actions bypass the headless `-p` runner and
-    // type the prompt into the live primary F12 harness session (starting
-    // it if needed). This follows the Shift+TAB-selected primary harness,
-    // so actions like `/rabbit` land in Codex/OpenCode when that is the
-    // row's default AI.
+    // Session- and manager-target prompt actions bypass the headless
+    // `-p` runner and type the prompt into a live tmux session
+    // (starting it detached if needed): the worktree's primary F12
+    // session for `session`, the singleton manager session — prefixed
+    // `[re: <slug>]` so the subject is explicit — for `manager`.
     // Fire-and-forget: there's no run to track or focus, so we just log
     // progress to the activity pane. The cold-start path can take a few
-    // seconds, hence the immediate "sending…" toast.
-    // Manager-target prompt actions inject into the singleton manager
-    // session instead of the worktree's, prefixed with the originating
-    // slug so the manager knows the subject. Same fire-and-forget
-    // semantics as session targets.
-    if (def && def.kind === "claude" && def.target === "manager") {
+    // seconds, hence the immediate "sending…" toast. One shared
+    // delivery helper so the two targets can't drift.
+    if (def && def.kind === "claude" && (def.target === "session" || def.target === "manager")) {
       const renderedPrompt = applyVars(def.prompt, vars);
       const trimmedExtras = applyVars(extras, vars).trim();
       const body = trimmedExtras
         ? `${renderedPrompt}\n\n${trimmedExtras}`
         : renderedPrompt;
-      const fullPrompt = `[re: ${slug}] ${body}`;
+      const target =
+        def.target === "manager"
+          ? {
+              slug: MANAGER_SLOT.slug,
+              cwd: MANAGER_SLOT.path,
+              label: "manager",
+              text: `[re: ${slug}] ${body}`,
+            }
+          : {
+              slug,
+              cwd: row.wt.path,
+              label: `${getHarness(primaryHarness).label} session`,
+              text: body,
+            };
       const sessionLog = createLogger(slug);
-      sessionLog.event.info(`${def.name} → manager session`);
-      toast(`sending ${def.name} to manager…`, theme.info, 2000);
+      sessionLog.event.info(`${def.name} → ${target.label}`);
+      toast(`sending ${def.name} to ${target.label}…`, theme.info, 2000);
       void injectIntoSession({
-        slug: MANAGER_SLOT.slug,
-        cwd: MANAGER_SLOT.path,
+        slug: target.slug,
+        cwd: target.cwd,
         harnessId: primaryHarness,
-        text: fullPrompt,
+        text: target.text,
       }).then(
         (res) => {
           if (res.ok) {
             sessionLog.event.ok(
               res.coldStarted
-                ? `started manager session and sent ${def.name}`
-                : `sent ${def.name} to manager`,
-            );
-          } else {
-            sessionLog.event.err(`manager inject failed: ${res.reason}`);
-            toast(`manager inject failed: ${res.reason}`, theme.err, 3000);
-          }
-        },
-      );
-      return { launched: true };
-    }
-    if (def && def.kind === "claude" && def.target === "session") {
-      const renderedPrompt = applyVars(def.prompt, vars);
-      const trimmedExtras = applyVars(extras, vars).trim();
-      const fullPrompt = trimmedExtras
-        ? `${renderedPrompt}\n\n${trimmedExtras}`
-        : renderedPrompt;
-      const sessionLog = createLogger(slug);
-      const harness = getHarness(primaryHarness);
-      sessionLog.event.info(`${def.name} → live ${harness.label} session`);
-      toast(`sending ${def.name} to session…`, theme.info, 2000);
-      void injectIntoSession({
-        slug,
-        cwd: row.wt.path,
-        harnessId: primaryHarness,
-        text: fullPrompt,
-      }).then(
-        (res) => {
-          if (res.ok) {
-            sessionLog.event.ok(
-              res.coldStarted
-                ? `started ${harness.label} session and sent ${def.name}`
-                : `sent ${def.name} to ${harness.label} session`,
+                ? `started ${target.label} and sent ${def.name}`
+                : `sent ${def.name} to ${target.label}`,
             );
           } else {
             sessionLog.event.err(`inject failed: ${res.reason}`);

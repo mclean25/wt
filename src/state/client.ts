@@ -33,7 +33,10 @@ export const CACHE_DB = config.paths.cacheDb;
 // SSH wrapper sessions); a restored v8 entry would lack it and lie to
 // consumers about the declared non-optional type.
 // v10: hub mode removed — TmuxSessionsData dropped `remote` again, and
-// hub-only queries (task focus) should not restore.
+// hub-only queries (task focus) should not restore. The same release
+// also added required work-status fields (`workState` et al.) to the
+// persisted RemoteWorktreeSummary shape — independently bust-worthy,
+// covered by this same bump.
 const CACHE_BUSTER = "v10";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;

@@ -39,6 +39,24 @@ export function sessionSwitchTarget(
 export const WT_SOURCE_SLUG = "wt";
 
 /**
+ * Slugs the session slots own (`tui/sessions/slots.ts`): the wt source
+ * repo, the main clone, the dotfiles, and the manager singleton. They
+ * share the tmux-session namespace with worktree slugs, so a worktree
+ * ACTUALLY slugged one of these would cross-wire its agent session
+ * with the slot's (`wt manager send` landing in a feature branch's
+ * conversation, `m` attaching to the wrong thing). `createWorktree`
+ * refuses them at creation — the one place the collision can be
+ * prevented cheaply. Kept here (core layer) because the TUI slots file
+ * can't be imported from core.
+ */
+export const RESERVED_SESSION_SLUGS: readonly string[] = [
+  WT_SOURCE_SLUG,
+  "main",
+  "dotfiles",
+  "manager",
+];
+
+/**
  * Kinds of session this module manages. `claude` / `codex` / `opencode`
  * are AI harness sessions (each spawned for one worktree at a time);
  * `diff` is the F11 git-diff TUI; `shell` is the F10 plain login

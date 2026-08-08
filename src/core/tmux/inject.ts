@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
 import { getHarness, type HarnessId } from "../harness/index.ts";
+import { withAsyncFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
 import { buildInnerArgs, sessionsDir, tmuxClientCwd } from "./attach.ts";
 import { ensureConfig } from "./config.ts";
@@ -204,6 +205,24 @@ async function pasteBuffer(name: string, text: string): Promise<void> {
  * before injecting avoids it.
  */
 export async function injectIntoSession(opts: {
+  slug: string;
+  cwd: string;
+  harnessId?: HarnessId;
+  text: string;
+}): Promise<{ ok: true; coldStarted: boolean } | { ok: false; reason: string }> {
+  // Cross-process serialization per target session. Historically every
+  // inject target was single-writer, but the manager slot is a genuine
+  // multi-writer singleton (TUI automations, `wt manager send` from N
+  // worktree agents, [[actions]] target="manager") — without this,
+  // near-simultaneous injections interleave paste text and stray
+  // Enters in one pane, and two cold starts race. Worktree targets get
+  // the same guard for free (`wt claude send` vs the TUI's automations).
+  return withAsyncFileLock(`__inject__${sessionName(opts.slug, opts.harnessId ?? "claude")}`, () =>
+    injectIntoSessionUnlocked(opts),
+  );
+}
+
+async function injectIntoSessionUnlocked(opts: {
   slug: string;
   cwd: string;
   harnessId?: HarnessId;

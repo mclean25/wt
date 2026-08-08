@@ -8,23 +8,30 @@
  * next expected step), bare `wt status` prints the vocabulary, and
  * errors restate the rules. Humans mostly use the TUI (`u` picker)
  * and never see this. `WT_NO_HINTS=1` silences the footers.
+ *
+ * Argument handling lives in the pure `parseStatusArgs` so the whole
+ * flag/positional/validation matrix is unit-testable without spawning
+ * git (see status.test.ts); `run` only resolves worktrees and does IO.
  */
 import { revParse } from "../../core/git.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Worktree } from "../../core/types.ts";
 import {
   resolveWorkState,
+  sanitizeWorkNote,
   WORK_RISKS,
+  WORK_STATES,
   workAge,
+  workStatusSuffix,
   type WorkRisk,
   type WorkState,
   type WorkStatusRecord,
 } from "../../core/work-status.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import { readWtState, setSlugWorkStatus } from "../../core/wtstate.ts";
 import { bold, cyan, dim, green, magenta, red, yellow } from "../colors.ts";
 
-const VOCAB = `states (set with ${bold("wt status <state> [-m note] [--risk r]")}; unique prefixes + nh/nt work):
+const VOCAB = `states (unique prefixes + nh/nt work):
   ${bold("todo")}           created, not started
   ${bold("working")}        implementation in progress
   ${bold("review")}         under review (self-review / review bot / addressing findings)
@@ -35,6 +42,7 @@ const VOCAB = `states (set with ${bold("wt status <state> [-m note] [--risk r]")
                  medium/high require ${bold("-m")} naming the notable impacts (end
                  users, coworker workflows, costs). High-value only — no noise.
 
+set:   wt status [<slug>] <state> [-m "note"] [--risk low|medium|high]
 show:  wt status [<slug>] [--all [--json]]     clear: wt status --clear [<slug>]`;
 
 const HINTS_OFF = process.env.WT_NO_HINTS === "1";
@@ -100,12 +108,164 @@ function resolveRisk(input: string): WorkRisk | null {
   return q !== "" && matches.length === 1 ? matches[0]! : null;
 }
 
-async function currentWorktree(all: Worktree[]): Promise<Worktree | null> {
-  const cwd = process.cwd();
-  return all.find((w) => cwd === w.path || cwd.startsWith(`${w.path}/`)) ?? null;
+/** Parsed intent for one `wt status` invocation. */
+export type StatusArgs =
+  | { kind: "help" }
+  | { kind: "error"; message: string; hints?: string[]; showVocab?: boolean }
+  | { kind: "all"; json: boolean }
+  | { kind: "show"; slugArg: string | null }
+  | { kind: "clear"; slugArg: string | null }
+  | {
+      kind: "set";
+      slugArg: string | null;
+      state: WorkState;
+      note: string | null;
+      risk: WorkRisk | null;
+    };
+
+function err(message: string, hints?: string[], showVocab = false): StatusArgs {
+  return { kind: "error", message, hints, showVocab };
 }
 
-function describe(slug: string, record: WorkStatusRecord | undefined, headSha: string | null): string {
+/**
+ * Pure argument parsing + the validation rules that make statuses
+ * trustworthy (risk required on ready, notes required where a bare
+ * state would be useless). Notes are sanitized (control chars/ANSI
+ * stripped) and whitespace-only notes count as absent. Flags never
+ * swallow a following flag as their value, and flag combinations that
+ * would silently drop intent (`--all --clear`, `--clear --risk`) are
+ * errors rather than no-ops.
+ */
+export function parseStatusArgs(argv: readonly string[]): StatusArgs {
+  const positionals: string[] = [];
+  let note: string | null = null;
+  let riskRaw: string | null = null;
+  let clear = false;
+  let all = false;
+  let json = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "-m" || a === "--note" || a === "--risk") {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("-")) {
+        return err(`${a} requires a value${value !== undefined ? ` (got "${value}")` : ""}`);
+      }
+      i++;
+      if (a === "--risk") riskRaw = value;
+      else note = value;
+    } else if (a === "--clear") clear = true;
+    else if (a === "--all") all = true;
+    else if (a === "--json") json = true;
+    else if (a === "--help" || a === "-h") return { kind: "help" };
+    else if (a.startsWith("-")) return err(`unknown flag: ${a}`, undefined, true);
+    else positionals.push(a);
+  }
+
+  if (note !== null) {
+    note = sanitizeWorkNote(note);
+    if (note === "") note = null;
+  }
+
+  let risk: WorkRisk | null = null;
+  if (riskRaw !== null) {
+    risk = resolveRisk(riskRaw);
+    if (!risk) return err(`--risk must be one of ${WORK_RISKS.join("|")}, got "${riskRaw}"`);
+  }
+
+  if (all) {
+    if (clear || riskRaw !== null || note !== null || positionals.length > 0) {
+      return err("--all only combines with --json — drop the other flags/arguments");
+    }
+    return { kind: "all", json };
+  }
+  if (json) return err("--json requires --all");
+
+  if (clear) {
+    if (riskRaw !== null || note !== null) {
+      return err("--clear doesn't take -m/--risk — it just drops the record");
+    }
+    if (positionals.length > 1) return err("too many arguments for --clear");
+    return { kind: "clear", slugArg: positionals[0] ?? null };
+  }
+
+  // Positional layout: [] show-cwd · [state] set-on-cwd · [slug] show ·
+  // [slug, state] set. A lone positional resolving to a state wins over
+  // slug interpretation (states are reserved words here).
+  const resolveState = (input: string): WorkState | StatusArgs => {
+    const state = resolveWorkState(input);
+    if (state) return state;
+    const matches = WORK_STATES.filter((s) => s.startsWith(input.trim().toLowerCase()));
+    if (matches.length > 1) {
+      return err(`ambiguous status "${input}" (matches ${matches.join(", ")})`, undefined, true);
+    }
+    return err(`unknown status: ${input}`, undefined, true);
+  };
+
+  let slugArg: string | null = null;
+  let stateArg: string | null = null;
+  if (positionals.length === 1) {
+    if (resolveWorkState(positionals[0]!)) stateArg = positionals[0]!;
+    else {
+      const matches = WORK_STATES.filter((s) =>
+        s.startsWith(positionals[0]!.trim().toLowerCase()),
+      );
+      if (matches.length > 1) {
+        return err(
+          `ambiguous status "${positionals[0]}" (matches ${matches.join(", ")})`,
+          undefined,
+          true,
+        );
+      }
+      slugArg = positionals[0]!;
+    }
+  } else if (positionals.length === 2) {
+    slugArg = positionals[0]!;
+    stateArg = positionals[1]!;
+  } else if (positionals.length > 2) {
+    return err("too many arguments", undefined, true);
+  }
+
+  if (stateArg === null) {
+    if (riskRaw !== null || note !== null) {
+      return err("-m/--risk only apply when setting a state");
+    }
+    return { kind: "show", slugArg };
+  }
+
+  const resolved = resolveState(stateArg);
+  if (typeof resolved !== "string") return resolved;
+  const state = resolved;
+
+  if (risk && state !== "ready") {
+    return err(`--risk only applies to ready (got ${state})`);
+  }
+  if (state === "ready" && !risk) {
+    return err("ready requires --risk low|medium|high — how risky is merging this?", [
+      "judge broadly: end users, coworker workflows/dev tooling, costs, migrations.",
+      `medium/high also require ${bold("-m")} naming the notable impacts. No noise: if`,
+      `nothing is notable, that's ${bold("--risk low")} with no note.`,
+    ]);
+  }
+  if (state === "ready" && risk !== "low" && !note) {
+    return err(`ready --risk ${risk} requires -m: what should Michael know before merging?`, [
+      "high-value only — end-user impact, coworker disruption, cost, irreversibility",
+      `(e.g. "calendar integrations may need a resync", "not reasonably testable").`,
+    ]);
+  }
+  if (state === "needs-human" && !note) {
+    return err("needs-human requires -m: what exactly do you need from Michael?", [
+      `e.g. -m "dev-env Google login expired — log me back in via the open browser"`,
+    ]);
+  }
+
+  return { kind: "set", slugArg, state, note, risk };
+}
+
+function describe(
+  slug: string,
+  record: WorkStatusRecord | undefined,
+  headSha: string | null,
+): string {
   if (!record) return `${cyan(slug)}  ${dim("no status asserted")}`;
   const color = stateColor(record.state);
   const parts = [`${cyan(slug)}  ${color(record.state)}`];
@@ -125,117 +285,80 @@ function hint(lines: string[]): void {
   for (const line of lines) console.log(dim("» ") + line);
 }
 
+function findWorktree(wts: Worktree[], slugOrBranch: string): Worktree | null {
+  return wts.find((w) => w.slug === slugOrBranch || w.branch === slugOrBranch) ?? null;
+}
+
 export async function run(argv: string[]): Promise<number> {
-  const positionals: string[] = [];
-  let note: string | null = null;
-  let riskRaw: string | null = null;
-  let clear = false;
-  let all = false;
-  let json = false;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    if (a === "-m" || a === "--note") {
-      note = argv[++i] ?? null;
-      if (note === null) {
-        console.error(red(`${a} requires a value`));
-        return 2;
-      }
-    } else if (a === "--risk") {
-      riskRaw = argv[++i] ?? null;
-      if (riskRaw === null) {
-        console.error(red("--risk requires low|medium|high"));
-        return 2;
-      }
-    } else if (a === "--clear") clear = true;
-    else if (a === "--all") all = true;
-    else if (a === "--json") json = true;
-    else if (a === "--help" || a === "-h") {
-      console.log(VOCAB);
-      return 0;
-    } else if (a.startsWith("-")) {
-      console.error(red(`unknown flag: ${a}`));
-      console.log(VOCAB);
-      return 2;
-    } else positionals.push(a);
+  const args = parseStatusArgs(argv);
+
+  if (args.kind === "help") {
+    console.log(VOCAB);
+    return 0;
+  }
+  if (args.kind === "error") {
+    console.error(red(args.message));
+    if (args.hints) hint(args.hints);
+    if (args.showVocab) console.log(VOCAB);
+    return 2;
   }
 
   const wts = (await listWorktrees()).filter((w) => !w.isMain);
   const state = readWtState();
 
-  if (all) {
+  if (args.kind === "all") {
+    // One revParse per worktree, shared by both output shapes.
     const entries = await Promise.all(
-      wts.map(async (w) => {
-        const record = state.slugs[w.slug]?.work;
-        const headSha = await revParse("HEAD", w.path);
-        return {
-          slug: w.slug,
-          branch: w.branch,
-          state: record?.state ?? null,
-          note: record?.note ?? null,
-          risk: record?.risk ?? null,
-          at: record?.at ?? null,
-          stale: !!(record?.sha && headSha && record.sha !== headSha),
-        };
-      }),
+      wts.map(async (w) => ({
+        w,
+        record: state.slugs[w.slug]?.work,
+        headSha: await revParse("HEAD", w.path),
+      })),
     );
-    if (json) {
-      console.log(JSON.stringify(entries, null, 2));
+    if (args.json) {
+      console.log(
+        JSON.stringify(
+          entries.map(({ w, record, headSha }) => ({
+            slug: w.slug,
+            branch: w.branch,
+            state: record?.state ?? null,
+            note: record?.note ?? null,
+            risk: record?.risk ?? null,
+            at: record?.at ?? null,
+            stale: !!(record?.sha && headSha && record.sha !== headSha),
+          })),
+          null,
+          2,
+        ),
+      );
       return 0;
     }
-    for (const w of wts) {
-      const headSha = await revParse("HEAD", w.path);
-      console.log(describe(w.slug, state.slugs[w.slug]?.work, headSha));
+    for (const { w, record, headSha } of entries) {
+      console.log(describe(w.slug, record, headSha));
     }
     return 0;
   }
 
-  // Positional layout: [] show-cwd · [state] set-on-cwd · [slug] show ·
-  // [slug, state] set. A lone positional that resolves to a state wins
-  // over slug interpretation (states are reserved words here).
-  let target: Worktree | null = null;
-  let stateArg: string | null = null;
-  if (positionals.length === 0) {
-    target = await currentWorktree(wts);
-  } else if (positionals.length === 1) {
-    const asState = resolveWorkState(positionals[0]!);
-    if (asState && !clear) {
-      stateArg = positionals[0]!;
-      target = await currentWorktree(wts);
-    } else {
-      target =
-        wts.find((w) => w.slug === positionals[0] || w.branch === positionals[0]) ?? null;
-      if (!target) {
-        console.error(red(`no worktree (and no such status): ${positionals[0]}`));
-        console.log(VOCAB);
-        return 1;
-      }
-    }
-  } else if (positionals.length === 2) {
-    target =
-      wts.find((w) => w.slug === positionals[0] || w.branch === positionals[0]) ?? null;
-    if (!target) {
-      console.error(red(`no worktree: ${positionals[0]}`));
-      return 1;
-    }
-    stateArg = positionals[1]!;
-  } else {
-    console.error(red(`too many arguments`));
-    console.log(VOCAB);
-    return 2;
-  }
-
+  const target = args.slugArg
+    ? findWorktree(wts, args.slugArg)
+    : worktreeAtCwd(wts);
   if (!target) {
-    console.error(red("not inside a worktree — pass a slug, or cd into one"));
+    if (args.slugArg) {
+      console.error(red(`no worktree (and no such status): ${args.slugArg}`));
+      console.log(VOCAB);
+    } else {
+      console.error(red("not inside a worktree — pass a slug, or cd into one"));
+    }
     return 1;
   }
 
-  if (clear) {
+  if (args.kind === "clear") {
     setSlugWorkStatus(target.slug, null);
     console.log(green(`✓ ${target.slug} status cleared`));
     return 0;
   }
 
-  if (stateArg === null) {
+  if (args.kind === "show") {
     const headSha = await revParse("HEAD", target.path);
     console.log(describe(target.slug, state.slugs[target.slug]?.work, headSha));
     if (!HINTS_OFF) {
@@ -245,72 +368,26 @@ export async function run(argv: string[]): Promise<number> {
     return 0;
   }
 
-  const next = resolveWorkState(stateArg);
-  if (!next) {
-    console.error(red(`unknown status: ${stateArg}`));
-    console.log(VOCAB);
-    return 2;
-  }
-
-  let risk: WorkRisk | null = null;
-  if (riskRaw !== null) {
-    risk = resolveRisk(riskRaw);
-    if (!risk) {
-      console.error(red(`--risk must be one of ${WORK_RISKS.join("|")}, got "${riskRaw}"`));
-      return 2;
-    }
-    if (next !== "ready") {
-      console.error(red(`--risk only applies to ready (got ${next})`));
-      return 2;
-    }
-  }
-
-  // The rules that make statuses trustworthy. Enforced here (the
-  // agent-facing surface); the TUI picker stays lenient for the human.
-  if (next === "ready" && !risk) {
-    console.error(red("ready requires --risk low|medium|high — how risky is merging this?"));
-    hint([
-      "judge broadly: end users, coworker workflows/dev tooling, costs, migrations.",
-      `medium/high also require ${bold("-m")} naming the notable impacts. No noise: if`,
-      `nothing is notable, that's ${bold("--risk low")} with no note.`,
-    ]);
-    return 2;
-  }
-  if (next === "ready" && risk !== "low" && !note) {
-    console.error(
-      red(`ready --risk ${risk} requires -m: what should Michael know before merging?`),
-    );
-    hint([
-      "high-value only — end-user impact, coworker disruption, cost, irreversibility",
-      `(e.g. "calendar integrations may need a resync", "not reasonably testable").`,
-    ]);
-    return 2;
-  }
-  if (next === "needs-human" && !note) {
-    console.error(red('needs-human requires -m: what exactly do you need from Michael?'));
-    hint([`e.g. -m "dev-env Google login expired — log me back in via the open browser"`]);
-    return 2;
-  }
-
   const record: WorkStatusRecord = {
-    state: next,
+    state: args.state,
     at: new Date().toISOString(),
   };
-  if (note) record.note = note;
-  if (risk) record.risk = risk;
+  if (args.note) record.note = args.note;
+  if (args.risk) record.risk = args.risk;
   const sha = await revParse("HEAD", target.path);
   if (sha) record.sha = sha;
   setSlugWorkStatus(target.slug, record);
 
   // File-only audit trail (the TUI derives its own attention-feed
-  // entries from the wtstate change; this line is for `grep EVENT`).
+  // entries from the wtstate change; this line is for grepping).
   const log = createLogger(target.slug);
-  const detail = `${next}${risk ? ` (risk: ${risk})` : ""}${note ? ` — ${note}` : ""}`;
-  log.info(`work status → ${detail}`);
+  log.info(`work status → ${args.state}${workStatusSuffix(record)}`);
 
-  const color = stateColor(next);
-  console.log(`${green("✓")} ${cyan(target.slug)} → ${color(next)}${risk ? `  ${dim("risk:")} ${color(risk)}` : ""}`);
-  if (note) console.log(`  ${dim("note:")} ${note}`);
-  hint(guidance(next));
+  const color = stateColor(args.state);
+  console.log(
+    `${green("✓")} ${cyan(target.slug)} → ${color(args.state)}${args.risk ? `  ${dim("risk:")} ${color(args.risk)}` : ""}`,
+  );
+  if (args.note) console.log(`  ${dim("note:")} ${args.note}`);
+  hint(guidance(args.state));
   return 0;
 }

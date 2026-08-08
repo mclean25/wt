@@ -241,6 +241,18 @@ describe("status.* (work-status triggers)", () => {
     expect(evaluateAutomations([r], [makeRow("a")], FRESH)).toHaveLength(0);
   });
 
+  test("needs_testing fires on its own state only", () => {
+    const r = rule({ id: "nudge", on: "status.needs_testing" });
+    const row = makeRow("a", {
+      work: { state: "needs-testing", note: "verify email copy", at: "t" },
+    });
+    const fires = evaluateAutomations([r], [row], STALE);
+    expect(fires).toHaveLength(1);
+    expect(fires[0]!.detail).toBe("needs-testing — verify email copy");
+    const other = makeRow("a", { work: { state: "needs-human", note: "x", at: "t" } });
+    expect(evaluateAutomations([r], [other], STALE)).toHaveLength(0);
+  });
+
   test("ready detail carries the risk", () => {
     const r = rule({ id: "ping", on: "status.ready" });
     const row = makeRow("a", {

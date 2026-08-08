@@ -481,7 +481,7 @@ export function WorktreeList({ items, archivedRows, reviewRequests, selectedInde
   const listScrollRef = useScrollbarNoFlash(listRef);
   // Expose scroll-to-edge to the parent's j/k handler — reveals trailing
   // blank space / the review + archived headers that sit below the last
-  // selectable item. Shared with `panels/tasks.tsx` via `useScrollToEdge`.
+  // selectable item.
   useScrollToEdge(listRef, scrollHandle);
   const selItem = selectedIndex < reviewOffset ? items[selectedIndex] : undefined;
   const selectedChildId =

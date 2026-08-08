@@ -725,6 +725,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         prev.fields.dirty === fields.dirty &&
         prev.fields.lock === fields.lock &&
         prev.fields.deploy === fields.deploy &&
+        prev.fields.dev === fields.dev &&
         prev.fields.merged === fields.merged &&
         prev.fields.gone === fields.gone &&
         prev.fields.sync === fields.sync &&

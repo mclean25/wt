@@ -2,7 +2,13 @@ import type { RemoteConfig } from "./config.ts";
 import { run } from "./proc.ts";
 import { remoteWtCommand } from "./remote-protocol.ts";
 import { StatusKind, type StatusKind as StatusKindValue } from "./types.ts";
-import { WORK_STATES, type WorkState } from "./work-status.ts";
+import {
+  sanitizeWorkNote,
+  WORK_RISKS,
+  WORK_STATES,
+  type WorkRisk,
+  type WorkState,
+} from "./work-status.ts";
 
 export type RemoteWorktreeSummary = {
   hostLabel: string;
@@ -19,12 +25,16 @@ export type RemoteWorktreeSummary = {
   unpushed: number;
   issueUrl: string | null;
   /**
-   * Work status asserted on the remote host (`work_state` in its
-   * `wt ls --json`). Null when unasserted OR when the remote wt
-   * predates the field — tolerant by design so mixed versions keep
-   * listing.
+   * Work status asserted on the remote host (`work_*` in its
+   * `wt ls --json`). All null when unasserted OR when the remote wt
+   * predates the fields — tolerant by design so mixed versions keep
+   * listing. The note/risk/at ride along so a future remote details
+   * view has them; today only the state (the dot) renders.
    */
   workState: WorkState | null;
+  workNote: string | null;
+  workRisk: WorkRisk | null;
+  workAt: string | null;
 };
 
 const STATUS_KINDS = new Set<string>(Object.values(StatusKind));
@@ -111,6 +121,16 @@ export function parseRemoteWorktrees(
         (WORK_STATES as readonly string[]).includes(row.work_state)
           ? (row.work_state as WorkState)
           : null,
+      workNote:
+        typeof row.work_note === "string" && row.work_note.trim() !== ""
+          ? sanitizeWorkNote(row.work_note)
+          : null,
+      workRisk:
+        typeof row.work_risk === "string" &&
+        (WORK_RISKS as readonly string[]).includes(row.work_risk)
+          ? (row.work_risk as WorkRisk)
+          : null,
+      workAt: typeof row.work_at === "string" ? row.work_at : null,
     };
   });
 }

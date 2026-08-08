@@ -15,9 +15,20 @@ import { run } from "./proc.ts";
 
 const log = createLogger("[notify]");
 
-/** One line, AppleScript-safe: JSON escaping covers quotes/backslashes. */
+/**
+ * One line, AppleScript-safe. JSON escaping covers quotes/backslashes
+ * (AppleScript shares those escapes); control chars are stripped
+ * OUTRIGHT first because JSON would emit `\uXXXX` for them, which
+ * AppleScript does NOT parse — a stray control byte would otherwise
+ * fail the whole osascript compile and silently drop the banner.
+ */
 function appleScriptString(s: string): string {
-  return JSON.stringify(s.replaceAll(/\s+/g, " ").trim());
+  return JSON.stringify(
+    s
+      .replaceAll(/\s+/g, " ")
+      .replaceAll(/[\u0000-\u001f\u007f-\u009f]/g, "")
+      .trim(),
+  );
 }
 
 export async function notifyMacos(title: string, message: string): Promise<void> {

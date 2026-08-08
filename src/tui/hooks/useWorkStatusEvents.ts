@@ -17,21 +17,20 @@
 import { useEffect, useRef } from "react";
 
 import { createLogger } from "../../core/logger.ts";
-import type { WorkStatusRecord } from "../../core/work-status.ts";
+import { workStatusSuffix, type WorkStatusRecord } from "../../core/work-status.ts";
 import type { WtState } from "../../core/wtstate.ts";
 
 function describe(record: WorkStatusRecord): string {
-  const risk = record.risk ? ` (risk: ${record.risk})` : "";
-  const note = record.note ? ` — ${record.note}` : "";
+  const suffix = workStatusSuffix(record);
   switch (record.state) {
     case "needs-human":
-      return `needs you${note}`;
+      return `needs you${suffix}`;
     case "ready":
-      return `ready to merge${risk}${note}`;
+      return `ready to merge${suffix}`;
     case "needs-testing":
-      return `needs testing${note}`;
+      return `needs testing${suffix}`;
     default:
-      return `→ ${record.state}${note}`;
+      return `→ ${record.state}${suffix}`;
   }
 }
 
@@ -53,6 +52,12 @@ export function useWorkStatusEvents(wtState: WtState | undefined): void {
       const record = entry.work;
       if (!record) continue;
       if (prev.get(slug) === record.at) continue;
+      // A slug appearing for the FIRST time after the initial seed —
+      // e.g. a fresh worktree whose creator already asserted (/triage
+      // seeding `todo`), or a slug-state record rebuilt after destroy —
+      // is persisted history, not a transition; seed it silently like
+      // the startup pass does.
+      if (!prev.has(slug)) continue;
       const log = createLogger(slug);
       const text = describe(record);
       if (record.state === "needs-human") log.attention.err(text);

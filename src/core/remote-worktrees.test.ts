@@ -33,6 +33,9 @@ describe("parseRemoteWorktrees", () => {
       unpushed: 2,
       issueUrl: null,
       workState: null,
+      workNote: null,
+      workRisk: null,
+      workAt: null,
     });
   });
 

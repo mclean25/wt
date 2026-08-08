@@ -7,7 +7,7 @@
  * claude row already narrates the live session, and this row answers
  * "what did the agent last claim".
  */
-import { workStatusBadge, workStateColor } from "../badges.ts";
+import { workStateColor, workStateGlyph } from "../badges.ts";
 import { workAge } from "../../core/work-status.ts";
 import { theme } from "../theme.ts";
 import type { RowModule } from "./types.ts";
@@ -18,7 +18,7 @@ export const statusRow: RowModule = {
   render: ({ row }) => {
     const record = row.work;
     if (!record) return <text fg={theme.fgDim}>—</text>;
-    const badge = workStatusBadge(record, undefined)!;
+    const glyph = workStateGlyph(record.state);
     const color = workStateColor(record.state);
     const age = workAge(record.at);
     // Time-based staleness: commits after the assertion mean the
@@ -32,7 +32,7 @@ export const statusRow: RowModule = {
       lastCommitMs > assertedMs;
     return (
       <text wrapMode="none" truncate>
-        <span fg={badge.fg}>{badge.glyph}  </span>
+        <span fg={color}>{glyph}  </span>
         <span fg={color}>{record.state}</span>
         {record.risk ? (
           <span>

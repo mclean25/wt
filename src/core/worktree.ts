@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import { listRiftWorktreePaths } from "./backend.ts";
 import { config } from "./config.ts";
@@ -191,6 +191,24 @@ function resolveStage(path: string, slug: string): string {
     }
   }
   return computeStage(slug);
+}
+
+/**
+ * The worktree containing `cwd` (path-prefix match, normalized), or
+ * null. THE resolver for "which worktree am I in" across CLI commands
+ * (`wt status`, `wt dev`, `wt doctor`) — one implementation so the
+ * matching rule can't drift.
+ */
+export function worktreeAtCwd(
+  worktrees: readonly Worktree[],
+  cwd: string = process.cwd(),
+): Worktree | null {
+  const here = resolve(cwd);
+  for (const w of worktrees) {
+    const wp = resolve(w.path);
+    if (here === wp || here.startsWith(`${wp}/`)) return w;
+  }
+  return null;
 }
 
 export type SyncCounts = { ahead: number; behind: number };

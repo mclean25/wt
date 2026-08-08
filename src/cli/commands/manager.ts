@@ -32,6 +32,11 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   if (sub === "send") {
+    // `--help` after `send` must not be injected as a literal message.
+    if (rest[0] === "--help" || rest[0] === "-h") {
+      console.log("usage: wt manager send <text...>   inject a message into the manager session");
+      return 0;
+    }
     const text = rest.join(" ").trim();
     if (!text) {
       console.error(red("wt manager send requires a message"));

@@ -1,3 +1,5 @@
+import type { WorkStatusRecord } from "../work-status.ts";
+
 /**
  * Synthetic section key for an inferred stack. NUL-prefixed so it can
  * never collide with a user's manual section name. The TUI re-exports
@@ -28,8 +30,6 @@ export function stackIdFromSectionKey(key: string): string | null {
  * legacy layout (inbox, then manual sections) on read.
  */
 export const GROUP_INBOX = "\0inbox";
-
-import type { WorkStatusRecord } from "../work-status.ts";
 
 export type WtSlugState = {
   /** Section name. `null` = unsectioned (rendered at top, no header). */

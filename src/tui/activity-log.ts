@@ -14,9 +14,20 @@ export type WtEvent = {
 type Listener = () => void;
 
 const MAX_EVENTS = 500;
+// Attention-worthy events keep their own (smaller) reserved buffer:
+// they'd otherwise share the 500-slot ring with the firehose, where a
+// chatty stretch (destroy logs, refresh churn) could silently evict a
+// needs-you line before the user ever presses `"`.
+const MAX_ATTENTION = 200;
+
+/** What the attention FEED shows: the curated channel plus any error. */
+export function isAttentionWorthy(e: Pick<WtEvent, "channel" | "level">): boolean {
+  return e.channel === "attention" || e.level === "err";
+}
 
 class EventLog {
   private events: readonly WtEvent[] = [];
+  private attention: readonly WtEvent[] = [];
   private listeners = new Set<Listener>();
   private nextId = 1;
   private notifyTimer: Timer | null = null;
@@ -25,12 +36,17 @@ class EventLog {
     const full: WtEvent = { id: this.nextId++, ts: Date.now(), ...partial };
     const next = [...this.events, full];
     this.events = next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
+    if (isAttentionWorthy(full)) {
+      const att = [...this.attention, full];
+      this.attention = att.length > MAX_ATTENTION ? att.slice(-MAX_ATTENTION) : att;
+    }
     this.scheduleNotify();
     return full;
   }
 
   // Arrow-bound so React's useSyncExternalStore gets stable refs.
   getSnapshot = (): readonly WtEvent[] => this.events;
+  getAttentionSnapshot = (): readonly WtEvent[] => this.attention;
 
   subscribe = (fn: Listener): (() => void) => {
     this.listeners.add(fn);
@@ -56,4 +72,12 @@ export const events = new EventLog();
 
 export function useEvents(): readonly WtEvent[] {
   return useSyncExternalStore(events.subscribe, events.getSnapshot, events.getSnapshot);
+}
+
+export function useAttentionEvents(): readonly WtEvent[] {
+  return useSyncExternalStore(
+    events.subscribe,
+    events.getAttentionSnapshot,
+    events.getAttentionSnapshot,
+  );
 }

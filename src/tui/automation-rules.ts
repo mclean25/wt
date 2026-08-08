@@ -24,6 +24,7 @@
 import type { AutomationDef, AutomationTrigger } from "../core/config.ts";
 import { pluralize } from "../core/text.ts";
 import { REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
+import { workStatusSuffix, type WorkState } from "../core/work-status.ts";
 
 import { isCleanCandidate } from "./app-helpers.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
@@ -49,6 +50,27 @@ export type AutomationFire = {
   /** Human-readable trigger summary for the activity-pane event line. */
   detail: string;
 };
+
+/**
+ * The asserted work state a `status.*` trigger fires on, or null for
+ * every other trigger. Shared with the breaker-reset logic in
+ * `useAutomations`, which must distinguish "condition actually
+ * cleared" (state changed) from "row merely ineligible this pass"
+ * (busy/paused) — resetting on the latter would wipe legitimate
+ * breaker counts.
+ */
+export function statusTriggerState(trigger: AutomationTrigger): WorkState | null {
+  switch (trigger) {
+    case "status.needs_human":
+      return "needs-human";
+    case "status.needs_testing":
+      return "needs-testing";
+    case "status.ready":
+      return "ready";
+    default:
+      return null;
+  }
+}
 
 export type AutomationEvalCtx = {
   /**
@@ -195,21 +217,14 @@ function evaluateRowTrigger(
       // Work-status assertions are local (wtstate) — no freshness gate.
       // The fire key carries the assertion timestamp: one fire per
       // assertion, and re-asserting (new `at`) legitimately re-fires.
-      const want =
-        trigger === "status.needs_human"
-          ? "needs-human"
-          : trigger === "status.needs_testing"
-            ? "needs-testing"
-            : "ready";
+      const want = statusTriggerState(trigger)!;
       const work = row.work;
       if (!work || work.state !== want) return null;
-      const risk = work.risk ? ` (risk: ${work.risk})` : "";
-      const note = work.note ? ` — ${work.note}` : "";
       return singleRowFire(
         rule,
         row,
         `${rule.id}:work:${slug}:${work.at}`,
-        `${want}${risk}${note}`,
+        `${want}${workStatusSuffix(work)}`,
       );
     }
     case "stack.parent_merged":

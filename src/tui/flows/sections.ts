@@ -195,8 +195,21 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
         );
         return;
       }
-      const bucket = active
-        .filter((r) => r.section === current.section)
+      // `swapOrders` renormalizes EVERY slug in the bucket to the
+      // sequence given here before swapping the pair, so the bucket
+      // must be the MANUAL order, not the display order — under status
+      // sort those differ, and handing it the status-sorted sequence
+      // would silently bake the current status grouping into every
+      // untouched row's persisted order. Same-rank visual neighbors
+      // swap correctly either way (rank is the primary sort key, so
+      // inverting the pair's manual order inverts them within the
+      // rank).
+      const sectionRows = active.filter((r) => r.section === current.section);
+      const manualOrderOf = (r: (typeof sectionRows)[number]): number =>
+        wtState?.slugs[r.wt.slug]?.order ?? -Infinity;
+      const bucket = sectionRows
+        .slice()
+        .sort((a, b) => manualOrderOf(a) - manualOrderOf(b))
         .map((r) => r.wt.slug);
       swapOrder(slug, target.wt.slug, current.section, bucket).catch((err) =>
         reportActionError("reorder", err),

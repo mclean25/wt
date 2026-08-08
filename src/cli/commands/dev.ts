@@ -7,7 +7,7 @@ import {
 import { sessionName, TMUX_SOCKET } from "../../core/tmux/naming.ts";
 import { run as runProc } from "../../core/proc.ts";
 import type { Worktree } from "../../core/types.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import { cyan, dim, green, red, yellow } from "../colors.ts";
 
 const USAGE =
@@ -22,8 +22,7 @@ const USAGE =
 async function resolveWorktree(slugArg: string | undefined): Promise<Worktree | null> {
   const all = (await listWorktrees()).filter((w) => !w.isMain);
   if (slugArg) return all.find((w) => w.slug === slugArg) ?? null;
-  const cwd = process.cwd();
-  return all.find((w) => cwd === w.path || cwd.startsWith(`${w.path}/`)) ?? null;
+  return worktreeAtCwd(all);
 }
 
 export async function run(argv: string[]): Promise<number> {

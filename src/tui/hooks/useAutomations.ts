@@ -75,6 +75,7 @@ import { wtStateQuery } from "../../state/queries.ts";
 import {
   evaluateAutomations,
   fireIdentity,
+  statusTriggerState,
   type AutomationFire,
 } from "../automation-rules.ts";
 import { isCleanCandidate } from "../app-helpers.ts";
@@ -108,7 +109,7 @@ type Executing = {
   slug: string;
   /** All slugs the dispatch may touch (quiesceSlugs at dispatch time). */
   slugs: readonly string[];
-  kind: "builtin" | "headless" | "session";
+  kind: "builtin" | "headless" | "session" | "manager";
   /** True for builtin:restack — at most one may execute PER STACK at a
    *  time (the engine locks per chain, so different stacks restack
    *  concurrently). */
@@ -312,6 +313,13 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
           sessionBusyState(ex.slug) === null ||
           now - ex.dispatchedAt > SESSION_SLOT_MAX_MS
         );
+      case "manager":
+        // The manager isn't a worktree row — `sessionBusyState` (built
+        // from rows) can't see it, and polling the SOURCE slug would
+        // hold the slot hostage to a session that has nothing to do
+        // with the delivery. The injection completing (promiseDone,
+        // checked above) IS the release; the manager works on after.
+        return true;
       default: {
         const _exhaustive: never = ex.kind;
         void _exhaustive;
@@ -415,11 +423,8 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
   function dispatchKind(rule: AutomationFire["rule"]): Executing["kind"] {
     if (rule.run.startsWith("builtin:")) return "builtin";
     const def = resolveActionDef(rule.run);
-    // Manager briefings share session semantics: fire-and-forget
-    // injection with no tracked run.
-    if (def?.kind === "claude" && (def.target === "session" || def.target === "manager")) {
-      return "session";
-    }
+    if (def?.kind === "claude" && def.target === "manager") return "manager";
+    if (def?.kind === "claude" && def.target === "session") return "session";
     return "headless";
   }
 
@@ -465,6 +470,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
           if (sid && !byId.has(`${rule.id}|${sid}`)) resetBreaker(rule.id, sid);
         }
       } else {
+        const statusWant = statusTriggerState(rule.on);
         for (const row of ctx.rows) {
           // `pr.conflict` on a PR-carrying row is freshness-gated in the
           // evaluator (a conflict can't be read off persisted cache), so
@@ -475,6 +481,11 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
           // observable, so it still resets unconditionally (the offline-
           // wedge case the unconditional reset exists for).
           if (rule.on === "pr.conflict" && row.pr && !ctx.githubFresh) continue;
+          // Status triggers: an absent fire can mean "row ineligible
+          // this pass" (busy lock, paused), not "state cleared" — check
+          // the asserted state directly so a transient Busy window
+          // can't hand the loop free strikes.
+          if (statusWant && row.work?.state === statusWant) continue;
           if (!byId.has(`${rule.id}|${row.wt.slug}`)) {
             resetBreaker(rule.id, row.wt.slug);
           }
@@ -531,9 +542,11 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // so different stacks restack concurrently).
     const occupiedSlugs = new Set<string>();
     const restackStacksInFlight = new Set<string>();
+    let managerInFlight = false;
     for (const ex of executing.current.values()) {
       for (const s of ex.slugs) occupiedSlugs.add(s);
       if (ex.isRestack && ex.stackId) restackStacksInFlight.add(ex.stackId);
+      if (ex.kind === "manager") managerInFlight = true;
     }
     const queue = [...intents.current.values()].sort(
       (a, b) => a.createdAt - b.createdAt,
@@ -544,6 +557,17 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       const { rule } = fire;
       const wtLog = createLogger(fire.slug);
       const isRestack = rule.run === "builtin:restack";
+      const ruleDef = rule.run.startsWith("builtin:")
+        ? null
+        : resolveActionDef(rule.run);
+      const isManagerRun = ruleDef?.kind === "claude" && ruleDef.target === "manager";
+      // The breaker exists to stop a fix-it action from hammering a
+      // condition it keeps failing to clear. Notifications and manager
+      // briefings don't CLEAR anything — the condition legitimately
+      // stays true until the human acts — so counting them would
+      // swallow the 3rd+ needs-human ping exactly when it matters.
+      // Cooldowns still apply for spacing.
+      const breakerExempt = rule.run === "builtin:notify" || isManagerRun;
       if (fire.quiesceSlugs.some((s) => occupiedSlugs.has(s))) continue;
       if (
         isRestack &&
@@ -553,13 +577,18 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       ) {
         continue;
       }
+      // One manager injection at a time: the manager pane is a shared
+      // singleton, and interleaved paste+submit sequences would garble
+      // both briefings. (The inject path also holds a cross-process
+      // lock; this gate just keeps the queue orderly.)
+      if (isManagerRun && managerInFlight) continue;
       if (!intent.announced) {
         intent.announced = true;
         wtLog.event.info(`auto ${rule.id}: ${fire.detail} — queued`);
       }
       const target = pairTarget(fire);
       const breaker = breakerState(rule.id, target);
-      if (breaker.trippedAt !== null) {
+      if (!breakerExempt && breaker.trippedAt !== null) {
         // Breaker is open: swallow the fire (mark handled) so it
         // doesn't re-announce every pass. Resets when the condition
         // is observed clear.
@@ -580,12 +609,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // so quiescence is meaningless for them — and a needs-human fire
       // happens exactly while the session is non-quiescent (asking).
       // Bypass, don't wait.
-      const ruleDef = rule.run.startsWith("builtin:")
-        ? null
-        : resolveActionDef(rule.run);
-      const bypassQuiesce =
-        rule.run === "builtin:notify" ||
-        (ruleDef?.kind === "claude" && ruleDef.target === "manager");
+      const bypassQuiesce = breakerExempt;
       const blocked = bypassQuiesce ? null : quiesceBlockReason(fire, now);
       if (blocked) {
         if (rule.busy === "skip") {
@@ -606,7 +630,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         });
         if (!avail.ok) continue;
       }
-      if (breaker.count >= BREAKER_LIMIT) {
+      if (!breakerExempt && breaker.count >= BREAKER_LIMIT) {
         tripBreaker(rule.id, target);
         markFiresDelivered(fire.fireKeys);
         wtLog.event.err(
@@ -636,6 +660,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       executing.current.set(intent.id, entry);
       for (const s of fire.quiesceSlugs) occupiedSlugs.add(s);
       if (isRestack && fire.stackId) restackStacksInFlight.add(fire.stackId);
+      if (isManagerRun) managerInFlight = true;
       wtLog.event.info(`auto ${rule.id}: ${fire.detail} — running ${rule.run}`);
       void execute(fire)
         .then(
@@ -652,14 +677,14 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
               return;
             }
             markFiresDelivered(fire.fireKeys);
-            bumpBreaker(rule.id, target);
+            if (!breakerExempt) bumpBreaker(rule.id, target);
           },
           (err) => {
             // A run that LAUNCHED and failed does NOT retry: keys stay
             // handled; a new push (new fire key) is the sanctioned
             // retry path.
             markFiresDelivered(fire.fireKeys);
-            bumpBreaker(rule.id, target);
+            if (!breakerExempt) bumpBreaker(rule.id, target);
             const msg = err instanceof Error ? err.message : String(err);
             wtLog.event.err(`auto ${rule.id} failed: ${msg}`);
           },

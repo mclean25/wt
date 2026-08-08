@@ -151,6 +151,48 @@ export function workAge(at: string, nowMs: number = Date.now()): string | null {
 }
 
 /**
+ * Sanitize free-text that agents attach to a status (`-m` notes).
+ * Notes travel far — terminal stdout, the TUI, log lines, macOS
+ * notifications via osascript — and the writer is an agent whose
+ * context may contain untrusted text, so raw escape sequences are a
+ * real injection vector (terminal title spoofing, OSC tricks) and
+ * control bytes break AppleScript string literals. Strip ANSI
+ * CSI/OSC sequences and every control char, collapse whitespace.
+ * Applied at WRITE time (CLI) and defensively at parse time, so no
+ * consumer needs its own guard.
+ */
+export function sanitizeWorkNote(s: string): string {
+  return (
+    s
+      // OSC sequences: ESC ] ... terminated by BEL or ESC-backslash.
+      .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, "")
+      // CSI sequences (ESC [ params final) and any other ESC-led pair.
+      .replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]?/g, "")
+      .replace(/\u001b[()][A-Za-z0-9]/g, "")
+      .replace(/\u001b./g, "")
+      // Remaining C0/C1 control chars (bare BEL, CR, backspace, ...).
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
+
+/**
+ * The shared `(risk: X) — note` suffix every surface appends after its
+ * own lead word (CLI confirmation, automation fire detail, attention
+ * narration). One implementation so a format tweak or a new field
+ * can't drift across them.
+ */
+export function workStatusSuffix(record: {
+  risk?: WorkRisk;
+  note?: string;
+}): string {
+  const risk = record.risk ? ` (risk: ${record.risk})` : "";
+  const note = record.note ? ` — ${record.note}` : "";
+  return `${risk}${note}`;
+}
+
+/**
  * Tolerant parse of a persisted record (wtstate is hand-editable and
  * versions drift). Unknown states drop the whole record — a stale
  * vocabulary word from a future/older wt should vanish, not crash or
@@ -164,7 +206,12 @@ export function parseWorkStatus(raw: unknown): WorkStatusRecord | null {
   }
   if (typeof rec.at !== "string" || rec.at.trim() === "") return null;
   const out: WorkStatusRecord = { state: rec.state as WorkState, at: rec.at };
-  if (typeof rec.note === "string" && rec.note.trim() !== "") out.note = rec.note;
+  if (typeof rec.note === "string") {
+    // Defense in depth: the CLI sanitizes on write, but state.json is
+    // hand-editable and other writers may exist.
+    const note = sanitizeWorkNote(rec.note);
+    if (note !== "") out.note = note;
+  }
   if (
     typeof rec.risk === "string" &&
     (WORK_RISKS as readonly string[]).includes(rec.risk)

@@ -21,6 +21,7 @@ import { branchExists, git, gitQuiet, originBranchExists, revParse } from "./git
 import { ISSUE_ID_RE, ISSUE_URL_RE } from "./issue-tracker.ts";
 import { lockLabel, lockStatus, tryAcquireLock } from "./locks.ts";
 import { runStreaming } from "./proc.ts";
+import { RESERVED_SESSION_SLUGS } from "./tmux/naming.ts";
 import { computeStage, dirSlug, slugify } from "./stage.ts";
 import { adjectives, animals, uniqueNamesGenerator } from "unique-names-generator";
 import { safeStage } from "./stage-safety.ts";
@@ -213,6 +214,16 @@ export async function createWorktree(
   const slug = dirSlug(branch);
   const path = join(config.paths.worktreeRoot, slug);
   const stage = computeStage(slug);
+
+  // Slot sessions (wt source, main clone, dotfiles, manager) share the
+  // tmux namespace with worktree slugs — a worktree slugged "manager"
+  // would receive the fleet coordinator's injections. Refuse up front.
+  if (RESERVED_SESSION_SLUGS.includes(slug)) {
+    return {
+      ok: false,
+      reason: `"${slug}" is a reserved session name (${RESERVED_SESSION_SLUGS.join(", ")}) — pick different title words`,
+    };
+  }
 
   if (existsSync(path)) {
     return { ok: false, reason: `Path already exists: ${path}` };

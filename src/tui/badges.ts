@@ -106,6 +106,11 @@ export function workStateColor(state: WorkState): string {
   }
 }
 
+/** The dot glyph for a work state: solid, hollow for `todo`. */
+export function workStateGlyph(state: WorkState): string {
+  return state === "todo" ? NF.dotOutline : NF.dot;
+}
+
 /**
  * The work-status dot — the list pane's leftmost glyph (the slot the
  * old clean/dirty marker held; dirty moved into the badge cluster,
@@ -121,7 +126,7 @@ export function workStatusBadge(
   const eff = effectiveWorkState(record, sessionState);
   if (!eff) return null;
   return {
-    glyph: eff.state === "todo" ? NF.dotOutline : NF.dot,
+    glyph: workStateGlyph(eff.state),
     fg: workStateColor(eff.state),
   };
 }

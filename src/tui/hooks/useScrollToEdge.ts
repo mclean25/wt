@@ -2,11 +2,10 @@ import { useEffect, type RefObject } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
 /**
- * Imperative scroll-to-edge control shape both list panels expose to
- * their parent's j/k handler — identical to `ListScrollHandle`
- * (`panels/list.tsx`) and `TaskListHandle` (`panels/tasks.tsx`), which
- * keep their own named aliases for the public prop but are structurally
- * this same shape.
+ * Imperative scroll-to-edge control shape the list panel exposes to
+ * its parent's j/k handler — identical to `ListScrollHandle`
+ * (`panels/list.tsx`), which keeps its own named alias for the public
+ * prop but is structurally this same shape.
  */
 export type ScrollToEdgeHandle = { toEdge: (dir: "top" | "bottom") => void };
 
@@ -16,11 +15,6 @@ export type ScrollToEdgeHandle = { toEdge: (dir: "top" | "bottom") => void };
  * `ScrollBoxRenderable`. A large `scrollBy` clamps at the content edge,
  * so `toEdge` reveals whatever trailing content the cursor itself can't
  * reach — blank space, or headers below the last selectable row.
- *
- * `panels/list.tsx` and `panels/tasks.tsx` both wire their own
- * `<scrollbox>` ref through this so the parent's j/k "jump to edge"
- * handler can treat either pane identically without either panel
- * hand-rolling the same effect.
  */
 export function useScrollToEdge(
   listRef: RefObject<ScrollBoxRenderable | null>,
