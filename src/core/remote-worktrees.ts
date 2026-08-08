@@ -2,6 +2,7 @@ import type { RemoteConfig } from "./config.ts";
 import { run } from "./proc.ts";
 import { remoteWtCommand } from "./remote-protocol.ts";
 import { StatusKind, type StatusKind as StatusKindValue } from "./types.ts";
+import { WORK_STATES, type WorkState } from "./work-status.ts";
 
 export type RemoteWorktreeSummary = {
   hostLabel: string;
@@ -17,6 +18,13 @@ export type RemoteWorktreeSummary = {
   dirty: boolean;
   unpushed: number;
   issueUrl: string | null;
+  /**
+   * Work status asserted on the remote host (`work_state` in its
+   * `wt ls --json`). Null when unasserted OR when the remote wt
+   * predates the field — tolerant by design so mixed versions keep
+   * listing.
+   */
+  workState: WorkState | null;
 };
 
 const STATUS_KINDS = new Set<string>(Object.values(StatusKind));
@@ -98,6 +106,11 @@ export function parseRemoteWorktrees(
           ? row.unpushed
           : 0,
       issueUrl: typeof row.issue_url === "string" ? row.issue_url : null,
+      workState:
+        typeof row.work_state === "string" &&
+        (WORK_STATES as readonly string[]).includes(row.work_state)
+          ? (row.work_state as WorkState)
+          : null,
     };
   });
 }

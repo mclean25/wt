@@ -93,6 +93,17 @@ Tail a destroy log (`tail -F`). No slug ⇒ the most recently modified log.
 
 Show / record / forget a worktree's fork base — the branch it's based on when that isn't trunk. This record is the stack primitive (see [stacked-prs.md](stacked-prs.md)): the TUI's base row, stack grouping, sync counts, diff, and AI summary all resolve against it, and `wt restack` replays onto it.
 
+### `wt status [<slug>] [<state>] [-m <note>] [--risk <r>]`
+
+Show or assert a worktree's **work status** — the agent-declared lifecycle state (`todo`, `working`, `review`, `needs-testing`, `needs-human`, `ready`), rendered as the list pane's leftmost colored dot and used for the section-internal auto-sort (`[ui] sort`). The primary caller is a coding agent inside the worktree (cwd resolves the target; a slug/branch arg overrides), and the output deliberately teaches: every transition prints a short guidance footer with the expected next step, bare `wt status` prints the vocabulary, and errors restate the rules. `WT_NO_HINTS=1` silences the footers.
+
+The rules that make statuses trustworthy are enforced here (the TUI's `u` picker is deliberately lenient for the human):
+
+- `needs-human` requires `-m` naming exactly what's needed — it's the only state that means "the human must act".
+- `ready` requires `--risk low|medium|high` (judged broadly: end users, coworker workflows, costs, migrations), and medium/high additionally require `-m` naming the notable impacts. High-value notes only — nothing notable is `--risk low` with no note.
+
+States accept unique prefixes plus `nh`/`nt` aliases. `--clear` drops the record, `--all [--json]` prints the fleet overview (the manager session's eyes). Each record stamps the assert time and HEAD sha, so both the CLI and the details-pane `status` row can flag a status that predates newer commits. Statuses also ride `wt ls --json` (`work_state`/`work_note`/`work_risk`/`work_at`), which carries them across SSH for remote worktrees.
+
 ### `wt issue <slug>` / `wt issue <slug> --gh <n>` / `wt issue <slug> --clear-gh`
 
 Show or edit a worktree's issue links. The **primary** id is parsed from the slug (`coz-1935-…` → `COZ-1935`) and is never stored or edited here — it's the worktree's identity. The **secondary** GitHub issue is a per-slug record attached with `--gh <n>` (typically after a spec/breakout issue is created mid-work) and detached with `--clear-gh`; it never changes the branch. The TUI's `i` key and `y i` yank treat an attached GitHub issue as the most-specific link target; `I` / `y I` always target the primary. `<slug>` also accepts a branch name. Both ids appear in `wt ls --json` (`issue_id`/`issue_url`, `gh_issue`/`gh_issue_url`).

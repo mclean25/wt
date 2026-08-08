@@ -33,6 +33,7 @@ export {
   setSlugDevPort,
   setSlugGithubIssue,
   setSlugSection,
+  setSlugWorkStatus,
   swapOrders,
   toggleSectionFolded,
 } from "./wtstate/sections.ts";

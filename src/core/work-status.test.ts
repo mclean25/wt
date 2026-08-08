@@ -1,0 +1,118 @@
+import { describe, expect, test } from "bun:test";
+
+import {
+  effectiveWorkState,
+  LANDED_RANK,
+  NO_STATUS_RANK,
+  parseWorkStatus,
+  resolveWorkState,
+  workAge,
+  workStateRank,
+} from "./work-status.ts";
+
+describe("resolveWorkState", () => {
+  test("exact ids resolve", () => {
+    expect(resolveWorkState("ready")).toBe("ready");
+    expect(resolveWorkState("needs-human")).toBe("needs-human");
+  });
+
+  test("unique prefixes resolve", () => {
+    expect(resolveWorkState("w")).toBe("working");
+    expect(resolveWorkState("rev")).toBe("review");
+    expect(resolveWorkState("rea")).toBe("ready");
+    expect(resolveWorkState("t")).toBe("todo");
+  });
+
+  test("aliases cover the shared needs- prefix", () => {
+    expect(resolveWorkState("nh")).toBe("needs-human");
+    expect(resolveWorkState("nt")).toBe("needs-testing");
+    expect(resolveWorkState("human")).toBe("needs-human");
+    expect(resolveWorkState("testing")).toBe("needs-testing");
+  });
+
+  test("ambiguous and unknown input resolve to null", () => {
+    expect(resolveWorkState("r")).toBeNull(); // review | ready
+    expect(resolveWorkState("needs-")).toBeNull(); // human | testing
+    expect(resolveWorkState("done")).toBeNull();
+    expect(resolveWorkState("")).toBeNull();
+  });
+});
+
+describe("workStateRank", () => {
+  test("orders by urgency with statusless neutral and landed last", () => {
+    const ranks = [
+      workStateRank("needs-human"),
+      workStateRank("needs-testing"),
+      workStateRank("ready"),
+      workStateRank("review"),
+      workStateRank("working"),
+      NO_STATUS_RANK,
+      workStateRank("todo"),
+      LANDED_RANK,
+    ];
+    expect([...ranks].sort((a, b) => a - b)).toEqual(ranks);
+    expect(workStateRank(null)).toBe(NO_STATUS_RANK);
+    expect(workStateRank(undefined)).toBe(NO_STATUS_RANK);
+  });
+});
+
+describe("effectiveWorkState", () => {
+  const ready = { state: "ready", at: "2026-08-08T00:00:00Z" } as const;
+
+  test("session asking overrides any assertion", () => {
+    expect(effectiveWorkState(ready, "asking")).toEqual({
+      state: "needs-human",
+      derived: true,
+    });
+    expect(effectiveWorkState(null, "asking")).toEqual({
+      state: "needs-human",
+      derived: true,
+    });
+  });
+
+  test("otherwise the assertion stands, or nothing", () => {
+    expect(effectiveWorkState(ready, "working")).toEqual({
+      state: "ready",
+      derived: false,
+    });
+    expect(effectiveWorkState(null, "idle")).toBeNull();
+    expect(effectiveWorkState(undefined, undefined)).toBeNull();
+  });
+});
+
+describe("parseWorkStatus", () => {
+  test("round-trips a full record", () => {
+    const rec = {
+      state: "ready",
+      note: "calendar integrations may need a resync",
+      risk: "medium",
+      at: "2026-08-08T12:00:00.000Z",
+      sha: "abc123",
+    } as const;
+    expect(parseWorkStatus(rec)).toEqual(rec);
+  });
+
+  test("drops records with unknown state or missing at", () => {
+    expect(parseWorkStatus({ state: "shipped", at: "2026-08-08" })).toBeNull();
+    expect(parseWorkStatus({ state: "ready" })).toBeNull();
+    expect(parseWorkStatus("ready")).toBeNull();
+    expect(parseWorkStatus(null)).toBeNull();
+  });
+
+  test("drops invalid risk but keeps the record", () => {
+    expect(
+      parseWorkStatus({ state: "ready", at: "t", risk: "yolo", note: " " }),
+    ).toEqual({ state: "ready", at: "t" });
+  });
+});
+
+describe("workAge", () => {
+  const now = Date.parse("2026-08-08T12:00:00Z");
+  test("compact units", () => {
+    expect(workAge("2026-08-08T11:59:30Z", now)).toBe("30s");
+    expect(workAge("2026-08-08T11:30:00Z", now)).toBe("30m");
+    expect(workAge("2026-08-08T06:00:00Z", now)).toBe("6h");
+    expect(workAge("2026-08-05T12:00:00Z", now)).toBe("3d");
+    expect(workAge("not a date", now)).toBeNull();
+  });
+});

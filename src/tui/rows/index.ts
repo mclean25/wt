@@ -15,6 +15,7 @@ import { issueRow } from "./issue.tsx";
 import { pathRow } from "./path.tsx";
 import { prRow } from "./pr.tsx";
 import { stageRow } from "./stage.tsx";
+import { statusRow } from "./status.tsx";
 import type { RowModule } from "./types.ts";
 
 // The rebase lifecycle (restacking / mid-rebase / conflict) is NOT a
@@ -28,6 +29,7 @@ const REGISTRY: readonly RowModule[] = [
   baseRow,
   pathRow,
   issueRow,
+  statusRow,
   stageRow,
   devRow,
   prRow,

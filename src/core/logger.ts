@@ -31,8 +31,19 @@ import { config } from "./config.ts";
 
 export type EventKind = "info" | "ok" | "warn" | "err" | "dim";
 
+/**
+ * Which pane feed an event belongs to. `firehose` is the classic
+ * everything-log; `attention` is the curated feed the bottom pane
+ * shows by default — status transitions, needs-you signals, things
+ * worth interrupting a scan for. Errors emitted on the firehose still
+ * surface in the attention VIEW (level-based include); the channel
+ * only marks what was deliberately curated.
+ */
+export type EventChannel = "attention" | "firehose";
+
 export type EventRecord = {
   level: EventKind;
+  channel: EventChannel;
   source: string;
   text: string;
 };
@@ -50,6 +61,18 @@ export interface Logger {
     warn(text: string): void;
     err(text: string): void;
     dim(text: string): void;
+  };
+  /**
+   * Curated high-signal feed (see `EventChannel`). No `dim` on
+   * purpose — if it's dim it isn't attention-worthy. File lines are
+   * tagged `ATTN` (vs `EVENT`) so `grep ' ATTN '` reconstructs what
+   * the attention pane showed.
+   */
+  attention: {
+    info(text: string): void;
+    ok(text: string): void;
+    warn(text: string): void;
+    err(text: string): void;
   };
   child(source: string): Logger;
 }
@@ -82,28 +105,40 @@ export function createLogger(source: string): Logger {
     warn: (msg, ctx) => writeFile("WARN", source, msg, ctx),
     error: (msg, ctx) => writeError(source, msg, ctx),
     event: {
-      info: (text) => emit("info", source, text),
-      ok: (text) => emit("ok", source, text),
-      warn: (text) => emit("warn", source, text),
-      err: (text) => emit("err", source, text),
-      dim: (text) => emit("dim", source, text),
+      info: (text) => emit("info", source, text, "firehose"),
+      ok: (text) => emit("ok", source, text, "firehose"),
+      warn: (text) => emit("warn", source, text, "firehose"),
+      err: (text) => emit("err", source, text, "firehose"),
+      dim: (text) => emit("dim", source, text, "firehose"),
+    },
+    attention: {
+      info: (text) => emit("info", source, text, "attention"),
+      ok: (text) => emit("ok", source, text, "attention"),
+      warn: (text) => emit("warn", source, text, "attention"),
+      err: (text) => emit("err", source, text, "attention"),
     },
     child: (sub) => createLogger(sub),
   };
 }
 
-function emit(kind: EventKind, source: string, text: string): void {
+function emit(
+  kind: EventKind,
+  source: string,
+  text: string,
+  channel: EventChannel,
+): void {
   // Multiline text would corrupt the daily-log line format and overflow
   // the activity pane's fixed one-row-per-event layout. Split into one
   // record per line so each gets its own ts/source/kind prefix in both
   // sinks; preserve leading whitespace so indented blocks stay readable.
+  const tag = channel === "attention" ? "ATTN " : "EVENT";
   for (const line of splitEventLines(text)) {
     appendLine(
-      `${ts()} EVENT ${kind.padEnd(KIND_PAD)} ${source.padEnd(SRC_PAD)} ${line}\n`,
+      `${ts()} ${tag} ${kind.padEnd(KIND_PAD)} ${source.padEnd(SRC_PAD)} ${line}\n`,
     );
     if (sink) {
       try {
-        sink({ level: kind, source, text: line });
+        sink({ level: kind, channel, source, text: line });
       } catch {
         // Sink errors must not break logging.
       }

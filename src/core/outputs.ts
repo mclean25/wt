@@ -69,9 +69,16 @@ export function outputStatusLabel(status: OutputStatus): string {
 }
 
 const EVENTS_OUTPUT_ID = "events";
+const FIREHOSE_OUTPUT_ID = "events:all";
 
+/** The curated attention feed — the bottom pane's default output. */
 export function eventsOutputId(): string {
   return EVENTS_OUTPUT_ID;
+}
+
+/** The unfiltered everything-log, one `"` press past the attention feed. */
+export function firehoseOutputId(): string {
+  return FIREHOSE_OUTPUT_ID;
 }
 
 export function actionOutputId(slug: string, startedAt: number): string {
@@ -109,7 +116,19 @@ export function eventsOutput(lastEventTs: number): Output {
   return {
     id: EVENTS_OUTPUT_ID,
     kind: "events",
-    title: "events",
+    title: "attention",
+    sessionName: null,
+    status: "live",
+    startedAt: 0,
+    lastActivity: lastEventTs,
+  };
+}
+
+export function firehoseOutput(lastEventTs: number): Output {
+  return {
+    id: FIREHOSE_OUTPUT_ID,
+    kind: "events",
+    title: "all events",
     sessionName: null,
     status: "live",
     startedAt: 0,

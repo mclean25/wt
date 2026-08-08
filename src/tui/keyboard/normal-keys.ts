@@ -21,7 +21,7 @@ import { getHarness, HARNESSES, type HarnessId } from "../../core/harness/index.
 import { issueUrlForSlug, specificIssueUrl } from "../../core/issue-tracker.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
-import { eventsOutputId, indexOfOutput } from "../../core/outputs.ts";
+import { eventsOutputId, firehoseOutputId, indexOfOutput } from "../../core/outputs.ts";
 import { stageUrl } from "../../core/stage.ts";
 import { closeHarnessSessionGracefully } from "../../core/tmux.ts";
 import { StatusKind } from "../../core/types.ts";
@@ -108,6 +108,7 @@ export type NormalKeysCtx = {
   openSectionPicker: ReturnType<typeof makeSectionFlows>["openSectionPicker"];
   openSectionRename: ReturnType<typeof makeSectionFlows>["openSectionRename"];
   openBasePicker: ReturnType<typeof makeBaseFlows>["openBasePicker"];
+  openStatusPicker: () => void;
   openActionPicker: (slug: string) => void;
   openReviewerPicker: (slug: string) => Promise<void>;
   doReplayStack: ReturnType<typeof makeDestroyFlows>["doReplayStack"];
@@ -161,6 +162,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     openSectionPicker,
     openSectionRename,
     openBasePicker,
+    openStatusPicker,
     openActionPicker,
     openReviewerPicker,
     doReplayStack,
@@ -269,11 +271,15 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       if (target) setFocus(currentSlug ?? null, { focused: target.id });
       return;
     }
-    // `"` jumps to events for this worktree's bucket — the global
-    // pane when you want to step out of whatever per-row context the
-    // auto-rules surfaced.
+    // `"` jumps to the attention feed; pressing it again while the
+    // attention feed is showing cycles to the unfiltered firehose (and
+    // back) — curated by default, everything one keystroke away.
     if (k.sequence === '"') {
-      setFocus(currentSlug ?? null, { focused: eventsOutputId() });
+      const next =
+        displayedOutput.id === eventsOutputId()
+          ? firehoseOutputId()
+          : eventsOutputId();
+      setFocus(currentSlug ?? null, { focused: next });
       return;
     }
     // Unified Shift+J/K — moves the smallest movable thing under the
@@ -1113,6 +1119,10 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     }
     if (isPlainLetter(k, "b")) {
       openBasePicker();
+      return;
+    }
+    if (isPlainLetter(k, "u")) {
+      openStatusPicker();
       return;
     }
     if (isPlainLetter(k, "t")) {

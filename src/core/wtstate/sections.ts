@@ -1,3 +1,4 @@
+import type { WorkStatusRecord } from "../work-status.ts";
 import { readWtState, withWtStateLock, writeWtState } from "./io.ts";
 import { GROUP_INBOX, stackIdFromSectionKey } from "./types.ts";
 import type { WtSlugState, WtState } from "./types.ts";
@@ -252,6 +253,31 @@ export function setSlugGithubIssue(slug: string, issue: number | null): void {
 
 export function setSlugSection(slug: string, section: string | null): void {
   placeSlug(slug, section, "bottom");
+}
+
+/**
+ * Set (or clear, with `record = null`) a slug's asserted work status
+ * (`wt status` / the TUI `u` picker). Mirrors `setSlugGithubIssue`'s
+ * create-on-first-write / no-op-when-absent shape. Validation (risk
+ * required on ready, note rules) is the CALLER's job — this setter
+ * only persists; keeping policy out of it lets the TUI picker be more
+ * lenient than the agent-facing CLI.
+ */
+export function setSlugWorkStatus(
+  slug: string,
+  record: WorkStatusRecord | null,
+): void {
+  withWtStateLock(() => {
+    const state = readWtState();
+    const prev = state.slugs[slug];
+    if (!prev && record === null) return;
+    const next: WtState = { ...state, slugs: { ...state.slugs } };
+    const entry: WtSlugState = { section: null, order: 0, ...prev };
+    delete entry.work;
+    if (record !== null) entry.work = record;
+    next.slugs[slug] = entry;
+    writeWtState(next);
+  });
 }
 
 /**

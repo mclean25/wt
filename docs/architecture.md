@@ -96,11 +96,15 @@ Every list-picker modal follows the same shape so muscle memory carries across p
 
 When a picker doesn't naturally have a single trigger key (e.g. branchPicker, reached mid-flow), drop the re-press leg and keep Enter/Esc — don't invent a trigger key to satisfy the rule.
 
+## Work status
+
+`core/work-status.ts` is the pure module behind `wt status` / the `u` picker: the fixed six-state vocabulary, prefix resolution, urgency ranking, and the one derived override (`effectiveWorkState`: a session waiting on input renders as needs-human whatever was asserted). The record itself (`{state, note?, risk?, at, sha?}`) lives in `WtSlugState.work` — so persistence, cross-process propagation (the state-file watcher), remote transport (`wt ls --json` → `remoteWorktreesQuery`), and TUI freshness were all already wired. The rules that make agent assertions trustworthy (ready needs `--risk`, needs-human needs a note) are enforced in `cli/commands/status.ts`, deliberately NOT in the setter — the TUI picker stays lenient for the human. Consumers: `workStatusBadge` (badges.ts) renders the dot, `rowWorkRank`/`sortActiveRows` (useWorktreeRows.ts) drive the `[ui] sort = "status"` ordering, `rows/status.tsx` is the details row, and `useWorkStatusEvents` narrates observed transitions into the attention feed.
+
 ## Logging
 
-`src/core/logger.ts` gives every source two channels: file-only `debug/info/warn/error(msg, ctx?)`, and `event.{info,ok,warn,err,dim}(text)` which fans out to the file *and* the activity pane (when the TUI runtime has registered a sink). Lazy daily file at `~/.cache/wt/logs/app/wt-YYYY-MM-DD.log`, 14-day retention, cross-process append-safe. `tui/activity-log.ts` is just the in-memory store + `useEvents` hook — emit through `createLogger(...)`.
+`src/core/logger.ts` gives every source three channels: file-only `debug/info/warn/error(msg, ctx?)`; `event.{info,ok,warn,err,dim}(text)` which fans out to the file *and* the bottom pane's firehose feed (when the TUI runtime has registered a sink); and `attention.{info,ok,warn,err}(text)` for the curated attention feed — the pane's default view, reserved for things worth interrupting a scan for (work-status transitions, needs-you signals; `event.err` lines surface there too by level). Lazy daily file at `~/.cache/wt/logs/app/wt-YYYY-MM-DD.log`, 14-day retention, cross-process append-safe. `tui/activity-log.ts` is just the in-memory store + `useEvents` hook — emit through `createLogger(...)`.
 
-Per-worktree destroy logs live one level up at `~/.cache/wt/logs/<slug>-*.log`; `wt logs <slug>` tails the latest. Event lines in the daily file are tagged `EVENT`, so `grep ' EVENT '` reconstructs what the activity pane showed.
+Per-worktree destroy logs live one level up at `~/.cache/wt/logs/<slug>-*.log`; `wt logs <slug>` tails the latest. Event lines in the daily file are tagged `EVENT` (firehose) or `ATTN` (attention), so `grep ' EVENT \| ATTN '` reconstructs what the pane showed.
 
 ## Stable files
 

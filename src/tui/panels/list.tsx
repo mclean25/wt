@@ -11,7 +11,7 @@ import { Fragment, memo, useEffect, useRef, type RefObject } from "react";
 import { TextAttributes } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
-import { type Badge, checkBadge, statusBadge } from "../badges.ts";
+import { type Badge, checkBadge, statusBadge, workStatusBadge } from "../badges.ts";
 import { BadgeCluster, badgeClusterCells } from "../badge-cluster.tsx";
 import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
 import { useScrollToEdge } from "../hooks/useScrollToEdge.ts";
@@ -112,13 +112,34 @@ type Props = {
 };
 
 /**
- * Status indicator — always reflects the actual worktree status (busy /
- * missing / gone / merged / dirty / clean). Background refetch state
- * is hinted via the spinner badge in the right cluster instead, so it
- * doesn't masquerade as a primary status. Archived rows render dim.
+ * Whether the git-derived status keeps the left glyph slot: the rare,
+ * loud states (busy op / path missing / branch gone / merged) still
+ * render their glyph there. `dirty` moved to the badge cluster and
+ * `clean` renders nothing — the slot's steady-state occupant is the
+ * work-status dot (`workStatusBadge`).
  */
-function StatusMarker({ row }: { row: WorktreeRow }) {
-  const base = statusBadge(row.status);
+function statusKeepsGutter(kind: StatusKind): boolean {
+  return kind !== StatusKind.Dirty && kind !== StatusKind.Clean;
+}
+
+/**
+ * Leftmost glyph — the loud git states (busy / missing / gone /
+ * merged) when present, else the work-status dot, else blank.
+ * Background refetch state is hinted via the spinner badge in the
+ * right cluster instead, so it doesn't masquerade as a primary
+ * status. Archived rows render dim.
+ */
+function StatusMarker({
+  row,
+  sessionState,
+}: {
+  row: WorktreeRow;
+  sessionState: DerivedState | undefined;
+}) {
+  const base = statusKeepsGutter(row.status.kind)
+    ? statusBadge(row.status)
+    : workStatusBadge(row.work, sessionState);
+  if (!base) return <text> </text>;
   const fg = row.archived ? theme.fgDim : base.fg;
   return <text fg={fg}>{base.glyph}</text>;
 }
@@ -126,12 +147,23 @@ function StatusMarker({ row }: { row: WorktreeRow }) {
 /**
  * Left gutter for a stacked row, repurposing the status-marker slot: a
  * 1-cell tree connector (structural, dim) followed by the 2-cell stack
- * ordinal colored by the member's worktree status (so dirty/merged/
- * busy still read at a glance without a separate status glyph).
+ * ordinal colored by the member's loud git status when present, else
+ * its work status (so blocked/ready members still read at a glance
+ * without a separate dot).
  */
-function StackGutter({ row }: { row: WorktreeRow }) {
+function StackGutter({
+  row,
+  sessionState,
+}: {
+  row: WorktreeRow;
+  sessionState: DerivedState | undefined;
+}) {
   const info = row.stack!;
-  const ordFg = row.archived ? theme.fgDim : statusBadge(row.status).fg;
+  const ordFg = row.archived
+    ? theme.fgDim
+    : statusKeepsGutter(row.status.kind)
+      ? statusBadge(row.status).fg
+      : workStatusBadge(row.work, sessionState)?.fg ?? theme.fgDim;
   const ord = stackOrdinalLabel(info.ordinal);
   return (
     <box flexShrink={0} flexDirection="row">
@@ -221,14 +253,14 @@ const RowView = memo(function RowView({
         // Stack rows repurpose the marker slot for the tree gutter
         // (connector + ordinal). 4 cells wide (1 + 2 + gap), so the
         // label budget below accounts for one extra cell of indent.
-        <StackGutter row={row} />
+        <StackGutter row={row} sessionState={sessionState} />
       ) : (
         <box flexShrink={0} flexDirection="row">
           {/* Mirror the right-cluster pattern: width=2 box for the icon,
               then a width=1 box for the gap. Same shape that produces
               tight left-aligned icons over there. */}
           <box width={2} flexShrink={0}>
-            <StatusMarker row={row} />
+            <StatusMarker row={row} sessionState={sessionState} />
           </box>
           <box width={1} flexShrink={0}>
             <text> </text>
@@ -385,7 +417,16 @@ const RemoteRowView = memo(function RemoteRowView({
     : entry.status === "creating"
       ? { kind: StatusKind.Busy, label: "creating", op: "init" }
       : { kind: StatusKind.Clean, label: "ready" };
-  const marker = statusBadge(status);
+  // Remote rows have no badge cluster, so unlike local rows the dirty
+  // pencil keeps the marker slot here; only a CLEAN remote row cedes it
+  // to the (SSH-carried) work-status dot.
+  const remoteWork =
+    isRemoteSummary(entry) && status.kind === StatusKind.Clean && entry.workState
+      ? workStatusBadge({ state: entry.workState, at: "" }, undefined)
+      : null;
+  const marker =
+    remoteWork ??
+    (status.kind === StatusKind.Clean ? { glyph: " ", fg: theme.fgDim } : statusBadge(status));
   const rawLabel = remoteEntryLabel(entry);
   const { id, rest } = slugLabel(rawLabel);
   const numId = id ? id.replace(/^[A-Z]+-/, "") : null;

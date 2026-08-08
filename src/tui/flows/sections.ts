@@ -10,9 +10,11 @@ import type { WtState } from "../../core/wtstate.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import type { SectionPickerItem } from "../panels/section-picker.tsx";
 import type { Modal } from "../modal-state.ts";
+import { config } from "../../core/config.ts";
 import {
   GROUP_INBOX,
   STACK_SECTION_PREFIX,
+  rowWorkRank,
   type WorktreeRow,
 } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
@@ -178,6 +180,21 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     const slug = current.wt.slug;
     const target = active[idx + dir];
     if (target && target.section === current.section) {
+      // Status-first sort: a swap across different urgency ranks is a
+      // silent no-op (the rank tier re-asserts itself on the next
+      // render), so refuse with a hint instead of writing an order
+      // that changes nothing visible.
+      if (
+        config.ui.sort === "status" &&
+        rowWorkRank(current) !== rowWorkRank(target)
+      ) {
+        toast(
+          "status sort pins this row — reorder within the same status, or set [ui] sort = \"manual\"",
+          theme.fgDim,
+          2500,
+        );
+        return;
+      }
       const bucket = active
         .filter((r) => r.section === current.section)
         .map((r) => r.wt.slug);

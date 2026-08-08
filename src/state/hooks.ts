@@ -97,12 +97,14 @@ import type { DiffContext } from "../core/diff/index.ts";
 import { gitRun, invalidateMainFirstParents } from "../core/git.ts";
 import { fetchAuthenticatedLogin } from "../core/github.ts";
 import type { PullRequest, Worktree } from "../core/types.ts";
+import type { WorkStatusRecord } from "../core/work-status.ts";
 import {
   moveGroupPast as moveGroupPastOnDisk,
   placeSlug as placeSlugOnDisk,
   renameSection as renameSectionOnDisk,
   setSlugBase as setSlugBaseOnDisk,
   setSlugSection as setSlugSectionOnDisk,
+  setSlugWorkStatus as setSlugWorkStatusOnDisk,
   swapOrders as swapOrdersOnDisk,
   toggleSectionFolded as toggleSectionFoldedOnDisk,
   toggleSlugAutomationsPaused as toggleSlugAutomationsPausedOnDisk,
@@ -620,6 +622,19 @@ export function useWtActions() {
      */
     async setSection(slug: string, section: string | null): Promise<void> {
       setSlugSectionOnDisk(slug, section);
+      await qc.invalidateQueries({ queryKey: qk.wtState() });
+    },
+    /**
+     * Assert (or clear, with `null`) a slug's work status — the TUI
+     * (`u` picker) leg of `wt status`. The wtState invalidation is what
+     * re-runs the status-first sort; awaited so cursor-follow reads
+     * fresh rows.
+     */
+    async setWorkStatus(
+      slug: string,
+      record: WorkStatusRecord | null,
+    ): Promise<void> {
+      setSlugWorkStatusOnDisk(slug, record);
       await qc.invalidateQueries({ queryKey: qk.wtState() });
     },
     /**

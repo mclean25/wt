@@ -541,6 +541,14 @@ export type Config = {
      * hide any slot added in a later version from anyone who set it.
      */
     hiddenBadges: ReadonlySet<BadgeSlot>;
+    /**
+     * List-pane row ordering inside each section. `status` (default)
+     * ranks rows by work-status urgency (needs-human first, landed
+     * last; see core/work-status.ts), with the manual order as the
+     * stable tie-break — a no-op until statuses exist. `manual` is the
+     * pure hand order. Stack sections always keep spine order.
+     */
+    sort: "status" | "manual";
   };
 };
 
@@ -552,6 +560,7 @@ export type Config = {
  */
 export const BADGE_SLOTS = [
   "action",
+  "dirty",
   "rebase",
   "deploy",
   "session",
@@ -635,7 +644,7 @@ const GENERIC_DEFAULTS = {
     // `panels/details/rebase-block.tsx`). Old configs listing it are
     // harmless — unknown ids drop silently at resolve time. "linear" is
     // accepted as a legacy alias for "issue" at resolve time.
-    rows: ["branch", "base", "issue", "stage", "dev", "pr", "claude", "git"] as const,
+    rows: ["branch", "base", "issue", "status", "stage", "dev", "pr", "claude", "git"] as const,
   },
   actions: [
     {
@@ -995,6 +1004,14 @@ function build(raw: Raw, errs: Errors): Config {
       );
     }
   }
+  const uiSort = errs.optEnum(
+    ui,
+    "ui",
+    "sort",
+    ["status", "manual"] as const,
+    "status",
+  );
+
   const githubRaw = obj(raw.github);
   const githubEventsRaw = githubRaw ? obj(githubRaw.events) : null;
   const githubEventsSecretFile = githubEventsRaw
@@ -1056,7 +1073,7 @@ function build(raw: Raw, errs: Errors): Config {
     github,
     actions,
     automations,
-    ui: { rows, hiddenBadges },
+    ui: { rows, hiddenBadges, sort: uiSort },
   };
 }
 

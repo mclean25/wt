@@ -27,7 +27,7 @@ import { getHarness } from "../core/harness/index.ts";
 import type { HarnessId } from "../core/harness/index.ts";
 import type { DerivedState } from "../core/harness/status.ts";
 import { stateColor } from "./claude-state.ts";
-import { type MergeQueueState, REVIEW_BOT_NONE } from "../core/types.ts";
+import { type MergeQueueState, REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
 import { type BadgeSlot, config } from "../core/config.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
 
@@ -65,10 +65,12 @@ export function badgeClusterCells(
   // action while hosting a live session shows both glyphs).
   const showSessionSlot = activeHarnessId !== undefined && shows("session");
   const rebase = rebaseHint(row);
+  const dirty = dirtyHint(row);
   const hasAnyBadge =
     showAction ||
     showSessionSlot ||
     !!rebase ||
+    !!dirty ||
     !!(prSlot || mq || isDeployed) ||
     !!reviewBotHint(row) ||
     !!reviewHint(row) ||
@@ -76,6 +78,7 @@ export function badgeClusterCells(
   if (!hasAnyBadge) return 0;
   let cells = 2; // leading gap
   if (showAction) cells += 2;
+  if (dirty) cells += 2;
   if (showSessionSlot) cells += 2;
   if (rebase) cells += 2;
   if (reviewBotHint(row)) cells += 2;
@@ -151,6 +154,19 @@ function rebaseHint(
 ): Badge | null {
   if (!shows("rebase")) return null;
   return rebaseBadge(row.fields.lock.data, row.fields.conflict.data, sessionState);
+}
+
+/**
+ * Uncommitted-changes hint (the pencil the leftmost gutter used to
+ * carry before the work-status dot claimed that slot). Shown only when
+ * the derived status IS dirty — the loud states (busy/gone/merged)
+ * still own the gutter and would make a duplicate pencil here noise.
+ * Clean renders nothing (absence-as-signal).
+ */
+function dirtyHint(row: WorktreeRow): Badge | null {
+  if (!shows("dirty")) return null;
+  if (row.status.kind !== StatusKind.Dirty) return null;
+  return { glyph: NF.pencil, fg: theme.warn };
 }
 
 /**
@@ -248,10 +264,12 @@ export function BadgeCluster({
   const showAction = actionRunning && shows("action");
   const showSessionSlot = activeHarnessId !== undefined && shows("session");
   const rebase = rebaseHint(row, sessionState);
+  const dirty = dirtyHint(row);
   const hasAnyBadge =
     showAction ||
     showSessionSlot ||
     !!rebase ||
+    !!dirty ||
     !!(prSlot || mq || isDeployed) ||
     !!bot ||
     !!review ||
@@ -263,6 +281,13 @@ export function BadgeCluster({
       {showAction ? (
         <box width={2} flexShrink={0}>
           <text fg={theme.ok}>{NF.comment}</text>
+        </box>
+      ) : null}
+      {/* Uncommitted-changes pencil — relocated from the left gutter,
+          which the work-status dot now owns. */}
+      {dirty ? (
+        <box width={2} flexShrink={0}>
+          <text fg={row.archived ? theme.fgDim : dirty.fg}>{dirty.glyph}</text>
         </box>
       ) : null}
       {/* Rebase-lifecycle slot (restacking / mid-rebase / conflict) —

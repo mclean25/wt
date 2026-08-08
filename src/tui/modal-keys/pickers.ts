@@ -68,6 +68,46 @@ export function handleBasePickerKey(
   return true;
 }
 
+export function handleStatusPickerKey(
+  k: KeyEvent,
+  modal: Extract<Modal, { kind: "statusPicker" }>,
+  { setModal, commitStatusPick }: SimpleModalContext,
+): boolean {
+  if (k.name === "j" || k.name === "down") {
+    setModal({ ...modal, index: Math.min(modal.index + 1, modal.items.length - 1) });
+    return true;
+  }
+  if (k.name === "k" || k.name === "up") {
+    setModal({ ...modal, index: Math.max(modal.index - 1, 0) });
+    return true;
+  }
+  if (k.sequence && /^[1-9]$/.test(k.sequence)) {
+    const item = modal.items[parseInt(k.sequence, 10) - 1];
+    if (item) commitStatusPick(item, modal.slug);
+    return true;
+  }
+  // `x` clears — the picker's "kill" affordance; the clear row is also
+  // selectable normally.
+  if (isPlainLetter(k, "x")) {
+    const clearItem = modal.items.find((it) => it.state === null);
+    if (clearItem) commitStatusPick(clearItem, modal.slug);
+    return true;
+  }
+  if (k.name === "return" || isPlainLetter(k, "u")) {
+    const item = modal.items[modal.index];
+    if (item) commitStatusPick(item, modal.slug);
+    return true;
+  }
+  if (
+    k.name === "escape" ||
+    k.sequence === "q" ||
+    (k.ctrl && k.name === "c")
+  ) {
+    setModal(null);
+  }
+  return true;
+}
+
 export function handleOutputsPickerKey(
   k: KeyEvent,
   modal: Extract<Modal, { kind: "outputsPicker" }>,

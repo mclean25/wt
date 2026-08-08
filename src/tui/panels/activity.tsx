@@ -89,10 +89,33 @@ function EventsList({
  * `<box>` chrome. Rendered inside `OutputViewer`'s border when the
  * `events` output is selected.
  */
-export function ActivityContent({ height }: { height: number }) {
+export function ActivityContent({
+  height,
+  feed = "firehose",
+}: {
+  height: number;
+  /**
+   * `attention` shows the curated channel plus any error-level line
+   * from the firehose (an error is attention-worthy wherever it was
+   * emitted); `firehose` shows everything, both channels — it is the
+   * superset, not the complement.
+   */
+  feed?: "attention" | "firehose";
+}) {
   const events = useEvents();
+  const shown = useMemo(
+    () =>
+      feed === "attention"
+        ? events.filter((e) => e.channel === "attention" || e.level === "err")
+        : events,
+    [events, feed],
+  );
   return (
-    <EventsList events={events} height={height} emptyText="(no events yet)" />
+    <EventsList
+      events={shown}
+      height={height}
+      emptyText={feed === "attention" ? "(nothing needs you)" : "(no events yet)"}
+    />
   );
 }
 

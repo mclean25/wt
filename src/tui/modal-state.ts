@@ -1,5 +1,6 @@
 import type { ActionDef } from "../core/actions.ts";
 import type { HistoryEntry } from "../core/actions.ts";
+import type { WorkState } from "../core/work-status.ts";
 import type { RemovedWorktree } from "../core/wtstate.ts";
 import type { ActionPickerState } from "./panels/action-picker.tsx";
 import type { PerfInjectState } from "./panels/perf.tsx";
@@ -56,6 +57,12 @@ export type Modal =
       kind: "basePicker";
       slug: string;
       items: Array<{ label: string; branch: string | null }>;
+      index: number;
+    }
+  | {
+      kind: "statusPicker";
+      slug: string;
+      items: Array<{ label: string; state: WorkState | null }>;
       index: number;
     }
   | {

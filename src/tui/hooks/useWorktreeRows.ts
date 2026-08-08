@@ -12,6 +12,11 @@ import { buildStackIndex, type SpinePos } from "../../core/stack-layout.ts";
 import { slugLabel } from "../../core/stage.ts";
 import type { LockMeta, MergeQueueEntry, PullRequest, Status, Worktree } from "../../core/types.ts";
 import { StatusKind } from "../../core/types.ts";
+import {
+  LANDED_RANK,
+  workStateRank,
+  type WorkStatusRecord,
+} from "../../core/work-status.ts";
 import type { SyncState } from "../../core/worktree.ts";
 import {
   GROUP_INBOX,
@@ -141,6 +146,13 @@ export type WorktreeRow = {
    * is the most-specific link target for `i` / `y i`.
    */
   githubIssue: number | null;
+  /**
+   * Agent-asserted work status (`wt status` / the `u` picker), straight
+   * from wtstate. `null` = never asserted. The list dot renders the
+   * EFFECTIVE state (this plus the session-asking override) via
+   * `workStatusBadge`; the section-internal auto-sort ranks on this.
+   */
+  work: WorkStatusRecord | null;
   archived: boolean;
   /**
    * Resolved title with `llm > pr > commit > slug` fallback. Both the
@@ -382,29 +394,50 @@ function resolveTitle(
 }
 
 /**
+ * Urgency rank for the status-first sort inside a (non-stack) section.
+ * Merged/gone rows sink last whatever they asserted (landed is landed);
+ * everything else ranks on the asserted work status — deliberately NOT
+ * the effective state (session-asking upgrades tint the dot but don't
+ * reorder rows; sorting on a transient signal would make the list
+ * twitch every time an agent pauses on a prompt).
+ */
+export function rowWorkRank(row: WorktreeRow): number {
+  if (row.status.kind === StatusKind.Merged || row.status.kind === StatusKind.Gone) {
+    return LANDED_RANK;
+  }
+  return workStateRank(row.work?.state);
+}
+
+/**
  * Section-aware sort for the active (non-archived) rows. Display order
  * is one unified ranked list of GROUPS — stack sections, the
  * unsectioned inbox (`GROUP_INBOX` sentinel), and manual named
  * sections — exactly as they appear in `sectionsOrder` (readWtState
  * self-heals it: dead manual groups drop, and a pre-unification file is
  * seeded with the legacy inbox/manual layout). Within each group, rows
- * sort by `state.order` ascending
- * (stack rows by inferred layout index via `effectiveOrders`); unstated
- * entries float to the top (-Infinity) so brand-new worktrees always
- * land at the top of the inbox. Groups not yet ranked (a freshly
- * created stack mid-render, post-rename quirk) degrade predictably:
- * stack keys sort to the front (where new stacks live), manual names
- * to the end, then alphabetically — display stays stable until the
- * self-heal catches up on the next read.
+ * sort status-first when `[ui] sort = "status"` (the default): work-
+ * status urgency rank, then the manual `state.order` as the stable
+ * tie-break — so same-status rows keep their hand order, statusless
+ * rows keep exactly the old behavior, and `J`/`K` still reorders within
+ * a rank. Stack sections are exempt (spine order IS the layout), as is
+ * `sort = "manual"`. Unstated orders float to the top (-Infinity) so
+ * brand-new worktrees land at the top of their rank band. Groups not
+ * yet ranked (a freshly created stack mid-render, post-rename quirk)
+ * degrade predictably: stack keys sort to the front (where new stacks
+ * live), manual names to the end, then alphabetically — display stays
+ * stable until the self-heal catches up on the next read.
  *
  * Returned as a fresh array; the caller is responsible for combining
  * with the archived rows and any rows-array identity stabilization.
+ * Cursor stability across re-sorts is structural: the selection is
+ * keyed by slug (see app.tsx `sel`), never by index.
  */
 function sortActiveRows(
   active: WorktreeRow[],
   unsortedIndex: ReadonlyMap<string, number>,
   effectiveOrders: ReadonlyMap<string, number>,
   sectionsOrder: readonly string[],
+  statusSort: boolean,
 ): WorktreeRow[] {
   const rank = new Map<string, number>();
   for (let i = 0; i < sectionsOrder.length; i++) {
@@ -422,6 +455,10 @@ function sortActiveRows(
       const rankB = rankOf(groupB);
       if (rankA !== rankB) return rankA - rankB;
       return groupA.localeCompare(groupB);
+    }
+    if (statusSort && !a.sectionIsStack) {
+      const wr = rowWorkRank(a) - rowWorkRank(b);
+      if (wr !== 0) return wr;
     }
     const orderA = effectiveOrders.get(a.wt.slug) ?? -Infinity;
     const orderB = effectiveOrders.get(b.wt.slug) ?? -Infinity;
@@ -667,6 +704,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         stack?.index ?? stateSlugs[wt.slug]?.order ?? -Infinity,
       );
       const githubIssue = stateSlugs[wt.slug]?.githubIssue ?? null;
+      const work = stateSlugs[wt.slug]?.work ?? null;
       const llmTitle = aiResults[i]?.title ?? null;
       const llmBrief = aiResults[i]?.brief ?? null;
       const prTitle = pr?.title ?? null;
@@ -697,6 +735,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         prev.pr === pr &&
         prev.mq === mq &&
         prev.githubIssue === githubIssue &&
+        prev.work === work &&
         prev.archived === archived &&
         prev.title === title &&
         prev.titleSource === titleSource &&
@@ -723,6 +762,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         stackedOn: stackedOnOut,
         stack: stackOut,
         githubIssue,
+        work,
         archived,
         title,
         titleSource,
@@ -756,6 +796,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
       listIndexOf,
       effectiveOrders,
       sectionsOrder,
+      config.ui.sort === "status",
     );
     const archived = unsorted.filter((r) => r.archived);
     const nextRows: WorktreeRow[] = [...active, ...archived];

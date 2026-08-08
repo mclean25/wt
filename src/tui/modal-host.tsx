@@ -163,6 +163,14 @@ export function PostFooterModals({
           toggleKey="b"
         />
       ) : null}
+      {modal?.kind === "statusPicker" ? (
+        <PickerModal
+          title={`status for ${modal.slug}`}
+          items={modal.items.map((it) => it.label)}
+          selectedIndex={modal.index}
+          toggleKey="u"
+        />
+      ) : null}
       {modal?.kind === "reviewerPicker" ? (
         <MultiPickerModal
           title={modal.title}

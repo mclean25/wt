@@ -10,6 +10,7 @@ import * as logsCmd from "./commands/logs.ts";
 import * as openCmd from "./commands/open.ts";
 import * as baseCmd from "./commands/base.ts";
 import * as issueCmd from "./commands/issue.ts";
+import * as statusCmd from "./commands/status.ts";
 import * as claudeCmd from "./commands/claude.ts";
 import * as devCmd from "./commands/dev.ts";
 import * as restackCmd from "./commands/restack.ts";
@@ -36,6 +37,7 @@ commands:
   events      manage the optional GitHub webhook daemon
   remote      enter or run wt on the configured SSH remote
   base        show / set / clear a worktree's recorded fork base
+  status      show / assert a worktree's work status (agent-facing)
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
   claude      drive a worktree's Claude Code session (send / ls / kill)
   dev         start / stop / inspect a worktree's [dev_server]
@@ -60,6 +62,7 @@ const RUNNERS: Record<string, Runner> = {
   _remote: remoteExecCmd.run,
   _session: sessionExecCmd.run,
   base: baseCmd.run,
+  status: statusCmd.run,
   issue: issueCmd.run,
   claude: claudeCmd.run,
   dev: devCmd.run,

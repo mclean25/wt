@@ -135,8 +135,9 @@ const KEY_BLOCKS: Block[] = [
       { key: "l n", label: "new section (chord)" },
       { key: "L", label: "rename current section" },
       { key: "b", label: "set fork base (picker · b b confirms) · record only, never rebases" },
+      { key: "u", label: "set work status (picker · u u confirms, x clears) — same record as `wt status`" },
       { key: "R", label: "rebase/restack row — whole stack, or standalone onto base/main (/restack on conflict)" },
-      { key: "J / K", label: "move row · stack/folded section: move whole group" },
+      { key: "J / K", label: "move row · stack/folded section: move whole group (status sort: within same status)" },
     ],
   },
   {
@@ -200,7 +201,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "'", label: "outputs picker for this worktree" },
       { key: "' '", label: "confirm highlighted output (chord)" },
       { key: "[ / ]", label: "cycle prev / next output for this worktree" },
-      { key: '"', label: "jump to events for this worktree" },
+      { key: '"', label: "attention feed · press again for the full events firehose" },
       { key: "esc", label: "clear focus (return to follow-row auto)" },
     ],
   },
@@ -238,11 +239,22 @@ const STATUS_GLYPHS: GlyphItem[] = [
   { glyph: NF.unlink, color: theme.err, label: "missing (path vanished)" },
   { glyph: NF.slash, color: theme.warn, label: "gone (branch deleted upstream)" },
   { glyph: NF.merge, color: theme.ok, label: `merged into ${TRUNK}` },
-  { glyph: NF.pencil, color: theme.warn, label: "uncommitted changes" },
-  { glyph: "  ", color: theme.fgDim, label: "idle / clean", search: "idle clean" },
+  { glyph: "  ", color: theme.fgDim, label: "no status asserted", search: "idle clean no status" },
+];
+
+// The work-status dot (leftmost slot; `wt status` / `u`). One glyph,
+// color carries the state — mirror of `workStateColor` in badges.ts.
+const WORK_STATUS_GLYPHS: GlyphItem[] = [
+  { glyph: NF.dot, color: theme.err, label: "needs-human — blocked on you", search: "needs human blocked status" },
+  { glyph: NF.dot, color: theme.warn, label: "needs-testing — verification pending", search: "needs testing status" },
+  { glyph: NF.dot, color: theme.ok, label: "ready — tested, merge it", search: "ready merge status" },
+  { glyph: NF.dot, color: theme.info, label: "review — findings being addressed", search: "review status" },
+  { glyph: NF.dot, color: theme.accent, label: "working — implementation in flight", search: "working status" },
+  { glyph: NF.dotOutline, color: theme.fgDim, label: "todo — queued, not started", search: "todo status" },
 ];
 
 const BADGES: GlyphItem[] = [
+  { glyph: NF.pencil, color: theme.warn, label: "uncommitted changes", search: "dirty uncommitted" },
   { glyph: NF.prOpen, color: theme.accentAlt, label: "PR open" },
   { glyph: NF.prDraft, color: theme.fgDim, label: "PR draft" },
   { glyph: NF.prMerged, color: theme.info, label: "PR merged" },
@@ -306,6 +318,7 @@ const SYNC: GlyphItem[] = [
 ];
 
 const REFERENCE_BLOCKS: Block[] = [
+  { kind: "glyphs", title: "work status (wt status / u)", items: WORK_STATUS_GLYPHS },
   { kind: "glyphs", title: "status glyphs", items: STATUS_GLYPHS },
   { kind: "glyphs", title: "PR / CI badges", items: BADGES },
   { kind: "glyphs", title: "AI session states", cols: 2, glyphWidth: 3, items: AI_STATES },

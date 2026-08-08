@@ -29,6 +29,8 @@ export function stackIdFromSectionKey(key: string): string | null {
  */
 export const GROUP_INBOX = "\0inbox";
 
+import type { WorkStatusRecord } from "../work-status.ts";
+
 export type WtSlugState = {
   /** Section name. `null` = unsectioned (rendered at top, no header). */
   section: string | null;
@@ -79,6 +81,12 @@ export type WtSlugState = {
    * TUI's `i`/`y i` treat it as the most-specific link target.
    */
   githubIssue?: number;
+  /**
+   * Agent-asserted lifecycle status (`wt status` / the `u` picker).
+   * See `core/work-status.ts` for the vocabulary and semantics.
+   * Absent = never asserted (renders as no dot, sorts neutral).
+   */
+  work?: WorkStatusRecord;
 };
 
 /**

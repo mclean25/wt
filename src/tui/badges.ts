@@ -57,6 +57,11 @@ import {
   type Status,
   StatusKind,
 } from "../core/types.ts";
+import {
+  effectiveWorkState,
+  type WorkState,
+  type WorkStatusRecord,
+} from "../core/work-status.ts";
 
 import { NF } from "./icons.ts";
 import { theme } from "./theme.ts";
@@ -75,6 +80,50 @@ export function statusBadge(s: Status): Badge {
   if (s.kind === StatusKind.Merged) return { glyph: NF.merge, fg: theme.ok };
   if (s.kind === StatusKind.Dirty) return { glyph: NF.pencil, fg: theme.warn };
   return { glyph: NF.clean, fg: theme.fgDim };
+}
+
+/**
+ * Color for a work status (the agent-asserted lifecycle state). One
+ * hue per state, chosen so a scan down the dot column answers "what
+ * needs me": red = blocked on the human, yellow = verification
+ * pending, green = merge it, magenta = in review, cyan = in flight,
+ * dim = queued.
+ */
+export function workStateColor(state: WorkState): string {
+  switch (state) {
+    case "needs-human":
+      return theme.err;
+    case "needs-testing":
+      return theme.warn;
+    case "ready":
+      return theme.ok;
+    case "review":
+      return theme.info;
+    case "working":
+      return theme.accent;
+    case "todo":
+      return theme.fgDim;
+  }
+}
+
+/**
+ * The work-status dot — the list pane's leftmost glyph (the slot the
+ * old clean/dirty marker held; dirty moved into the badge cluster,
+ * clean renders nothing). Solid circle for every asserted state,
+ * hollow for `todo`; color is the whole signal. Derived upgrades from
+ * `effectiveWorkState` apply (a session asking for input renders the
+ * needs-human red even without an assertion). Null = blank slot.
+ */
+export function workStatusBadge(
+  record: WorkStatusRecord | null | undefined,
+  sessionState?: DerivedState,
+): Badge | null {
+  const eff = effectiveWorkState(record, sessionState);
+  if (!eff) return null;
+  return {
+    glyph: eff.state === "todo" ? NF.dotOutline : NF.dot,
+    fg: workStateColor(eff.state),
+  };
 }
 
 /** Glyph + color for a PR's state — used by row badge cluster AND details pr line. */

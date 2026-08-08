@@ -32,6 +32,7 @@ describe("parseRemoteWorktrees", () => {
       dirty: false,
       unpushed: 2,
       issueUrl: null,
+      workState: null,
     });
   });
 
@@ -40,7 +41,24 @@ describe("parseRemoteWorktrees", () => {
       slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
       status: "clean", status_label: "clean", dirty: false,
     }]), "cachy");
-    expect(row).toMatchObject({ unpushed: 0, statusOp: null });
+    expect(row).toMatchObject({ unpushed: 0, statusOp: null, workState: null });
+  });
+
+  test("parses a work state and drops unknown vocabulary", () => {
+    const rows = parseRemoteWorktrees(JSON.stringify([
+      {
+        slug: "a", branch: "a", path: "/a", stage: "a", exists: true,
+        status: "clean", status_label: "clean", dirty: false,
+        work_state: "needs-human",
+      },
+      {
+        slug: "b", branch: "b", path: "/b", stage: "b", exists: true,
+        status: "clean", status_label: "clean", dirty: false,
+        work_state: "from-the-future",
+      },
+    ]), "cachy");
+    expect(rows[0]?.workState).toBe("needs-human");
+    expect(rows[1]?.workState).toBeNull();
   });
 
   test("infers an init lock from older remote status labels", () => {

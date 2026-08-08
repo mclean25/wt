@@ -15,6 +15,7 @@ import {
   actionOutput,
   destroyOutput,
   eventsOutput,
+  firehoseOutput,
   sessionOutput,
   sortOutputs,
 } from "../../core/outputs.ts";
@@ -98,6 +99,7 @@ export function useOutputs(opts: {
 
     const lastEvtTs = evts[evts.length - 1]?.ts ?? Date.now();
     out.push(eventsOutput(lastEvtTs));
+    out.push(firehoseOutput(lastEvtTs));
 
     for (const run of actions.values()) {
       out.push(actionOutput(run));

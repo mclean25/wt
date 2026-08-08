@@ -4,9 +4,9 @@
 
 ## Layout
 
-- **List pane** (left): one line per worktree — slug, status glyphs, PR/CI badges, session indicators — grouped into sections, with stacks rendered as trees. A pinned "review requests" section surfaces PRs waiting on your review.
-- **Details pane** (right): the configured rows (`[ui].rows` in [configuration.md](configuration.md#ui)) for the selected worktree — branch, base, tracker issue, stage, PR, sessions, git state — then a rebase-state block (restacking / mid-rebase / conflict with the clashing files) when something is moving, plus the AI-generated title/description band when `[ai]` is configured.
-- **Bottom pane**: live outputs — harness sessions, action runs, event feeds. Auto-follows the selected row; `'` picks an output explicitly, `[` / `]` cycle, `Esc` returns to auto-follow.
+- **List pane** (left): one line per worktree — a work-status dot, slug, PR/CI badges, session indicators — grouped into sections, with stacks rendered as trees. The leftmost slot is the colored **work-status dot** (`wt status` / `u`: red needs-human, yellow needs-testing, green ready, magenta review, cyan working, hollow todo; blank when unasserted), overridden by the loud git states (busy op, missing, gone, merged); uncommitted changes show as a pencil in the right badge cluster. With `[ui] sort = "status"` (default), rows auto-sort inside each section by that urgency — the cursor follows the worktree, not the position. A pinned "review requests" section surfaces PRs waiting on your review.
+- **Details pane** (right): the configured rows (`[ui].rows` in [configuration.md](configuration.md#ui)) for the selected worktree — branch, base, tracker issue, work status (with risk, age, and note), stage, PR, sessions, git state — then a rebase-state block (restacking / mid-rebase / conflict with the clashing files) when something is moving, plus the AI-generated title/description band when `[ai]` is configured.
+- **Bottom pane**: live outputs — harness sessions, action runs, and two event feeds: the curated **attention** feed (status transitions, needs-you signals, errors — the default) and the full firehose. Auto-follows the selected row; `'` picks an output explicitly, `[` / `]` cycle, `"` jumps to attention (again for the firehose), `Esc` returns to auto-follow.
 - **Footer**: key legend, or a text prompt when one is active (`n` local new-worktree, `Ctrl+N` remote new-worktree, `L` rename section).
 
 Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the state files — plus the optional [GitHub webhook daemon](github-events.md) — invalidate exactly what changed. `r` re-fetches as a backstop; `Ctrl+R` (with confirm) nukes all cached data and refetches from scratch.
@@ -83,8 +83,9 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 |---|---|
 | `l` | section picker (`l l` confirms, `l n` creates a new section) |
 | `L` | rename the current section |
-| `J` / `K` | move the row (or its whole stack / folded group) down / up |
+| `J` / `K` | move the row (or its whole stack / folded group) down / up — under status sort, within the same status rank only |
 | `b` | base picker — record which branch this worktree forked from (`b b` confirms; record-only, never rebases) |
+| `u` | work-status picker (`u u` confirms, `x` clears) — same record as [`wt status`](cli.md#wt-status-slug-state--m-note---risk-r), minus the CLI's risk/note rules (you're the human it escalates to) |
 | `R` | rebase/restack the selected row — a stack member restacks the whole stack, a standalone worktree rebases onto its recorded base or trunk; same engine as [`wt restack`](stacked-prs.md) (fetch + reconcile + squash-safe replay). On a conflict bail it hands off automatically: `/restack` is injected into the failing worktree's session (cold-starting it if needed) to resolve and finish. Locks per chain, so different stacks/worktrees restack concurrently; members show the sync glyph while it runs (warn-tinted when mid-rebase). Refuses on an already-landed row — that's `c`'s job |
 
 ### Automations

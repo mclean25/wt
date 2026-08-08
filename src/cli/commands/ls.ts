@@ -49,6 +49,13 @@ export async function run(argv: string[]): Promise<number> {
           gh_issue_url: slugStates[w.slug]?.githubIssue
             ? githubIssueUrl(slugStates[w.slug]!.githubIssue!)
             : null,
+          // Work status (agent-asserted; see `wt status`). Rides this
+          // payload so `remoteWorktreesQuery` (the remote host's
+          // `wt ls --json`) carries statuses across SSH for free.
+          work_state: slugStates[w.slug]?.work?.state ?? null,
+          work_note: slugStates[w.slug]?.work?.note ?? null,
+          work_risk: slugStates[w.slug]?.work?.risk ?? null,
+          work_at: slugStates[w.slug]?.work?.at ?? null,
         };
       }),
     );

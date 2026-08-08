@@ -34,6 +34,7 @@ import { useAutoCopy } from "./hooks/useAutoCopy.ts";
 import { useLogTails } from "./hooks/useLogTails.ts";
 import { usePaste } from "./hooks/usePaste.ts";
 import { useTerminalFocus } from "./hooks/useTerminalFocus.ts";
+import { useWorkStatusEvents } from "./hooks/useWorkStatusEvents.ts";
 import { useWorktreeRows } from "./hooks/useWorktreeRows.ts";
 import { useStackSections } from "./hooks/useStackSections.ts";
 import { useVisualItems } from "./hooks/useVisualItems.ts";
@@ -53,6 +54,7 @@ import { handleNormalKey, type NormalKeysCtx } from "./keyboard/normal-keys.ts";
 import { handleRemovedViewKey } from "./keyboard/removed-view-keys.ts";
 import { makeActionPickerFlows } from "./flows/action-picker.ts";
 import { makeBaseFlows } from "./flows/base.ts";
+import { makeWorkStatusFlows } from "./flows/work-status.ts";
 import { makeDestroyFlows } from "./flows/destroy.ts";
 import { makeGithubPrFlows } from "./flows/github-pr.ts";
 import { makeWorktreeCreateFlows } from "./flows/new-worktree.ts";
@@ -101,6 +103,7 @@ export function App({ onExit }: Props) {
     archive,
     setSection,
     setBase,
+    setWorkStatus,
     swapOrder,
     placeSlug,
     renameSection,
@@ -205,6 +208,10 @@ export function App({ onExit }: Props) {
 
   const { wtStateForStacks, foldedSections, stackSectionLabels } =
     useStackSections(rows);
+
+  // Narrate work-status transitions (from any process) into the
+  // attention feed.
+  useWorkStatusEvents(wtStateForStacks.data);
 
   const cleanCandidates = useMemo(
     () => rows.filter((r) => isCleanCandidate(r)),
@@ -415,6 +422,15 @@ export function App({ onExit }: Props) {
     setBase,
   });
 
+  // Work-status picker flow (`u`) — extracted to `flows/work-status.ts`.
+  const { openStatusPicker, commitStatusPick } = makeWorkStatusFlows({
+    current,
+    setModal,
+    toast,
+    reportActionError,
+    setWorkStatus,
+  });
+
   // Destroy / clean / restack flows — extracted to `flows/destroy.ts`.
   // Rebuilt per render so the closures see fresh rows / selection.
   const {
@@ -586,6 +602,7 @@ export function App({ onExit }: Props) {
           refreshPerf: () => perf.refetch(),
           doPerfInvestigate,
           commitBasePick,
+          commitStatusPick,
           doYank,
           doClean,
           doRemove,
@@ -701,6 +718,7 @@ export function App({ onExit }: Props) {
       openSectionPicker,
       openSectionRename,
       openBasePicker,
+      openStatusPicker,
       openActionPicker,
       openReviewerPicker,
       doReplayStack,

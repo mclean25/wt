@@ -1,11 +1,12 @@
 import { useSyncExternalStore } from "react";
 
-import type { EventKind } from "../core/logger.ts";
+import type { EventChannel, EventKind } from "../core/logger.ts";
 
 export type WtEvent = {
   id: number;
   ts: number;
   level: EventKind;
+  channel: EventChannel;
   source: string; // "app" | slug | arbitrary
   text: string;
 };

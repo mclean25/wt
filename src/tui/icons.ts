@@ -24,6 +24,8 @@ export const NF = {
 	merge: "\u{F419}", // nf-oct-git_merge       — branch merged into main
 	pencil: "\u{F448}", // nf-oct-pencil         — uncommitted changes
 	clean: "\u{F06C}", // nf-fa-leaf             — clean working tree, at rest
+	dot: "\u{F111}", // nf-fa-circle            — work-status dot (asserted states)
+	dotOutline: "\u{F10C}", // nf-fa-circle_o    — work-status dot, todo (hollow)
 
 	// PR badges
 	prOpen: "\u{F407}", // nf-oct-git_pull_request

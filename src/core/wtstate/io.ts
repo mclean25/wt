@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 
 import { withFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
+import { parseWorkStatus } from "../work-status.ts";
 import { GROUP_INBOX, STACK_SECTION_PREFIX } from "./types.ts";
 import type { RemovedWorktree, WtSlugState, WtState } from "./types.ts";
 
@@ -73,6 +74,8 @@ export function parseWtState(raw: unknown): WtState {
       if (rec.automationsPaused === true) {
         slugs[k]!.automationsPaused = true;
       }
+      const work = parseWorkStatus(rec.work);
+      if (work) slugs[k]!.work = work;
     }
   }
   const rawOrder: string[] = [];

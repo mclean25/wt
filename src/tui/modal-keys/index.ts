@@ -14,6 +14,7 @@ import { handleReviewerPickerKey } from "./reviewers.ts";
 import { handleSectionPickerKey } from "./sections.ts";
 import {
   handleBasePickerKey,
+  handleStatusPickerKey,
   handleBranchPickerKey,
   handleOutputsPickerKey,
 } from "./pickers.ts";
@@ -59,6 +60,8 @@ export function handleSimpleModalKey(
       return handleBranchPickerKey(k, modal, ctx);
     case "basePicker":
       return handleBasePickerKey(k, modal, ctx);
+    case "statusPicker":
+      return handleStatusPickerKey(k, modal, ctx);
     case "yank":
       return handleYankKey(k, ctx);
     case "cleanConfirm":

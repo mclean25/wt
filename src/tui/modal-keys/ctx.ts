@@ -3,6 +3,7 @@ import type { KeyEvent } from "@opentui/core";
 
 import type { ActionDef } from "../../core/actions.ts";
 import type { HarnessId } from "../../core/harness/index.ts";
+import type { WorkState } from "../../core/work-status.ts";
 import type { Output } from "../../core/outputs.ts";
 import type { RemovedWorktree } from "../../core/wtstate.ts";
 import type { Modal } from "../modal-state.ts";
@@ -21,6 +22,10 @@ export type SimpleModalContext = {
   doPerfInvestigate: () => void;
   commitBasePick: (
     item: { label: string; branch: string | null },
+    slug: string,
+  ) => void;
+  commitStatusPick: (
+    item: { label: string; state: WorkState | null },
     slug: string,
   ) => void;
   doYank: (slug: string, label: string, value: string | null) => void;

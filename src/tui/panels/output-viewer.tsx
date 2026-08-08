@@ -5,7 +5,7 @@
  * components for the body.
  */
 import { actionRegistry } from "../../core/actions.ts";
-import { type Output, outputStatusLabel } from "../../core/outputs.ts";
+import { eventsOutputId, type Output, outputStatusLabel } from "../../core/outputs.ts";
 import { theme } from "../theme.ts";
 
 import {
@@ -42,7 +42,7 @@ function borderColor(o: Output): string {
 }
 
 function titleFor(o: Output): string {
-  if (o.kind === "events") return "events";
+  if (o.kind === "events") return o.title;
   if (o.kind === "session") return o.title;
   if (o.kind === "destroy") {
     return `destroy · ${o.slug ?? "?"} · running`;
@@ -73,7 +73,12 @@ export function OutputViewer({ output, height }: Props) {
 
 function OutputContent({ output, height }: { output: Output; height: number }) {
   if (output.kind === "events") {
-    return <ActivityContent height={height} />;
+    return (
+      <ActivityContent
+        height={height}
+        feed={output.id === eventsOutputId() ? "attention" : "firehose"}
+      />
+    );
   }
   if (output.kind === "destroy" && output.slug) {
     return <DestroyContent slug={output.slug} height={height} />;
