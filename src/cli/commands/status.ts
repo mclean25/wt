@@ -37,7 +37,7 @@ const VOCAB = `states (unique prefixes + nh/nt work):
   ${bold("review")}         under review (self-review / review bot / addressing findings)
   ${bold("needs-testing")}  built; manual verification pending — YOU own that testing
                  (dev env + browser), it is not a request for a human
-  ${bold("needs-human")}    blocked on Michael; ${bold("-m")} required: say exactly what you need
+  ${bold("needs-human")}    blocked on the human; ${bold("-m")} required: say exactly what you need
   ${bold("ready")}          tested & safe to merge; requires ${bold("--risk low|medium|high")}.
                  medium/high require ${bold("-m")} naming the notable impacts (end
                  users, coworker workflows, costs). High-value only — no noise.
@@ -59,7 +59,7 @@ function guidance(state: WorkState): string[] {
     case "working":
       return [
         `when implementation is done, keep going: review it, test it yourself on the dev env,`,
-        `then ${bold("wt status ready --risk <r>")}. Blocked on Michael? ${bold('wt status needs-human -m "<what you need>"')}`,
+        `then ${bold("wt status ready --risk <r>")}. Blocked on the human? ${bold('wt status needs-human -m "<what you need>"')}`,
       ];
     case "review":
       return [
@@ -74,12 +74,12 @@ function guidance(state: WorkState): string[] {
       ];
     case "needs-human":
       return [
-        `Michael will see this. Keep making progress on anything not blocked,`,
+        `The human will see this. Keep making progress on anything not blocked,`,
         `and assert the next status the moment you're unblocked.`,
       ];
     case "ready":
       return [
-        `leave the PR ready for Michael to merge — do NOT merge it yourself.`,
+        `leave the PR ready for the human to merge — do NOT merge it yourself.`,
         `make sure the PR body reflects the final state of the change.`,
       ];
   }
@@ -247,13 +247,13 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     ]);
   }
   if (state === "ready" && risk !== "low" && !note) {
-    return err(`ready --risk ${risk} requires -m: what should Michael know before merging?`, [
+    return err(`ready --risk ${risk} requires -m: what should the human know before merging?`, [
       "high-value only — end-user impact, coworker disruption, cost, irreversibility",
       `(e.g. "calendar integrations may need a resync", "not reasonably testable").`,
     ]);
   }
   if (state === "needs-human" && !note) {
-    return err("needs-human requires -m: what exactly do you need from Michael?", [
+    return err("needs-human requires -m: what exactly do you need from the human?", [
       `e.g. -m "dev-env Google login expired — log me back in via the open browser"`,
     ]);
   }

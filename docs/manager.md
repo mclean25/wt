@@ -14,7 +14,7 @@ Deliberately thin: wt ships no manager-specific engine. The manager is an ordina
 [[actions]]
 id     = "brief-manager-needs-human"
 name   = "Brief manager: needs human"
-prompt = "{{slug}} asserted needs-human. Read `wt status {{slug}}`, triage: if you can unblock it yourself (gh operations, fleet knowledge), do so and set the next status on its behalf; otherwise summarize what Michael must do."
+prompt = "{{slug}} asserted needs-human. Read `wt status {{slug}}`, triage: if you can unblock it yourself (gh operations, fleet knowledge), do so and set the next status on its behalf; otherwise summarize what the human must do."
 target = "manager"
 
 [[automations]]

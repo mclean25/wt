@@ -28,8 +28,8 @@ describe("issueIdForSlug", () => {
 
 describe("repoWebUrl", () => {
   test("scp-style ssh remote", () => {
-    expect(repoWebUrl("git@github.com:TransitivIO/cozee-dev.git")).toBe(
-      "https://github.com/TransitivIO/cozee-dev",
+    expect(repoWebUrl("git@github.com:acme/webapp.git")).toBe(
+      "https://github.com/acme/webapp",
     );
   });
 

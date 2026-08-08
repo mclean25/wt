@@ -51,7 +51,7 @@ function parse(argv: string[]): Flags | { error: string } {
     slug,
     open: !noOpen && isInteractive(),
     install: !noInstall,
-    // Multiple positionals are one input: `wt new COZ-1953 fix calendar`
+    // Multiple positionals are one input: `wt new ENG-1953 fix calendar`
     // reads as id + pasted title (parseInput slugifies the tail).
     raw: positionals.length > 0 ? positionals.join(" ") : undefined,
     any,

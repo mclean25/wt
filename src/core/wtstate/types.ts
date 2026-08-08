@@ -74,7 +74,7 @@ export type WtSlugState = {
   /**
    * GitHub issue number attached to this worktree as its SECONDARY id
    * — the primary id stays the tracker id parsed from the slug
-   * (`coz-1935-…` → COZ-1935). Set by `wt new --gh <n>` or `wt issue
+   * (`eng-1935-…` → ENG-1935). Set by `wt new --gh <n>` or `wt issue
    * <slug> --gh <n>`, typically after a spec/breakout issue is created
    * mid-work (which is why it's state, not part of the branch name:
    * renaming a pushed branch to encode it would be disruptive). The

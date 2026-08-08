@@ -4,7 +4,7 @@ import { config } from "./config.ts";
 // a branch. Independent of `[issue_tracker]` — they parse *input*, not
 // config. The URL shape is Linear's (the one tracker with a known
 // paste-a-URL format); the bare-id shape matches any Linear/Jira/
-// Shortcut/Cozee-style id (`ENG-1234`, `COZ-1953`).
+// Linear/Jira/Shortcut-style id (`ENG-1234`, `ABC-1953`).
 export const ISSUE_URL_RE = /linear\.app\/[^/]+\/issue\/([A-Z]+-\d+)/i;
 export const ISSUE_ID_RE = /^[A-Z]+-\d+$/i;
 

@@ -18,7 +18,7 @@ const USAGE = `usage: wt issue <slug>              show the worktree's issue ids
        wt issue <slug> --clear-gh   detach the secondary GitHub issue
 
 <slug> also accepts a branch name. The primary id comes from the slug
-(coz-1935-… → COZ-1935); --gh never changes the branch.`;
+(eng-1935-… → ENG-1935); --gh never changes the branch.`;
 
 export async function run(argv: string[]): Promise<number> {
   const [first, ...rest] = argv;

@@ -6,6 +6,8 @@
 
 Each row shows live status, PR state, preview deployment, issue link, and coding-agent session activity (Claude Code, Codex, OpenCode) for one worktree, so the whole pile of in-progress work is visible on one screen. The details pane can also pull an AI-generated title and description for each branch from a local OpenAI-compatible LLM endpoint or Google's Gemini API.
 
+The design principle behind all of it: **the human does only the work only a human can do** (merges, logins, judgment calls). Agents assert a per-worktree work status (`wt status` — blocked-on-you / needs-testing / ready-to-merge, with a merge-risk level), the list auto-sorts by what needs you, automations ping only when human action is genuinely required, and a singleton manager session coordinates the fleet. The full rationale and agency model: **[docs/fleet.md](docs/fleet.md)**.
+
 ![screenshot](docs/screenshot.png)
 
 ## Requirements
@@ -64,7 +66,9 @@ The full reference — every option, default, the `[[actions]]` menu, and `[[aut
 
 ## Use
 
-`wt` with no arguments launches the TUI; press `?` inside for the full keymap and glyph legend. Subcommands (`wt new`, `wt rm`, `wt clean`, `wt restack`, …) run the same operations one-shot from a shell.
+`wt` with no arguments launches the TUI; press `?` inside for the full keymap and glyph legend. Subcommands (`wt new`, `wt rm`, `wt clean`, `wt status`, `wt restack`, `wt manager`, …) run the same operations one-shot from a shell — `wt status` in particular is built for coding agents to call from inside their worktrees, and prints next-step guidance when they do.
+
+The bottom pane defaults to a curated **attention feed** (status transitions, needs-you signals, errors); `"` cycles to the full event firehose. `m` attaches the [manager session](docs/manager.md), the singleton fleet coordinator.
 
 An optional `[remote]` SSH target lets `Ctrl+N` create worktrees on a second
 machine while keeping them in a server-named section of the same list;
@@ -83,7 +87,7 @@ State is push-based: filesystem watchers on git refs, worktree dirs, and wt's ow
 | [docs/cli.md](docs/cli.md) | every subcommand and flag |
 | [docs/configuration.md](docs/configuration.md) | complete config.toml reference |
 | [docs/automations.md](docs/automations.md) | the `[[automations]]` engine: triggers, settle windows, breaker |
-| [docs/fleet.md](docs/fleet.md) | fleet management: the why behind work statuses, and the agency levels |
+| [docs/fleet.md](docs/fleet.md) | the philosophy: minimal human work, work statuses, and the agency levels |
 | [docs/manager.md](docs/manager.md) | the manager session: the singleton fleet coordinator (`m` / `wt manager`) |
 | [docs/github-events.md](docs/github-events.md) | push-based PR/CI updates via a repo webhook |
 | [docs/stacked-prs.md](docs/stacked-prs.md) | stacked PRs: fork-base records, inferred stacks, `wt restack` |

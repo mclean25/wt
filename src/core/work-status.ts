@@ -30,7 +30,7 @@ import type { DerivedState } from "./harness/status.ts";
  *                      it is not a request for the human to test.
  *  - `needs-human`   — blocked on the human (login/creds, a decision,
  *                      a test only they can run). The only state that
- *                      means "Michael must act". Note required.
+ *                      means "the human must act". Note required.
  *  - `ready`         — tested as far as reasonable; safe to merge.
  *                      Carries a merge `risk` and, when notable, a
  *                      high-value impacts note (end users, coworker

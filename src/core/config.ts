@@ -61,7 +61,7 @@ export type SstConfig = {
 export type IssueTrackerConfig = {
   /**
    * URL template containing an `{id}` placeholder, substituted with the
-   * uppercased issue id (`COZ-1883`). Null when no template is
+   * uppercased issue id (`ENG-1883`). Null when no template is
    * configured or derivable — the issue row then shows the bare id.
    */
   urlTemplate: string | null;

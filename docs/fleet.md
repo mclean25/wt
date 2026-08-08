@@ -1,6 +1,16 @@
-# Fleet management — why this system exists
+# Philosophy — minimal human work
 
-The rationale doc. The mechanics live in [cli.md](cli.md#wt-status-slug-state--m-note---risk-r) (`wt status`), [automations.md](automations.md) (triggers, notify), [manager.md](manager.md) (the coordinator session), and [configuration.md](configuration.md#ui) (sort, rows, badges). This page records **the user problem, the design intent, and the agency levels** so future work stays aligned with them. When a change would bend one of these, this is the doc to update deliberately — not drift past.
+wt's intent doc. The mechanics live in [cli.md](cli.md#wt-status-slug-state--m-note---risk-r) (`wt status`), [automations.md](automations.md) (triggers, notify), [manager.md](manager.md) (the coordinator session), and [configuration.md](configuration.md#ui) (sort, rows, badges). This page records **the philosophy, the user problem, the design intent, and the agency levels** so future work stays aligned with them. When a change would bend one of these, this is the doc to update deliberately — not drift past.
+
+## The principle
+
+**The human does only the work only a human can do.** Everything else — anything agents are good at, anything deterministic code can express — belongs to agents or to wt itself. Concretely:
+
+- Merges, logins/credentials, judgment calls, and risk acceptance stay human. Almost nothing else should.
+- If a workflow contains a recurring human step, that's a backlog item, not a fact of life: move it to an agent (a skill, a convention, a manager play) or into wt (a watcher, an automation, a status rule).
+- This applies to **every changeset**, not just fleet features. Building anything in wt, ask: what human step does this create or leave behind, and what would it take for an agent or automation to absorb it? Designs that reduce human involvement win ties; designs that add a manual step need to justify it.
+
+The rest of this doc is that principle applied to wt's founding pain: coordinating a fleet of agent-driven worktrees.
 
 ## The pain
 
@@ -16,6 +26,7 @@ None of that was visible without opening each session and reading scrollback. Ag
 ## What "good" looks like
 
 - **One glance answers "what needs me."** The list pane, top to bottom, IS the priority queue.
+- **The human's queue only ever shrinks.** Agents and automations pull work OFF it (testing, triage, nudging, restacks); nothing wt adds should put new recurring work on it.
 - **Interruptions only when a human is genuinely required** — and then loudly (banner), not buried in a log.
 - **Zero noise.** A signal that fires when nothing changed, or a note that restates the diff, trains the reader to ignore the channel. Every surface here would rather stay silent than say something low-value.
 - **The human does only the human parts**: logins, judgment calls, final say on merges. Everything else is owned end-to-end by an agent.
@@ -46,7 +57,7 @@ The current contract. These are deliberate, not accidental — expanding one (sa
 - Assert every lifecycle transition (`wt status`), and never end a session without a clear one. Finishing means `ready --risk <r>` with only *notable* impacts in the note (end users, coworker workflows, cost, irreversibility) — or an honest `needs-testing`/`needs-human`.
 - Escalate `needs-human` **only** for genuine blockers: expired logins/creds, judgment calls, human-only checks. Keep working on whatever isn't blocked while waiting.
 - Ask fleet-level questions of the manager (`wt manager send`), not the human.
-- **Never merge a PR.** Never update the external tracker's (Cozee) status.
+- **Never merge a PR.** Never update the external issue tracker's status.
 
 **The manager** coordinates, and may act autonomously on anything reversible and fleet-scoped:
 
@@ -56,7 +67,7 @@ The current contract. These are deliberate, not accidental — expanding one (sa
 
 **wt itself** stays deterministic: automations fire once per instance (ledger), notifications only for the two states that mean "look at me" (`needs_human`, `ready` — the human merges manually, so ready IS actionable), and nothing edge-triggered or bespoke.
 
-**The human** keeps: merges, logins/credentials, final QA whenever he wants it, risk acceptance on medium/high `ready`s, Cozee status, and any expansion of the levels above.
+**The human** keeps: merges, logins/credentials, final QA whenever they want it, risk acceptance on medium/high `ready`s, external-tracker status, and any expansion of the levels above.
 
 ## Known deliberate omissions
 

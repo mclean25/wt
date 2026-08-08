@@ -180,7 +180,7 @@ export function parseNewInput(raw: string, defaultBase?: string): NewInput {
     }
   }
   if (positionals.length === 0) return { error: "missing input" };
-  // Multiple words are one input — `COZ-1953 fix calendar` reads as
+  // Multiple words are one input — `ENG-1953 fix calendar` reads as
   // id + pasted title (parseInput slugifies the tail).
   return { input: positionals.join(" "), anyAuthor, attach, gh, base };
 }

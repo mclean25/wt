@@ -176,7 +176,7 @@ Semantics:
 
 ## `[issue_tracker]` — optional integration
 
-Omit the section entirely to hide the `issue` row. The section's mere presence surfaces the issue id parsed from the branch slug (`michael/coz-1883-fix` → `COZ-1883`) as an unlinked value — useful when your tracker has no per-task URLs. Add `url_template` (or the Linear preset) to turn the id into a deep link, which also powers the `i` open-issue key and the `y i` yank.
+Omit the section entirely to hide the `issue` row. The section's mere presence surfaces the issue id parsed from the branch slug (`yourname/eng-1883-fix` → `ENG-1883`) as an unlinked value — useful when your tracker has no per-task URLs. Add `url_template` (or the Linear preset) to turn the id into a deep link, which also powers the `i` open-issue key and the `y i` yank.
 
 ```toml
 # Bare id display only — no per-task URLs exist:
@@ -201,7 +201,7 @@ Id parsing itself is driven by the slug shape (`[a-z]+-\d+`), independent of `[b
 
 **Built-in `GH-` convention:** an id with the `gh` prefix (`michael/gh-970-fix-typo` → `GH-970`) is taken to mean a GitHub issue on this repo and links to `<origin repo>/issues/970`, bypassing `url_template`. The repo URL is derived from the main clone's `origin` remote (ssh, scp, or https forms; bare ssh-config aliases can't be resolved, so those ids render unlinked). No configuration — this works even with a bare `[issue_tracker]` section. (With `prefix` set, GH-led ids can't *create* worktrees — the supported shape there is the secondary id below.)
 
-**Secondary GitHub issue:** independent of the slug id, a worktree can carry an attached GitHub issue number (`wt new … --gh 970`, `wt issue <slug> --gh 970` — see [cli.md](cli.md)). The issue row shows it after the primary (`COZ-1935 · #970`), and it becomes the most-specific target for `i` / `y i`; `I` / `y I` keep targeting the primary.
+**Secondary GitHub issue:** independent of the slug id, a worktree can carry an attached GitHub issue number (`wt new … --gh 970`, `wt issue <slug> --gh 970` — see [cli.md](cli.md)). The issue row shows it after the primary (`ENG-1935 · #970`), and it becomes the most-specific target for `i` / `y i`; `I` / `y I` keep targeting the primary.
 
 ## `[ai]` — optional integration
 

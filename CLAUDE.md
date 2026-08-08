@@ -22,7 +22,7 @@ Commit and push directly to `main`. Don't create feature branches, don't open PR
 - `docs/tui.md` — keymap + panes. Any keybinding change updates it (and `src/tui/panels/help.tsx`, the in-app source of truth).
 - `docs/cli.md` — subcommands + flags. Any CLI change updates it.
 - `docs/automations.md`, `docs/github-events.md`, `docs/stacked-prs.md`, `docs/manager.md` — per-feature semantics.
-- `docs/fleet.md` — the INTENT layer: the user pain the work-status/manager system exists to solve, and the agency levels (what agents/the manager may do autonomously vs. what stays with the human). **Read it before changing anything status/manager/automation-shaped**; a change that bends an agency level updates that doc in the same commit, deliberately.
+- `docs/fleet.md` — the philosophy/INTENT layer: the minimal-human-work principle, the user pain the work-status/manager system solves, and the agency levels (what agents/the manager may do autonomously vs. what stays with the human). **Read it before changing anything status/manager/automation-shaped**; a change that bends an agency level updates that doc in the same commit, deliberately.
 - `docs/discord.md` — the Discord server wiring (#updates digest workflow, #github repo webhook, badge, secrets inventory). Any change to `.github/workflows/discord-digest.yml`, the repo's webhooks, or community surfaces updates it.
 - `README.md` — concise front door; it links out rather than duplicating. Keep it short.
 
@@ -35,6 +35,7 @@ Commit and push directly to `main`. Don't create feature branches, don't open PR
 
 ## Working principles
 
+- **Offload the human, always.** wt exists to shrink human involvement to the parts only a human can do — merges, logins/credentials, judgment calls, risk acceptance. Everything agents are good at, and everything deterministic code can do, moves to agents or into wt itself. This is top of mind for EVERY changeset: when building, apply it automatically (don't add a manual step where a watcher, an automation, a status assertion, or a manager briefing could absorb it); when designing, actively propose moving existing human work to agents or code. The intent doc is docs/fleet.md — read it before status/manager/automation-shaped work, and update it in the same commit when a change moves the human/agent boundary.
 - **Source fetches stay batched.** The github source is one GraphQL round-trip aliasing every per-worktree PR field plus the repo `mergeQueue` block. Never split it into per-row fetches; rate limits and latency are real. New PR fields go into `PR_FRAGMENT` in `core/github/fetch.ts` rather than getting their own query.
 - **AI summary is hash-keyed.** `aiSummaryQuery`'s queryKey is `["aiSummary", <hash>]`; equivalent diffs across rebases/amends/renames hit the same entry. "Previous summary stays visible while a new hash fetches" comes from `placeholderData: keepPreviousData` at the observer — no mismatch effect, no force-regen flag; the hash flipping IS the trigger. `refreshAiSummary` (`t`) refetches the diff context and `removeQueries` the entry for the resulting hash.
 - **Pluginify reactively.** Built-ins now, plugins only when there's a second concrete implementation that justifies the seam. Don't pre-design for "what if someone wants Jira."
