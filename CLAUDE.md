@@ -22,6 +22,7 @@ Commit and push directly to `main`. Don't create feature branches, don't open PR
 - `docs/tui.md` — keymap + panes. Any keybinding change updates it (and `src/tui/panels/help.tsx`, the in-app source of truth).
 - `docs/cli.md` — subcommands + flags. Any CLI change updates it.
 - `docs/automations.md`, `docs/github-events.md`, `docs/stacked-prs.md`, `docs/manager.md` — per-feature semantics.
+- `docs/fleet.md` — the INTENT layer: the user pain the work-status/manager system exists to solve, and the agency levels (what agents/the manager may do autonomously vs. what stays with the human). **Read it before changing anything status/manager/automation-shaped**; a change that bends an agency level updates that doc in the same commit, deliberately.
 - `docs/discord.md` — the Discord server wiring (#updates digest workflow, #github repo webhook, badge, secrets inventory). Any change to `.github/workflows/discord-digest.yml`, the repo's webhooks, or community surfaces updates it.
 - `README.md` — concise front door; it links out rather than duplicating. Keep it short.
 
