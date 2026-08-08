@@ -171,32 +171,6 @@ const KEY_BLOCKS: Block[] = [
   },
   {
     kind: "keys",
-    title: "hub mode (wt hub)",
-    note: "Tmux-hosted task inbox: left = tasks, right = live session. Typing always goes to the session; drive wt with the \u2318 layer (terminal-translated \u2014 `wt hub keys alacritty|wezterm` prints the config; works from either pane). For rare classic actions: \u2318U to focus the tasks pane, type the letter, Esc back. Bottom groups: Remote (SSH worktrees, opened through a local wrapper session), Archived, Sessions. `wt classic` opens the three-pane TUI.",
-    items: [
-      { key: "\u2318J / \u2318K", label: "move through the inbox (session pane follows)" },
-      { key: "\u23181-9", label: "jump straight to task N (dim ordinals)" },
-      { key: "\u2318L", label: "open/show the task's agent session \u00b7 repeat: toggle pane focus" },
-      { key: "\u2318D / \u2318S", label: "diff / shell view \u00b7 repeat: toggle pane focus" },
-      { key: "\u2318U / Esc", label: "focus the tasks pane / bounce back to the session" },
-      { key: "\u2318E", label: "expand/collapse stack or the Sessions group" },
-      { key: "\u2318Z / \u2318P", label: "snooze until state changes / pin to top" },
-      { key: "\u2318I", label: "toggle the details card" },
-      { key: "\u2318O / \u2318\u21e7M", label: "open PR / toggle auto-merge" },
-      { key: "\u2318T", label: "new worktree" },
-      { key: "\u2318. / \u2318;", label: "action picker / sessions picker" },
-      { key: "\u2318W", label: "close the session gracefully (press twice); at a bare prompt closes the window" },
-      { key: "\u2318\u232b", label: "remove the worktree (confirm)" },
-      { key: "\u2318F", label: "zoom the session pane" },
-      { key: "\u2318R / \u2318/", label: "refresh / this help" },
-      { key: "q", label: "leave the hub, tasks pane focused (sessions keep running)" },
-      { key: "F7-F12", label: "legacy layer still works (focus/zoom/shell/diff/agent)" },
-      { key: "' [ ] \"", label: "output card: picker / cycle / events feed; Esc dismisses" },
-      { key: "h", label: "removed-worktrees history (browse/restore), tasks pane focused" },
-    ],
-  },
-  {
-    kind: "keys",
     title: "review requests (pinned section)",
     note: "PRs awaiting your review, pulled from GitHub. Not worktrees — only these keys apply.",
     items: [
@@ -233,7 +207,7 @@ const KEY_BLOCKS: Block[] = [
   {
     kind: "keys",
     title: "perf overlay (P)",
-    note: "\"is the machine slow because of us?\" — a filtered btop over everything descending from wt or its tmux server, grouped by category and by worktree session. Samples every 2s while open and not at all while closed. %cpu is a lifetime decaying average, so read it as sustained pressure rather than a profile. Classic mode only: in hub mode P is the pin toggle.",
+    note: "\"is the machine slow because of us?\" — a filtered btop over everything descending from wt or its tmux server, grouped by category and by worktree session. Samples every 2s while open and not at all while closed. %cpu is a lifetime decaying average, so read it as sustained pressure rather than a profile.",
     items: [
       { key: "j k", label: "scroll" },
       { key: "i", label: "send the snapshot to the wt session as a prompt, then enter it" },

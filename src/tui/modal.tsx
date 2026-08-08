@@ -22,7 +22,7 @@ const DEFAULT_INSET: Required<Inset> = {
 
 /**
  * Below this terminal width the viewport-relative insets stop making
- * sense — 20% of the hub's ~35-col task pane leaves a ~21-col modal.
+ * sense — 20% of a narrow terminal leaves an unusably thin modal.
  * Narrow viewports get a full-width, near-full-height frame instead
  * (caller insets included: whatever margin looked right at 130 cols
  * is wrong at 35).

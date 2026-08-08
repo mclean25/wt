@@ -1,17 +1,15 @@
 /**
- * Section divider shared by every panel that groups rows under a
- * labeled rule — the classic worktree list (`panels/list.tsx`) and the
- * task inbox (`panels/tasks.tsx`) rendered byte-identical copies of
- * this before it was factored out here; keep it that way rather than
- * letting either panel drift its own version.
+ * Section divider for every panel that groups rows under a labeled
+ * rule (the worktree list's manual sections, stack sections, and
+ * remote host groups).
  */
 import { theme } from "../theme.ts";
 
 /**
- * One style for every section — manual sections, auto-managed stack
- * sections, and task-inbox buckets all share the same muted rule + label.
- * An optional identity glyph belongs to the group itself (for example an SSH
- * server); row status still stays on each row.
+ * One style for every section — manual sections and auto-managed stack
+ * sections share the same muted rule + label. An optional identity
+ * glyph belongs to the group itself (for example an SSH server); row
+ * status still stays on each row.
  */
 export function Divider({
   label,

@@ -62,10 +62,7 @@ export function slotSessionResumeTarget(
 
 /**
  * Persist-before-spawn / conditional-rollback contract for a named
- * claude session, shared by `doSpawnNamedClaudeSession` below and its
- * hub-mode drop-in (`flows/hub.ts`'s `spawnNamedClaudeSession`, which
- * detaches + retargets instead of attaching but needs byte-for-byte
- * the same persistence semantics).
+ * claude session, used by `doSpawnNamedClaudeSession` below.
  *
  * Persist-before-spawn is intentional: a wt crash mid-spawn must
  * leave the name reachable on next start. The trade-off is a
@@ -77,15 +74,12 @@ export function slotSessionResumeTarget(
  * orphan it from the picker.
  *
  * `spawn`'s return type is generic (bounded only by `{ ok: boolean }`)
- * rather than pinned to the full result shape either caller's
- * underlying spawn call returns (`enterHarnessSession`'s `AttachResult`
- * for the classic flow, `ensureSessionDetached`'s `{ ok, created }` /
- * `{ ok, reason }` for the hub flow) — those two shapes disagree, and
- * this helper only needs the `ok` discriminant to decide whether to
- * roll back. Callers that need the extra detail (e.g. classic's
- * detached-vs-exited messaging) get it back verbatim through the
- * (generic, discriminated) return value / their own closure — see the
- * two call sites.
+ * rather than pinned to the caller's full spawn-result shape
+ * (`enterHarnessSession`'s `AttachResult`) — this helper only needs
+ * the `ok` discriminant to decide whether to roll back. Callers that
+ * need the extra detail (e.g. detached-vs-exited messaging) get it
+ * back verbatim through the (generic, discriminated) return value /
+ * their own closure.
  */
 export async function withNamedClaudePersistence<T extends { ok: boolean }>(
   slug: string,
@@ -288,11 +282,11 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
    * duplicate state mutation).
    *
    * The persist-before-spawn / rollback contract lives in
-   * `withNamedClaudePersistence` above (shared with the hub-mode
-   * drop-in); this function's `spawn` closure captures the full
-   * `enterHarnessSession` result in `attachResult` so the
-   * detached-vs-exited-vs-failed messaging below — which the shared
-   * helper doesn't know about — still has it to work with.
+   * `withNamedClaudePersistence` above; this function's `spawn`
+   * closure captures the full `enterHarnessSession` result in
+   * `attachResult` so the detached-vs-exited-vs-failed messaging
+   * below — which the shared helper doesn't know about — still has it
+   * to work with.
    */
   function doSpawnNamedClaudeSession(slug: string, name: string): void {
     const row = rows.find((r) => r.wt.slug === slug);

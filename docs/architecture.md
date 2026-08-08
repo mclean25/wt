@@ -17,13 +17,13 @@ The list panel (`src/tui/panels/list.tsx`) is deliberately **not** row-driven �
 `src/tui/app.tsx` wires everything: state declarations, hook wiring, per-render flow factories, the ctx objects key handlers destructure, and the layout JSX. The pieces:
 
 - **Keyboard** — `src/tui/keyboard/` (`global-keys.ts`, `footer-input-keys.ts`, `removed-view-keys.ts`, `normal-keys.ts`) plus `src/tui/modal-keys/` (one file per modal family; `index.ts` is the dispatcher). The `useKeyboard` callback in app.tsx only routes, in load-bearing order: modal → footer input → removed view → `h` toggle → normal mode. Handler-check order *inside* `normal-keys.ts` is also load-bearing (see its header comment).
-- **Flows** — `src/tui/flows/` (`destroy.ts`, `sessions.ts`, `hub.ts`, `github-pr.ts`, `sections.ts`, `base.ts`, `reviewers.ts`, `new-worktree.ts`, `action-picker.ts`, `perf-report.ts` — per-render factories over a context object) and `src/tui/hooks/useActionDispatch.ts` (action launch + completion subscriber). New flow logic goes in a flows module, not back into app.tsx.
+- **Flows** — `src/tui/flows/` (`destroy.ts`, `sessions.ts`, `github-pr.ts`, `sections.ts`, `base.ts`, `reviewers.ts`, `new-worktree.ts`, `action-picker.ts`, `perf-report.ts` — per-render factories over a context object) and `src/tui/hooks/useActionDispatch.ts` (action launch + completion subscriber). New flow logic goes in a flows module, not back into app.tsx.
 - **Modal overlays** — `src/tui/modal-host.tsx` (`PreFooterModals` mount before the Footer, `PostFooterModals` after; render order is paint order). The modal union lives in `src/tui/modal-state.ts`; `modal.tsx` is the shared chrome component.
 - Pure helpers in `src/tui/app-helpers.ts`; title-bar badges in `src/tui/usage-badge.tsx`.
 
 ## Module layout conventions
 
-The big core modules are directories behind a same-named flat barrel: `core/github.ts` → `core/github/`, `core/wtstate.ts` → `core/wtstate/`, `core/stack-ops.ts` → `core/stack-ops/`, `core/actions.ts` → `core/actions/`, `core/tmux.ts` → `core/tmux/`, `core/hub.ts` → `core/hub/`, `state/queries.ts` → `state/queries/`. The barrel re-exports the module's public surface with explicit named re-exports — importers keep using the flat path; only names in the barrel are public. (`tui/modal-keys/` is a plain directory — its single consumer imports `index.ts` directly.)
+The big core modules are directories behind a same-named flat barrel: `core/github.ts` → `core/github/`, `core/wtstate.ts` → `core/wtstate/`, `core/stack-ops.ts` → `core/stack-ops/`, `core/actions.ts` → `core/actions/`, `core/tmux.ts` → `core/tmux/`, `state/queries.ts` → `state/queries/`. The barrel re-exports the module's public surface with explicit named re-exports — importers keep using the flat path; only names in the barrel are public. (`tui/modal-keys/` is a plain directory — its single consumer imports `index.ts` directly.)
 
 Per-harness code (claude/codex/opencode session discovery, naming, events, usage, tails) lives under `core/harness/<harness>/` behind the generic `Harness` interface (`core/harness/types.ts`); `core/harness/status.ts` is the shared `DerivedState` vocabulary.
 
@@ -46,7 +46,6 @@ Freshness is **push-based**; the `r` keybind is a backstop, not the mechanism. E
 | 3-minute `fetch origin` interval | backstop for remote drift |
 | claude-registry fs.watch, session-tail triggers (`gh pr …` / `git push` inside a session) | sessions / github |
 | action `affects` tags on completion | the declared domains (`git`, `github`, `dev` — the dev-server start/stop builtins declare `dev`, refreshing the slug's fields; a 15s poll backstops out-of-band crashes) |
-| hub session entry (`switchRight` retargets) + the on-screen re-stamp while a shown session streams output (`useHubController`) | `~/.cache/wt/task-focus.json` — the slug's last-focused stamp, which is what flips a task out of the `review-output` bucket; push-based, no polling |
 
 One deliberate exception: `perfSnapshotQuery` (the `P` overlay) polls as its *primary* mechanism, not as a backstop. Nothing emits an event when some process starts burning CPU, and the overlay's whole job is to show the number moving. It's gated hard on the modal being open (`enabled`), so it samples at 2s while visible and not at all otherwise, and it's excluded from the persister — a restored snapshot is a previous run's dead pids. Don't treat it as precedent for polling a source that *does* have a trigger available.
 
@@ -79,28 +78,6 @@ suspends the Mac renderer. Detaching returns to the same Mac Inbox.
 `d` forwards the normal `wt rm` command after confirmation, preserving the
 remote installation's lock and dirty-work safeguards while explicitly leaving
 any SST stage intact.
-
-Hub mode can't hand off the terminal, so it bridges the same `_session`
-SSH command through a local **wrapper session** on the inner tmux server
-(`core/tmux/remote-wrapper.ts`, reserved names `wt-remote~<slug>~<target>`
-excluded from classification and the orphan reaper) and retargets the right
-pane at it; wrapper death (SSH drop) is observed by the hub's liveness watch
-through the same `tmuxSessionsQuery` every other session kind uses. See
-[hub.md](hub.md#remote-worktrees).
-
-## Hub mode
-
-An opt-in second UI (`[ui] mode = "hub"` / `wt hub`) layered on top of the same
-worktree pipeline rather than a fork of it — see [hub.md](hub.md) for the full
-picture (tmux topology, bucket precedence, keymap). Two things worth knowing
-structurally:
-
-- `core/hub/` (behind the `core/hub.ts` barrel, alongside `core/tmux/`) owns
-  the outer `wt-hub` tmux server: layout (`layout.ts`), generated config
-  (`config.ts`), and the control surface the TUI drives it with —
-  `switchRight` retargeting the right pane, `focusLeft`/`focusRight`,
-  `killHub` (`control.ts`).
-- The task inbox gets its own pass at the sources/rows/driver split: `core/task-state.ts` is the pure bucket-precedence source (no queries, no fs — fully unit-tested), `src/tui/hooks/useTaskRows.ts` is the rows-equivalent glue that turns the existing worktree-row pipeline plus review-request PRs into sorted `TaskItem[]`, and `src/tui/panels/tasks.tsx` (`TaskList`) is the driver — purely presentational, same badge/glyph machinery as `panels/list.tsx`.
 
 ## Modal UX rules
 

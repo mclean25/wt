@@ -189,8 +189,8 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
   // engine must not fire before it knows the pause flags.
   const wtStateReady = wtState.data !== undefined;
   const paused = !wtStateReady || wtState.data.automationsPaused === true;
-  // Freshness subscription extracted to `useGithubFresh` (shared with
-  // the hub task-inbox derivation — same persisted-cache hard rule).
+  // Freshness subscription extracted to `useGithubFresh` (same
+  // persisted-cache hard rule).
   const githubFresh = useGithubFresh(configured);
 
   // Everything the pass reads lives in a ref so the effects subscribe

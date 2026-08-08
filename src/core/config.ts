@@ -9,7 +9,7 @@
  * It then searches from the current directory upward for `.wt.toml`
  * and recursively merges that repository config over the user config.
  * Arrays replace wholesale. `WT_REPO_CONFIG` carries the selected file
- * into child processes whose working directory changes (notably hub/tmux).
+ * into child processes whose working directory changes (notably tmux).
  *
  * Required fields have no default — the loader collects every missing
  * or malformed field and exits with one human-readable error before
@@ -541,26 +541,8 @@ export type Config = {
      * hide any slot added in a later version from anyone who set it.
      */
     hiddenBadges: ReadonlySet<BadgeSlot>;
-    /**
-     * Which TUI a bare `wt` launches. `classic` is the three-pane
-     * worktree TUI; `hub` boots the tmux-hosted task-inbox layout
-     * (left task pane + live harness pane, see docs/hub.md). Both modes
-     * share all on-disk state — swap freely. `wt classic` / `wt hub`
-     * force a mode regardless of this setting.
-     */
-    mode: TuiMode;
-    /**
-     * Background color for hub mode's task pane and the outer tmux
-     * server's pane-border paint (see `applyHubPalette` in
-     * `tui/theme.ts` and `buildHubConfig` in `core/hub/config.ts`).
-     * `#RRGGBB` hex only. Defaults to the built-in Catppuccin Mocha
-     * base the hub palette otherwise hardcodes.
-     */
-    hubBackground: string;
   };
 };
-
-export type TuiMode = "classic" | "hub";
 
 /**
  * The glyph slots `tui/badge-cluster.tsx` composes, in cluster order.
@@ -654,9 +636,6 @@ const GENERIC_DEFAULTS = {
     // harmless — unknown ids drop silently at resolve time. "linear" is
     // accepted as a legacy alias for "issue" at resolve time.
     rows: ["branch", "base", "issue", "stage", "dev", "pr", "claude", "git"] as const,
-    // Catppuccin Mocha base — matches the owner's Alacritty theme
-    // (`~/.dotfiles/alacritty`) and `applyHubPalette`'s prior hardcode.
-    hubBackground: "#1E1E2E",
   },
   actions: [
     {
@@ -1016,21 +995,6 @@ function build(raw: Raw, errs: Errors): Config {
       );
     }
   }
-  const uiMode = errs.optEnum(
-    ui,
-    "ui",
-    "mode",
-    ["classic", "hub"] as const satisfies readonly TuiMode[],
-    "classic",
-  );
-  const hubBackgroundRaw = errs.optStr(ui, "hub_background", GENERIC_DEFAULTS.ui.hubBackground);
-  let hubBackground = GENERIC_DEFAULTS.ui.hubBackground;
-  if (/^#[0-9a-fA-F]{6}$/.test(hubBackgroundRaw)) {
-    hubBackground = hubBackgroundRaw;
-  } else {
-    errs.add("ui.hub_background must be a #RRGGBB hex color");
-  }
-
   const githubRaw = obj(raw.github);
   const githubEventsRaw = githubRaw ? obj(githubRaw.events) : null;
   const githubEventsSecretFile = githubEventsRaw
@@ -1092,7 +1056,7 @@ function build(raw: Raw, errs: Errors): Config {
     github,
     actions,
     automations,
-    ui: { rows, hiddenBadges, mode: uiMode, hubBackground },
+    ui: { rows, hiddenBadges },
   };
 }
 

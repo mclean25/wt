@@ -4,12 +4,7 @@ import { join } from "node:path";
 
 import { SESSION_SWITCH_EXIT_CODE } from "./naming.ts";
 
-/**
- * Path to the directory holding every generated tmux config (this
- * server's `tmux.conf` and hub mode's `hub-tmux.conf`) — shared so
- * `core/hub/config.ts` doesn't duplicate the `~/.cache/wt` join +
- * mkdir dance.
- */
+/** Path to the directory holding the generated `tmux.conf`. */
 export function configDir(): string {
   const dir = join(homedir(), ".cache", "wt");
   mkdirSync(dir, { recursive: true });
@@ -17,12 +12,8 @@ export function configDir(): string {
 }
 
 /**
- * Terminal-capability preamble shared verbatim by this server's config
- * and hub mode's outer-server config (`core/hub/config.ts`'s
- * `buildHubConfig`) — the hub's left pane runs `wt _taskpane` and its
- * right pane's client passes through into THIS server, so both need
- * identical truecolor / extended-keys / no-flash settings for the
- * passthrough to be transparent. Notable choices:
+ * Terminal-capability preamble for the wt server's generated config.
+ * Notable choices:
  *  - `status off` + `set-titles off`: no tmux chrome anywhere.
  *  - `alternate-screen off`: tmux fakes alt-screen for inner programs
  *    instead of switching the outer terminal's buffer, which removes
@@ -37,9 +28,9 @@ export function configDir(): string {
  *  - `extended-keys always` + `extended-keys-format csi-u` + `:extkeys`
  *    feature: lets tmux distinguish Shift+Enter from plain Enter so
  *    multiline shortcuts work through nested tmux/Codex/Claude sessions.
- *  - `:hyperlinks` preserves OSC 8 link boundaries through both direct
- *    xterm-family clients and the nested `tmux-256color` hub client, so
- *    the outer terminal does not have to guess where a URL ends.
+ *  - `:hyperlinks` preserves OSC 8 link boundaries through direct
+ *    xterm-family clients, so the outer terminal does not have to
+ *    guess where a URL ends.
  *  - Clipboard: `MouseDragEnd1Pane` pipes a completed selection to
  *    `pbcopy`, making drag-and-release match native macOS terminal copy
  *    behavior without enabling application-originated clipboard writes.
@@ -85,11 +76,8 @@ bind-key -n F12 if-shell -F '#{==:#{@wt-shortcut},harness}' 'detach-client' 'det
 
 /**
  * Write `content` to `path` only if it differs from what's already
- * there. Shared by this module's `writeConfig` and hub mode's
- * `writeHubConfig` — both need the same read-prev/compare/write-if-
- * changed shape, since callers on both sides use `changed` to decide
- * whether to kill+restart the affected tmux server (tmux only loads
- * its config at server start).
+ * there. Callers use `changed` to decide whether to kill+restart the
+ * tmux server (tmux only loads its config at server start).
  */
 export function writeIfChanged(path: string, content: string): { path: string; changed: boolean } {
   let prev = "";

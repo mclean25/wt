@@ -28,7 +28,7 @@
 // This module has been split into src/core/tmux/*.ts; this file is now
 // a thin barrel reproducing the original export surface.
 
-export { HUB_HOME_SESSION, TMUX_SOCKET, WT_SOURCE_SLUG, claudeSessionName, sessionName } from "./tmux/naming.ts";
+export { TMUX_SOCKET, WT_SOURCE_SLUG, claudeSessionName, sessionName } from "./tmux/naming.ts";
 export type { SessionKind } from "./tmux/naming.ts";
 
 export { buildConfig, writeConfig } from "./tmux/config.ts";
@@ -54,14 +54,5 @@ export { listAllSessionsRaw } from "./tmux/process.ts";
 
 export { attachOrCreate, ensureSessionDetached } from "./tmux/attach.ts";
 export type { AttachResult } from "./tmux/attach.ts";
-
-export {
-  ensureRemoteWrapperSession,
-  killRemoteWrapperSessions,
-  parseRemoteWrapper,
-  remoteWrapperName,
-  REMOTE_WRAPPER_PREFIX,
-} from "./tmux/remote-wrapper.ts";
-export type { RemoteSessionTarget, RemoteWrapperEntry } from "./tmux/remote-wrapper.ts";
 
 export { injectIntoSession } from "./tmux/inject.ts";

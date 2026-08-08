@@ -73,12 +73,6 @@ export function parseWtState(raw: unknown): WtState {
       if (rec.automationsPaused === true) {
         slugs[k]!.automationsPaused = true;
       }
-      if (rec.taskPinned === true) {
-        slugs[k]!.taskPinned = true;
-      }
-      if (typeof rec.taskSnoozedBucket === "string" && rec.taskSnoozedBucket.trim() !== "") {
-        slugs[k]!.taskSnoozedBucket = rec.taskSnoozedBucket;
-      }
     }
   }
   const rawOrder: string[] = [];

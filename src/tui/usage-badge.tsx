@@ -52,15 +52,7 @@ export function PrimaryHarnessBadge({ primary }: { primary: HarnessId }) {
  * Each source is gated to its primary so we don't scan rollouts / hit
  * the opencode DB when that harness isn't selected.
  */
-export function UsageBadge({
-  primary,
-  compact = false,
-}: {
-  primary: HarnessId;
-  /** Hub pane (~35 cols): percentages only — `21% · 5%` — no window
-   *  labels or reset countdowns, or the badge alone fills the bar. */
-  compact?: boolean;
-}) {
+export function UsageBadge({ primary }: { primary: HarnessId }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 30_000);
@@ -79,18 +71,6 @@ export function UsageBadge({
   if (primary === "opencode") {
     const cost = opencode.data;
     if (!cost) return null;
-    if (compact) {
-      return (
-        <box flexShrink={0} flexDirection="row">
-          <text>
-            <span fg={theme.fg}>{formatCost(cost.fiveHour)}</span>
-            <span fg={theme.fgDim}>{" · "}</span>
-            <span fg={theme.fg}>{formatCost(cost.sevenDay)}</span>
-            <span fg={theme.fgDim}>{" "}</span>
-          </text>
-        </box>
-      );
-    }
     return (
       <box flexShrink={0} flexDirection="row">
         <text>
@@ -128,12 +108,9 @@ export function UsageBadge({
     }
     nodes.push(
       <span key={`${c.key}-pct`} fg={pctColor(c.win.pct)}>
-        {compact ? `${c.win.pct}%` : `${c.key} ${c.win.pct}%`}
+        {`${c.key} ${c.win.pct}%`}
       </span>,
     );
-    // Compact drops the scope and countdown: the hub pane has ~35 cols and
-    // the percentages are what's being glanced at.
-    if (compact) continue;
     if (c.win.label) {
       nodes.push(
         <span key={`${c.key}-scope`} fg={theme.fgDim}>
@@ -151,7 +128,7 @@ export function UsageBadge({
   }
   nodes.push(
     <span key="tail" fg={theme.fgDim}>
-      {compact ? " " : " · "}
+      {" · "}
     </span>,
   );
 

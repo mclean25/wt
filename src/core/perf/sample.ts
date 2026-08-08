@@ -239,7 +239,7 @@ async function tmuxServerPid(signal?: AbortSignal): Promise<number | null> {
 // Checked in this order; first match wins. `test` deliberately precedes
 // `build` so `npm exec vitest run eslint-rules` is a test run, not a
 // lint, and `build` precedes `dev` so `vite build` isn't a dev server.
-const WT_RE = /\/\.?wt\/(bin|src)\/|(^|\/)wt\s+(ls|new|rm|hub|logs|doctor|classic)\b/;
+const WT_RE = /\/\.?wt\/(bin|src)\/|(^|\/)wt\s+(ls|new|rm|logs|doctor|status)\b/;
 const HARNESS_RE = /(^|\/|\s)(claude|codex|opencode)(\s|$)/;
 const TEST_RE = /\b(vitest|jest|playwright)\b|\bdeno\s+test\b/;
 const BUILD_RE = /\b(tsc|eslint|biome|esbuild|rollup|webpack|swc|prettier)\b|\bvite\s+build\b/;

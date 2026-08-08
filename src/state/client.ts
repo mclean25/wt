@@ -32,7 +32,9 @@ export const CACHE_DB = config.paths.cacheDb;
 // v9: TmuxSessionsData gained the required `remote` field (hub mode's
 // SSH wrapper sessions); a restored v8 entry would lack it and lie to
 // consumers about the declared non-optional type.
-const CACHE_BUSTER = "v9";
+// v10: hub mode removed — TmuxSessionsData dropped `remote` again, and
+// hub-only queries (task focus) should not restore.
+const CACHE_BUSTER = "v10";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

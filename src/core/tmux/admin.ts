@@ -5,17 +5,11 @@ import { run } from "../proc.ts";
 import {
   bareSlug,
   CLAUDE_NAMED_SEP,
-  HUB_HOME_SESSION,
   sessionName,
   SUFFIX,
   TMUX_SOCKET,
 } from "./naming.ts";
 import { killByName, listAllSessionsRaw } from "./process.ts";
-import {
-  parseRemoteWrapper,
-  REMOTE_WRAPPER_PREFIX,
-  type RemoteWrapperEntry,
-} from "./remote-wrapper.ts";
 
 const log = createLogger("[tmux]");
 
@@ -175,17 +169,12 @@ export type SessionClassification = {
   action: Set<string>;
   /** `[dev_server]` supervisor sessions (see core/dev-server.ts). */
   dev: Set<string>;
-  /** Local wrapper sessions for REMOTE worktree sessions (hub mode). */
-  remote: RemoteWrapperEntry[];
 };
 
 /**
  * Pure classifier behind `listSessions` — split out so the
  * (name → kind) logic is unit-testable without spawning a real tmux
- * server. See `listSessions` for the full semantics; the one thing to
- * know here is that `HUB_HOME_SESSION` (the reserved hub dashboard
- * session, not a worktree session of any kind) is excluded from every
- * returned set, including as a bare-slug claude entry.
+ * server. See `listSessions` for the full semantics.
  */
 export function classifySessions(names: Iterable<string>): SessionClassification {
   const claude: ClaudeSessionEntry[] = [];
@@ -196,20 +185,7 @@ export function classifySessions(names: Iterable<string>): SessionClassification
   const shell = new Set<string>();
   const action = new Set<string>();
   const dev = new Set<string>();
-  const remote: RemoteWrapperEntry[] = [];
   for (const name of names) {
-    // The reserved hub-home dashboard session isn't a worktree session
-    // of any kind — it must not surface as a claude session for slug
-    // "wt-hub-home" (or any other classified set). See naming.ts.
-    if (name === HUB_HOME_SESSION) continue;
-    // Remote wrapper sessions are reserved names too — carved out
-    // BEFORE the kind-suffix matching below, or `wt-remote~foo-diff`
-    // would surface as a local diff session for slug `wt-remote~foo`.
-    const wrapper = parseRemoteWrapper(name);
-    if (wrapper) {
-      remote.push(wrapper);
-      continue;
-    }
     if (name.endsWith(SUFFIX.codex)) {
       codex.add(name.slice(0, -SUFFIX.codex.length));
     } else if (name.endsWith(SUFFIX.opencode)) {
@@ -235,7 +211,7 @@ export function classifySessions(names: Iterable<string>): SessionClassification
       }
     }
   }
-  return { claude, claudeSlugs, codex, opencode, diff, shell, action, dev, remote };
+  return { claude, claudeSlugs, codex, opencode, diff, shell, action, dev };
 }
 
 /**
@@ -277,26 +253,14 @@ export async function listSessions(): Promise<
  */
 /**
  * Pure filter behind `reapOrphanedSessions` — split out (like
- * `classifySessions`) so the reserved-name whitelist is unit-testable
- * without a live tmux server. The reserved hub-home session isn't
- * slug-owned, so it can never appear in a caller's `liveSlugs` set on
- * its own merits — whitelist it directly rather than relying on every
- * caller to remember to add it alongside the slot-slug whitelist.
- * Remote wrapper sessions are likewise reserved: their slug lives on
- * the remote host, so it can never be in a LOCAL live-slug set; their
- * lifecycle is SSH-bound (the wrapper dies when its ssh exits), not
- * reap-driven.
+ * `classifySessions`) so the slug matching is unit-testable without a
+ * live tmux server.
  */
 export function orphanedSessions(
   sessions: Iterable<string>,
   liveSlugs: ReadonlySet<string>,
 ): string[] {
-  return [...sessions].filter(
-    (s) =>
-      s !== HUB_HOME_SESSION &&
-      !s.startsWith(REMOTE_WRAPPER_PREFIX) &&
-      !liveSlugs.has(bareSlug(s)),
-  );
+  return [...sessions].filter((s) => !liveSlugs.has(bareSlug(s)));
 }
 
 export async function reapOrphanedSessions(

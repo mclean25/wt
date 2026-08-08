@@ -346,8 +346,8 @@ export type PendingContext = {
 
 /**
  * Single forward pass over the tail's parsed entries, tracking the two
- * pieces of "what is the agent doing / blocked on" state the task-inbox
- * row needs. Entries arrive in chronological order (see
+ * pieces of "what is the agent doing / blocked on" state consumers
+ * need. Entries arrive in chronological order (see
  * `parseTailLines`), so walking forward and always overwriting on a
  * new match naturally lands on the *last* occurrence of each — the
  * last tool_use block of the last assistant entry, and the last

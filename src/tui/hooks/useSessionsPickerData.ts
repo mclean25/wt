@@ -23,8 +23,8 @@ export function useSessionsPickerData(opts: {
   const { modal, rows, currentHarnessSessions } = opts;
 
   // LLM-authored summary snippets for the picker's currently-open
-  // worktree OR Sessions slot (the hub opens the picker on slot tasks
-  // too — the query only needs a slug + path). Only fetched when the
+  // worktree OR Sessions slot (the query only needs a slug + path).
+  // Only fetched when the
   // picker is open (gated by `enabled`); the queryFn does light
   // tail-bounded disk reads cached by (mtime, size) so repeat opens
   // are essentially free.

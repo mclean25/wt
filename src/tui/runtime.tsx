@@ -165,16 +165,7 @@ async function reapStartup(): Promise<void> {
   }
 }
 
-export type RunTuiOpts = {
-  /**
-   * True when this process is the hub layout's left pane
-   * (`wt _taskpane`): the App renders the task inbox and drives the
-   * right pane via `core/hub` instead of the classic three-pane view.
-   */
-  hubPane?: boolean;
-};
-
-export async function runTui(opts: RunTuiOpts = {}): Promise<TuiExit> {
+export async function runTui(): Promise<TuiExit> {
   // Forward logger.event.* into the activity-pane store. CLI runs leave
   // this unset, so event-style log calls there go to the file only.
   setEventSink((e) => {
@@ -475,7 +466,7 @@ export async function runTui(opts: RunTuiOpts = {}): Promise<TuiExit> {
   return new Promise<TuiExit>((resolve) => {
     root.render(
       <QueryClientProvider client={wtClient.client}>
-        <App onExit={resolve} hubPane={opts.hubPane ?? false} />
+        <App onExit={resolve} />
       </QueryClientProvider>,
     );
   }).finally(async () => {

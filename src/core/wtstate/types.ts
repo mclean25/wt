@@ -79,10 +79,6 @@ export type WtSlugState = {
    * TUI's `i`/`y i` treat it as the most-specific link target.
    */
   githubIssue?: number;
-  /** Task-inbox pin (hub mode): pinned tasks sort above everything. Absent = unpinned. */
-  taskPinned?: true;
-  /** Bucket name the user snoozed this task at (hub mode). Stale when the derived bucket moves on; readers treat a mismatch as expired. */
-  taskSnoozedBucket?: string;
 };
 
 /**

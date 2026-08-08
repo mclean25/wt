@@ -60,8 +60,7 @@ export function paneTarget(name: string): string {
 /**
  * Run a tmux command on our private server; collect exit code + stderr.
  * `cwd` is pinned to `homedir()` rather than `run()`'s default
- * (`config.paths.mainClone`) for the same reason `hub/proc.ts`'s
- * `spawnTmux` pins it: the first client to touch a socket forks its
+ * (`config.paths.mainClone`): the first client to touch a socket forks its
  * tmux server, and that server inherits the client's cwd for its whole
  * life (see `tmuxClientCwd` in `core/tmux/attach.ts`). A worktree-
  * rooted cwd is dangerous there — if it's later deleted, the server is

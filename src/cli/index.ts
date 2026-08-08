@@ -19,9 +19,6 @@ import * as remoteCmd from "./commands/remote.ts";
 import * as remoteExecCmd from "./commands/_remote.ts";
 import * as sessionExecCmd from "./commands/_session.ts";
 import * as destroyCmd from "./commands/_destroy.ts";
-import * as hubCmd from "./commands/hub.ts";
-import * as taskpaneCmd from "./commands/_taskpane.ts";
-import * as homeCmd from "./commands/_home.ts";
 
 const HELP = `usage: wt <command> [options]
 
@@ -38,8 +35,6 @@ commands:
   skills      install wt's bundled workflow skills into a harness
   events      manage the optional GitHub webhook daemon
   remote      enter or run wt on the configured SSH remote
-  hub         launch the task-inbox hub layout (left tasks, right live session)
-  classic     launch the classic three-pane TUI regardless of [ui] mode
   base        show / set / clear a worktree's recorded fork base
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
   claude      drive a worktree's Claude Code session (send / ls / kill)
@@ -69,15 +64,6 @@ const RUNNERS: Record<string, Runner> = {
   claude: claudeCmd.run,
   dev: devCmd.run,
   _destroy: destroyCmd.run,
-  hub: hubCmd.run,
-  // `wt classic` forces the classic TUI even when `[ui] mode = "hub"`.
-  classic: async () => {
-    const { runTui } = await import("../tui/runtime.tsx");
-    await runTui({});
-    return 0;
-  },
-  _taskpane: taskpaneCmd.run,
-  _home: homeCmd.run,
 };
 
 export async function dispatch(argv: string[]): Promise<number> {

@@ -228,8 +228,8 @@ export async function attachOrCreate(opts: {
     // tmux only reads its config at server start, so a changed render
     // (different wt build, different outer TERM) only takes effect if
     // the server restarts. Killing it is free when nothing's running —
-    // but once long-lived sessions exist (a hub keeping harness
-    // sessions attached, another terminal's F12 session), killServer()
+    // but once long-lived sessions exist (another terminal's F12
+    // session, a detached harness still working), killServer()
     // here would cross-kill every one of them just because THIS
     // attach's config render happened to differ. Only kill on the
     // empty-server path; otherwise apply what tmux can hot-reload via
@@ -504,17 +504,17 @@ export async function attachOrCreate(opts: {
  * the same (slug, kind, managedName) just attaches to what this
  * created rather than spawning a second session.
  *
- * For hub mode and any other non-interactive caller that needs a
- * session to exist without taking over the terminal (unlike
- * `attachOrCreate`, which inherits stdio and blocks until the client
- * detaches). `kind: "action"` is excluded — action sessions have their
- * own lifecycle in `core/tmux/action-sessions.ts`.
+ * For any non-interactive caller that needs a session to exist without
+ * taking over the terminal (unlike `attachOrCreate`, which inherits
+ * stdio and blocks until the client detaches). `kind: "action"` is
+ * excluded — action sessions have their own lifecycle in
+ * `core/tmux/action-sessions.ts`.
  *
  * Uses `ensureConfig()`, NOT `writeConfig()` + `killServer()`: this can
  * run from arbitrary contexts (e.g. from inside the wt tmux server
- * itself, or from a hub that's keeping other sessions alive), where the
- * kill-server-on-config-change dance would be actively destructive. See
- * `ensureConfig`'s header for the full rationale.
+ * itself), where the kill-server-on-config-change dance would be
+ * actively destructive. See `ensureConfig`'s header for the full
+ * rationale.
  */
 export async function ensureSessionDetached(opts: {
   slug: string;

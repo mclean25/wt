@@ -8,12 +8,12 @@
  * to non-manual successes — the same manual-flag discrimination the
  * clobber guard in `runOptimisticMutation` uses.
  *
- * Extracted from `useAutomations` so the hub's task-inbox derivation
- * can honor the same hard rule (CLAUDE.md: persisted-cache PR data
- * must never fire) without duplicating the subscription. `enabled`
- * short-circuits the subscription for callers that only conditionally
- * care (automations gate on `configured`); once fresh, stays fresh
- * for the process lifetime.
+ * Extracted from `useAutomations` so other consumers can honor the
+ * same hard rule (CLAUDE.md: persisted-cache PR data must never fire)
+ * without duplicating the subscription. `enabled` short-circuits the
+ * subscription for callers that only conditionally care (automations
+ * gate on `configured`); once fresh, stays fresh for the process
+ * lifetime.
  */
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";

@@ -10,10 +10,9 @@ export type RemoteRunOptions = {
 };
 
 /**
- * Argv for an interactive (PTY-allocating) remote wt invocation. Shared
- * by the classic full-screen handoff (`runRemoteWt` interactive) and the
- * hub's local tmux wrapper sessions, so both ride the same timeouts and
- * transport encoding. Bound the TCP connect + detect a mid-session drop:
+ * Argv for an interactive (PTY-allocating) remote wt invocation — the
+ * full-screen handoff (`runRemoteWt` interactive). Bound the TCP
+ * connect + detect a mid-session drop:
  * without these, an unreachable host hangs on the OS connect timeout
  * (often 60s+) — for classic that's AFTER the renderer is already
  * suspended and the terminal handed off, a frozen blank screen. BatchMode

@@ -34,15 +34,6 @@ type Props = {
   mode: FooterMode;
   hint?: string;
   height?: number;
-  /**
-   * Hub mode: suppresses the trailing wt-source/dotfiles slot robots
-   * (the two `box` glyphs on the far right) on toast/input footers.
-   * The hub never renders a `legend`-mode footer at all — `app.tsx`
-   * returns `null` there instead — so `compact` only ever affects the
-   * toast/input branches; it doesn't do anything to a legend footer
-   * because the hub never reaches one.
-   */
-  compact?: boolean;
 };
 
 /** Status color for a slot's robot glyph; dim when no live session. */
@@ -50,7 +41,7 @@ function slotGlyphFg(harnessId: HarnessId, state: DerivedState | null): string {
   return state ? stateColor(harnessId, state) : theme.fgDim;
 }
 
-export function Footer({ mode, hint, compact = false }: Props) {
+export function Footer({ mode, hint }: Props) {
   // The two tail-less session slots (`,` wt-source and `/` dotfiles) get
   // permanent status robots bundled at the far right — wt-source first,
   // dotfiles to its right. No labels: position is the discriminator (the
@@ -103,16 +94,14 @@ export function Footer({ mode, hint, compact = false }: Props) {
           <text fg={theme.fgDim}>{hint}</text>
         </box>
       ) : null}
-      {compact ? null : (
-        <box flexShrink={0} marginLeft={1} flexDirection="row">
-          <box width={2} flexShrink={0}>
-            <text fg={slotGlyphFg(primary, wtState)}>{primaryGlyph}</text>
-          </box>
-          <box width={2} flexShrink={0}>
-            <text fg={slotGlyphFg(primary, dotfilesState)}>{primaryGlyph}</text>
-          </box>
+      <box flexShrink={0} marginLeft={1} flexDirection="row">
+        <box width={2} flexShrink={0}>
+          <text fg={slotGlyphFg(primary, wtState)}>{primaryGlyph}</text>
         </box>
-      )}
+        <box width={2} flexShrink={0}>
+          <text fg={slotGlyphFg(primary, dotfilesState)}>{primaryGlyph}</text>
+        </box>
+      </box>
     </box>
   );
 }

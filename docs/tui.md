@@ -115,10 +115,6 @@ instead of sending you hunting through worktrees.
 | `i` | send the snapshot to the wt-source session (`,`) as an investigation prompt, then enter that session |
 | `r` | resample now |
 
-**Classic mode only.** In [hub mode](hub.md) `P` is already the pin-task
-toggle, so the overlay has no trigger there. Use `wt classic` (or run the
-sampler outside the TUI) if you need it while working in the hub.
-
 Sampling runs only while the overlay is open (every 2s, four shell-outs)
 and stops entirely when it closes — nothing polls in the background, and
 the snapshot is never persisted to the query cache.
@@ -144,6 +140,3 @@ machine feels slow".
 
 Every list picker follows the same shape: the key that opened it confirms the highlight when pressed again (`l l`, `; ;`, `' '`, `! !`, `b b`, `v v`), `Enter` always confirms, `Esc`/`q`/`Ctrl+C` always cancel, `j`/`k` move, and digits `1`–`9` quick-pick when the list is short. Special rows get their own letter (`l n` new section, `! c` custom prompt, `; c` new claude session).
 
-## Hub mode
-
-An opt-in alternate UI: a prioritized task inbox instead of the three-pane list, next to a pane that's always a live coding-agent session. Driven by a ⌘ layer (Alacritty-translated, works from either pane): ⌘J/⌘K nav, ⌘L open session, ⌘D/⌘S diff/shell, ⌘H/Esc focus hops, ⌘1-9 task jump; rare classic actions stay plain letters with the task pane focused. `[ui] mode = "hub"` (see [configuration.md](configuration.md#ui)) makes it the default for a bare `wt`; `wt hub` / `wt classic` switch explicitly, and both views share all on-disk state. Full writeup: [docs/hub.md](hub.md).
