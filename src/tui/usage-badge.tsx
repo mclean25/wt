@@ -14,7 +14,10 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import type { ClaudeUsage } from "../core/harness/claude/usage.ts";
+import type {
+  ClaudeUsage,
+  UsagePeriod,
+} from "../core/harness/claude/usage.ts";
 import type { CodexUsage } from "../core/harness/codex/usage.ts";
 import { getHarness, type HarnessId } from "../core/harness/index.ts";
 import {
@@ -105,33 +108,56 @@ export function UsageBadge({
     nowMs,
   );
   if (!formatted) return null;
-  const { fiveHour: five, sevenDay: seven } = formatted;
-  if (compact) {
-    return (
-      <box flexShrink={0} flexDirection="row">
-        <text>
-          <span fg={pctColor(five.pct)}>{`${five.pct}%`}</span>
-          <span fg={theme.fgDim}>{" · "}</span>
-          <span fg={pctColor(seven.pct)}>{`${seven.pct}%`}</span>
-          <span fg={theme.fgDim}>{" "}</span>
-        </text>
-      </box>
+  // Either window can be absent — a plan may report no account-wide weekly
+  // limit — so the " · " separator rides with the second cluster instead of
+  // being emitted unconditionally, or a lone 5h reading trails a dangling dot.
+  const clusters = [
+    formatted.fiveHour ? { key: "5h", win: formatted.fiveHour } : null,
+    formatted.sevenDay ? { key: "7d", win: formatted.sevenDay } : null,
+  ].filter((c) => c !== null);
+  if (clusters.length === 0) return null;
+
+  const nodes: React.ReactNode[] = [];
+  for (const [i, c] of clusters.entries()) {
+    if (i > 0) {
+      nodes.push(
+        <span key={`${c.key}-sep`} fg={theme.fgDim}>
+          {" · "}
+        </span>,
+      );
+    }
+    nodes.push(
+      <span key={`${c.key}-pct`} fg={pctColor(c.win.pct)}>
+        {compact ? `${c.win.pct}%` : `${c.key} ${c.win.pct}%`}
+      </span>,
     );
+    // Compact drops the scope and countdown: the hub pane has ~35 cols and
+    // the percentages are what's being glanced at.
+    if (compact) continue;
+    if (c.win.label) {
+      nodes.push(
+        <span key={`${c.key}-scope`} fg={theme.fgDim}>
+          {` ${c.win.label}`}
+        </span>,
+      );
+    }
+    if (c.win.remaining) {
+      nodes.push(
+        <span key={`${c.key}-rem`} fg={theme.fgDim}>
+          {` (${c.win.remaining})`}
+        </span>,
+      );
+    }
   }
+  nodes.push(
+    <span key="tail" fg={theme.fgDim}>
+      {compact ? " " : " · "}
+    </span>,
+  );
+
   return (
     <box flexShrink={0} flexDirection="row">
-      <text>
-        <span fg={pctColor(five.pct)}>{`5h ${five.pct}%`}</span>
-        {five.remaining ? (
-          <span fg={theme.fgDim}>{` (${five.remaining})`}</span>
-        ) : null}
-        <span fg={theme.fgDim}>{" · "}</span>
-        <span fg={pctColor(seven.pct)}>{`7d ${seven.pct}%`}</span>
-        {seven.remaining ? (
-          <span fg={theme.fgDim}>{` (${seven.remaining})`}</span>
-        ) : null}
-        <span fg={theme.fgDim}>{" · "}</span>
-      </text>
+      <text>{nodes}</text>
     </box>
   );
 }
@@ -152,10 +178,15 @@ function pctColor(pct: number): string {
   return theme.fg;
 }
 
-type PctWindow = { pct: number; remaining: string | null };
+type PctWindow = {
+  pct: number;
+  remaining: string | null;
+  /** Model this window is scoped to, when it isn't account-wide. */
+  label: string | null;
+};
 type FormattedUsage = {
-  fiveHour: PctWindow;
-  sevenDay: PctWindow;
+  fiveHour: PctWindow | null;
+  sevenDay: PctWindow | null;
 };
 
 /**
@@ -166,17 +197,19 @@ type FormattedUsage = {
  * reset window briefly hits before the source rewrites its `resetsAt`.
  * The real value (and countdown) returns on the next refresh.
  */
-function pctWindow(
-  p: { utilization: number; resetsAt: string | null },
-  nowMs: number,
-): PctWindow {
+function pctWindow(p: UsagePeriod | null, nowMs: number): PctWindow | null {
+  if (!p) return null;
+  const label = p.label ?? null;
   if (p.resetsAt) {
     const t = Date.parse(p.resetsAt);
-    if (!Number.isNaN(t) && nowMs >= t) return { pct: 0, remaining: null };
+    if (!Number.isNaN(t) && nowMs >= t) {
+      return { pct: 0, remaining: null, label };
+    }
   }
   return {
     pct: Math.round(p.utilization),
     remaining: formatRemaining(p.resetsAt, nowMs),
+    label,
   };
 }
 
@@ -185,10 +218,10 @@ function formatPctUsage(
   nowMs: number,
 ): FormattedUsage | null {
   if (!usage) return null;
-  return {
-    fiveHour: pctWindow(usage.fiveHour, nowMs),
-    sevenDay: pctWindow(usage.sevenDay, nowMs),
-  };
+  const fiveHour = pctWindow(usage.fiveHour, nowMs);
+  const sevenDay = pctWindow(usage.sevenDay, nowMs);
+  if (!fiveHour && !sevenDay) return null;
+  return { fiveHour, sevenDay };
 }
 
 /**
