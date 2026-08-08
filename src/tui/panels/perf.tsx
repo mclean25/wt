@@ -8,6 +8,8 @@
  * Presentational only. Sampling lives in `core/perf.ts` behind
  * `perfSnapshotQuery`; this file never shells out.
  */
+import { useTerminalDimensions } from "@opentui/react";
+
 import {
   CATEGORY_LABEL,
   shortCommand,
@@ -41,13 +43,35 @@ function pct(n: number): string {
   return `${n.toFixed(0)}%`;
 }
 
-function gb(mb: number): string {
-  return `${(mb / 1024).toFixed(1)}G`;
+/** `34M` under a gig, `2.3G` above — `0.0G` reads as broken. */
+function mem(mb: number): string {
+  return mb >= 1000 ? `${(mb / 1024).toFixed(1)}G` : `${Math.max(0, Math.round(mb))}M`;
 }
 
 /** Fixed-width right-aligned cell, so columns line up without a table. */
 function pad(text: string, width: number): string {
   return text.length >= width ? text : " ".repeat(width - text.length) + text;
+}
+
+/** Left-aligned fixed-width cell, `…`-ellipsized when it doesn't fit. */
+function fit(text: string, width: number): string {
+  if (width <= 0) return "";
+  const cut = text.length > width ? `${text.slice(0, width - 1)}…` : text;
+  return cut + " ".repeat(width - cut.length);
+}
+
+/**
+ * Columns available INSIDE the modal's scroll area. Mirrors the Modal
+ * geometry (6% insets each side above the narrow cutoff, else full
+ * width; 1 border + 1 padding each side) minus room for the scrollbox
+ * scrollbar. Every row below is preformatted in JS to this budget —
+ * terminal cells never rely on the renderer clipping overlong text,
+ * which is exactly what used to wrap/garble long command lines.
+ */
+function useContentWidth(): number {
+  const { width } = useTerminalDimensions();
+  const modalW = width < 60 ? width : width - Math.round(width * 0.06) * 2;
+  return Math.max(36, modalW - 4 /* border+padding */ - 2 /* scrollbar */);
 }
 
 function Bar({
@@ -81,24 +105,26 @@ function MeterRow({
   max,
   trailing,
   color,
+  width,
 }: {
   label: string;
   value: number;
   max: number;
   trailing: string;
   color?: string;
+  /** Content budget; the trailing text is `…`-clipped to what remains. */
+  width: number;
 }) {
+  const trailW = Math.max(0, width - LABEL_W - BAR_W - 2);
   return (
     <box flexDirection="row">
       <box width={LABEL_W} flexShrink={0}>
-        <text fg={theme.fgDim}>{label}</text>
+        <text fg={theme.fgDim} wrapMode="none">{label}</text>
       </box>
       <box width={BAR_W} flexShrink={0}>
         <Bar value={value} max={max} color={color} />
       </box>
-      <box flexGrow={1} flexShrink={1}>
-        <text fg={theme.fg}>{"  "}{trailing}</text>
-      </box>
+      <text fg={theme.fg} wrapMode="none">{"  "}{fit(trailing, trailW).trimEnd()}</text>
     </box>
   );
 }
@@ -120,27 +146,47 @@ function SectionHeader({ title, note }: { title: string; note?: string }) {
   );
 }
 
-function ProcRow({ proc, ceiling }: { proc: PerfProc; ceiling: number }) {
+/**
+ * One process list: fully preformatted single-line rows
+ * (`cpu mem [session] command`), truncated in JS to the width budget.
+ * The session column sizes to the longest name present (capped), and
+ * near-idle rows are folded into a "+N idle" line — this is the
+ * "heaviest" list, and `sleep`/wrapper rows at 0% are noise.
+ */
+function ProcList({
+  procs,
+  ceiling,
+  width,
+}: {
+  procs: PerfProc[];
+  ceiling: number;
+  width: number;
+}) {
+  const shown = procs.filter((p) => p.cpu >= 0.5 || p.rssMb >= 100);
+  const visible = shown.length >= 3 ? shown : procs.slice(0, 3);
+  const hidden = procs.length - visible.length;
+  const sessions = visible.some((p) => p.session);
+  const sessW = sessions
+    ? Math.min(16, Math.max(...visible.map((p) => p.session?.length ?? 0)))
+    : 0;
+  // "  cpu% memM  [session  ]command…"
+  const cmdW = width - 5 - 1 - 5 - 2 - (sessions ? sessW + 2 : 0);
   return (
-    <box flexDirection="row">
-      <box width={7} flexShrink={0}>
-        <text fg={loadColor(proc.cpu / ceiling)}>{pad(pct(proc.cpu), 6)}</text>
-      </box>
-      <box width={7} flexShrink={0}>
-        <text fg={theme.fgDim}>{pad(gb(proc.rssMb), 6)}</text>
-      </box>
-      <box flexGrow={1} flexShrink={1} overflow="hidden">
-        <text fg={theme.fg} wrapMode="none" truncate>
-          {shortCommand(proc.command, 200)}
+    <box flexDirection="column">
+      {visible.map((p) => (
+        <text key={p.pid} wrapMode="none">
+          <span fg={loadColor(p.cpu / ceiling)}>{pad(pct(p.cpu), 5)}</span>
+          <span fg={theme.fgDim}>{pad(mem(p.rssMb), 6)}</span>
+          {"  "}
+          {sessions ? (
+            <span fg={theme.accentAlt}>{fit(p.session ?? "", sessW + 2)}</span>
+          ) : null}
+          <span fg={theme.fg}>{fit(shortCommand(p.command, cmdW), cmdW)}</span>
         </text>
-      </box>
-      {proc.session ? (
-        <box width={26} flexShrink={0} overflow="hidden">
-          <text fg={theme.accentAlt} wrapMode="none" truncate>
-            {"  "}
-            {proc.session}
-          </text>
-        </box>
+      ))}
+      {procs.length === 0 ? <text fg={theme.fgDim}>none</text> : null}
+      {hidden > 0 ? (
+        <text fg={theme.fgDim}>{`      + ${hidden} more near idle (<0.5% cpu, <100M)`}</text>
       ) : null}
     </box>
   );
@@ -215,6 +261,7 @@ export function PerfOverlay({
   }
 
   const ceiling = snapshot.cores * 100;
+  const contentW = useContentWidth();
   const injectLine =
     inject.kind === "sending" ? (
       <text fg={theme.accent}>sending snapshot to the wt session…</text>
@@ -245,19 +292,22 @@ export function PerfOverlay({
             label="cpu (all)"
             value={snapshot.systemCpu}
             max={ceiling}
+            width={contentW}
             trailing={`${pct(snapshot.systemCpu)} of ${pct(ceiling)} · ${snapshot.cores} cores`}
           />
           <MeterRow
             label="cpu (wt)"
             value={snapshot.wtCpu}
             max={ceiling}
-            trailing={`${pct(snapshot.wtCpu)} · ${gb(snapshot.wtRssMb)} rss`}
+            width={contentW}
+            trailing={`${pct(snapshot.wtCpu)} · ${mem(snapshot.wtRssMb)} rss`}
           />
           <MeterRow
             label="memory"
             value={snapshot.memUsedMb}
             max={snapshot.memTotalMb}
-            trailing={`${gb(snapshot.memUsedMb)} of ${gb(snapshot.memTotalMb)}`}
+            width={contentW}
+            trailing={`${mem(snapshot.memUsedMb)} of ${mem(snapshot.memTotalMb)}`}
           />
           <box flexDirection="row">
             <box width={LABEL_W} flexShrink={0}>
@@ -278,7 +328,8 @@ export function PerfOverlay({
               label={CATEGORY_LABEL[b.category]}
               value={b.cpu}
               max={ceiling}
-              trailing={`${pad(pct(b.cpu), 5)}  ${pad(gb(b.rssMb), 6)}  ${b.count} proc${b.count === 1 ? "" : "s"}`}
+              width={contentW}
+              trailing={`${pad(pct(b.cpu), 5)}  ${pad(mem(b.rssMb), 6)}  ${b.count} proc${b.count === 1 ? "" : "s"}`}
             />
           ))}
           {snapshot.categories.length === 0 ? (
@@ -293,10 +344,11 @@ export function PerfOverlay({
               {snapshot.sessions.map((s) => (
                 <MeterRow
                   key={s.name}
-                  label={s.name.slice(0, LABEL_W - 1)}
+                  label={fit(s.name, LABEL_W - 1).trimEnd()}
                   value={s.cpu}
                   max={ceiling}
-                  trailing={`${pad(pct(s.cpu), 5)}  ${pad(gb(s.rssMb), 6)}  ${s.summary}`}
+                  width={contentW}
+                  trailing={`${pad(pct(s.cpu), 5)}  ${pad(mem(s.rssMb), 6)}  ${s.summary}`}
                 />
               ))}
             </box>
@@ -307,21 +359,13 @@ export function PerfOverlay({
           title="heaviest processes downstream of wt"
           note="%cpu is a lifetime decaying average, not an instantaneous sample — read it as sustained pressure."
         />
-        <box flexDirection="column">
-          {snapshot.top.map((p) => (
-            <ProcRow key={p.pid} proc={p} ceiling={ceiling} />
-          ))}
-        </box>
+        <ProcList procs={snapshot.top} ceiling={ceiling} width={contentW} />
 
         <SectionHeader
           title="heaviest processes NOT downstream of wt"
           note="if the answer to 'why is my machine slow' is here, it isn't wt or the agents."
         />
-        <box flexDirection="column">
-          {snapshot.outsiders.map((p) => (
-            <ProcRow key={p.pid} proc={p} ceiling={ceiling} />
-          ))}
-        </box>
+        <ProcList procs={snapshot.outsiders} ceiling={ceiling} width={contentW} />
       </scrollbox>
     </Modal>
   );
