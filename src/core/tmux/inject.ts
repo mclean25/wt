@@ -67,9 +67,10 @@ async function startHarnessSessionDetached(
   slug: string,
   cwd: string,
   harnessId: HarnessId,
+  managedName: string | null,
 ): Promise<{ ok: boolean; reason?: string }> {
   const harness = getHarness(harnessId);
-  const name = sessionName(slug, harnessId);
+  const name = sessionName(slug, harnessId, managedName);
   // ensureConfig, NOT writeConfig: this can run from inside the wt tmux
   // server (e.g. `wt claude send` issued by another claude session),
   // where the rendered config differs and the kill-server-on-change
@@ -82,7 +83,7 @@ async function startHarnessSessionDetached(
     cwd,
     kind: harnessId,
     harness,
-    managedNameNorm: null,
+    managedNameNorm: managedName,
     resumeSessionId: null,
   });
   let proc: Bun.Subprocess;
@@ -208,6 +209,8 @@ export async function injectIntoSession(opts: {
   slug: string;
   cwd: string;
   harnessId?: HarnessId;
+  /** Claude-only named-session identity (the manager); null = primary. */
+  managedName?: string | null;
   text: string;
 }): Promise<{ ok: true; coldStarted: boolean } | { ok: false; reason: string }> {
   // Cross-process serialization per target session. Historically every
@@ -217,8 +220,9 @@ export async function injectIntoSession(opts: {
   // near-simultaneous injections interleave paste text and stray
   // Enters in one pane, and two cold starts race. Worktree targets get
   // the same guard for free (`wt claude send` vs the TUI's automations).
-  return withAsyncFileLock(`__inject__${sessionName(opts.slug, opts.harnessId ?? "claude")}`, () =>
-    injectIntoSessionUnlocked(opts),
+  return withAsyncFileLock(
+    `__inject__${sessionName(opts.slug, opts.harnessId ?? "claude", opts.managedName ?? null)}`,
+    () => injectIntoSessionUnlocked(opts),
   );
 }
 
@@ -226,17 +230,19 @@ async function injectIntoSessionUnlocked(opts: {
   slug: string;
   cwd: string;
   harnessId?: HarnessId;
+  managedName?: string | null;
   text: string;
 }): Promise<{ ok: true; coldStarted: boolean } | { ok: false; reason: string }> {
   const { slug, cwd, text } = opts;
   const harnessId = opts.harnessId ?? "claude";
-  const name = sessionName(slug, harnessId);
+  const managedName = opts.managedName ?? null;
+  const name = sessionName(slug, harnessId, managedName);
   const running = (
     await listAllSessionsRaw().catch(() => new Set<string>())
   ).has(name);
   let coldStarted = false;
   if (!running) {
-    const started = await startHarnessSessionDetached(slug, cwd, harnessId);
+    const started = await startHarnessSessionDetached(slug, cwd, harnessId, managedName);
     if (!started.ok) {
       return {
         ok: false,

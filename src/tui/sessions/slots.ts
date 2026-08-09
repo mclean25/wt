@@ -34,6 +34,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { config } from "../../core/config.ts";
+import { MANAGER_CLAUDE_NAME, MANAGER_SLUG } from "../../core/manager.ts";
 import { WT_SOURCE_SLUG } from "../../core/tmux.ts";
 
 /**
@@ -57,6 +58,14 @@ export type SessionSlot = {
   /** The keybinding that enters this slot — rendered as the footer's
    *  `[key]` button, colored by the slot's live-session state. */
   key: string;
+  /**
+   * Claude named-session identity, for slots that share a cwd with
+   * another slot (the manager, whose directory is the main clone's).
+   * Claude's primary-conversation UUID keys on the cwd alone, so two
+   * primary slots in one directory would be ONE conversation. Null =
+   * primary. See `core/manager.ts`.
+   */
+  claudeName: string | null;
 };
 
 /**
@@ -69,6 +78,7 @@ export const WT_SOURCE_SLOT: SessionSlot = {
   path: WT_REPO_PATH,
   label: "wt",
   key: ",",
+  claudeName: null,
 };
 
 /**
@@ -83,6 +93,7 @@ export const MAIN_CLONE_SLOT: SessionSlot = {
   path: config.paths.mainClone,
   label: "main",
   key: ".",
+  claudeName: null,
 };
 
 /**
@@ -96,6 +107,7 @@ export const DOTFILES_SLOT: SessionSlot = {
   path: join(homedir(), ".dotfiles"),
   label: "dotfiles",
   key: "/",
+  claudeName: null,
 };
 
 /**
@@ -107,13 +119,15 @@ export const DOTFILES_SLOT: SessionSlot = {
  * main clone so `gh`, repo context, and `wt status --all` all work.
  * Distinct from MAIN_CLONE_SLOT (`.`) — same directory, different
  * conversation: `.` is "pair on the main repo", this is "run the
- * fleet".
+ * fleet". The distinctness is the `claudeName`: without it, claude's
+ * cwd-keyed primary UUID would make `.` and `m` one conversation.
  */
 export const MANAGER_SLOT: SessionSlot = {
-  slug: "manager",
+  slug: MANAGER_SLUG,
   path: config.paths.mainClone,
   label: "manager",
   key: "m",
+  claudeName: MANAGER_CLAUDE_NAME,
 };
 
 /**

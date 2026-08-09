@@ -28,6 +28,7 @@ import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { createLogger } from "../../core/logger.ts";
 import { injectIntoSession } from "../../core/tmux.ts";
 import { StatusKind } from "../../core/types.ts";
+import { ensureManagerClaudeName } from "../../core/manager.ts";
 import { MANAGER_SLOT } from "../sessions/slots.ts";
 
 import {
@@ -298,15 +299,18 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           ? {
               slug: MANAGER_SLOT.slug,
               cwd: MANAGER_SLOT.path,
+              managedName: MANAGER_SLOT.claudeName,
               label: "manager",
               text: `[re: ${slug}] ${body}`,
             }
           : {
               slug,
               cwd: row.wt.path,
+              managedName: null,
               label: `${getHarness(primaryHarness).label} session`,
               text: body,
             };
+      if (def.target === "manager") ensureManagerClaudeName();
       const sessionLog = createLogger(slug);
       sessionLog.event.info(`${def.name} → ${target.label}`);
       ack(`sending ${def.name} to ${target.label}…`, theme.info, 2000);
@@ -314,6 +318,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
         slug: target.slug,
         cwd: target.cwd,
         harnessId: primaryHarness,
+        managedName: target.managedName,
         text: target.text,
       }).then(
         (res) => {

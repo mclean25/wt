@@ -15,6 +15,8 @@ import { startCodexEventPolling } from "../core/harness/codex/events.ts";
 import { harnessTailRegistry } from "../core/harness/tail.ts";
 import { startOpencodeEventPolling } from "../core/harness/opencode/events.ts";
 import { createLogger, flushLogger, setEventSink } from "../core/logger.ts";
+import { ensureManagerClaudeName, MANAGER_SLUG } from "../core/manager.ts";
+import { killHarnessSession, listAllSessionsRaw } from "../core/tmux.ts";
 import { reapDevServerFiles } from "../core/dev-server.ts";
 import { reapDestroyLogs } from "../core/logs.ts";
 import {
@@ -152,6 +154,18 @@ async function reapStartup(): Promise<void> {
     const protectedSlugs = new Set(live);
     for (const slug of SLOT_SLUGS) protectedSlugs.add(slug);
     await reapOrphanedSessions(protectedSlugs);
+    // One-time migration: the manager now lives as a NAMED claude
+    // session (`manager~manager`) with its own conversation UUID —
+    // the old bare `manager` primary shared main's conversation (same
+    // cwd → same cwd-keyed UUID). A leftover primary-form session
+    // would linger protected forever and confuse `m` (which no longer
+    // attaches it), so kill it here. New code never creates it.
+    ensureManagerClaudeName();
+    const tmuxLive = await listAllSessionsRaw().catch(() => new Set<string>());
+    if (tmuxLive.has(MANAGER_SLUG)) {
+      startupLog.warn("killing legacy primary-form manager session (shared main's conversation)");
+      await killHarnessSession(MANAGER_SLUG, "claude", null).catch(() => {});
+    }
     // Drop terminal action run dirs whose slug is gone OR that fall
     // beyond the rehydration window. Ordered before `boot` so the
     // boot scan only sees dirs we'll actually keep — saves a meta-

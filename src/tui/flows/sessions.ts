@@ -213,6 +213,9 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
     const slotLog = createLogger(slot.label);
     void (async () => {
       slotLog.event.info(`entering ${harness.label} session (F12 to detach)`);
+      // A named-identity slot (the manager) must have its claude name
+      // persisted before discovery or resume can see the conversation.
+      if (slot.claudeName !== null) addClaudeName(slot.slug, slot.claudeName);
       let resumeSessionId: string | null = null;
       let freshSlot = false;
       if (harness.singleSlot) {
@@ -241,6 +244,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         slug: slot.slug,
         cwd: slot.path,
         harnessId: primaryHarness,
+        managedName: slot.claudeName,
         // Surface the slot's label in claude's /resume listing so the
         // conversation is recognizable by name; ignored by codex /
         // opencode (their tmux name is the discriminator).

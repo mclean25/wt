@@ -15,10 +15,13 @@
  */
 import { config } from "../../core/config.ts";
 import { readPrimaryHarness } from "../../core/harness/primary.ts";
+import {
+  ensureManagerClaudeName,
+  MANAGER_CLAUDE_NAME,
+  MANAGER_SLUG,
+} from "../../core/manager.ts";
 import { attachOrCreate, injectIntoSession } from "../../core/tmux.ts";
 import { dim, green, red } from "../colors.ts";
-
-const MANAGER_SLUG = "manager";
 
 export async function run(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
@@ -42,10 +45,12 @@ export async function run(argv: string[]): Promise<number> {
       console.error(red("wt manager send requires a message"));
       return 2;
     }
+    ensureManagerClaudeName();
     const res = await injectIntoSession({
       slug: MANAGER_SLUG,
       cwd: config.paths.mainClone,
       harnessId: readPrimaryHarness(),
+      managedName: MANAGER_CLAUDE_NAME,
       text,
     });
     if (!res.ok) {
@@ -68,10 +73,12 @@ export async function run(argv: string[]): Promise<number> {
     console.error(red("wt manager (attach) needs a TTY — did you mean `wt manager send`?"));
     return 2;
   }
+  ensureManagerClaudeName();
   const result = await attachOrCreate({
     slug: MANAGER_SLUG,
     cwd: config.paths.mainClone,
     kind: readPrimaryHarness(),
+    managedName: MANAGER_CLAUDE_NAME,
   });
   if (result.kind === "spawn-failed") {
     console.error(red(result.reason));
