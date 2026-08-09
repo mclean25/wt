@@ -113,14 +113,33 @@ export async function lockChain(
 
 /** Retarget a branch's PR base to `expectedBase` when GitHub disagrees.
  *  The PR is resolved live (no cached number exists anymore); a branch
- *  with no PR, or a PR that already left OPEN, is left alone. */
+ *  with no PR, or a PR that already left OPEN, is left alone — EXCEPT
+ *  the one recoverable-by-human case below, which gets an attention
+ *  line instead of silence. */
 export async function retargetIfNeeded(
   branch: string,
   expectedBase: string,
   onLog: Logger,
 ): Promise<void> {
   const live = await viewPrInfo(branch);
-  if (!live || live.state !== "OPEN" || live.baseRefName === expectedBase) return;
+  if (!live) return;
+  // Deleting a merged parent's branch via the API (`gh pr merge
+  // --delete-branch`) makes GitHub CLOSE the child PRs that target it,
+  // unrecoverably — a closed PR can neither change base nor reopen once
+  // its base ref is gone. (The repo-level "automatically delete head
+  // branches" setting retargets children instead; see
+  // docs/stacked-prs.md.) The branch itself is fine — this replay just
+  // restacked it — so tell the human the one thing only they can do:
+  // open a fresh PR.
+  if (live.state === "CLOSED" && live.baseRefName !== expectedBase) {
+    log.attention.warn(
+      `${branch}: PR #${live.number} was closed by GitHub when its base branch was deleted — ` +
+        `the branch is restacked onto ${expectedBase}; open a fresh PR for it ` +
+        `(avoid \`gh pr merge --delete-branch\`; use the repo's auto-delete setting instead)`,
+    );
+    return;
+  }
+  if (live.state !== "OPEN" || live.baseRefName === expectedBase) return;
   const r = await retargetPrBase(live.number, expectedBase);
   if (r.ok) onLog(`  retargeted PR #${live.number} base → ${expectedBase}`);
   else onLog(`  warn: retarget PR #${live.number} base: ${r.error}`);

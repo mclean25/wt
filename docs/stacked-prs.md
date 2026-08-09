@@ -65,6 +65,18 @@ automations) reparents its children automatically when the branch is deleted —
 onto the deleted branch's own recorded base, anchors kept — so the stack heals
 itself as PRs land; the replay stays an explicit `R`/`wt restack`.
 
+**How the parent's branch gets deleted matters for the CHILD PRs.** With the
+repo's "automatically delete head branches" setting, GitHub retargets open
+child PRs to the merged parent's base (they survive and stay open). Deleting
+the branch by API — which is what `gh pr merge --delete-branch` does — makes
+GitHub **close** the child PRs instead, and a PR closed this way is
+unrecoverable: its base can't be edited and it can't reopen once the base ref
+is gone. The restack still replays the child branches fine; the engine detects
+the closed-by-base-deletion case during its retarget pass and raises an
+attention line telling you to open a fresh PR. Prefer the repo setting (or the
+web UI's post-merge "Delete branch" button, which also retargets) over
+`--delete-branch`.
+
 Restacks lock **per chain**, not globally: the engine takes every member's
 per-slug flock (the same locks creates/destroys use) for the duration, so
 disjoint stacks — and unrelated standalone worktrees — restack concurrently,
