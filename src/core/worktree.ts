@@ -483,10 +483,12 @@ async function syncMainDeps(cwd: string, beforeHead: string): Promise<void> {
   log.event.info(`${lockfile} changed on trunk — syncing main clone deps (${sync.label})`);
   const code = await runStreaming(sync.argv, { cwd });
   if (code === 0) {
-    log.event.ok("main clone deps synced");
+    log.event.ok("main clone deps synced", { toast: true });
   } else {
     log.warn("main clone dependency sync failed", { cwd, code, command: sync.label });
-    log.event.warn(`main clone deps sync failed (${sync.label} exit ${code}) — run it there by hand`);
+    log.event.warn(`main clone deps sync failed (${sync.label} exit ${code}) — run it there by hand`, {
+      toast: true,
+    });
   }
 }
 

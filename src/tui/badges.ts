@@ -117,14 +117,17 @@ export function workStateGlyph(state: WorkState): string {
  * clean renders nothing). Solid circle for every asserted state,
  * hollow for `todo`; color is the whole signal. Derived upgrades from
  * `effectiveWorkState` apply (a session asking for input renders the
- * needs-human red even without an assertion). Null = blank slot.
+ * needs-human red even without an assertion). A row with no assertion
+ * renders the same hollow dim dot as `todo` — "not started" is the
+ * honest default, and a blank slot reads as a rendering gap rather
+ * than a state. Render-time only: nothing is ever written back.
  */
 export function workStatusBadge(
   record: WorkStatusRecord | null | undefined,
   sessionState?: DerivedState,
-): Badge | null {
+): Badge {
   const eff = effectiveWorkState(record, sessionState);
-  if (!eff) return null;
+  if (!eff) return { glyph: NF.dotOutline, fg: theme.fgDim };
   return {
     glyph: workStateGlyph(eff.state),
     fg: workStateColor(eff.state),

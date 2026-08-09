@@ -50,17 +50,31 @@ export type EventRecord = {
 
 export type EventSink = (e: EventRecord) => void;
 
+/**
+ * Toast control for an event/attention emit. Attention-channel emits
+ * flash as a footer toast BY DEFAULT (attention means "worth
+ * interrupting a scan", and the toast is that interruption); firehose
+ * emits opt in with `{ toast: true }`. Either way the flag rides the
+ * emit, so a background toast is structurally guaranteed to have a
+ * pane line backing it — toasts are ephemeral, the feeds are the
+ * record. Inert when no toast sink is registered (CLI runs).
+ */
+export type EmitOpts = { toast?: boolean };
+
+export type ToastRecord = { level: EventKind; source: string; text: string };
+export type ToastSink = (t: ToastRecord) => void;
+
 export interface Logger {
   debug(msg: string, ctx?: object): void;
   info(msg: string, ctx?: object): void;
   warn(msg: string, ctx?: object): void;
   error(msg: string | Error, ctx?: object): void;
   event: {
-    info(text: string): void;
-    ok(text: string): void;
-    warn(text: string): void;
-    err(text: string): void;
-    dim(text: string): void;
+    info(text: string, opts?: EmitOpts): void;
+    ok(text: string, opts?: EmitOpts): void;
+    warn(text: string, opts?: EmitOpts): void;
+    err(text: string, opts?: EmitOpts): void;
+    dim(text: string, opts?: EmitOpts): void;
   };
   /**
    * Curated high-signal feed (see `EventChannel`). No `dim` on
@@ -69,10 +83,10 @@ export interface Logger {
    * the attention pane showed.
    */
   attention: {
-    info(text: string): void;
-    ok(text: string): void;
-    warn(text: string): void;
-    err(text: string): void;
+    info(text: string, opts?: EmitOpts): void;
+    ok(text: string, opts?: EmitOpts): void;
+    warn(text: string, opts?: EmitOpts): void;
+    err(text: string, opts?: EmitOpts): void;
   };
   child(source: string): Logger;
 }
@@ -83,6 +97,7 @@ const LVL_PAD = 5;
 const KIND_PAD = 4;
 
 let sink: EventSink | null = null;
+let toastSink: ToastSink | null = null;
 // Serialize writes through a promise chain so lines land in order.
 // Each `appendFile` reopens the file (fast, ~80μs on macOS APFS) so
 // daily rollover is automatic — we just recompute the path per write.
@@ -91,6 +106,10 @@ let initialized = false;
 
 export function setEventSink(fn: EventSink | null): void {
   sink = fn;
+}
+
+export function setToastSink(fn: ToastSink | null): void {
+  toastSink = fn;
 }
 
 /** Drain queued writes. Call from TUI/CLI shutdown before `process.exit`. */
@@ -105,17 +124,17 @@ export function createLogger(source: string): Logger {
     warn: (msg, ctx) => writeFile("WARN", source, msg, ctx),
     error: (msg, ctx) => writeError(source, msg, ctx),
     event: {
-      info: (text) => emit("info", source, text, "firehose"),
-      ok: (text) => emit("ok", source, text, "firehose"),
-      warn: (text) => emit("warn", source, text, "firehose"),
-      err: (text) => emit("err", source, text, "firehose"),
-      dim: (text) => emit("dim", source, text, "firehose"),
+      info: (text, opts) => emit("info", source, text, "firehose", opts),
+      ok: (text, opts) => emit("ok", source, text, "firehose", opts),
+      warn: (text, opts) => emit("warn", source, text, "firehose", opts),
+      err: (text, opts) => emit("err", source, text, "firehose", opts),
+      dim: (text, opts) => emit("dim", source, text, "firehose", opts),
     },
     attention: {
-      info: (text) => emit("info", source, text, "attention"),
-      ok: (text) => emit("ok", source, text, "attention"),
-      warn: (text) => emit("warn", source, text, "attention"),
-      err: (text) => emit("err", source, text, "attention"),
+      info: (text, opts) => emit("info", source, text, "attention", opts),
+      ok: (text, opts) => emit("ok", source, text, "attention", opts),
+      warn: (text, opts) => emit("warn", source, text, "attention", opts),
+      err: (text, opts) => emit("err", source, text, "attention", opts),
     },
     child: (sub) => createLogger(sub),
   };
@@ -126,13 +145,15 @@ function emit(
   source: string,
   text: string,
   channel: EventChannel,
+  opts?: EmitOpts,
 ): void {
   // Multiline text would corrupt the daily-log line format and overflow
   // the activity pane's fixed one-row-per-event layout. Split into one
   // record per line so each gets its own ts/source/kind prefix in both
   // sinks; preserve leading whitespace so indented blocks stay readable.
   const tag = channel === "attention" ? "ATTN " : "EVENT";
-  for (const line of splitEventLines(text)) {
+  const lines = splitEventLines(text);
+  for (const line of lines) {
     appendLine(
       `${ts()} ${tag} ${kind.padEnd(KIND_PAD)} ${source.padEnd(SRC_PAD)} ${line}\n`,
     );
@@ -142,6 +163,16 @@ function emit(
       } catch {
         // Sink errors must not break logging.
       }
+    }
+  }
+  // Toast the FIRST line only — the footer is a single row; the full
+  // text is in the pane feed this emit just wrote.
+  const wantToast = opts?.toast ?? channel === "attention";
+  if (wantToast && toastSink && lines.length > 0) {
+    try {
+      toastSink({ level: kind, source, text: lines[0]! });
+    } catch {
+      // Sink errors must not break logging.
     }
   }
 }

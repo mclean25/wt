@@ -855,12 +855,16 @@ class ActionRegistry {
     });
 
     const dur = formatDuration(endedAt - cur.startedAt);
+    // Success/failure toast: the run finishes minutes after whatever
+    // launched it (keystroke or automation), so the pane line alone is
+    // easy to miss. A kill is the immediate echo of the user's own
+    // keystroke — no toast.
     if (status === "succeeded") {
-      log.event.ok(`${slug}: ${cur.actionName} succeeded (${dur})`);
+      log.event.ok(`${slug}: ${cur.actionName} succeeded (${dur})`, { toast: true });
     } else if (status === "killed") {
       log.event.warn(`${slug}: ${cur.actionName} killed (${dur})`);
     } else {
-      log.event.err(`${slug}: ${cur.actionName} failed (${dur})`);
+      log.event.err(`${slug}: ${cur.actionName} failed (${dur})`, { toast: true });
     }
     this.scheduleCleanup();
   }

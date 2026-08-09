@@ -55,6 +55,7 @@ Commit and push directly to `main`. Don't create feature branches, don't open PR
 
 - Daily app log: `~/.cache/wt/logs/app/wt-YYYY-MM-DD.log` — read it when something looked wrong; event lines are tagged `EVENT` (`grep ' EVENT '` shows what the activity pane showed). Destroy logs: `~/.cache/wt/logs/<slug>-*.log` via `wt logs <slug>`.
 - Adding a log call: `createLogger(source)` at module top (or per-call for dynamic slugs). `log.event.X` when the user should see it in the activity pane; `log.debug/info/warn/error` for file-only. `log.error` does **not** auto-promote to the pane.
+- **Toasts vs. pane feeds — the contract.** The footer toast is a single latest-wins slot for "see this NOW"; the pane feeds are the record. Keystroke feedback (the flows' `ctx.toast(...)`) is toast-only and never logged — it acknowledges something the user just did. Background code never toasts directly: it rides the logger, where `log.attention.*` toasts by default (attention already means "worth interrupting a scan"; `{toast: false}` opts out) and `log.event.*` opts in with `{toast: true}` — reserved for async completions and failures whose trigger is long past (action finished, handoff sent, automation dispatched/failed, dep sync done). Consequence: every background toast has a pane line behind it, so a missed toast is always recoverable; and routine firehose chatter never toasts.
 
 ## Tooling
 

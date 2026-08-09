@@ -429,10 +429,13 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       text,
     }).then((res) => {
       if (res.ok) {
+        // Toast: the handoff lands well after the restack's own toast
+        // expired, and cold starts take seconds — worth an async ack.
         log.event.ok(
           res.coldStarted
             ? `started ${harness.label} session and sent ${skill}`
             : `sent ${skill} to ${harness.label} session`,
+          { toast: true },
         );
       } else {
         log.event.err(`${skill} handoff failed: ${res.reason} — run it by hand`);

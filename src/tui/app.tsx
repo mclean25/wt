@@ -68,6 +68,7 @@ import { useSessionsPickerData } from "./hooks/useSessionsPickerData.ts";
 import { PrimaryHarnessBadge, UsageBadge } from "./usage-badge.tsx";
 import { writeClipboard } from "../core/macos.ts";
 import { theme } from "./theme.ts";
+import { showToast } from "./toast.ts";
 import { type RemoteCreation } from "./remote-creation.ts";
 
 const appLog = createLogger("[app]");
@@ -158,7 +159,6 @@ export function App({ onExit }: Props) {
   // identity of the thing being renamed). Not folded into `modal`
   // because the rename UX uses the footer, not an overlay.
   const [pendingRename, setPendingRename] = useState<string | null>(null);
-  const toastTimer = useRef<Timer | null>(null);
 
   // Auto-tail every busy worktree so logs surface in the activity pane
   // without user intervention. Returns the active set so rows can flag
@@ -178,7 +178,7 @@ export function App({ onExit }: Props) {
   });
 
   // Bracketed paste → append into whichever text mode is active. No-op
-  // in legend/toast/confirm modes since paste only makes sense when the
+  // in legend/confirm modes since paste only makes sense when the
   // user is typing.
   usePaste((text) => {
     if (modal?.kind === "actionPicker" && modal.state.mode === "edit") {
@@ -366,13 +366,12 @@ export function App({ onExit }: Props) {
     refreshStack,
   });
 
+  // Keystroke-feedback toasts (see CLAUDE.md's toast contract): a thin
+  // wrapper over the module store so every flow keeps its familiar
+  // `(message, color, ms)` signature. Background code toasts through
+  // the logger's `{ toast: true }` opt instead — never through this.
   function toast(message: string, color = theme.ok, ms = 2500): void {
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    setFooter({ kind: "toast", message, color });
-    toastTimer.current = setTimeout(() => {
-      setFooter((f) => (f.kind === "toast" ? { kind: "legend" } : f));
-      toastTimer.current = null;
-    }, ms);
+    showToast(message, color, ms);
   }
 
   function quit(): void {

@@ -308,10 +308,14 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       }).then(
         (res) => {
           if (res.ok) {
+            // Toast: the "sending…" ack above has long expired by the
+            // time a cold start finishes, and this may be an automation
+            // dispatch with no keystroke to acknowledge.
             sessionLog.event.ok(
               res.coldStarted
                 ? `started ${target.label} and sent ${def.name}`
                 : `sent ${def.name} to ${target.label}`,
+              { toast: true },
             );
           } else {
             sessionLog.event.err(`inject failed: ${res.reason}`);

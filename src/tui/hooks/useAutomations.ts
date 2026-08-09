@@ -635,6 +635,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         markFiresDelivered(fire.fireKeys);
         wtLog.event.err(
           `auto ${rule.id} tripped breaker on ${target} — ${BREAKER_LIMIT} runs, condition never cleared; fix by hand to re-arm`,
+          { toast: true },
         );
         intents.current.delete(intent.id);
         continue;
@@ -661,7 +662,9 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       for (const s of fire.quiesceSlugs) occupiedSlugs.add(s);
       if (isRestack && fire.stackId) restackStacksInFlight.add(fire.stackId);
       if (isManagerRun) managerInFlight = true;
-      wtLog.event.info(`auto ${rule.id}: ${fire.detail} — running ${rule.run}`);
+      wtLog.event.info(`auto ${rule.id}: ${fire.detail} — running ${rule.run}`, {
+        toast: true,
+      });
       void execute(fire)
         .then(
           (outcome) => {
@@ -686,7 +689,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
             markFiresDelivered(fire.fireKeys);
             if (!breakerExempt) bumpBreaker(rule.id, target);
             const msg = err instanceof Error ? err.message : String(err);
-            wtLog.event.err(`auto ${rule.id} failed: ${msg}`);
+            wtLog.event.err(`auto ${rule.id} failed: ${msg}`, { toast: true });
           },
         )
         .finally(() => {

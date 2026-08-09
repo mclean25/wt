@@ -124,7 +124,8 @@ function statusKeepsGutter(kind: StatusKind): boolean {
 
 /**
  * Leftmost glyph — the loud git states (busy / missing / gone /
- * merged) when present, else the work-status dot, else blank.
+ * merged) when present, else the work-status dot (a dim hollow
+ * default when nothing is asserted, so the column never has holes).
  * Background refetch state is hinted via the spinner badge in the
  * right cluster instead, so it doesn't masquerade as a primary
  * status. Archived rows render dim.
@@ -139,7 +140,6 @@ function StatusMarker({
   const base = statusKeepsGutter(row.status.kind)
     ? statusBadge(row.status)
     : workStatusBadge(row.work, sessionState);
-  if (!base) return <text> </text>;
   const fg = row.archived ? theme.fgDim : base.fg;
   return <text fg={fg}>{base.glyph}</text>;
 }
@@ -163,7 +163,7 @@ function StackGutter({
     ? theme.fgDim
     : statusKeepsGutter(row.status.kind)
       ? statusBadge(row.status).fg
-      : workStatusBadge(row.work, sessionState)?.fg ?? theme.fgDim;
+      : workStatusBadge(row.work, sessionState).fg;
   const ord = stackOrdinalLabel(info.ordinal);
   return (
     <box flexShrink={0} flexDirection="row">
@@ -419,14 +419,17 @@ const RemoteRowView = memo(function RemoteRowView({
       : { kind: StatusKind.Clean, label: "ready" };
   // Remote rows have no badge cluster, so unlike local rows the dirty
   // pencil keeps the marker slot here; only a CLEAN remote row cedes it
-  // to the (SSH-carried) work-status dot.
-  const remoteWork =
-    isRemoteSummary(entry) && status.kind === StatusKind.Clean && entry.workState
-      ? workStatusBadge({ state: entry.workState, at: "" }, undefined)
-      : null;
+  // to the (SSH-carried) work-status dot — which, like local rows,
+  // defaults to the dim hollow dot when nothing is asserted.
   const marker =
-    remoteWork ??
-    (status.kind === StatusKind.Clean ? { glyph: " ", fg: theme.fgDim } : statusBadge(status));
+    status.kind === StatusKind.Clean
+      ? workStatusBadge(
+          isRemoteSummary(entry) && entry.workState
+            ? { state: entry.workState, at: "" }
+            : null,
+          undefined,
+        )
+      : statusBadge(status);
   const rawLabel = remoteEntryLabel(entry);
   const { id, rest } = slugLabel(rawLabel);
   const numId = id ? id.replace(/^[A-Z]+-/, "") : null;

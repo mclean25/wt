@@ -49,6 +49,7 @@ import { backfillActivityLog } from "./activity-backfill.ts";
 import { events } from "./activity-log.ts";
 import { attachFetchLogs } from "./fetch-log.ts";
 import { SLOT_SLUGS } from "./sessions/slots.ts";
+import { attachLoggerToasts } from "./toast.ts";
 
 const startupLog = createLogger("[startup]");
 
@@ -175,6 +176,8 @@ export async function runTui(): Promise<TuiExit> {
   setEventSink((e) => {
     events.append(e);
   });
+  // Logger emits carrying `{ toast: true }` also flash in the footer.
+  const detachToasts = attachLoggerToasts();
 
   const wtClient = createWtQueryClient();
   const invalidations = new InvalidationScheduler(wtClient.client);
@@ -506,6 +509,7 @@ export async function runTui(): Promise<TuiExit> {
     stopCodexEvents();
     stopOpencodeEvents();
     setEventSink(null);
+    detachToasts();
     // Must null the trigger sink BEFORE `wtClient.shutdown()`: a
     // debounce timer can still be pending here, and nulling the sink
     // first makes its late fire a no-op. Reordering these two lines
