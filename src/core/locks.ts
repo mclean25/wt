@@ -1,7 +1,7 @@
 import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { dlopen, FFIType, suffix } from "bun:ffi";
 
 import { config } from "./config.ts";
@@ -166,7 +166,19 @@ export function tryAcquireLock(
  */
 export function withFileLock<T>(name: string, fn: () => T): T {
   ensureLockDir();
-  const fd = openSync(lockPath(name), "a+");
+  return withFileLockAt(lockPath(name), fn);
+}
+
+/**
+ * `withFileLock` against an ABSOLUTE lock-file path instead of a name
+ * under the per-instance `lockDir`. For critical sections guarding
+ * MACHINE-GLOBAL files (skills.json): two isolated instances have two
+ * different lockDirs, so a lockDir-keyed name can't serialize them
+ * against each other — the lock must live beside the shared file.
+ */
+export function withFileLockAt<T>(lockFile: string, fn: () => T): T {
+  mkdirSync(dirname(lockFile), { recursive: true });
+  const fd = openSync(lockFile, "a+");
   try {
     flock(fd, LOCK_EX);
     return fn();

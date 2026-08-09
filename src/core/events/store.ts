@@ -16,7 +16,7 @@
  * reads them through the normal query path.
  */
 import { mkdirSync, readFileSync, renameSync, watch, writeFileSync, type FSWatcher } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
@@ -27,7 +27,7 @@ import type { MergeQueueEntry, PullRequest } from "../types.ts";
 const log = createLogger("[events]");
 
 /** Events dir sits beside the persisted query cache so it follows a moved `cache_db`. */
-export const EVENTS_DIR = join(dirname(config.paths.cacheDb), "events");
+export const EVENTS_DIR = join(config.paths.cacheRoot, "events");
 export const SNAPSHOT_NAME = "github.json";
 export const SNAPSHOT_PATH = join(EVENTS_DIR, SNAPSHOT_NAME);
 export const MARKER_NAME = "github.touch";

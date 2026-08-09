@@ -571,7 +571,6 @@ export function App({ onExit }: Props) {
   // Reviewer-picker flows (`v`) — extracted to `flows/reviewers.ts`.
   const { openReviewerPicker, submitReviewerPicker } = makeReviewerFlows({
     rows,
-    modal,
     setModal,
     toast,
     fetchContributors,

@@ -32,6 +32,15 @@ const SUBMIT_KEY_GAP_MS = 250;
 const PASTE_MAX_RETRIES = 3;
 /** Extra grace before a re-paste attempt. */
 const PASTE_RETRY_GRACE_MS = 1_000;
+/**
+ * Total elapsed budget for the verify/retry loop. The inject holds a
+ * cross-process per-session lock (multi-writer manager slot), and each
+ * retry can burn a grace + a full settle wait — unbounded, a few slow
+ * verifies queued on one session would push later writers past the
+ * lock's acquisition timeout and DROP their messages. Past the budget
+ * the current paste proceeds to submit as-is.
+ */
+const PASTE_VERIFY_BUDGET_MS = 20_000;
 
 /**
  * Wait until a freshly-started harness pane stops changing — meaning it
@@ -281,18 +290,34 @@ async function injectIntoSessionUnlocked(opts: {
     // wholesale with no error from tmux: waitForPaneReady can't tell
     // "settled and ready" from "settled and deaf". An accepted paste
     // always changes the pane text (inline, or Claude's "[Pasted text
-    // …]" placeholder), so an unchanged pane means the paste vanished —
-    // wait out another settle round and re-paste, bounded. The final
-    // attempt proceeds to submit regardless (pre-verify behavior).
-    for (let attempt = 0; ; attempt++) {
-      const before = (await capturePane(name))?.trim() ?? "";
-      await pasteBuffer(name, text);
-      await sleep(SUBMIT_DELAY_MS);
-      const after = (await capturePane(name))?.trim() ?? "";
-      if (after !== before || attempt >= PASTE_MAX_RETRIES) break;
-      log.warn("inject paste left no trace in pane; re-pasting", { name, attempt });
+    // …]" placeholder), so a pane still identical to the PRE-paste
+    // snapshot means the paste vanished — wait out another settle round
+    // and re-paste, bounded by attempts AND elapsed time (the lock-hold
+    // note on PASTE_VERIFY_BUDGET_MS). Every comparison is against the
+    // ORIGINAL pre-paste snapshot, and each retry re-checks it first —
+    // a first paste that merely RENDERED slowly is detected as landed
+    // and never double-pasted. Accepted residual (audited): on a warm
+    // pane that happens to be streaming unrelated output, ambient churn
+    // can mask a genuinely dropped paste (no retry — the pre-verify
+    // behavior); observed drops are cold-start-only, where the pane is
+    // static and the comparison is clean. The final attempt proceeds to
+    // submit regardless.
+    const prePaste = (await capturePane(name))?.trim() ?? "";
+    const verifyDeadline = Date.now() + PASTE_VERIFY_BUDGET_MS;
+    await pasteBuffer(name, text);
+    await sleep(SUBMIT_DELAY_MS);
+    for (let attempt = 0; attempt < PASTE_MAX_RETRIES; attempt++) {
+      let now = (await capturePane(name))?.trim() ?? "";
+      if (now !== prePaste || Date.now() >= verifyDeadline) break;
+      log.warn("inject paste left no trace in pane; waiting, then re-pasting", { name, attempt });
       await sleep(PASTE_RETRY_GRACE_MS);
       await waitForPaneReady(name);
+      // Late landing? The earlier paste may have rendered during the
+      // grace/settle — re-pasting on top would submit the text twice.
+      now = (await capturePane(name))?.trim() ?? "";
+      if (now !== prePaste) break;
+      await pasteBuffer(name, text);
+      await sleep(SUBMIT_DELAY_MS);
     }
     // Harnesses declare their own submit-key sequence: most take a
     // single Enter, but Claude Code and Codex receive the bracketed

@@ -14,16 +14,17 @@
  * be shared too — a second isolated instance (own cache_db) should not
  * re-ask questions the first already answered about the same global
  * files. Same write discipline as wtstate: atomic rename for readers,
- * a flock around read-modify-write for concurrent writers (the lock
- * lives in the per-instance lockDir, so cross-INSTANCE writers aren't
- * serialized — both sides are last-write-wins on a tiny JSON file,
- * acceptable for interactive-only writes).
+ * a flock around read-modify-write for concurrent writers. The lock
+ * file sits BESIDE this shared file (withFileLockAt), not in the
+ * per-instance lockDir — two isolated instances have different
+ * lockDirs, and a lockDir-keyed lock would let their read-modify-
+ * writes interleave and silently drop one side's update.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { withFileLock } from "../locks.ts";
+import { withFileLockAt } from "../locks.ts";
 import { createLogger } from "../logger.ts";
 
 const log = createLogger("[skills]");
@@ -73,7 +74,7 @@ function writeSkillsMemory(mem: SkillsMemory): void {
 }
 
 export function updateSkillsMemory(fn: (mem: SkillsMemory) => void): SkillsMemory {
-  return withFileLock("__skills__", () => {
+  return withFileLockAt(`${SKILLS_MEMORY_FILE}.lock`, () => {
     const mem = readSkillsMemory();
     fn(mem);
     writeSkillsMemory(mem);

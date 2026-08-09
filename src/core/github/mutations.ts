@@ -48,6 +48,9 @@ async function runGhMutation(
  * porcelain flag.
  */
 export async function enableAutoMerge(prId: string): Promise<GhActionResult> {
+  // Callers guard, but a raw GraphQL "Could not resolve to a node with
+  // the global id of ''" toast is useless — fail with a named reason.
+  if (!prId) return { ok: false, error: "missing PR node id" };
   return runGhMutation(
     [
       "gh", "api", "graphql",

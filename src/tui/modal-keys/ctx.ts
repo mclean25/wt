@@ -43,7 +43,9 @@ export type SimpleModalContext = {
   doCheckoutReview: (branch: string) => Promise<void>;
   doRestoreRemoved: (entry: RemovedWorktree) => Promise<void>;
   clearAll: () => Promise<void>;
-  submitReviewerPicker: () => Promise<void>;
+  submitReviewerPicker: (
+    picker: Extract<Modal, { kind: "reviewerPicker" }>,
+  ) => Promise<void>;
   commitSectionPick: (item: SectionPickerItem, slug: string) => void;
   consumePrTargetChord: (k: KeyEvent) => boolean;
   setLastMoveTarget: Dispatch<SetStateAction<string | null>>;

@@ -26,7 +26,7 @@ export function handleReviewerPickerKey(
     onMove: (next) => setModal({ ...modal, index: next }),
     // Enter / `v v` submit the checked SET — digits would ambiguously
     // toggle vs. submit, so they're off for multi-select.
-    onCommit: () => void submitReviewerPicker(),
+    onCommit: () => void submitReviewerPicker(modal),
     onCancel: () => setModal(null),
     confirm: ["v"],
     digits: false,

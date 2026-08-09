@@ -245,7 +245,17 @@ async function countsFor(
 
 /**
  * Ahead/behind of HEAD vs both the effective base and the branch's own
- * upstream. `remote` is null when the branch has never been pushed.
+ * upstream. `remote` is null only when the branch has no remote
+ * counterpart at all.
+ *
+ * No upstream configured does NOT mean never pushed: an explicit-
+ * refspec push (`git push origin <branch>` — how agents usually push)
+ * sets no tracking, and a restack's force-push keeps whatever tracking
+ * existed. When @{u} is missing, fall back to `origin/<branch>` if
+ * that ref exists — otherwise unpushed commits are invisible to every
+ * consumer of `remote` (most dangerously the `d` destroy escalation,
+ * which read a real unpushed commit as "0, safe to remove" during
+ * dogfooding).
  *
  * `effectiveBase` defaults to `origin/<config.branch.base>` (trunk).
  * Stacked worktrees pass the parent's branch instead so the brackets
@@ -262,7 +272,21 @@ export async function syncState(
     ["git", "rev-parse", "--abbrev-ref", "@{u}"],
     { cwd: wtPath },
   );
-  if (!hasUpstream) return { main, remote: null };
+  if (!hasUpstream) {
+    const branch = (
+      await runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
+    ).trim();
+    // Detached HEAD reports the literal "HEAD" — no branch, no counterpart.
+    if (!branch || branch === "HEAD") return { main, remote: null };
+    const originRef = `origin/${branch}`;
+    const originExists = await runQuiet(
+      ["git", "rev-parse", "--verify", "--quiet", originRef],
+      { cwd: wtPath },
+    );
+    if (!originExists) return { main, remote: null };
+    const remote = await countsFor(wtPath, `${originRef}...HEAD`);
+    return { main, remote };
+  }
   const remote = await countsFor(wtPath, "@{u}...HEAD");
   return { main, remote };
 }

@@ -7,10 +7,15 @@
  * reconcile-then-replay convenience. The genuinely hard part (anchored
  * rebase replay) lives in `RestackEngine`.
  */
+import { config } from "../config.ts";
 import { tryAcquireLock, type LockHandle } from "../locks.ts";
 import { createLogger } from "../logger.ts";
 import { retargetPrBase, viewPrInfo } from "../github.ts";
+import { runQuiet } from "../proc.ts";
 import { resolveChain, type RestackChain } from "./chain.ts";
+
+/** PRs already warned about as closed-by-base-deletion (once per process). */
+const warnedClosedPrs = new Set<number>();
 
 export const log = createLogger("[stack-ops]");
 
@@ -130,8 +135,19 @@ export async function retargetIfNeeded(
   // branches" setting retargets children instead; see
   // docs/stacked-prs.md.) The branch itself is fine — this replay just
   // restacked it — so tell the human the one thing only they can do:
-  // open a fresh PR.
+  // open a fresh PR. Two guards keep this from crying wolf: the close
+  // is only attributed to base deletion when the base ref is actually
+  // GONE from origin (an ordinarily-closed PR whose record later
+  // reparents would otherwise match), and each PR warns once per
+  // process (this runs on every replay pass of an active chain).
   if (live.state === "CLOSED" && live.baseRefName !== expectedBase) {
+    if (warnedClosedPrs.has(live.number)) return;
+    const baseStillExists = await runQuiet(
+      ["git", "rev-parse", "--verify", "--quiet", `origin/${live.baseRefName}`],
+      { cwd: config.paths.mainClone },
+    );
+    if (baseStillExists) return;
+    warnedClosedPrs.add(live.number);
     log.attention.warn(
       `${branch}: PR #${live.number} was closed by GitHub when its base branch was deleted — ` +
         `the branch is restacked onto ${expectedBase}; open a fresh PR for it ` +

@@ -16,7 +16,6 @@ import { theme } from "../theme.ts";
 
 type ReviewerFlowsCtx = {
   rows: WorktreeRow[];
-  modal: Modal | null;
   setModal: (m: Modal | null) => void;
   toast: (message: string, color?: string, ms?: number) => void;
   fetchContributors: () => Promise<readonly Contributor[]>;
@@ -29,7 +28,7 @@ type ReviewerFlowsCtx = {
 };
 
 export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
-  const { rows, modal, setModal, toast, fetchContributors, fetchMe, mutate } = ctx;
+  const { rows, setModal, toast, fetchContributors, fetchMe, mutate } = ctx;
 
   async function openReviewerPicker(slug: string): Promise<void> {
     const row = rows.find((r) => r.wt.slug === slug);
@@ -112,9 +111,15 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
     });
   }
 
-  async function submitReviewerPicker(): Promise<void> {
-    if (modal?.kind !== "reviewerPicker") return;
-    const { slug, prNumber, checked, original } = modal;
+  // Takes the picker payload from the KEY HANDLER (which receives the
+  // ref-authoritative modal at dispatch time) rather than reading the
+  // render-closure `modal`: a Space-toggle and the committing Enter can
+  // land in one input tick, and the closure would still hold the
+  // pre-toggle checked set — silently dropping the toggle.
+  async function submitReviewerPicker(
+    picker: Extract<Modal, { kind: "reviewerPicker" }>,
+  ): Promise<void> {
+    const { slug, prNumber, checked, original } = picker;
     const log = createLogger(slug);
     const branch = rows.find((r) => r.wt.slug === slug)?.wt.branch;
     setModal(null);

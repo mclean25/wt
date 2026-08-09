@@ -2,6 +2,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { config } from "../config.ts";
+import { createLogger } from "../logger.ts";
 import type { PrChecks, PrComment, PrReview, PullRequest, ReviewBotStatus } from "../types.ts";
 import type {
   GqlCommentAuthor,
@@ -10,6 +11,8 @@ import type {
   GqlReviewThread,
   RawCheck,
 } from "./types.ts";
+
+const log = createLogger("[gh-parse]");
 
 const CHECK_FAIL_CONCLUSIONS = new Set([
   "FAILURE",
@@ -110,6 +113,11 @@ const REPO_HAS_CI: boolean = (() => {
       (f) => f.endsWith(".yml") || f.endsWith(".yaml"),
     );
   } catch {
+    // ENOENT = genuinely no workflows dir. Anything else (perms, a
+    // not-yet-mounted clone) also degrades to "no CI" for the process
+    // lifetime — log it so a mysteriously-vanishing pending badge is
+    // diagnosable.
+    log.debug("workflows dir unreadable; treating repo as no-CI");
     return false;
   }
 })();
