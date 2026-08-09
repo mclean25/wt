@@ -1,3 +1,6 @@
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+
 import { config } from "../config.ts";
 import type { PrChecks, PrComment, PrReview, PullRequest, ReviewBotStatus } from "../types.ts";
 import type {
@@ -87,17 +90,36 @@ function failingCheckNames(raw: RawCheck[] | null | undefined): string[] {
 }
 
 /**
- * Floor an OPEN PR's check rollup at `pending`. GitHub reports an empty
- * rollup in the window between opening a PR and the first check run
- * registering (and momentarily during some background refreshes), which
- * `rollupChecks` maps to `none`. In this workflow every open PR runs CI, so
- * `none` on an open PR means "checks haven't reported yet", not "no CI" —
- * surface it as `pending` so the badge holds its slot instead of vanishing
- * and shoving the rest of the row's glyph cluster around on each refresh.
- * Closed/merged PRs keep `none` (their check state is genuinely terminal).
+ * Floor an OPEN PR's check rollup at `pending` — but only when the repo
+ * actually runs CI. GitHub reports an empty rollup in the window between
+ * opening a PR and the first check run registering (and momentarily during
+ * some background refreshes), which `rollupChecks` maps to `none`. On a
+ * CI-wired repo, `none` on an open PR therefore means "checks haven't
+ * reported yet" — surface it as `pending` so the badge holds its slot
+ * instead of vanishing and shoving the rest of the row's glyph cluster
+ * around on each refresh. On a repo with NO CI at all (dotfiles-style),
+ * that flooring would pin every open PR at "checks pending" forever, so
+ * it's gated on Actions workflow files existing in the main clone.
+ * (External-CI repos without workflow files only lose the slot-holding
+ * nicety for the seconds before their first status reports.) Closed/merged
+ * PRs keep `none` (their check state is genuinely terminal).
  */
-export function openPrChecks(state: PullRequest["state"], checks: PrChecks): PrChecks {
-  return state === "OPEN" && checks === "none" ? "pending" : checks;
+const REPO_HAS_CI: boolean = (() => {
+  try {
+    return readdirSync(join(config.paths.mainClone, ".github", "workflows")).some(
+      (f) => f.endsWith(".yml") || f.endsWith(".yaml"),
+    );
+  } catch {
+    return false;
+  }
+})();
+
+export function openPrChecks(
+  state: PullRequest["state"],
+  checks: PrChecks,
+  repoHasCi: boolean = REPO_HAS_CI,
+): PrChecks {
+  return repoHasCi && state === "OPEN" && checks === "none" ? "pending" : checks;
 }
 
 // Review-bot identity, from `[review_bot]` (CodeRabbit preset when the
@@ -402,6 +424,7 @@ export function nodeToPr(pr: GqlPrNode): PullRequest {
   const threads = pr.reviewThreads?.nodes ?? null;
   const requestedReviewers = extractRequestedReviewers(pr.reviewRequests);
   return {
+    id: pr.id,
     number: pr.number,
     url: pr.url,
     title: pr.title,

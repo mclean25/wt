@@ -29,6 +29,7 @@ const COMMENT_FETCH_LIMIT = config.reviewBot.unresolvedVia === "checklist" ? 30 
 // Shared fields for each PR. Used by every aliased sub-query below.
 const PR_FRAGMENT = `
 fragment PrFields on PullRequest {
+  id
   number
   url
   title

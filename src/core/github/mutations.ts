@@ -37,16 +37,27 @@ async function runGhMutation(
 }
 
 /**
- * Enable "merge when ready" on a PR via `gh pr merge --auto`. Runs from
- * the main clone so gh resolves the right repo. `gh` does the right
- * thing for both classic auto-merge and merge-queue repos — the same
- * flag enqueues when a queue is configured.
+ * Enable "merge when ready" on a PR — ARM ONLY, never merge now. The
+ * GraphQL `enablePullRequestAutoMerge` mutation (by node id) arms
+ * classic auto-merge and enqueues on merge-queue repos, but REFUSES
+ * ("clean status") when nothing blocks the PR. That refusal is the
+ * point: `gh pr merge --auto` looks equivalent but silently falls
+ * through to an IMMEDIATE merge on an unprotected repo — the picker's
+ * confirm-less "arm" keystroke once shipped a dogfood PR on the spot
+ * while toasting "auto-merge enabled". Never switch this back to the
+ * porcelain flag.
  */
-export async function enableAutoMerge(prNumber: number): Promise<GhActionResult> {
+export async function enableAutoMerge(prId: string): Promise<GhActionResult> {
   return runGhMutation(
-    ["gh", "pr", "merge", String(prNumber), "--auto", `--${AUTO_MERGE_METHOD.toLowerCase()}`],
+    [
+      "gh", "api", "graphql",
+      "-f",
+      "query=mutation($prId: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $prId, mergeMethod: $method}) { pullRequest { number } } }",
+      "-f", `prId=${prId}`,
+      "-f", `method=${AUTO_MERGE_METHOD}`,
+    ],
     "auto-merge failed",
-    { prNumber },
+    { prId },
   );
 }
 

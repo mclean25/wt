@@ -92,6 +92,15 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       return;
     }
     const prNumber = row.pr.number;
+    const prId = row.pr.id;
+    // The arm mutation needs the GraphQL node id, which persisted-cache
+    // entries from before the field existed lack. One live fetch fills
+    // it in — don't guess-and-merge with the number-based porcelain
+    // (see enableAutoMerge's doc for why that command is banned).
+    if (action === "enable" && prId === undefined) {
+      toast("PR cache predates this build — press r, then retry", theme.warn, 3500);
+      return;
+    }
     const branch = row.wt.branch;
     // Optimistic shape for enable: seed the method the gh call will arm
     // (shared AUTO_MERGE_METHOD constant, so this can't drift from
@@ -113,7 +122,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
         run: async () => {
           const result =
             action === "enable"
-              ? await enableAutoMerge(prNumber)
+              ? await enableAutoMerge(prId ?? "")
               : await disableAutoMerge(prNumber);
           if (!result.ok) throw new Error(result.error);
         },
@@ -151,6 +160,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       return;
     }
     const prNumber = row.pr.number;
+    const prId = row.pr.id ?? null;
     const branch = row.wt.branch;
     const wasDraft = row.pr.isDraft;
     const reviewerToAdd =
@@ -159,6 +169,12 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
         ? config.github.defaultReviewer
         : null;
     const needsAutoMerge = !row.pr.autoMerge;
+    // Arm-only auto-merge needs the node id (absent from pre-field
+    // persisted caches; one live fetch fills it in).
+    if (needsAutoMerge && prId === null) {
+      toast("PR cache predates this build — press r, then retry", theme.warn, 3500);
+      return;
+    }
 
     if (!wasDraft && !reviewerToAdd && !needsAutoMerge) {
       toast(`#${prNumber} already shipped`, theme.info, 2000);
@@ -244,7 +260,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
               },
             })),
           run: async () => {
-            const r = await enableAutoMerge(prNumber);
+            const r = await enableAutoMerge(prId ?? "");
             if (!r.ok) throw new Error(r.error);
           },
         });

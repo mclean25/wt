@@ -56,7 +56,7 @@ lock. It deletes the remote branch but never destroys an SST stage implicitly.
 | `g p` / `l p` | open the PR explicitly in GitHub / Linear Reviews (1.2s chord) |
 | `e` | mark a draft PR ready (confirm) |
 | `E` | "ship it": mark ready + request `[github].default_reviewer` + arm auto-merge, in one confirm |
-| `! m` | arm/disarm auto-merge (enqueues into GitHub's merge queue when one is configured) — a `!` picker row since `M` became the manager palette; fires directly, no confirm |
+| `! m` | arm/disarm auto-merge (enqueues into GitHub's merge queue when one is configured) — a `!` picker row since `M` became the manager palette; fires directly, no confirm. Arm-only by construction: on a repo where nothing would block the merge (no protection/queue), GitHub refuses the arm with "clean status" rather than wt ever merging on the spot |
 | `f` | tail the failing CI checks' logs into the activity pane |
 | `v` | reviewer picker (`Space` toggles, `v v` submits) |
 | `w` | (review-requests section) check the PR's branch out as a worktree |

@@ -115,6 +115,13 @@ export type MergeQueueEntry = {
 };
 
 export type PullRequest = {
+  /**
+   * GraphQL node ID, used by the arm-only auto-merge mutation.
+   * Optional: entries hydrated from a persisted cache written before
+   * the field existed lack it — callers must degrade gracefully (the
+   * next live fetch fills it in).
+   */
+  id?: string;
   number: number;
   url: string;
   headRefName: string;

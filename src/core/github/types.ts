@@ -14,6 +14,7 @@ export type RawCheck =
 export type GqlReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
 
 export type GqlPrNode = {
+  id: string;
   number: number;
   url: string;
   title: string;
