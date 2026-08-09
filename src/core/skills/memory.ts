@@ -8,20 +8,27 @@
  *     version changes the hash, so declining never silences future
  *     updates — only re-prompts for the same content.
  *
- * Lives beside the other cross-process wt state in ~/.cache/wt.
- * Same write discipline as wtstate: atomic rename for readers, a
- * flock around read-modify-write for concurrent writers.
+ * Deliberately pinned to `~/.cache/wt` rather than the config's cache
+ * root: the skills system's TARGETS are machine-global (`~/.claude`
+ * skills, template answers like the user's name), so its memory must
+ * be shared too — a second isolated instance (own cache_db) should not
+ * re-ask questions the first already answered about the same global
+ * files. Same write discipline as wtstate: atomic rename for readers,
+ * a flock around read-modify-write for concurrent writers (the lock
+ * lives in the per-instance lockDir, so cross-INSTANCE writers aren't
+ * serialized — both sides are last-write-wins on a tiny JSON file,
+ * acceptable for interactive-only writes).
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { withFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
-import { WT_STATE_DIR } from "../wtstate.ts";
 
 const log = createLogger("[skills]");
 
-export const SKILLS_MEMORY_FILE = join(WT_STATE_DIR, "skills.json");
+export const SKILLS_MEMORY_FILE = join(homedir(), ".cache", "wt", "skills.json");
 
 export type SkillsMemory = {
   answers: Record<string, string>;

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useIsFetching, useQuery } from "@tanstack/react-query";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
@@ -135,7 +135,26 @@ export function App({ onExit }: Props) {
   const detailsScrollRef = useRef<ScrollBoxRenderable>(null);
   // Scroll-to-edge control for the list pane, called by j/k at the boundary.
   const listScrollHandleRef = useRef<ListScrollHandle | null>(null);
-  const [footer, setFooter] = useState<FooterMode>({ kind: "legend" });
+  // Footer and modal state are REF-AUTHORITATIVE: one stdin chunk can
+  // parse into many key events handled in a single tick (fast typing,
+  // an unbracketed paste, tmux send-keys), and React batches the
+  // setState calls — so the render-closure values lag mid-burst and a
+  // plain `{ ...footer, value: footer.value + ch }` per keystroke
+  // keeps only the LAST character (Enter in the same chunk then
+  // submits the stale-empty value and silently drops the input). The
+  // setters below apply updates to the ref synchronously and mirror
+  // to state for rendering; the keyboard/paste dispatchers read the
+  // ref, never the render closure, so every handler's spread-and-set
+  // sees the value as of THIS event, not this render.
+  const [footer, setFooterState] = useState<FooterMode>({ kind: "legend" });
+  const footerRef = useRef<FooterMode>(footer);
+  const setFooter = useCallback(
+    (f: FooterMode | ((prev: FooterMode) => FooterMode)) => {
+      footerRef.current = typeof f === "function" ? f(footerRef.current) : f;
+      setFooterState(footerRef.current);
+    },
+    [],
+  );
   // Remote checkouts are absent from this machine's `git worktree list`, so
   // keep an explicit Inbox row visible while SSH creation/install is running.
   const [remoteCreation, setRemoteCreation] = useState<RemoteCreation | null>(null);
@@ -144,7 +163,13 @@ export function App({ onExit }: Props) {
   // rather than emergent. Per-modal payload (cursor index, picker
   // items, slug context) lives on its variant. The keyboard handler
   // and JSX both `switch` on `modal.kind`.
-  const [modal, setModal] = useState<Modal | null>(null);
+  const [modal, setModalState] = useState<Modal | null>(null);
+  // Same ref-authoritative discipline as `footer` above.
+  const modalRef = useRef<Modal | null>(modal);
+  const setModal = useCallback((m: Modal | null | ((prev: Modal | null) => Modal | null)) => {
+    modalRef.current = typeof m === "function" ? m(modalRef.current) : m;
+    setModalState(modalRef.current);
+  }, []);
   // Perf sampling runs ONLY while the `P` overlay is up — three
   // shell-outs every 2s is cheap against the load it measures, but
   // pointless (and self-defeating) with nothing watching.
@@ -186,6 +211,10 @@ export function App({ onExit }: Props) {
   // in legend/confirm modes since paste only makes sense when the
   // user is typing.
   usePaste((text) => {
+    // Read the refs, not the render closures — see the footer/modal
+    // state comment above.
+    const modal = modalRef.current;
+    const footer = footerRef.current;
     if (modal?.kind === "actionPicker" && modal.state.mode === "edit") {
       const clean = printableMultiline(text);
       if (!clean) return;
@@ -606,6 +635,13 @@ export function App({ onExit }: Props) {
   // mode. The per-layer key maps live in `keyboard/` and
   // `modal-keys/`; this callback only routes.
   useKeyboard((k) => {
+    // Shadow the render-closure values with the authoritative refs —
+    // several key events can land in one tick (see the footer/modal
+    // state comment), and routing on a stale closure would misdispatch
+    // the tail of a burst (e.g. `n` opens the prompt, the next chars
+    // must route to it immediately).
+    const modal = modalRef.current;
+    const footer = footerRef.current;
     // Exactly one modal is active at a time; dispatch to its handler
     // and swallow the keypress — no modal mode falls through to the
     // input/normal-mode handling below.

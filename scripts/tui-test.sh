@@ -50,6 +50,7 @@ case "$cmd" in
       -e WT_AUTOMATIONS="${WT_AUTOMATIONS:-off}" -e WT_GITHUB="${WT_GITHUB:-off}" \
       ${WT_CONFIG:+-e WT_CONFIG="$WT_CONFIG"} \
       ${WT_TMUX_SOCKET:+-e WT_TMUX_SOCKET="$WT_TMUX_SOCKET"} \
+      ${GH_TOKEN:+-e GH_TOKEN="$GH_TOKEN"} \
       -c "$ROOT" "exec bun src/main.ts"
     # Wait for the first painted frame (bun cold start + cache hydrate).
     for _ in $(seq 1 60); do
