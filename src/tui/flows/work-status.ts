@@ -12,6 +12,7 @@
 import type { WorkState, WorkStatusRecord } from "../../core/work-status.ts";
 import { WORK_STATES } from "../../core/work-status.ts";
 import type { Modal } from "../modal-state.ts";
+import { markSelfStatusWrite } from "../hooks/useWorkStatusEvents.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
 
@@ -56,6 +57,10 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     const record: WorkStatusRecord | null = item.state
       ? { state: item.state, at: new Date().toISOString() }
       : null;
+    // The toast below is this pick's ack; mute the narration's default
+    // toast for the write we're about to make (the attention line
+    // still lands in the pane feed).
+    markSelfStatusWrite(slug);
     setWorkStatus(slug, record).then(
       () => {
         toast(

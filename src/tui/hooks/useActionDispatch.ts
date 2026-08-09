@@ -210,13 +210,23 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     launchOpts: LaunchActionOpts = {},
   ): Promise<LaunchOutcome> {
     const { rows, primaryHarness, toast, setFocus } = opts;
+    // Automation launches (marked by `autoFireKeys`) suppress the
+    // keystroke-style acks below: the engine already toasts its own
+    // "auto <rule>: … — running <run>" dispatch line and narrates
+    // declines/failures itself, so the direct toasts here would
+    // clobber it in the single latest-wins slot (see the toast
+    // contract in CLAUDE.md — background paths toast via the logger).
+    const manual = launchOpts.autoFireKeys === undefined;
+    const ack: typeof toast = (...args) => {
+      if (manual) toast(...args);
+    };
     const row = rows.find((r) => r.wt.slug === slug);
     if (!row) {
-      toast("worktree gone", theme.warn, 1500);
+      ack("worktree gone", theme.warn, 1500);
       return { launched: false, reason: "worktree gone" };
     }
     if (!def && !extras.trim()) {
-      toast("prompt is empty", theme.warn, 1500);
+      ack("prompt is empty", theme.warn, 1500);
       return { launched: false, reason: "prompt is empty" };
     }
     // Manager-target actions never touch the source worktree — they
@@ -236,11 +246,11 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       // checks both — the same gate every session launch uses.
       const blocked = launchBlockedReason(row);
       if (blocked) {
-        toast(`${slug} is ${blocked}`, theme.warn, 2000);
+        ack(`${slug} is ${blocked}`, theme.warn, 2000);
         return { launched: false, reason: `${slug} is ${blocked}` };
       }
       if (row.status.kind === StatusKind.Busy) {
-        toast(`${slug} is busy`, theme.warn, 2000);
+        ack(`${slug} is busy`, theme.warn, 2000);
         return { launched: false, reason: `${slug} is busy` };
       }
     }
@@ -250,7 +260,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
         deployed: row.fields.deploy.data ?? false,
       });
       if (!avail.ok) {
-        toast(`${def.name}: ${avail.reason}`, theme.warn, 2500);
+        ack(`${def.name}: ${avail.reason}`, theme.warn, 2500);
         return { launched: false, reason: avail.reason };
       }
     }
@@ -299,7 +309,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
             };
       const sessionLog = createLogger(slug);
       sessionLog.event.info(`${def.name} → ${target.label}`);
-      toast(`sending ${def.name} to ${target.label}…`, theme.info, 2000);
+      ack(`sending ${def.name} to ${target.label}…`, theme.info, 2000);
       void injectIntoSession({
         slug: target.slug,
         cwd: target.cwd,
@@ -318,8 +328,10 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
               { toast: true },
             );
           } else {
-            sessionLog.event.err(`inject failed: ${res.reason}`);
-            toast(`inject failed: ${res.reason}`, theme.err, 3000);
+            // Logger-toast (not ctx.toast): the failure lands after the
+            // dispatch ack expired, and it must flash for automation
+            // launches too — this is their only failure surface.
+            sessionLog.event.err(`inject failed: ${res.reason}`, { toast: true });
           }
         },
       );
@@ -343,13 +355,13 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           primaryHarness,
         );
     if (!result.ok) {
-      toast(`action: ${result.reason}`, theme.err, 3000);
+      ack(`action: ${result.reason}`, theme.err, 3000);
       return { launched: false, reason: result.reason };
     }
     // Clear this worktree's focus so the auto-rules surface the
     // just-launched action.
     setFocus(slug, { focused: null });
-    toast(`launched ${result.run.actionName}`, theme.info, 2000);
+    ack(`launched ${result.run.actionName}`, theme.info, 2000);
     return { launched: true };
   }
 

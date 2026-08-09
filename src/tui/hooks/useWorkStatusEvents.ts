@@ -20,6 +20,27 @@ import { createLogger } from "../../core/logger.ts";
 import { workStatusSuffix, type WorkStatusRecord } from "../../core/work-status.ts";
 import type { WtState } from "../../core/wtstate.ts";
 
+/**
+ * Slugs whose next observed status change was written by THIS process
+ * (the `u` picker) — the picker already toasted its own keystroke ack,
+ * so the narration below logs the attention line with the toast
+ * suppressed instead of double-flashing the same change. Marks expire
+ * quickly: a stale one must never mute a real external transition.
+ */
+const selfWrites = new Map<string, number>();
+const SELF_WRITE_TTL_MS = 5000;
+
+export function markSelfStatusWrite(slug: string): void {
+  selfWrites.set(slug, Date.now());
+}
+
+function consumeSelfWrite(slug: string): boolean {
+  const at = selfWrites.get(slug);
+  if (at === undefined) return false;
+  selfWrites.delete(slug);
+  return Date.now() - at < SELF_WRITE_TTL_MS;
+}
+
 function describe(record: WorkStatusRecord): string {
   const suffix = workStatusSuffix(record);
   switch (record.state) {
@@ -60,10 +81,11 @@ export function useWorkStatusEvents(wtState: WtState | undefined): void {
       if (!prev.has(slug)) continue;
       const log = createLogger(slug);
       const text = describe(record);
-      if (record.state === "needs-human") log.attention.err(text);
-      else if (record.state === "ready") log.attention.ok(text);
-      else if (record.state === "needs-testing") log.attention.warn(text);
-      else log.attention.info(text);
+      const opts = consumeSelfWrite(slug) ? { toast: false } : undefined;
+      if (record.state === "needs-human") log.attention.err(text, opts);
+      else if (record.state === "ready") log.attention.ok(text, opts);
+      else if (record.state === "needs-testing") log.attention.warn(text, opts);
+      else log.attention.info(text, opts);
     }
   }, [wtState]);
 }

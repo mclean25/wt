@@ -66,7 +66,15 @@ class ToastStore {
 
 const store = new ToastStore();
 
-/** Flash a toast in the footer. Latest call wins; `ms` bounds its life. */
+/**
+ * Flash a toast in the footer. Latest call wins; `ms` bounds its life.
+ *
+ * Not gated by `attachLoggerToasts`'s lifecycle: a late promise
+ * resolving after teardown can still arm one timer here. Inert today —
+ * main.ts hits `process.exit` right after the TUI resolves — but if
+ * shutdown ever becomes graceful/multi-phase, this needs a disposed
+ * guard to avoid keeping the process alive.
+ */
 export function showToast(text: string, color: string = theme.ok, ms = 2500): void {
   store.show(text, color, ms);
 }
