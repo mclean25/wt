@@ -22,6 +22,7 @@
  * merged/gone) only need their own query to have loaded.
  */
 import type { AutomationDef, AutomationTrigger } from "../core/config.ts";
+import { githubIssueNumberFromSlug } from "../core/issue-tracker.ts";
 import { pluralize } from "../core/text.ts";
 import { REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
 import { workStatusSuffix, type WorkState } from "../core/work-status.ts";
@@ -47,6 +48,15 @@ export type AutomationFire = {
   fireKeys: readonly string[];
   /** Stack id (root branch) for `builtin:restack` dispatches; null otherwise. */
   stackId: string | null;
+  /**
+   * Issue number a `builtin:close-issue` run closes, FROZEN at fire
+   * time from the row; null for every other run. Frozen so delivery
+   * depends on nothing surviving: the row is routinely destroyed
+   * before dispatch (a clean/restack pre-clean, a manual `c` inside
+   * the settle window), and a wtstate re-read at delivery could even
+   * hit a recreated slug's fresh state and close the wrong issue.
+   */
+  closeIssue: number | null;
   /** Human-readable trigger summary for the activity-pane event line. */
   detail: string;
 };
@@ -119,6 +129,7 @@ function singleRowFire(
     quiesceSlugs: [row.wt.slug],
     fireKeys: [fireKey],
     stackId: null,
+    closeIssue: null,
     detail,
   };
 }
@@ -197,10 +208,14 @@ function evaluateRowTrigger(
       );
     }
     case "wt.merged": {
+      const closesIssue = rule.run === "builtin:close-issue";
       // Non-stacked worktrees only — merged stack members are cleaned
       // by the stack.parent_merged → builtin:restack path, and letting
       // both fire would race a clean against a whole-stack restack.
-      if (row.stack) return null;
+      // Exception: a close-issue run never touches the worktree (no
+      // race to protect against) and would otherwise miss every
+      // stacked landing, so it evaluates stack members too.
+      if (row.stack && !closesIssue) return null;
       // The PR-merged leg of isCleanCandidate needs fresh github data;
       // the merged/gone legs are local. Split the check accordingly.
       const localDone =
@@ -209,11 +224,35 @@ function evaluateRowTrigger(
       const prDone = ctx.githubFresh && row.pr?.state === "MERGED";
       if (!localDone && !prDone) return null;
       if (!isCleanCandidate(row)) return null;
+      const landed = row.pr ? `#${row.pr.number} merged` : "branch landed on trunk";
+      if (closesIssue) {
+        // Only fire when there's actually an issue to close — a fire
+        // with nothing behind it would still burn a ledger key and
+        // narrate a run that does nothing. The number rides the fire
+        // (`closeIssue`), frozen from this evaluation.
+        const issue = row.githubIssue ?? githubIssueNumberFromSlug(slug);
+        if (issue === null) return null;
+        return {
+          rule,
+          slug,
+          // Nothing needs to be quiescent to close an issue, and the
+          // empty set keeps this dispatch from blocking — or being
+          // blocked by — a clean or restack racing on the same row
+          // (the restack pre-clean destroys merged members; if this
+          // fire had to wait its turn on the slug, the row could be
+          // gone and the intent dropped as superseded before delivery).
+          quiesceSlugs: [],
+          fireKeys: [`${rule.id}:merged:${slug}:${row.pr?.number ?? "local"}`],
+          stackId: null,
+          closeIssue: issue,
+          detail: `${landed} — closing issue #${issue}`,
+        };
+      }
       return singleRowFire(
         rule,
         row,
         `${rule.id}:merged:${slug}:${row.pr?.number ?? "local"}`,
-        row.pr ? `#${row.pr.number} merged` : "branch landed on trunk",
+        landed,
       );
     }
     case "status.needs_human":
@@ -356,6 +395,7 @@ function evaluateStackTrigger(
       ],
       fireKeys,
       stackId,
+      closeIssue: null,
       detail: `${parts.join(" + ")} under ${pluralize(open.length, "open member")}`,
     });
   }

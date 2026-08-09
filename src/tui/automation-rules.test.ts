@@ -206,6 +206,47 @@ describe("wt.merged", () => {
   });
 });
 
+describe("wt.merged → builtin:close-issue", () => {
+  const r = rule({ id: "close-gh", on: "wt.merged", run: "builtin:close-issue" });
+
+  test("fires only when an issue is attached, with an empty quiesce set", () => {
+    const bare = makeRow("a", { pr: makePr({ state: "MERGED" }) });
+    expect(evaluateAutomations([r], [bare], FRESH)).toHaveLength(0);
+    const attached = makeRow("a", {
+      pr: makePr({ state: "MERGED" }),
+      githubIssue: 970,
+    });
+    const fires = evaluateAutomations([r], [attached], FRESH);
+    expect(fires).toHaveLength(1);
+    expect(fires[0]!.fireKeys).toEqual(["close-gh:merged:a:101"]);
+    // Empty on purpose: the close never touches the worktree, and the
+    // empty set keeps it out of the dispatch loop's slug contention so
+    // a racing clean/restack can't starve it into a superseded drop.
+    expect(fires[0]!.quiesceSlugs).toEqual([]);
+    // Frozen into the fire — delivery must not depend on the row (or
+    // its wtstate entry) surviving until dispatch.
+    expect(fires[0]!.closeIssue).toBe(970);
+    expect(fires[0]!.detail).toContain("#970");
+  });
+
+  test("a GH-<n> primary slug id counts as the attached issue", () => {
+    const row = makeRow("gh-88-fix-tabs", { pr: makePr({ state: "MERGED" }) });
+    const fires = evaluateAutomations([r], [row], FRESH);
+    expect(fires).toHaveLength(1);
+    expect(fires[0]!.closeIssue).toBe(88);
+  });
+
+  test("unlike other wt.merged rules, fires for stack members", () => {
+    const row = makeRow("a", {
+      pr: makePr({ state: "MERGED" }),
+      githubIssue: 970,
+      stack: stackInfo("eng-1", 1),
+      status: { kind: StatusKind.Merged, label: "merged" },
+    });
+    expect(evaluateAutomations([r], [row], FRESH)).toHaveLength(1);
+  });
+});
+
 describe("status.* (work-status triggers)", () => {
   const STALE: AutomationEvalCtx = { githubFresh: false, isPausedSlug: () => false };
 

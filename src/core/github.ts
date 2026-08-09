@@ -11,6 +11,7 @@ export { fetchReviewRequests } from "./github/review-requests.ts";
 export { fetchRepoContributors } from "./github/contributors.ts";
 export {
   AUTO_MERGE_METHOD,
+  closeGithubIssue,
   enableAutoMerge,
   disableAutoMerge,
   editReviewers,

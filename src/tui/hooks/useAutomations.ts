@@ -65,6 +65,7 @@ import {
   tripBreaker,
 } from "../../core/automations.ts";
 import { config, type AutomationTrigger } from "../../core/config.ts";
+import { closeGithubIssue } from "../../core/github.ts";
 import { lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { notifyMacos } from "../../core/notify.ts";
@@ -415,6 +416,27 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       await notifyMacos(`wt · ${slug}`, fire.detail);
       return { declined: null };
     }
+    if (rule.run === "builtin:close-issue") {
+      // The number rode the fire, frozen at evaluation — delivery must
+      // not depend on the row or its wtstate entry surviving (a racing
+      // clean/restack destroys the row, and a recreated slug would
+      // even offer up the WRONG state to a live re-read).
+      const issue = fire.closeIssue;
+      if (issue === null) {
+        wtLog.event.dim(`auto ${rule.id}: fire carried no issue number — nothing to close`);
+        return { declined: null };
+      }
+      const r = await closeGithubIssue(issue);
+      if (r.ok) {
+        wtLog.event.info(`auto ${rule.id}: closed issue #${issue}`);
+      } else {
+        // Deliberately non-fatal: repos whose PR bodies carry closing
+        // keywords race us to it, and "already closed" (or any other
+        // refusal) changes nothing. Log, never retry.
+        wtLog.event.dim(`auto ${rule.id}: close issue #${issue}: ${r.error}`);
+      }
+      return { declined: null };
+    }
     const def = resolveActionDef(rule.run);
     if (!def) throw new Error(`action "${rule.run}" not found in config`);
     const outcome = await latest.current.launchAction(slug, def, "", undefined, {
@@ -545,15 +567,27 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     }
 
     // Drop superseded intents — the condition cleared while queued.
+    // close-issue intents get a narrower rule: a merge can't un-happen,
+    // and the row routinely dies right after one (a clean/restack
+    // pre-clean archives at dispatch; a manual `c` easily beats the
+    // 10s settle window), so "row gone/archived/busy" must NOT count
+    // as superseded — the close still has to run, off the number
+    // frozen into the fire. Only a genuine clear (the row still
+    // evaluable but no longer firing — e.g. the issue was detached)
+    // or an explicit per-slug pause drops one.
     for (const [id, intent] of intents.current) {
-      if (!byId.has(id)) {
-        if (intent.announced) {
-          createLogger(intent.fire.slug).event.dim(
-            `auto ${intent.fire.rule.id}: superseded (condition cleared) — dropped`,
-          );
-        }
-        intents.current.delete(id);
+      if (byId.has(id)) continue;
+      if (intent.fire.rule.run === "builtin:close-issue") {
+        const row = ctx.rows.find((r) => r.wt.slug === intent.fire.slug);
+        const cleared = row !== undefined && isEligible(row, evalCtx);
+        if (!cleared && !evalCtx.isPausedSlug(intent.fire.slug)) continue;
       }
+      if (intent.announced) {
+        createLogger(intent.fire.slug).event.dim(
+          `auto ${intent.fire.rule.id}: superseded (condition cleared) — dropped`,
+        );
+      }
+      intents.current.delete(id);
     }
 
     // Delivery, FIFO by intent age, bounded by the concurrency cap.
@@ -585,12 +619,17 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         : resolveActionDef(rule.run);
       const isManagerRun = ruleDef?.kind === "claude" && ruleDef.target === "manager";
       // The breaker exists to stop a fix-it action from hammering a
-      // condition it keeps failing to clear. Notifications and manager
-      // briefings don't CLEAR anything — the condition legitimately
-      // stays true until the human acts — so counting them would
-      // swallow the 3rd+ needs-human ping exactly when it matters.
-      // Cooldowns still apply for spacing.
-      const breakerExempt = rule.run === "builtin:notify" || isManagerRun;
+      // condition it keeps failing to clear. Notifications, manager
+      // briefings, and issue closes don't CLEAR anything — the
+      // condition legitimately stays true until the human (or the
+      // clean flow) acts — so counting them would swallow the 3rd+
+      // needs-human ping exactly when it matters, or trip close-issue
+      // after a couple of reused-slug landings. Cooldowns still apply
+      // for spacing.
+      const breakerExempt =
+        rule.run === "builtin:notify" ||
+        rule.run === "builtin:close-issue" ||
+        isManagerRun;
       if (fire.quiesceSlugs.some((s) => occupiedSlugs.has(s))) continue;
       if (
         isRestack &&
@@ -631,7 +670,11 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // Notifications and manager briefings never touch the worktree,
       // so quiescence is meaningless for them — and a needs-human fire
       // happens exactly while the session is non-quiescent (asking).
-      // Bypass, don't wait.
+      // Bypass, don't wait. The two flags coincide today because every
+      // exempt run is exempt for the same reason (it can't clear or
+      // disturb anything in the worktree — close-issue's fires even
+      // carry an empty quiesceSlugs); a future run that's breaker-
+      // exempt but does touch the worktree must split them.
       const bypassQuiesce = breakerExempt;
       const blocked = bypassQuiesce ? null : quiesceBlockReason(fire, now);
       if (blocked) {

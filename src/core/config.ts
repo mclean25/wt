@@ -434,7 +434,12 @@ export type ActionDef =
  *                               conflicts with its effective base.
  *   "wt.merged"               — a NON-stacked worktree's branch landed
  *                               (merged / gone / PR merged — same set
- *                               the `c` clean sweep uses).
+ *                               the `c` clean sweep uses). Exception:
+ *                               rules running `builtin:close-issue`
+ *                               also evaluate stack members — that run
+ *                               never touches the worktree, so the
+ *                               clean-vs-restack race the exclusion
+ *                               protects against doesn't apply.
  *   "stack.parent_merged"     — a stack (worktrees chained by their
  *                               recorded fork bases) has a merged
  *                               member with open members stacked on it.
@@ -468,6 +473,7 @@ export const AUTOMATION_BUILTINS = [
   "builtin:restack",
   "builtin:clean",
   "builtin:notify",
+  "builtin:close-issue",
 ] as const;
 export type AutomationBuiltin = (typeof AUTOMATION_BUILTINS)[number];
 
@@ -1246,6 +1252,21 @@ function parseAutomations(
         `${tag}: run "builtin:clean" targets one worktree; use "builtin:restack" for stack.parent_merged (it cleans merged members first)`,
       );
       continue;
+    }
+    // close-issue is defined by the landing: it closes the attached
+    // GitHub issue once the branch merges. Every other trigger would
+    // close issues for work that hasn't landed. And one rule covers
+    // every worktree — a second is always a config mistake that would
+    // just race the first to the same `gh issue close`.
+    if (run === "builtin:close-issue") {
+      if (on !== "wt.merged") {
+        errs.add(`${tag}: run "builtin:close-issue" requires on = "wt.merged"`);
+        continue;
+      }
+      if (out.some((a) => a.run === "builtin:close-issue")) {
+        errs.add(`${tag}: only one builtin:close-issue rule is allowed`);
+        continue;
+      }
     }
     const busy = errs.optEnum(
       entry,

@@ -129,6 +129,21 @@ export async function markPullRequestReady(prNumber: number): Promise<GhActionRe
 }
 
 /**
+ * Close a GitHub issue on the origin repo as completed. Used by the
+ * `builtin:close-issue` automation once a worktree's branch lands.
+ * Callers treat failure as advisory — the issue may already be closed
+ * (a PR-body closing keyword, or a hand close, beat us to it) — so
+ * they log and move on rather than surfacing an error.
+ */
+export async function closeGithubIssue(issue: number): Promise<GhActionResult> {
+  return runGhMutation(
+    ["gh", "issue", "close", String(issue), "--reason", "completed"],
+    "close issue failed",
+    { issue },
+  );
+}
+
+/**
  * Stream the failed-job logs of the most recent failed CI run for
  * `branch` to `onLine`, via `gh run view <id> --log-failed`. Resolves
  * the count of lines emitted, or a reason when gh is missing, no failed

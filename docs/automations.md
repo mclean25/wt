@@ -18,7 +18,7 @@ Fire keys embed the PR's head SHA where relevant: a new push produces a new key 
 | `review_bot.unresolved` | the configured [`[review_bot]`](configuration.md#review_bot--the-bot-review-track) has unresolved findings — unresolved threads (CodeRabbit) or unticked checklist boxes, per `unresolved_via`. `rabbit.unresolved` is accepted as a legacy alias |
 | `review.changes_requested` | a human review requested changes |
 | `pr.conflict` | the merge-tree probe says the branch conflicts with its effective base |
-| `wt.merged` | a non-stacked worktree's branch landed (merged / upstream gone / PR merged — the same set the `c` clean sweep uses) |
+| `wt.merged` | a non-stacked worktree's branch landed (merged / upstream gone / PR merged — the same set the `c` clean sweep uses). Rules running `builtin:close-issue` also evaluate stack members — that run never touches the worktree, so the clean-vs-restack race the exclusion protects against doesn't apply |
 | `stack.parent_merged` | a stack (worktrees chained by their recorded fork bases — see [stacked-prs.md](stacked-prs.md)) has a merged member with open members stacked on it |
 | `status.needs_human` / `status.needs_testing` / `status.ready` | the worktree's asserted [work status](cli.md#wt-status-slug-state--m-note---risk-r) is that state. Local (wtstate), so no GitHub-freshness gate; the fire key carries the assertion timestamp, so one assertion fires once and re-asserting fires again — unless the re-assert is identical (same state/note/risk/sha), in which case `setSlugWorkStatus` is a no-op that keeps the original `at`, so it doesn't refire. Hyphenated spellings (`status.needs-human`) are accepted aliases. Settle defaults to 0 — an assertion is a deliberate write, not flappy derived state |
 
@@ -37,6 +37,15 @@ PR-driven conditions additionally require a **live GitHub fetch this session** �
 id  = "ping-needs-human"
 on  = "status.needs_human"
 run = "builtin:notify"
+```
+
+- `builtin:close-issue` — close the worktree's attached GitHub issue as completed once its branch lands (requires `on = "wt.merged"`; merges via GitHub and via wt look identical to the level condition; one rule max — a second would just race the first). The issue is the `--gh <n>` secondary id, or a `GH-<n>` primary slug id on repos without a tracker; a merged worktree with neither simply never fires. This is the deliberate replacement for GitHub's PR-body `Closes #N` keywords on repos whose feature PRs merge into a non-default branch (e.g. `staging`), where those keywords never fire — and where they do fire, losing the race is fine: failures ("already closed", anything else) are logged as advisory and never retried. Four deviations from the standard pipeline, all following from "it never touches the worktree and a merge can't un-happen": it also fires for stack members (see the trigger table), it bypasses quiescence entirely, it's breaker-exempt like `builtin:notify` (closing an issue doesn't clear the merged condition — only cleanup does), and its queued intent survives the row's death — the issue number is frozen into the fire at evaluation, so a clean that razes the worktree before delivery (a restack pre-clean, or a manual `c` inside the settle window) doesn't lose the close. Detaching the issue while the row is still alive, or pausing the worktree, still cancels a queued close; a merge that happens entirely while wt isn't running and whose worktree is also cleaned before the next launch is the one case nothing can observe.
+
+```toml
+[[automations]]
+id  = "close-issue-on-merge"
+on  = "wt.merged"
+run = "builtin:close-issue"
 ```
 
 ## Dispatch pipeline

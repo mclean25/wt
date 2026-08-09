@@ -83,6 +83,18 @@ export function githubIssueUrl(issue: number): string | null {
 }
 
 /**
+ * GitHub issue number when the slug's PRIMARY id is a `GH-<n>` id
+ * (`gh-970-fix-tabs` → 970), null otherwise. Pure — safe from the
+ * automations evaluator, which uses it as the fallback identity when
+ * no secondary `--gh` issue is attached.
+ */
+export function githubIssueNumberFromSlug(slug: string): number | null {
+  const id = issueIdForSlug(slug);
+  const m = id ? GH_ID_RE.exec(id) : null;
+  return m ? Number(m[1]) : null;
+}
+
+/**
  * The row's default link target: the MOST SPECIFIC issue. A worktree's
  * secondary GitHub issue (when attached) is narrower than its tracker
  * task, so `i` / `y i` prefer it; the tracker id stays the primary
