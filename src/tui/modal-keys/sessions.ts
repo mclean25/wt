@@ -11,6 +11,7 @@ import type { Modal } from "../modal-state.ts";
 import { previewFocusPatch } from "../picker-preview.ts";
 import { isSyntheticLiveSessionId } from "../hooks/useHarnessSessions.ts";
 import type { SimpleModalContext } from "./ctx.ts";
+import { handleListPickerKey } from "./list-picker.ts";
 
 export function handleClaudeSessionsPickerKey(
   k: KeyEvent,
@@ -81,27 +82,6 @@ export function handleClaudeSessionsPickerKey(
     );
     if (target >= 0) moveTo(target);
   };
-  if (k.name === "j" || k.name === "down") {
-    moveTo(Math.min(idx + 1, totalRows - 1));
-    return true;
-  }
-  if (k.name === "k" || k.name === "up") {
-    moveTo(Math.max(0, idx - 1));
-    return true;
-  }
-  if (k.sequence && /^[1-9]$/.test(k.sequence)) {
-    const n = parseInt(k.sequence, 10) - 1;
-    let cursor = 0;
-    for (let i = 0; i < rowsLocal.length; i++) {
-      if (rowsLocal[i]!.kind !== "session") continue;
-      if (cursor === n) {
-        commitRow(i);
-        return true;
-      }
-      cursor++;
-    }
-    return true;
-  }
   if (k.sequence === "x" && !k.ctrl && !k.meta) {
     const r = rowsLocal[idx];
     if (r?.kind === "session") {
@@ -166,18 +146,27 @@ export function handleClaudeSessionsPickerKey(
       return true;
     }
   }
-  if (k.sequence === ";" || k.name === "return") {
-    commitRow(idx);
-    return true;
-  }
-  if (
-    k.name === "escape" ||
-    k.sequence === "q" ||
-    (k.ctrl && k.name === "c")
-  ) {
-    setModal(null);
-  }
-  return true;
+  return handleListPickerKey(k, {
+    count: totalRows,
+    index: idx,
+    onMove: moveTo,
+    onCommit: commitRow,
+    onCancel: () => setModal(null),
+    confirm: [";"],
+    // Digits count SESSION rows only — the "new …" affordances keep
+    // their harness letters.
+    digits: (n) => {
+      let cursor = 0;
+      for (let i = 0; i < rowsLocal.length; i++) {
+        if (rowsLocal[i]!.kind !== "session") continue;
+        if (cursor === n - 1) {
+          commitRow(i);
+          return;
+        }
+        cursor++;
+      }
+    },
+  });
 }
 
 export function handleClaudeSessionsNewKey(
@@ -249,16 +238,17 @@ export function handleHarnessSelectKey(
     commit(letterMatch.id);
     return true;
   }
-  if ((k.name === "f12" && !k.shift) || k.name === "return") {
+  // F12 confirms too — the picker opens from Shift+F12, so the bare
+  // spawn key doubles as "yes, this one".
+  if (k.name === "f12" && !k.shift) {
     commit(HARNESSES[idx]!.id);
     return true;
   }
-  if (
-    k.name === "escape" ||
-    k.sequence === "q" ||
-    (k.ctrl && k.name === "c")
-  ) {
-    setModal(null);
-  }
-  return true;
+  return handleListPickerKey(k, {
+    count: HARNESSES.length,
+    index: idx,
+    onMove: (next) => setModal({ ...modal, index: next }),
+    onCommit: (i) => commit(HARNESSES[i]!.id),
+    onCancel: () => setModal(null),
+  });
 }

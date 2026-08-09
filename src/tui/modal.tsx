@@ -52,6 +52,13 @@ type Props = {
    * least one — esc/q/ctrl+c are universal).
    */
   hints: KeyHintPair[];
+  /**
+   * `true` pins the frame to the full inset-derived rectangle (the
+   * pre-auto-height behavior) — for content that should OWN the space,
+   * like the help overlay's scrolling sections. Default (false) sizes
+   * the modal to its content, capped at that same rectangle.
+   */
+  fill?: boolean;
   children: ReactNode;
 };
 
@@ -72,18 +79,30 @@ export function Modal({
   borderColor = theme.accent,
   inset,
   hints,
+  fill = false,
   children,
 }: Props) {
-  const { width } = useTerminalDimensions();
+  const { width, height } = useTerminalDimensions();
   const i =
     width < NARROW_WIDTH ? NARROW_INSET : { ...DEFAULT_INSET, ...inset };
+  // Height is content-driven by default: the box grows with its
+  // children and the vertical insets only bound the MAXIMUM. A seven-
+  // row picker renders as a seven-row modal instead of a fixed
+  // 60%-tall frame of mostly empty space. `fill` keeps the full frame
+  // for content that owns the space (help's scrolling sections — a
+  // bare flexGrow scrollbox doesn't self-measure, so auto-height
+  // would collapse it).
+  const maxHeight = Math.max(
+    8,
+    Math.floor((height * (100 - pct(i.top) - pct(i.bottom))) / 100),
+  );
   return (
     <box
       position="absolute"
       top={i.top}
       left={i.left}
       right={i.right}
-      bottom={i.bottom}
+      {...(fill ? { bottom: i.bottom } : { maxHeight })}
       zIndex={10}
       backgroundColor={theme.bg}
       border
@@ -94,12 +113,26 @@ export function Modal({
       padding={1}
       flexDirection="column"
     >
-      <box flexDirection="column" flexGrow={1} overflow="hidden">
+      <box
+        flexDirection="column"
+        flexShrink={1}
+        minHeight={0}
+        overflow="hidden"
+        {...(fill ? { flexGrow: 1 } : {})}
+      >
         {children}
       </box>
-      <box flexShrink={0} flexDirection="row" marginTop={1}>
+      {/* flexWrap: the hint chips flow onto extra rows at narrow widths
+          instead of overrunning the border. Each chip is one unbreakable
+          <text>; wrapping happens only between chips. */}
+      <box flexShrink={0} flexDirection="row" flexWrap="wrap" marginTop={1}>
         <KeyHint pairs={hints} />
       </box>
     </box>
   );
+}
+
+function pct(p: Percent): number {
+  const n = parseFloat(p);
+  return Number.isFinite(n) ? n : 0;
 }

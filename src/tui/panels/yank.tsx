@@ -53,29 +53,21 @@ export function YankModal({ row }: Props) {
   return (
     <Modal
       title="yank · pick what to copy"
-      inset={{ top: "35%", right: "20%", bottom: "40%", left: "20%" }}
+      inset={{ top: "25%", right: "20%", bottom: "20%", left: "20%" }}
       hints={[["esc / q / y", "cancel"]]}
     >
+      {/* One <text> per row (spans, padEnd alignment) — sibling boxes
+          with fixed widths overprinted each other at narrow widths. */}
       {items.map((it) => (
-        <box key={it.key} flexDirection="row">
-          <box width={3} flexShrink={0}>
-            <text fg={theme.accent} attributes={1}>
-              {it.key}
-            </text>
-          </box>
-          <box width={11} flexShrink={0}>
-            <text fg={theme.fg}>{it.label}</text>
-          </box>
-          <box flexShrink={1} overflow="hidden">
-            <text
-              fg={it.value ? theme.fgDim : theme.warn}
-              wrapMode="none"
-              truncate
-            >
-              {it.value ?? "—"}
-            </text>
-          </box>
-        </box>
+        <text key={it.key} wrapMode="none" truncate>
+          <span fg={theme.accent} attributes={1}>
+            {it.key.padEnd(3)}
+          </span>
+          <span fg={theme.fg}>{it.label.padEnd(11)}</span>
+          <span fg={it.value ? theme.fgDim : theme.warn}>
+            {it.value ?? "—"}
+          </span>
+        </text>
       ))}
     </Modal>
   );

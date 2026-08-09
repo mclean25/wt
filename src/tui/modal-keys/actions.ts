@@ -4,6 +4,7 @@ import { recentValues } from "../../core/actions.ts";
 import { printableMultiline } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
+import { handleListPickerKey } from "./list-picker.ts";
 
 export function handleActionPickerKey(
   k: KeyEvent,
@@ -22,20 +23,6 @@ export function handleActionPickerKey(
   const ap = modal.state;
   if (ap.mode === "list") {
     const items = buildActionPickerItems(ap.slug);
-    if (k.name === "j" || k.name === "down") {
-      setModal({
-        kind: "actionPicker",
-        state: { ...ap, index: Math.min(ap.index + 1, items.length - 1) },
-      });
-      return true;
-    }
-    if (k.name === "k" || k.name === "up") {
-      setModal({
-        kind: "actionPicker",
-        state: { ...ap, index: Math.max(ap.index - 1, 0) },
-      });
-      return true;
-    }
     const commitIndex = (i: number): void => {
       const item = items[i];
       if (!item) return;
@@ -68,6 +55,10 @@ export function handleActionPickerKey(
         },
       });
     };
+    // Per-action letter keys (config-assigned) stay a pre-check: they
+    // are dynamic per item list, with `c` reserved for the custom
+    // prompt. Both follow the same "letter fires directly" convention
+    // the shared handler implements for static chords.
     if (k.sequence === "c") {
       setModal({
         kind: "actionPicker",
@@ -84,18 +75,17 @@ export function handleActionPickerKey(
         return true;
       }
     }
-    if (k.name === "return" || k.sequence === "!") {
-      commitIndex(ap.index);
-      return true;
-    }
-    if (
-      k.name === "escape" ||
-      k.sequence === "q" ||
-      (k.ctrl && k.name === "c")
-    ) {
-      setModal(null);
-    }
-    return true;
+    return handleListPickerKey(k, {
+      count: items.length,
+      index: ap.index,
+      onMove: (next) =>
+        setModal({ kind: "actionPicker", state: { ...ap, index: next } }),
+      onCommit: commitIndex,
+      onCancel: () => setModal(null),
+      confirm: ["!"],
+      // Actions are picked by their assigned letters, not positions.
+      digits: false,
+    });
   }
 
   if (k.ctrl && k.name === "c") {
@@ -182,33 +172,24 @@ export function handleArgPickerKey(
     if (text) setModal({ ...modal, input: (modal.input ?? "") + text });
     return true;
   }
-  if (k.name === "escape" || k.sequence === "q") {
-    setModal(null);
-    return true;
-  }
-  if (k.name === "j" || k.name === "down") {
-    setModal({ ...modal, index: Math.min(modal.index + 1, rowCount - 1) });
-    return true;
-  }
-  if (k.name === "k" || k.name === "up") {
-    setModal({ ...modal, index: Math.max(modal.index - 1, 0) });
-    return true;
-  }
-  if (k.sequence && /^[1-9]$/.test(k.sequence)) {
-    const i = Number(k.sequence) - 1;
-    if (i < modal.history.length) {
+  return handleListPickerKey(k, {
+    count: rowCount,
+    index: modal.index,
+    onMove: (next) => setModal({ ...modal, index: next }),
+    onCommit: (i) => {
+      if (i >= modal.history.length) {
+        setModal({ ...modal, input: "" });
+        return;
+      }
       const entry = modal.history[i];
       if (entry) launch(entry.value);
-    }
-    return true;
-  }
-  if (k.name === "return") {
-    if (modal.index >= modal.history.length) {
-      setModal({ ...modal, input: "" });
-      return true;
-    }
-    const entry = modal.history[modal.index];
-    if (entry) launch(entry.value);
-  }
-  return true;
+    },
+    onCancel: () => setModal(null),
+    // Digits launch history values only — the "+ new value…" row is
+    // Enter-only (it opens an input, not a pick).
+    digits: (n) => {
+      const entry = modal.history[n - 1];
+      if (entry) launch(entry.value);
+    },
+  });
 }

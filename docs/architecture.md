@@ -81,18 +81,21 @@ any SST stage intact.
 
 ## Modal UX rules
 
-Every list-picker modal follows the same shape so muscle memory carries across pickers. Hold to these when adding or modifying a picker:
+Every list-picker modal follows the same shape so muscle memory carries across pickers — and the shape is now CODE, not convention: `tui/modal-keys/list-picker.ts` (`handleListPickerKey`) implements move/digits/chords/confirm/cancel once, and every picker handler delegates to it after its picker-specific pre-checks (text-input modes, space-toggle, preview-on-move). Add new pickers through it; hand-rolling the base keys is how pickers drift. The rules it encodes:
 
-- **Trigger-key re-press confirms.** Whatever single key opens the picker (`l`, `;`, `'`, `!`, `v`, `b`) also commits the highlighted row when pressed again (`l l`, `; ;`, `' '`, `! !`, `v v`).
+- **Trigger-key re-press confirms.** Whatever single key opens the picker (`l`, `;`, `'`, `!`, `v`, `b`, `u`) also commits the highlighted row when pressed again (`l l`, `; ;`, `' '`, `! !`, `v v`, `u u`) — the `confirm` option.
 - **Enter still works** — the chord is the cheap path, Enter the discoverable one.
 - **Esc / q / Ctrl+C cancel.** Universal, no exceptions.
 - **j/k or arrows move.** Nothing fancier; `g`/`G` aren't bound inside pickers.
-- **1–9 quick-pick** when the list shows ≤9 items; out-of-range digits are ignored.
+- **1–9 quick-pick** when the list shows ≤9 items; out-of-range digits are ignored. Pickers whose rows have their own letters (actions) or where digits would be ambiguous (multi-select) pass `digits: false`; pickers with special rows remap via a `digits` function.
+- **Per-item letter chords where rows are nameable** (`chords` option): the status picker's `t/w/r/n/h/y` states, per-harness `c/x/o` "new session" rows. Render the letter dim in the row (`PickerModal`'s `itemKeys`) so the chord is discoverable.
 - **Sub-affordances get their own letter** (`l n` new section, `! c` custom prompt, `; c` new claude session). The trigger re-press always means "confirm the highlight", never "jump to the special row".
 - **Live preview on the bottom pane when it helps** (outputs, sessions) via `previewFocusPatch` from `tui/picker-preview.ts`; pickers without a sensible preview leave the pane alone.
 - **`x` kills** where rows represent killable things, without an extra confirm.
 - **Hints reflect the chord** — render the trigger-confirm pair in the modal's `hints`; `PickerModal` / `MultiPickerModal` take a `toggleKey` prop that wires this.
 - **Unbounded lists scroll, don't clip.** The `Modal` shell clips overflow with no scrollback of its own, so any list that maps user-sized data (actions, sessions, branches, outputs, clean candidates) wraps its rows in `<ScrollableList>` (`tui/panels/scroll-list.tsx`): it fills the modal, suppresses the mount scrollbar flash, and scrolls the selected row into view as j/k moves (each row carries a stable `id`, and `selectedId` names the highlighted one). Rows still own horizontal truncation (`wrapMode="none" truncate` inside a `flexGrow`/`overflow="hidden"` box) — vertical scroll, horizontal ellipsis.
+- **Modals size to their content.** The `Modal` shell grows with its children up to the inset-derived height cap — a seven-row picker is a seven-row modal. `fill` opts back into the full fixed frame for content that owns the space (help) — a bare `flexGrow` scrollbox doesn't self-measure and collapses under auto-height, which is also why `ScrollableList`-based pickers work unchanged. Hint chips along the bottom edge wrap BETWEEN hints at narrow widths (`KeyHint` renders each pair as one non-wrapping `<text>` inside a `flexWrap` row) — never through the border.
+- **Rows are single `<text>` nodes.** Compose columns with spans + `padEnd`, not sibling fixed-width boxes — box rows overprint each other when the modal is narrower than their natural width (the old yank modal garble).
 
 When a picker doesn't naturally have a single trigger key (e.g. branchPicker, reached mid-flow), drop the re-press leg and keep Enter/Esc — don't invent a trigger key to satisfy the rule.
 

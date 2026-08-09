@@ -13,6 +13,11 @@ type Props = {
    * hint when set.
    */
   toggleKey?: string;
+  /**
+   * Per-item chord letters, rendered dim before each label (`null` for
+   * chordless rows). Same length as `items` when provided.
+   */
+  itemKeys?: readonly (string | null)[];
 };
 
 export function PickerModal({
@@ -20,6 +25,7 @@ export function PickerModal({
   items,
   selectedIndex,
   toggleKey,
+  itemKeys,
 }: Props) {
   const pickKeys = toggleKey ? `${toggleKey} / ⏎` : "⏎";
   return (
@@ -39,6 +45,7 @@ export function PickerModal({
           const selected = i === selectedIndex;
           const bg = selected ? theme.rowSelectedBg : undefined;
           const fg = selected ? theme.fgBright : theme.fg;
+          const chord = itemKeys?.[i] ?? null;
           return (
             <box
               id={`pick:${item}`}
@@ -51,6 +58,11 @@ export function PickerModal({
               <text fg={selected ? theme.accent : theme.fgDim}>
                 {selected ? "▸ " : "  "}
               </text>
+              {itemKeys ? (
+                <text fg={selected ? theme.accent : theme.fgDim}>
+                  {chord ? `${chord} ` : "  "}
+                </text>
+              ) : null}
               <text fg={fg} wrapMode="none" truncate>
                 {item}
               </text>

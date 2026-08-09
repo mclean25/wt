@@ -1,38 +1,31 @@
 import type { KeyEvent } from "@opentui/core";
 
-import { isPlainLetter } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import { previewFocusPatch } from "../picker-preview.ts";
+import { WORK_STATE_CHORDS } from "../flows/work-status.ts";
 import type { SimpleModalContext } from "./ctx.ts";
+import { handleListPickerKey } from "./list-picker.ts";
 
 export function handleBranchPickerKey(
   k: KeyEvent,
   modal: Extract<Modal, { kind: "branchPicker" }>,
   { setModal }: SimpleModalContext,
 ): boolean {
-  if (k.name === "j" || k.name === "down") {
-    setModal({ ...modal, index: Math.min(modal.index + 1, modal.items.length - 1) });
-    return true;
-  }
-  if (k.name === "k" || k.name === "up") {
-    setModal({ ...modal, index: Math.max(modal.index - 1, 0) });
-    return true;
-  }
-  if (k.name === "return") {
-    const chosen = modal.items[modal.index]!;
-    modal.resolve(chosen);
-    setModal(null);
-    return true;
-  }
-  if (
-    k.name === "escape" ||
-    k.sequence === "q" ||
-    (k.ctrl && k.name === "c")
-  ) {
-    modal.resolve(null);
-    setModal(null);
-  }
-  return true;
+  return handleListPickerKey(k, {
+    count: modal.items.length,
+    index: modal.index,
+    onMove: (next) => setModal({ ...modal, index: next }),
+    onCommit: (i) => {
+      const chosen = modal.items[i];
+      if (chosen === undefined) return;
+      modal.resolve(chosen);
+      setModal(null);
+    },
+    onCancel: () => {
+      modal.resolve(null);
+      setModal(null);
+    },
+  });
 }
 
 export function handleBasePickerKey(
@@ -40,32 +33,17 @@ export function handleBasePickerKey(
   modal: Extract<Modal, { kind: "basePicker" }>,
   { setModal, commitBasePick }: SimpleModalContext,
 ): boolean {
-  if (k.name === "j" || k.name === "down") {
-    setModal({ ...modal, index: Math.min(modal.index + 1, modal.items.length - 1) });
-    return true;
-  }
-  if (k.name === "k" || k.name === "up") {
-    setModal({ ...modal, index: Math.max(modal.index - 1, 0) });
-    return true;
-  }
-  if (k.sequence && /^[1-9]$/.test(k.sequence)) {
-    const item = modal.items[parseInt(k.sequence, 10) - 1];
-    if (item) commitBasePick(item, modal.slug);
-    return true;
-  }
-  if (k.name === "return" || isPlainLetter(k, "b")) {
-    const item = modal.items[modal.index];
-    if (item) commitBasePick(item, modal.slug);
-    return true;
-  }
-  if (
-    k.name === "escape" ||
-    k.sequence === "q" ||
-    (k.ctrl && k.name === "c")
-  ) {
-    setModal(null);
-  }
-  return true;
+  return handleListPickerKey(k, {
+    count: modal.items.length,
+    index: modal.index,
+    onMove: (next) => setModal({ ...modal, index: next }),
+    onCommit: (i) => {
+      const item = modal.items[i];
+      if (item) commitBasePick(item, modal.slug);
+    },
+    onCancel: () => setModal(null),
+    confirm: ["b"],
+  });
 }
 
 export function handleStatusPickerKey(
@@ -73,39 +51,25 @@ export function handleStatusPickerKey(
   modal: Extract<Modal, { kind: "statusPicker" }>,
   { setModal, commitStatusPick }: SimpleModalContext,
 ): boolean {
-  if (k.name === "j" || k.name === "down") {
-    setModal({ ...modal, index: Math.min(modal.index + 1, modal.items.length - 1) });
-    return true;
+  // Every state has a direct chord (`u t` → todo, …, `x` clears) —
+  // the letters render dim in the picker rows.
+  const chords: Record<string, (index: number) => void> = {};
+  for (const item of modal.items) {
+    const letter = item.state === null ? "x" : WORK_STATE_CHORDS[item.state];
+    chords[letter] = () => commitStatusPick(item, modal.slug);
   }
-  if (k.name === "k" || k.name === "up") {
-    setModal({ ...modal, index: Math.max(modal.index - 1, 0) });
-    return true;
-  }
-  if (k.sequence && /^[1-9]$/.test(k.sequence)) {
-    const item = modal.items[parseInt(k.sequence, 10) - 1];
-    if (item) commitStatusPick(item, modal.slug);
-    return true;
-  }
-  // `x` clears — the picker's "kill" affordance; the clear row is also
-  // selectable normally.
-  if (isPlainLetter(k, "x")) {
-    const clearItem = modal.items.find((it) => it.state === null);
-    if (clearItem) commitStatusPick(clearItem, modal.slug);
-    return true;
-  }
-  if (k.name === "return" || isPlainLetter(k, "u")) {
-    const item = modal.items[modal.index];
-    if (item) commitStatusPick(item, modal.slug);
-    return true;
-  }
-  if (
-    k.name === "escape" ||
-    k.sequence === "q" ||
-    (k.ctrl && k.name === "c")
-  ) {
-    setModal(null);
-  }
-  return true;
+  return handleListPickerKey(k, {
+    count: modal.items.length,
+    index: modal.index,
+    onMove: (next) => setModal({ ...modal, index: next }),
+    onCommit: (i) => {
+      const item = modal.items[i];
+      if (item) commitStatusPick(item, modal.slug);
+    },
+    onCancel: () => setModal(null),
+    confirm: ["u"],
+    chords,
+  });
 }
 
 export function handleOutputsPickerKey(
@@ -113,43 +77,21 @@ export function handleOutputsPickerKey(
   modal: Extract<Modal, { kind: "outputsPicker" }>,
   { setModal, visibleOutputs, currentSlug, setFocus }: SimpleModalContext,
 ): boolean {
-  const idx =
-    visibleOutputs.length === 0
-      ? 0
-      : Math.min(Math.max(0, modal.index), visibleOutputs.length - 1);
-  const moveTo = (next: number): void => {
-    setModal({ kind: "outputsPicker", index: next });
-    const patch = previewFocusPatch(visibleOutputs[next]?.id ?? null);
-    if (patch) setFocus(currentSlug ?? null, patch);
-  };
   const commit = (i: number): void => {
     const target = visibleOutputs[i];
     if (target) setFocus(currentSlug ?? null, { focused: target.id });
     setModal(null);
   };
-  if (k.name === "j" || k.name === "down") {
-    moveTo(Math.min(idx + 1, visibleOutputs.length - 1));
-    return true;
-  }
-  if (k.name === "k" || k.name === "up") {
-    moveTo(Math.max(0, idx - 1));
-    return true;
-  }
-  if (k.sequence && /^[1-9]$/.test(k.sequence)) {
-    const i = parseInt(k.sequence, 10) - 1;
-    if (visibleOutputs[i]) commit(i);
-    return true;
-  }
-  if (k.sequence === "'" || k.name === "return") {
-    commit(idx);
-    return true;
-  }
-  if (
-    k.name === "escape" ||
-    k.sequence === "q" ||
-    (k.ctrl && k.name === "c")
-  ) {
-    setModal(null);
-  }
-  return true;
+  return handleListPickerKey(k, {
+    count: visibleOutputs.length,
+    index: modal.index,
+    onMove: (next) => {
+      setModal({ kind: "outputsPicker", index: next });
+      const patch = previewFocusPatch(visibleOutputs[next]?.id ?? null);
+      if (patch) setFocus(currentSlug ?? null, patch);
+    },
+    onCommit: commit,
+    onCancel: () => setModal(null),
+    confirm: ["'"],
+  });
 }

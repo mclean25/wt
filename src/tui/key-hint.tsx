@@ -13,26 +13,22 @@ type Props = {
  * Inline keystroke hint, e.g. `j/k move · ⏎ pick · esc cancel`.
  * Returns a Fragment of `<text>` nodes so the caller controls the
  * row container (typically `<box flexDirection="row">`).
+ *
+ * Each `key + label (+ separator)` chip is a single non-wrapping
+ * `<text>`, so a `flexWrap="wrap"` container breaks the row BETWEEN
+ * chips at narrow widths — never mid-hint, and never through the
+ * modal border.
  */
 export function KeyHint({ pairs, separator = " · " }: Props) {
   const parts: ReactNode[] = [];
   pairs.forEach(([key, label], i) => {
-    if (i > 0) {
-      parts.push(
-        <text key={`sep-${i}`} fg={theme.fgDim}>
-          {separator}
-        </text>,
-      );
-    }
     parts.push(
-      <text key={`k-${i}`} fg={theme.accent} attributes={1}>
-        {key}
-      </text>,
-    );
-    parts.push(
-      <text key={`l-${i}`} fg={theme.fgDim}>
-        {" "}
-        {label}
+      <text key={`h-${i}`} wrapMode="none">
+        <span fg={theme.accent} attributes={1}>
+          {key}
+        </span>
+        <span fg={theme.fgDim}> {label}</span>
+        {i < pairs.length - 1 ? <span fg={theme.fgDim}>{separator}</span> : null}
       </text>,
     );
   });

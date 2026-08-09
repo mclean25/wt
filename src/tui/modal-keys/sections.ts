@@ -1,8 +1,9 @@
 import type { KeyEvent } from "@opentui/core";
 
-import { isPlainLetter, printableText } from "../app-helpers.ts";
+import { printableText } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
+import { handleListPickerKey } from "./list-picker.ts";
 
 export function handleSectionPickerKey(
   k: KeyEvent,
@@ -59,36 +60,27 @@ export function handleSectionPickerKey(
     if (text) setModal({ ...modal, newName: modal.newName + text });
     return true;
   }
-  if (k.name === "j" || k.name === "down") {
-    setModal({ ...modal, index: Math.min(modal.index + 1, modal.items.length - 1) });
-    return true;
-  }
-  if (k.name === "k" || k.name === "up") {
-    setModal({ ...modal, index: Math.max(modal.index - 1, 0) });
-    return true;
-  }
-  if (isPlainLetter(k, "n")) {
-    const createIdx = modal.items.findIndex((it) => it.kind === "create");
-    if (createIdx >= 0) commitSectionPick(modal.items[createIdx]!, modal.slug);
-    return true;
-  }
-  if (k.sequence && /^[1-9]$/.test(k.sequence)) {
-    const i = parseInt(k.sequence, 10) - 1;
-    const item = modal.items[i];
-    if (item && item.kind !== "create") commitSectionPick(item, modal.slug);
-    return true;
-  }
-  if (k.name === "return" || isPlainLetter(k, "l")) {
-    const item = modal.items[modal.index];
-    if (item) commitSectionPick(item, modal.slug);
-    return true;
-  }
-  if (
-    k.name === "escape" ||
-    k.sequence === "q" ||
-    (k.ctrl && k.name === "c")
-  ) {
-    setModal(null);
-  }
-  return true;
+  return handleListPickerKey(k, {
+    count: modal.items.length,
+    index: modal.index,
+    onMove: (next) => setModal({ ...modal, index: next }),
+    onCommit: (i) => {
+      const item = modal.items[i];
+      if (item) commitSectionPick(item, modal.slug);
+    },
+    onCancel: () => setModal(null),
+    confirm: ["l"],
+    // `n` jumps straight to the "+ new section" affordance.
+    chords: {
+      n: () => {
+        const createIdx = modal.items.findIndex((it) => it.kind === "create");
+        if (createIdx >= 0) commitSectionPick(modal.items[createIdx]!, modal.slug);
+      },
+    },
+    // Digits pick sections only — the create row keeps its letter.
+    digits: (n) => {
+      const item = modal.items[n - 1];
+      if (item && item.kind !== "create") commitSectionPick(item, modal.slug);
+    },
+  });
 }

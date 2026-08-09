@@ -27,6 +27,7 @@ import { OutputsPicker } from "./panels/outputs-picker.tsx";
 import { PerfOverlay } from "./panels/perf.tsx";
 import { ArgPickerModal, MultiPickerModal, PickerModal } from "./panels/picker.tsx";
 import { SectionPickerModal } from "./panels/section-picker.tsx";
+import { WORK_STATE_CHORDS } from "./flows/work-status.ts";
 import {
   SessionsPickerList,
   SessionsPickerNew,
@@ -169,6 +170,9 @@ export function PostFooterModals({
           items={modal.items.map((it) => it.label)}
           selectedIndex={modal.index}
           toggleKey="u"
+          itemKeys={modal.items.map((it) =>
+            it.state === null ? "x" : WORK_STATE_CHORDS[it.state],
+          )}
         />
       ) : null}
       {modal?.kind === "reviewerPicker" ? (

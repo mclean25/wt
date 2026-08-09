@@ -18,6 +18,22 @@ import { theme } from "../theme.ts";
 
 export type StatusPickerItem = { label: string; state: WorkState | null };
 
+/**
+ * Direct chords inside the `u` picker (`u t` → todo, `u y` → ready).
+ * `x` clears, matching the picker's clear row. Letters avoid the
+ * picker's reserved keys (j/k/u/q/x, digits); the two `needs-*` states
+ * take their distinguishing word's initial, mirroring the CLI's
+ * `nt`/`nh` aliases.
+ */
+export const WORK_STATE_CHORDS: Record<WorkState, string> = {
+  todo: "t",
+  working: "w",
+  review: "r",
+  "needs-testing": "n",
+  "needs-human": "h",
+  ready: "y",
+};
+
 type WorkStatusFlowsCtx = {
   current: WorktreeRow | undefined;
   setModal: (m: Modal | null) => void;

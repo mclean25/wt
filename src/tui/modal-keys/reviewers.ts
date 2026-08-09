@@ -2,20 +2,14 @@ import type { KeyEvent } from "@opentui/core";
 
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
+import { handleListPickerKey } from "./list-picker.ts";
 
 export function handleReviewerPickerKey(
   k: KeyEvent,
   modal: Extract<Modal, { kind: "reviewerPicker" }>,
   { setModal, submitReviewerPicker }: SimpleModalContext,
 ): boolean {
-  if (k.name === "j" || k.name === "down") {
-    setModal({ ...modal, index: Math.min(modal.index + 1, modal.items.length - 1) });
-    return true;
-  }
-  if (k.name === "k" || k.name === "up") {
-    setModal({ ...modal, index: Math.max(modal.index - 1, 0) });
-    return true;
-  }
+  // Multi-select toggle stays a pre-check (space isn't a letter chord).
   if (k.name === "space" || k.sequence === " ") {
     const item = modal.items[modal.index];
     if (item) {
@@ -26,16 +20,15 @@ export function handleReviewerPickerKey(
     }
     return true;
   }
-  if (k.name === "return" || k.sequence === "v") {
-    void submitReviewerPicker();
-    return true;
-  }
-  if (
-    k.name === "escape" ||
-    k.sequence === "q" ||
-    (k.ctrl && k.name === "c")
-  ) {
-    setModal(null);
-  }
-  return true;
+  return handleListPickerKey(k, {
+    count: modal.items.length,
+    index: modal.index,
+    onMove: (next) => setModal({ ...modal, index: next }),
+    // Enter / `v v` submit the checked SET — digits would ambiguously
+    // toggle vs. submit, so they're off for multi-select.
+    onCommit: () => void submitReviewerPicker(),
+    onCancel: () => setModal(null),
+    confirm: ["v"],
+    digits: false,
+  });
 }
