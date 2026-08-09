@@ -31,6 +31,7 @@ import type { DerivedState } from "../../core/harness/status.ts";
 import { StatusKind, type PrComment, type Worktree } from "../../core/types.ts";
 import { useGithub } from "../../state/hooks.ts";
 import { useHarnessSessions } from "../hooks/useHarnessSessions.ts";
+import { useNowTick } from "../hooks/useNowTick.ts";
 import { usePrimaryHarness } from "../hooks/usePrimaryHarness.ts";
 import {
   aiSummaryQuery,
@@ -589,6 +590,9 @@ export function Details({
   scrollRef,
   sessionState,
 }: Props) {
+  // Ages ("· 17s ago", "committed 54s") are computed at render time;
+  // tick so they don't freeze on a quiet instance.
+  useNowTick();
   if (removed) {
     // Key by slug so cursor moves across history entries remount cleanly.
     return <RemovedBody key={`removed:${removed.slug}`} entry={removed} width={width} />;
