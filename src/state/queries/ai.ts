@@ -11,6 +11,7 @@ import type {
 } from "../../core/types.ts";
 import { createLogger } from "../../core/logger.ts";
 import { pluralize } from "../../core/text.ts";
+import { stackIdFromSectionKey } from "../../core/wtstate.ts";
 
 import { qk } from "../keys.ts";
 import { KEEP_PREV, NO_CTX_HASH, STALE } from "./shared.ts";
@@ -176,12 +177,16 @@ export const stackTitleQuery = (
       if (members.length === 0) {
         throw new Error("stackTitleQuery: members empty (enabled guard missed)");
       }
-      aiLog.event.dim(`naming stack ${sectionName} (${members.length} members)...`);
+      // Log the stack id, not the raw section key — the key carries a
+      // NUL prefix (`\0stack:`) that must never hit the log/pane (the
+      // logger would render it as � anyway).
+      const displayName = stackIdFromSectionKey(sectionName) ?? sectionName;
+      aiLog.event.dim(`naming stack ${displayName} (${members.length} members)...`);
       const start = Date.now();
       try {
         const title = await summarizeStack(members, signal);
         aiLog.event.dim(
-          `named stack ${sectionName} → "${title}" (${formatDuration(Date.now() - start)})`,
+          `named stack ${displayName} → "${title}" (${formatDuration(Date.now() - start)})`,
         );
         return title;
       } catch (err) {
@@ -190,7 +195,7 @@ export const stackTitleQuery = (
         if (signal.aborted) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         aiLog.event.err(
-          `naming stack ${sectionName} failed (${formatDuration(Date.now() - start)}): ${msg}`,
+          `naming stack ${displayName} failed (${formatDuration(Date.now() - start)}): ${msg}`,
         );
         throw err;
       }

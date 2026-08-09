@@ -159,7 +159,7 @@ function emit(
   // record per line so each gets its own ts/source/kind prefix in both
   // sinks; preserve leading whitespace so indented blocks stay readable.
   const tag = channel === "attention" ? "ATTN " : "EVENT";
-  const lines = splitEventLines(text);
+  const lines = splitEventLines(text).map(sanitizeControl);
   for (const line of lines) {
     appendLine(
       `${ts()} ${tag} ${kind.padEnd(KIND_PAD)} ${source.padEnd(SRC_PAD)} ${line}\n`,
@@ -193,11 +193,29 @@ function splitEventLines(text: string): string[] {
   return text.split(/\r\n|\r|\n/).filter((line) => line.length > 0);
 }
 
+/**
+ * Replace control bytes so the daily file stays grep-able TEXT. One
+ * NUL anywhere (a raw stack section key once leaked its "\0stack:"
+ * prefix into an event line) flips BSD grep into binary mode and
+ * silently breaks `grep ' EVENT '` over the whole file — the exact
+ * debugging path the docs recommend. Tabs and \n pass through (emit
+ * splits \n out beforehand; writeFile indents it deliberately); \r is
+ * replaced here as the backstop for the non-split writeFile path.
+ */
+function sanitizeControl(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\0-\x08\x0B-\x1F\x7F]/g, "�");
+}
+
 function writeFile(level: string, source: string, msg: string, ctx?: object): void {
   const ctxStr = ctx && Object.keys(ctx).length > 0 ? ` ${safeJson(ctx)}` : "";
   // Indent continuation lines so multi-line stack traces stay readable
   // under `tail -F` without swallowing the next record's timestamp.
-  const safeMsg = msg.includes("\n") ? msg.replaceAll("\n", "\n        ") : msg;
+  // (ctx is JSON.stringify'd, which already escapes control bytes.)
+  const cleaned = sanitizeControl(msg);
+  const safeMsg = cleaned.includes("\n")
+    ? cleaned.replaceAll("\n", "\n        ")
+    : cleaned;
   appendLine(
     `${ts()} ${level.padEnd(LVL_PAD)} ${source.padEnd(SRC_PAD)} ${safeMsg}${ctxStr}\n`,
   );
