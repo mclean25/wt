@@ -28,6 +28,10 @@ const READY_MAX_MS = 12_000;
 const SUBMIT_DELAY_MS = 500;
 /** Gap between successive submit keys (e.g. claude's double Enter). */
 const SUBMIT_KEY_GAP_MS = 250;
+/** Re-paste attempts when the pane shows no trace of the paste. */
+const PASTE_MAX_RETRIES = 3;
+/** Extra grace before a re-paste attempt. */
+const PASTE_RETRY_GRACE_MS = 1_000;
 
 /**
  * Wait until a freshly-started harness pane stops changing — meaning it
@@ -270,8 +274,26 @@ async function injectIntoSessionUnlocked(opts: {
     await sleep(WARM_SETTLE_MS);
   }
   try {
-    await pasteBuffer(name, text);
-    await sleep(SUBMIT_DELAY_MS);
+    // Paste, then VERIFY the pane actually changed. Claude's REPL can
+    // sit visually stable — banner rendered, prompt drawn — while its
+    // input is not yet accepting paste (the MCP-connect window on a
+    // cold start), and a paste sent into that window is dropped
+    // wholesale with no error from tmux: waitForPaneReady can't tell
+    // "settled and ready" from "settled and deaf". An accepted paste
+    // always changes the pane text (inline, or Claude's "[Pasted text
+    // …]" placeholder), so an unchanged pane means the paste vanished —
+    // wait out another settle round and re-paste, bounded. The final
+    // attempt proceeds to submit regardless (pre-verify behavior).
+    for (let attempt = 0; ; attempt++) {
+      const before = (await capturePane(name))?.trim() ?? "";
+      await pasteBuffer(name, text);
+      await sleep(SUBMIT_DELAY_MS);
+      const after = (await capturePane(name))?.trim() ?? "";
+      if (after !== before || attempt >= PASTE_MAX_RETRIES) break;
+      log.warn("inject paste left no trace in pane; re-pasting", { name, attempt });
+      await sleep(PASTE_RETRY_GRACE_MS);
+      await waitForPaneReady(name);
+    }
     // Harnesses declare their own submit-key sequence: most take a
     // single Enter, but Claude Code and Codex receive the bracketed
     // paste as a multi-line input blob whose first Enter only exits
