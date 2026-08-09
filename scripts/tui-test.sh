@@ -29,6 +29,10 @@
 #     automations alongside the live instance) and WT_GITHUB=off
 #     (probes render PR badges from the persisted cache instead of
 #     burning API quota — N probes once ate a day's rate limit).
+#     Both can be overridden by exporting them before `start`, but ONLY
+#     for a sealed second instance (own WT_CONFIG + WT_TMUX_SOCKET,
+#     cache_db relocated) — never against the live config. WT_CONFIG
+#     and WT_TMUX_SOCKET pass through when exported.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,7 +47,10 @@ case "$cmd" in
     name="${1:-probe}" w="${2:-200}" h="${3:-50}"
     T kill-session -t "$name" 2>/dev/null || true
     T new-session -d -s "$name" -x "$w" -y "$h" \
-      -e WT_AUTOMATIONS=off -e WT_GITHUB=off -c "$ROOT" "exec bun src/main.ts"
+      -e WT_AUTOMATIONS="${WT_AUTOMATIONS:-off}" -e WT_GITHUB="${WT_GITHUB:-off}" \
+      ${WT_CONFIG:+-e WT_CONFIG="$WT_CONFIG"} \
+      ${WT_TMUX_SOCKET:+-e WT_TMUX_SOCKET="$WT_TMUX_SOCKET"} \
+      -c "$ROOT" "exec bun src/main.ts"
     # Wait for the first painted frame (bun cold start + cache hydrate).
     for _ in $(seq 1 60); do
       out="$(T capture-pane -pt "$name" 2>/dev/null || true)"

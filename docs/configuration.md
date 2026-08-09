@@ -54,10 +54,14 @@ The source of truth for the schema is [`src/core/config.ts`](../src/core/config.
 |---|---|---|---|
 | `main_clone` | **yes** | — | The primary clone of the repo the worktrees belong to. |
 | `worktree_root` | **yes** | — | Directory where worktrees are created (`<worktree_root>/<slug>`). |
-| `log_dir` | no | `~/.cache/wt/logs` | Per-worktree destroy logs live here; daily structured app logs go to the derived `<log_dir>/app` subdirectory. |
-| `lock_dir` | no | `~/.cache/wt/locks` | Per-slug operation locks (what drives the "setting up…" busy state). |
-| `cache_db` | no | `~/.cache/wt/cache.sqlite` | SQLite blob persisting the TanStack Query cache between runs. |
+| `log_dir` | no | `<cache root>/logs` | Per-worktree destroy logs live here; daily structured app logs go to the derived `<log_dir>/app` subdirectory. |
+| `lock_dir` | no | `<cache root>/locks` | Per-slug operation locks (what drives the "setting up…" busy state). |
+| `cache_db` | no | `~/.cache/wt/cache.sqlite` | SQLite blob persisting the TanStack Query cache between runs. Its directory (the **cache root**) anchors every other cross-process file wt writes — `state.json`, `archive.json`, session-name registries, the automations ledger, manager reports, shell logs, the generated `tmux.conf`. Point `cache_db` into a fresh directory and that instance shares no state with any other. |
 | `wezterm_cli` | no | macOS: `/Applications/WezTerm.app/Contents/MacOS/wezterm`; elsewhere: `wezterm` from `PATH` | WezTerm CLI executable used to set the tab title to `wt` when `WEZTERM_PANE` is present. Supports `~` expansion. |
+
+### Running a second isolated instance
+
+Two wt instances (another repo, a test setup) stay fully independent when they differ on two knobs: a relocated `cache_db` (own cache root → own state universe) and the `WT_TMUX_SOCKET` environment variable (own tmux server — session names are only slug-scoped, so sharing a socket would cross-wire same-named sessions, most dangerously the singleton `manager`). Pick the config with `WT_CONFIG=/path/to/config.toml`. Both env vars propagate into every session the tmux server spawns, so `wt` CLI calls made inside agent sessions resolve the same instance.
 
 ## `[branch]`
 

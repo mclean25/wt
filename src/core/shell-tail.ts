@@ -38,9 +38,9 @@ import {
   statSync,
   watch,
 } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { config } from "./config.ts";
 import { MAX_BUFFERED_LINES } from "./harness/claude/events.ts";
 import { createLogger } from "./logger.ts";
 import { closeSilent, readFileSlice } from "./tail-util.ts";
@@ -102,7 +102,7 @@ const PROMPT_PREFIX_RE = /^[\s─-▟]*[❯>›→»$%#]\s+/;
 const MAX_RECONSTRUCT_LEN = 200;
 
 function shellLogDir(): string {
-  return join(homedir(), ".cache", "wt", "shell-logs");
+  return join(config.paths.cacheRoot, "shell-logs");
 }
 
 /** Stable per-slug log path under wt's cache dir. */

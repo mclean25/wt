@@ -1,7 +1,7 @@
 /**
  * Per-slug list of named claude sessions the user has spawned. Primary
  * (F12) is implicit — never stored here. Backing file:
- * `~/.cache/wt/claude-sessions.json`.
+ * `<cacheRoot>/claude-sessions.json`.
  *
  * The exported helpers cover both the persistence layer (read / mutate
  * the JSON file) and the picker-data composition
@@ -22,17 +22,17 @@
  * `nextAutoName` so the auto-numbering ladder stays predictable.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { wtSessionUuid, type SessionTail } from "./jsonl.ts";
 import type { RegistryStatus } from "./registry.ts";
 import { deriveSessionState, type DerivedState } from "../status.ts";
 import type { SessionSummary } from "./summaries.ts";
+import { config } from "../../config.ts";
 import { withFileLock } from "../../locks.ts";
 import { createLogger } from "../../logger.ts";
 
-const STATE_FILE = join(homedir(), ".cache", "wt", "claude-sessions.json");
+const STATE_FILE = join(config.paths.cacheRoot, "claude-sessions.json");
 const log = createLogger("[claude-sessions]");
 
 /** Raw file shape: `{ <slug>: ["name1", "name2", ...] }`. */

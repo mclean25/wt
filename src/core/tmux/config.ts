@@ -1,12 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { config } from "../config.ts";
 import { SESSION_SWITCH_EXIT_CODE } from "./naming.ts";
 
 /** Path to the directory holding the generated `tmux.conf`. */
 export function configDir(): string {
-  const dir = join(homedir(), ".cache", "wt");
+  const dir = config.paths.cacheRoot;
   mkdirSync(dir, { recursive: true });
   return dir;
 }

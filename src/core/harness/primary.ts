@@ -4,19 +4,19 @@
  * the top-right info bar advertises. TAB cycles through the registered
  * impls; this file is the source of truth across runs.
  *
- * Lives in `~/.cache/wt/harness.json` rather than `wtState.json` so the
+ * Lives in `<cacheRoot>/harness.json` rather than `wtState.json` so the
  * existing per-slug state file stays focused on section/order.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
 
 import { HARNESSES } from "./registry.ts";
 import type { HarnessId } from "./types.ts";
 
-const STATE_FILE = join(homedir(), ".cache", "wt", "harness.json");
+const STATE_FILE = join(config.paths.cacheRoot, "harness.json");
 const log = createLogger("[harness]");
 
 type FileShape = { primary?: HarnessId };

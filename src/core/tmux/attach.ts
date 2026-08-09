@@ -50,7 +50,7 @@ export function tmuxClientCwd(): string {
  * capture wrapper opened. Shell sessions deliberately never write here.
  */
 export function sessionsDir(): string {
-  const dir = join(homedir(), ".cache", "wt", "sessions");
+  const dir = join(config.paths.cacheRoot, "sessions");
   mkdirSync(dir, { recursive: true });
   return dir;
 }

@@ -1,7 +1,16 @@
 import type { HarnessId } from "../harness/index.ts";
 
-/** Socket name (`-L`) for the wt-private tmux server. */
-export const TMUX_SOCKET = "wt";
+/**
+ * Socket name (`-L`) for the wt-private tmux server. `WT_TMUX_SOCKET`
+ * overrides it so a second isolated wt instance (another repo's
+ * config, a test/dogfood setup) gets its own tmux universe — session
+ * names are only slug-scoped, so two instances on one socket would
+ * cross-wire same-named sessions (most dangerously the singleton
+ * `manager`). Pair it with a relocated `paths.cache_db`; the env var
+ * propagates into every session the server spawns, so `wt` CLI calls
+ * made inside them land on the same socket.
+ */
+export const TMUX_SOCKET = process.env.WT_TMUX_SOCKET?.trim() || "wt";
 
 /**
  * Exit statuses used by the tmux client's `detach-client -E` bindings to

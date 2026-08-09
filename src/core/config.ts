@@ -25,7 +25,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import type { BackendKind } from "./backend/types.ts";
 import {
@@ -506,6 +506,17 @@ export type Config = {
     lockDir: string;
     /** SQLite blob holding the persisted TanStack Query cache. */
     cacheDb: string;
+    /**
+     * `dirname(cacheDb)` — the root for ALL cross-process wt state
+     * (state.json, archive.json, session-name registries, automations
+     * ledger, manager reports, tmux conf, shell logs, dev scripts).
+     * `cache_db` is deliberately the single knob that relocates the
+     * whole state universe: point it into a fresh directory and a
+     * second wt instance (another repo, a test/dogfood setup) shares
+     * nothing with the first. New cross-process files go under this,
+     * never under a hardcoded `~/.cache/wt`.
+     */
+    cacheRoot: string;
     /** WezTerm CLI used for tab naming; null falls back to PATH lookup. */
     weztermCli: string | null;
   };
@@ -621,8 +632,6 @@ const GENERIC_DEFAULTS = {
     copyGlobs: [] as const,
   },
   paths: {
-    logDir: join(HOME, ".cache", "wt", "logs"),
-    lockDir: join(HOME, ".cache", "wt", "locks"),
     cacheDb: join(HOME, ".cache", "wt", "cache.sqlite"),
     weztermCli:
       process.platform === "darwin"
@@ -854,14 +863,17 @@ function build(raw: Raw, errs: Errors): Config {
 
   const mainClone = expandHome(errs.reqStr(paths, "paths", "main_clone"));
   const worktreeRoot = expandHome(errs.reqStr(paths, "paths", "worktree_root"));
-  const logDir = expandHome(errs.optStr(paths, "log_dir", GENERIC_DEFAULTS.paths.logDir));
+  const cacheDb = expandHome(errs.optStr(paths, "cache_db", GENERIC_DEFAULTS.paths.cacheDb));
+  // Everything cross-process anchors here; log_dir/lock_dir default
+  // relative to it so relocating cache_db moves the whole universe.
+  const cacheRoot = dirname(cacheDb);
+  const logDir = expandHome(errs.optStr(paths, "log_dir", join(cacheRoot, "logs")));
   // Sibling subdir for structured app logs — keeps daily `wt-*.log`
   // files separate from the per-worktree `<slug>-*.log` destroy logs
   // that `wt logs <slug>` reads. Not user-configurable; fold into
   // `log_dir` if the user moved that.
   const appLogDir = join(logDir, "app");
-  const lockDir = expandHome(errs.optStr(paths, "lock_dir", GENERIC_DEFAULTS.paths.lockDir));
-  const cacheDb = expandHome(errs.optStr(paths, "cache_db", GENERIC_DEFAULTS.paths.cacheDb));
+  const lockDir = expandHome(errs.optStr(paths, "lock_dir", join(cacheRoot, "locks")));
   const weztermCliRaw =
     errs.optStrOrNull(paths, "wezterm_cli") ?? GENERIC_DEFAULTS.paths.weztermCli;
   const weztermCli = weztermCliRaw ? expandHome(weztermCliRaw) : null;
@@ -1118,6 +1130,7 @@ function build(raw: Raw, errs: Errors): Config {
       appLogDir,
       lockDir,
       cacheDb,
+      cacheRoot,
       weztermCli,
     },
     branch: { prefix: branchPrefix, base: branchBase, idPattern, slugMaxLen },

@@ -8,13 +8,13 @@
  * Shape: `{ <slug>: { <session-id>: "<friendly-name>" } }`.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { config } from "../../config.ts";
 import { withFileLock } from "../../locks.ts";
 import { createLogger } from "../../logger.ts";
 
-const STATE_FILE = join(homedir(), ".cache", "wt", "opencode-sessions.json");
+const STATE_FILE = join(config.paths.cacheRoot, "opencode-sessions.json");
 const log = createLogger("[opencode-sessions]");
 
 type FileShape = Record<string, Record<string, string>>;

@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { config } from "./config.ts";
 import { run } from "./proc.ts";
 
 /**
@@ -18,7 +18,7 @@ import { run } from "./proc.ts";
  * titles collide (which they do in practice right after an update).
  */
 
-const CACHE_FILE = join(homedir(), ".cache", "wt", "zed-windows.json");
+const CACHE_FILE = join(config.paths.cacheRoot, "zed-windows.json");
 
 type CacheEntry = { windowId: number; lastSeen: string };
 type CacheFile = { byPath: Record<string, CacheEntry> };

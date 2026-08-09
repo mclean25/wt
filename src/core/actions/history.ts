@@ -56,7 +56,7 @@ const log = createLogger("[action-history]");
 /** Cap per action. Big enough to cover a few weeks of company churn; *  small enough that the picker stays scannable. */
 const MAX_PER_ACTION = 10;
 
-const HISTORY_PATH = join(dirname(config.paths.cacheDb), "action-history.json");
+const HISTORY_PATH = join(config.paths.cacheRoot, "action-history.json");
 
 export type HistoryEntry = {
   value: string;

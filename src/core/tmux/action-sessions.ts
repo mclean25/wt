@@ -26,15 +26,15 @@
  * here we only ever attach/kill by that fixed name.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
 import { run } from "../proc.ts";
+import { TMUX_SOCKET } from "./naming.ts";
 
 const log = createLogger("[action-tmux]");
 
-const TMUX_SOCKET = "wt";
 const ACTION_SUFFIX = "-action";
 
 /**
@@ -93,7 +93,7 @@ trap cleanup EXIT HUP TERM INT QUIT
 `;
 
 function cacheDir(): string {
-  const dir = join(homedir(), ".cache", "wt");
+  const dir = config.paths.cacheRoot;
   mkdirSync(dir, { recursive: true });
   return dir;
 }

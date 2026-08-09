@@ -2,20 +2,20 @@
  * Stable wt-friendly names for Codex sessions. Codex generates session
  * UUIDs itself and has no launch-time naming flag, so wt assigns names
  * after discovering new interactive rollouts and persists the mapping at
- * `~/.cache/wt/codex-sessions.json`.
+ * `<cacheRoot>/codex-sessions.json`.
  *
  * Shape: `{ <slug>: { <session-id>: "<friendly-name>" } }`.
  * The first discovered session is `primary`; later sessions are `2`,
  * `3`, and so on. UUIDs remain the authoritative resume handles.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { config } from "../../config.ts";
 import { withFileLock } from "../../locks.ts";
 import { createLogger } from "../../logger.ts";
 
-const STATE_FILE = join(homedir(), ".cache", "wt", "codex-sessions.json");
+const STATE_FILE = join(config.paths.cacheRoot, "codex-sessions.json");
 const log = createLogger("[codex-sessions]");
 
 type FileShape = Record<string, Record<string, string>>;

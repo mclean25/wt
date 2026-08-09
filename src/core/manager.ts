@@ -71,7 +71,7 @@ export type ManagerReport = {
  * churns constantly with sqlite WAL traffic.
  */
 export const MANAGER_REPORTS_PATH = join(
-  dirname(config.paths.cacheDb),
+  config.paths.cacheRoot,
   "manager",
   "reports.jsonl",
 );

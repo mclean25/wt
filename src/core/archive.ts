@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { config } from "./config.ts";
 import { withFileLock } from "./locks.ts";
 import { createLogger } from "./logger.ts";
 
-const ARCHIVE_FILE = join(homedir(), ".cache", "wt", "archive.json");
+const ARCHIVE_FILE = join(config.paths.cacheRoot, "archive.json");
 const log = createLogger("[archive]");
 
 type ArchiveFile = { slugs: string[] };

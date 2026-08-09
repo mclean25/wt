@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { config } from "../config.ts";
 import { withFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
 import { parseWorkStatus } from "../work-status.ts";
@@ -12,9 +12,11 @@ import type { RemovedWorktree, WtSlugState, WtState } from "./types.ts";
  * Directory holding the cross-process state files (`state.json` here,
  * `archive.json` in archive.ts). Exported so the TUI's state-file
  * watcher (`watchWtStateFiles` in repo-watch.ts) observes the same
- * location these writers target.
+ * location these writers target. Anchored to the config's cache root
+ * (`dirname(cache_db)`) so a second wt instance with its own config
+ * gets its own state universe.
  */
-export const WT_STATE_DIR = join(homedir(), ".cache", "wt");
+export const WT_STATE_DIR = config.paths.cacheRoot;
 export const STATE_FILE = join(WT_STATE_DIR, "state.json");
 export const log = createLogger("[wtstate]");
 
@@ -33,8 +35,8 @@ export function readWtState(): WtState {
  * Pure validation/coercion from parsed JSON to `WtState`, split out of
  * `readWtState` so the field-by-field tolerance rules (unknown shapes
  * degrade to defaults rather than throwing) are unit-testable without
- * touching the real state file — `readWtState` hardcodes `STATE_FILE`
- * to `~/.cache/wt/state.json` with no injection seam. Never throws:
+ * touching the real state file — `readWtState` reads the fixed
+ * `STATE_FILE` under the cache root with no injection seam. Never throws:
  * callers that already have a parsed JSON value (not raw text) can use
  * this directly instead of round-tripping through `readWtState`.
  */
