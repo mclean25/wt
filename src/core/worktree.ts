@@ -311,9 +311,12 @@ export async function worktreeHasTrackedChanges(wtPath: string): Promise<boolean
 /**
  * Count of commits on HEAD that aren't on the branch's upstream (or on
  * origin/main if there's no upstream). Used by remove flows to warn
- * about work that would be lost if the worktree is destroyed.
+ * about work that would be lost if the worktree is destroyed. Returns
+ * `null` when git couldn't answer — this feeds a data-loss guard, so
+ * "couldn't determine" must never masquerade as "nothing to lose";
+ * callers treat null as unpushed-work-unknown and stay cautious.
  */
-export async function unpushedCommits(wtPath: string): Promise<number> {
+export async function unpushedCommits(wtPath: string): Promise<number | null> {
   try {
     const hasUpstream = await runQuiet(
       ["git", "rev-parse", "--abbrev-ref", "@{u}"],
@@ -324,7 +327,7 @@ export async function unpushedCommits(wtPath: string): Promise<number> {
     return parseInt(ahead, 10) || 0;
   } catch (err) {
     log.error(err instanceof Error ? err : String(err), { wtPath });
-    return 0;
+    return null;
   }
 }
 
@@ -344,10 +347,10 @@ export async function worktreeStatus(wt: Worktree): Promise<Status> {
     return { kind: StatusKind.Missing, label: "missing" };
   }
   if (wt.branch) {
-    if (await branchIsGone(wt.branch)) {
+    if (await branchIsGone(wt.branch, wt.path)) {
       return { kind: StatusKind.Gone, label: "gone (squash-merged or deleted)" };
     }
-    if (await branchIsMerged(wt.branch)) {
+    if (await branchIsMerged(wt.branch, wt.path)) {
       return { kind: StatusKind.Merged, label: "merged into origin/main" };
     }
   }

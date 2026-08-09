@@ -20,6 +20,7 @@
 import type { Statement } from "bun:sqlite";
 
 import { createLogger } from "../../logger.ts";
+import { prepareTailQuery } from "../../tail-util.ts";
 import { openDb } from "./harness.ts";
 
 const log = createLogger("[opencode]");
@@ -71,10 +72,12 @@ function ensureStmts(): Stmts | null {
   if (!db) return null;
   try {
     stmts = {
-      sessionsByDir: db.query<SessionRow, { $directory: string }>(
+      sessionsByDir: prepareTailQuery<SessionRow, { $directory: string }>(
+        db,
         "SELECT id, title, time_updated FROM session WHERE directory = $directory AND time_archived IS NULL",
-      ) as unknown as Statement<SessionRow, [{ $directory: string }]>,
-      latestMsg: db.query<MessageRow, { $sid: string }>(
+      ),
+      latestMsg: prepareTailQuery<MessageRow, { $sid: string }>(
+        db,
         `SELECT id,
                 json_extract(data,'$.role')           AS role,
                 json_extract(data,'$.time.completed') AS completed,
@@ -83,20 +86,22 @@ function ensureStmts(): Stmts | null {
          WHERE session_id = $sid
          ORDER BY time_created DESC
          LIMIT 1`,
-      ) as unknown as Statement<MessageRow, [{ $sid: string }]>,
-      parts: db.query<PartRow, { $sid: string; $after: number }>(
+      ),
+      parts: prepareTailQuery<PartRow, { $sid: string; $after: number }>(
+        db,
         `SELECT id, json_extract(data,'$.type') AS type, data
          FROM part
          WHERE session_id = $sid AND time_created > $after
          ORDER BY time_created ASC`,
-      ) as unknown as Statement<PartRow, [{ $sid: string; $after: number }]>,
-      userText: db.query<UserPartRow, { $mid: string }>(
+      ),
+      userText: prepareTailQuery<UserPartRow, { $mid: string }>(
+        db,
         `SELECT json_extract(data,'$.text') AS text
          FROM part
          WHERE message_id = $mid AND json_extract(data,'$.type') = 'text'
          ORDER BY time_created ASC
          LIMIT 1`,
-      ) as unknown as Statement<UserPartRow, [{ $mid: string }]>,
+      ),
     };
     return stmts;
   } catch (err) {
@@ -158,6 +163,7 @@ function processSlug(
   slug: string,
   wtPath: string,
   isBaseline: boolean,
+  onActivity: (() => void) | undefined,
 ): void {
   const sessionRows = s.sessionsByDir.all({ $directory: wtPath });
 
@@ -179,6 +185,7 @@ function processSlug(
     if (isNew) {
       log.event.info(`new session: ${session.id.slice(0, 8)} · ${slug}`);
       seedSnapshot(s, snapKey, session);
+      onActivity?.();
       continue;
     }
 
@@ -220,6 +227,7 @@ function processSlug(
         snap.lastMessageRole = msgRow.role;
         snap.lastCompletedAt = msgRow.completed;
         snap.lastMessageCreatedMs = msgRow.time_created;
+        onActivity?.();
       } else if (
         // Same message id but streaming just finished (completed was null, now non-null).
         msgRow.role === "assistant" &&
@@ -228,6 +236,9 @@ function processSlug(
       ) {
         emitResponseDone(msgRow.completed, snap.lastMessageCreatedMs, slug);
         snap.lastCompletedAt = msgRow.completed;
+        // Response completion is exactly when opencode's per-message
+        // cost row lands — the trigger `opencodeCostQuery` needs.
+        onActivity?.();
       }
     }
 
@@ -292,9 +303,15 @@ function emitResponseDone(
  * active worktree slug + wtPath pairs. In the TUI runtime this is
  * backed by the tmux sessions query cache so we only scan worktrees
  * that actually have a live opencode tmux session.
+ *
+ * `onActivity`, when given, is called once per new/changed message or
+ * session observed (not on a no-op tick) — the TUI runtime uses this to
+ * invalidate `opencodeCost` as a push trigger instead of leaving that
+ * query on poll-only.
  */
 export function startOpencodeEventPolling(
   getActiveSlugs: () => Array<{ slug: string; wtPath: string }>,
+  onActivity?: () => void,
 ): () => void {
   const timers = new Set<Timer>();
   let running = false;
@@ -322,7 +339,7 @@ export function startOpencodeEventPolling(
     activeSlugs.forEach(({ slug, wtPath }, i) => {
       schedule(() => {
         try {
-          processSlug(s, slug, wtPath, isBaseline);
+          processSlug(s, slug, wtPath, isBaseline, onActivity);
         } catch (err) {
           log.warn("opencode event poll error", { slug, err: String(err) });
         } finally {

@@ -111,7 +111,12 @@ export async function fetchReviewRequests(
       stderr: r.stderr.slice(0, 200) || null,
       stdout: r.stdout.slice(0, 200) || null,
     });
-    return [];
+    // Throw rather than return [] — an empty success would blank the
+    // review-requests section on a transient blip; a rejection keeps
+    // the last good list and marks the query errored.
+    throw new Error(
+      `review-requests fetch failed: ${r.stderr.split("\n")[0]?.trim() || r.stdout.split("\n")[0]?.trim() || `gh exited ${r.exitCode}`}`,
+    );
   }
   let parsed: GqlReviewRequestResponse;
   try {
@@ -120,7 +125,7 @@ export async function fetchReviewRequests(
     log.error(err instanceof Error ? err : String(err), {
       stdout: r.stdout.slice(0, 200),
     });
-    return [];
+    throw new Error("review-requests fetch failed: unparseable gh output");
   }
   const nodes = parsed.data?.search?.nodes ?? [];
   const out: ReviewRequestPr[] = [];

@@ -33,7 +33,6 @@ export type FooterMode =
 type Props = {
   mode: FooterMode;
   hint?: string;
-  height?: number;
 };
 
 /**

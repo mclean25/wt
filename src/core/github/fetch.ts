@@ -9,6 +9,11 @@ import type { GithubData, GqlResponse } from "./types.ts";
 
 const log = createLogger("[gh]");
 
+/** First non-empty line, trimmed — gh failure bodies are multiline. */
+function firstLine(s: string): string {
+  return s.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "";
+}
+
 // Invariant: the github source is ONE batched GraphQL round trip. Every
 // per-worktree PR field (state, checks, reviews, requested + suggested
 // reviewers, ...) rides the same aliased query below, alongside the repo
@@ -182,15 +187,24 @@ export async function fetchGithub(
 
   const r = await run(args, { cwd: config.paths.mainClone, timeoutMs: 15_000, signal });
   if (r.exitCode !== 0) {
-    // The primary batched fetch failing silently means "empty state
-    // everywhere" with nothing to diagnose — log like the sibling
-    // fetchers do.
+    // Cancelled mid-flight (branch list re-keyed, `run` SIGTERMed the
+    // child). TanStack discards a cancelled fetch's result either way —
+    // routine supersession, not a failure.
+    if (signal?.aborted) return empty;
+    // A genuine failure must THROW, not return empty: an empty success
+    // overwrites the last good PR data with "no PRs anywhere" on the
+    // first transient blip (rate limit, auth, network), while a
+    // rejection keeps the cached data and surfaces through the details
+    // pane's error row. `gh` puts GraphQL/rate-limit bodies on stdout.
     log.error("gh api graphql failed", {
       exitCode: r.exitCode,
       stderr: r.stderr.slice(0, 400),
+      stdout: r.stdout.slice(0, 400),
       branchCount: branches.length,
     });
-    return empty;
+    throw new Error(
+      `github fetch failed: ${firstLine(r.stderr) || firstLine(r.stdout) || `gh exited ${r.exitCode}`}`,
+    );
   }
   let parsed: GqlResponse;
   try {
@@ -200,18 +214,20 @@ export async function fetchGithub(
       stdout: r.stdout.slice(0, 200),
       branchCount: branches.length,
     });
-    return empty;
+    throw new Error("github fetch failed: unparseable gh output");
   }
   const repo = parsed.data?.repository;
   if (!repo) {
     // Exit 0 with no repository payload = a GraphQL-level error
     // response (partial errors land in an `errors` array we don't
-    // model). Surface it instead of returning empty silently.
+    // model).
     log.error("gh api graphql returned no repository payload", {
       stdout: r.stdout.slice(0, 400),
       branchCount: branches.length,
     });
-    return empty;
+    throw new Error(
+      `github fetch failed: ${firstLine(r.stdout) || "no repository payload"}`,
+    );
   }
 
   const prs = new Map<string, PullRequest>();
@@ -247,11 +263,18 @@ export async function fetchGithub(
 /**
  * Thin wrapper kept for CLI callers (doctor, ls) that don't have a
  * prebuilt branch list. Resolves branches from `git worktree list`
- * before fetching.
+ * before fetching. Degrades to an empty map on fetch failure — a CLI
+ * listing without PR columns beats a crashed listing — but says so on
+ * stderr instead of impersonating "no PRs".
  */
 export async function fetchPrs(): Promise<Map<string, PullRequest>> {
   const branches = (await listWorktrees())
     .filter((w) => !w.isMain && w.branch)
     .map((w) => w.branch as string);
-  return (await fetchGithub(branches)).prs;
+  try {
+    return (await fetchGithub(branches)).prs;
+  } catch (err) {
+    console.error(`wt: ${err instanceof Error ? err.message : String(err)} (PR info omitted)`);
+    return new Map();
+  }
 }

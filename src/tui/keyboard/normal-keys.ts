@@ -27,6 +27,8 @@ import { closeHarnessSessionGracefully } from "../../core/tmux.ts";
 import { StatusKind } from "../../core/types.ts";
 import { stackIdFromSectionKey } from "../../core/wtstate.ts";
 import {
+  isBareKey,
+  isBareShiftedKey,
   isPlainLetter,
   isShiftedLetter,
   resolveDiffBase,
@@ -479,15 +481,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // Persistent like F12: detach with F10, reattach to find
     // scrollback, env, and any background processes still alive.
     // `exit` / Ctrl+D ends the session.
-    if (
-      k.name === "f10" &&
-      !k.shift &&
-      !k.ctrl &&
-      !k.option &&
-      !k.super &&
-      !k.hyper &&
-      !k.meta
-    ) {
+    if (isBareKey(k, "f10")) {
       if (selectedRemote) {
         doEnterRemoteSession("shell");
         return;
@@ -540,15 +534,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // `<slug>-diff`) so detach-then-reattach keeps the diff TUI's scroll +
     // expansion state. Init locks are allowed once the checkout exists;
     // destructive operations remain blocked so we don't race a destroy.
-    if (
-      k.name === "f11" &&
-      !k.shift &&
-      !k.ctrl &&
-      !k.option &&
-      !k.super &&
-      !k.hyper &&
-      !k.meta
-    ) {
+    if (isBareKey(k, "f11")) {
       if (selectedRemote) {
         doEnterRemoteSession("diff");
         return;
@@ -596,15 +582,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // session. Mirrors Shift+F11/F12. No-op (with a hint) when
     // there's no session. Killing terminates any background
     // processes the user launched in the shell.
-    if (
-      k.name === "f10" &&
-      k.shift &&
-      !k.ctrl &&
-      !k.option &&
-      !k.super &&
-      !k.hyper &&
-      !k.meta
-    ) {
+    if (isBareShiftedKey(k, "f10")) {
       if (!current) {
         toast("select a worktree first", theme.warn, 1500);
         return;
@@ -621,15 +599,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // session. Mirrors Shift+F12. No-op (with a hint) when there's no
     // session. Killing throws away the diff TUI's scroll/expansion state, so
     // next F11 opens fresh.
-    if (
-      k.name === "f11" &&
-      k.shift &&
-      !k.ctrl &&
-      !k.option &&
-      !k.super &&
-      !k.hyper &&
-      !k.meta
-    ) {
+    if (isBareShiftedKey(k, "f11")) {
       if (!current) {
         toast("select a worktree first", theme.warn, 1500);
         return;
@@ -647,15 +617,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // picks which harness to spawn (claude / codex / opencode). The
     // claude option preserves the prior auto-name behavior (see the
     // `harnessSelect` handler above).
-    if (
-      k.name === "f12" &&
-      k.shift &&
-      !k.ctrl &&
-      !k.option &&
-      !k.super &&
-      !k.hyper &&
-      !k.meta
-    ) {
+    if (isBareShiftedKey(k, "f12")) {
       if (selectedRemote) {
         doEnterRemoteSession("harness");
         return;
@@ -720,15 +682,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // detach-client so the same physical key flips between contexts.
     // Init locks are allowed once the checkout exists; destructive operations
     // remain blocked so we don't race a destroy.
-    if (
-      k.name === "f12" &&
-      !k.shift &&
-      !k.ctrl &&
-      !k.option &&
-      !k.super &&
-      !k.hyper &&
-      !k.meta
-    ) {
+    if (isBareKey(k, "f12")) {
       if (selectedRemote) {
         doEnterRemoteSession("harness");
         return;
@@ -769,15 +723,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // TAB — fold/unfold the section under the cursor. A folded section
     // collapses to one selectable header line with a stack/section summary
     // in the detail pane. (Shift+Tab cycles the primary harness, below.)
-    if (
-      k.name === "tab" &&
-      !k.shift &&
-      !k.ctrl &&
-      !k.option &&
-      !k.super &&
-      !k.hyper &&
-      !k.meta
-    ) {
+    if (isBareKey(k, "tab")) {
       // Land the cursor sensibly across the async reflow: unfolding → the
       // section's first row; folding → the new header line. Only active
       // (non-archived) sections fold — the archived block stays flat.
@@ -880,8 +826,13 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     if (!current) return;
     const rowLog = createLogger(current.wt.slug);
     if (isPlainLetter(k, "o")) {
-      openInZed(current.wt.path);
-      rowLog.event.info("opened in zed");
+      void openInZed(current.wt.path)
+        .then(() => rowLog.event.info("opened in zed"))
+        .catch((err: unknown) =>
+          rowLog.event.err(
+            `zed open failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
       return;
     }
     if (isPlainLetter(k, "p")) {

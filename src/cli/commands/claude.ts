@@ -6,6 +6,7 @@ import {
 } from "../../core/tmux.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import type { Worktree } from "../../core/types.ts";
+import { hasHelpFlag } from "../args.ts";
 import { dim, green, red } from "../colors.ts";
 
 const USAGE = `usage: wt claude send <slug> [text...]   type a prompt into the worktree's claude session
@@ -95,25 +96,29 @@ async function kill(slugOrBranch: string): Promise<number> {
 }
 
 export async function run(argv: string[]): Promise<number> {
+  // Only the subcommand/slug slot is checked for --help, never the
+  // `send` free-text tail — a message that happens to contain the
+  // literal word "--help" must still get sent, not swallowed as a
+  // usage request.
   const [first, ...rest] = argv;
-  if (!first || first === "--help" || first === "-h") {
+  if (!first || hasHelpFlag([first])) {
     console.log(USAGE);
     return first ? 0 : 2;
   }
   if (first === "send") {
     const [slug, ...text] = rest;
-    if (!slug) {
-      console.error(red(USAGE));
-      return 2;
+    if (!slug || hasHelpFlag([slug])) {
+      console.log(USAGE);
+      return slug ? 0 : 2;
     }
     return send(slug, text);
   }
   if (first === "ls") return ls();
   if (first === "kill") {
     const [slug] = rest;
-    if (!slug) {
-      console.error(red(USAGE));
-      return 2;
+    if (!slug || hasHelpFlag([slug])) {
+      console.log(USAGE);
+      return slug ? 0 : 2;
     }
     return kill(slug);
   }

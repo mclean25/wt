@@ -223,14 +223,6 @@ export function handleHarnessSelectKey(
       doEnterHarnessSession(slug, chosen, {});
     }
   };
-  if (k.name === "j" || k.name === "down") {
-    setModal({ ...modal, index: Math.min(idx + 1, HARNESSES.length - 1) });
-    return true;
-  }
-  if (k.name === "k" || k.name === "up") {
-    setModal({ ...modal, index: Math.max(0, idx - 1) });
-    return true;
-  }
   const letterMatch = HARNESSES.find(
     (h) => k.sequence === h.letter && !k.shift && !k.ctrl && !k.meta,
   );

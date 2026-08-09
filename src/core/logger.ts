@@ -92,9 +92,16 @@ export interface Logger {
 }
 
 const RETAIN_DAYS = 14;
-const SRC_PAD = 16;
 const LVL_PAD = 5;
-const KIND_PAD = 4;
+
+/** ISO-8601 width: `Date.prototype.toISOString()` is always 24 chars. */
+export const TS_LEN = 24;
+/** Width of the `EVENT`/`ATTN ` event-channel tag in a pane-line record. */
+export const TAG_PAD = 5;
+/** `kind.padEnd(KIND_PAD)` width in a pane-line record (`info`/`ok`/`warn`/`err`/`dim`). */
+export const KIND_PAD = 4;
+/** `source.padEnd(SRC_PAD)` width in a pane-line record; unpadded (not truncated) when the source is longer. */
+export const SRC_PAD = 16;
 
 let sink: EventSink | null = null;
 let toastSink: ToastSink | null = null;

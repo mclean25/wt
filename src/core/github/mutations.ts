@@ -3,11 +3,7 @@ import { createLogger } from "../logger.ts";
 import { run, runStreaming } from "../proc.ts";
 import type { AutoMergeMethod } from "../types.ts";
 import { hasGh } from "./gh-cli.ts";
-import type {
-  EnableAutoMergeResult,
-  GhActionResult,
-  LivePrInfo,
-} from "./types.ts";
+import type { GhActionResult, LivePrInfo } from "./types.ts";
 
 const log = createLogger("[gh]");
 
@@ -20,25 +16,38 @@ const log = createLogger("[gh]");
 export const AUTO_MERGE_METHOD: AutoMergeMethod = "REBASE";
 
 /**
+ * Shared body for every one-shot `gh` write below: gh-availability
+ * check, run from the main clone with the standard timeout, exit-code
+ * gate, and a uniform error-logged/GhActionResult shape. Callers supply
+ * only the argv and their own log label/context.
+ */
+async function runGhMutation(
+  argv: string[],
+  logLabel: string,
+  logCtx: Record<string, unknown>,
+): Promise<GhActionResult> {
+  if (!(await hasGh())) return { ok: false, error: "gh CLI not found" };
+  const r = await run(argv, { cwd: config.paths.mainClone, timeoutMs: 15_000 });
+  if (r.exitCode !== 0) {
+    const msg = (r.stderr || r.stdout).trim() || `gh exited ${r.exitCode}`;
+    log.error(logLabel, { ...logCtx, msg });
+    return { ok: false, error: msg };
+  }
+  return { ok: true };
+}
+
+/**
  * Enable "merge when ready" on a PR via `gh pr merge --auto`. Runs from
  * the main clone so gh resolves the right repo. `gh` does the right
  * thing for both classic auto-merge and merge-queue repos — the same
  * flag enqueues when a queue is configured.
  */
-export async function enableAutoMerge(
-  prNumber: number,
-): Promise<EnableAutoMergeResult> {
-  if (!(await hasGh())) return { ok: false, error: "gh CLI not found" };
-  const r = await run(
+export async function enableAutoMerge(prNumber: number): Promise<GhActionResult> {
+  return runGhMutation(
     ["gh", "pr", "merge", String(prNumber), "--auto", `--${AUTO_MERGE_METHOD.toLowerCase()}`],
-    { cwd: config.paths.mainClone, timeoutMs: 15_000 },
+    "auto-merge failed",
+    { prNumber },
   );
-  if (r.exitCode !== 0) {
-    const msg = (r.stderr || r.stdout).trim() || `gh exited ${r.exitCode}`;
-    log.error("auto-merge failed", { prNumber, msg });
-    return { ok: false, error: msg };
-  }
-  return { ok: true };
 }
 
 /**
@@ -46,20 +55,12 @@ export async function enableAutoMerge(
  * `gh pr merge --disable-auto`. No-op on PRs that aren't currently
  * armed; gh returns an error in that case which we surface verbatim.
  */
-export async function disableAutoMerge(
-  prNumber: number,
-): Promise<GhActionResult> {
-  if (!(await hasGh())) return { ok: false, error: "gh CLI not found" };
-  const r = await run(
+export async function disableAutoMerge(prNumber: number): Promise<GhActionResult> {
+  return runGhMutation(
     ["gh", "pr", "merge", String(prNumber), "--disable-auto"],
-    { cwd: config.paths.mainClone, timeoutMs: 15_000 },
+    "disable auto-merge failed",
+    { prNumber },
   );
-  if (r.exitCode !== 0) {
-    const msg = (r.stderr || r.stdout).trim() || `gh exited ${r.exitCode}`;
-    log.error("disable auto-merge failed", { prNumber, msg });
-    return { ok: false, error: msg };
-  }
-  return { ok: true };
 }
 
 /**
@@ -75,17 +76,10 @@ export async function editReviewers(
   if (changes.add.length === 0 && changes.remove.length === 0) {
     return { ok: true };
   }
-  if (!(await hasGh())) return { ok: false, error: "gh CLI not found" };
   const argv = ["gh", "pr", "edit", String(prNumber)];
   for (const l of changes.add) argv.push("--add-reviewer", l);
   for (const l of changes.remove) argv.push("--remove-reviewer", l);
-  const r = await run(argv, { cwd: config.paths.mainClone, timeoutMs: 15_000 });
-  if (r.exitCode !== 0) {
-    const msg = (r.stderr || r.stdout).trim() || `gh exited ${r.exitCode}`;
-    log.error("edit reviewers failed", { prNumber, changes, msg });
-    return { ok: false, error: msg };
-  }
-  return { ok: true };
+  return runGhMutation(argv, "edit reviewers failed", { prNumber, changes });
 }
 
 /**
@@ -99,17 +93,11 @@ export async function retargetPrBase(
   prNumber: number,
   base: string,
 ): Promise<GhActionResult> {
-  if (!(await hasGh())) return { ok: false, error: "gh CLI not found" };
-  const r = await run(
+  return runGhMutation(
     ["gh", "pr", "edit", String(prNumber), "--base", base],
-    { cwd: config.paths.mainClone, timeoutMs: 15_000 },
+    "retarget pr base failed",
+    { prNumber, base },
   );
-  if (r.exitCode !== 0) {
-    const msg = (r.stderr || r.stdout).trim() || `gh exited ${r.exitCode}`;
-    log.error("retarget pr base failed", { prNumber, base, msg });
-    return { ok: false, error: msg };
-  }
-  return { ok: true };
 }
 
 /**
@@ -118,20 +106,12 @@ export async function retargetPrBase(
  * should gate on user confirmation. Runs from the main clone so gh
  * resolves the right repo.
  */
-export async function markPullRequestReady(
-  prNumber: number,
-): Promise<GhActionResult> {
-  if (!(await hasGh())) return { ok: false, error: "gh CLI not found" };
-  const r = await run(
+export async function markPullRequestReady(prNumber: number): Promise<GhActionResult> {
+  return runGhMutation(
     ["gh", "pr", "ready", String(prNumber)],
-    { cwd: config.paths.mainClone, timeoutMs: 15_000 },
+    "mark ready failed",
+    { prNumber },
   );
-  if (r.exitCode !== 0) {
-    const msg = (r.stderr || r.stdout).trim() || `gh exited ${r.exitCode}`;
-    log.error("mark ready failed", { prNumber, msg });
-    return { ok: false, error: msg };
-  }
-  return { ok: true };
 }
 
 /**

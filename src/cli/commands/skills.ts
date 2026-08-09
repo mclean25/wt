@@ -24,6 +24,7 @@ import {
   type UnitReport,
   type UnitState,
 } from "../../core/skills.ts";
+import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import { isInteractive } from "../prompt.ts";
 import { runSkillsSync } from "../skills-sync.ts";
@@ -106,7 +107,7 @@ async function status(): Promise<number> {
 }
 
 async function diff(name: string | undefined): Promise<number> {
-  if (!name || name === "--help" || name === "-h") {
+  if (!name || hasHelpFlag([name])) {
     console.log(name ? USAGE : red("usage: wt skills diff <name>"));
     return name ? 0 : 2;
   }
@@ -159,15 +160,16 @@ async function diff(name: string | undefined): Promise<number> {
 }
 
 function reset(argv: string[]): number {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
   let answers = false;
   let declines = false;
   for (const a of argv) {
     if (a === "--answers") answers = true;
     else if (a === "--declines") declines = true;
-    else if (a === "--help" || a === "-h") {
-      console.log(USAGE);
-      return 0;
-    } else {
+    else {
       console.error(red(`unknown flag: ${a}`));
       return 2;
     }
@@ -186,16 +188,17 @@ function reset(argv: string[]): number {
 }
 
 async function sync(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
   let yes = false;
   let force = false;
   const names: string[] = [];
   for (const a of argv) {
     if (a === "--yes" || a === "-y") yes = true;
     else if (a === "--force") force = true;
-    else if (a === "--help" || a === "-h") {
-      console.log(USAGE);
-      return 0;
-    } else if (a.startsWith("-")) {
+    else if (a.startsWith("-")) {
       console.error(red(`unknown flag: ${a}\n`));
       console.error(USAGE);
       return 2;
@@ -214,7 +217,7 @@ async function sync(argv: string[]): Promise<number> {
 
 export async function run(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
-  if (sub === "--help" || sub === "-h") {
+  if (hasHelpFlag([sub ?? ""])) {
     console.log(USAGE);
     return 0;
   }

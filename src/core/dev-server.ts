@@ -357,13 +357,26 @@ export async function stopDevServer(slug: string): Promise<void> {
  * Level-derived state: session existence (tmux) + recorded-port
  * liveness (TCP probe) + the supervisor's marker. Cheap and local —
  * safe to poll from a query.
+ *
+ * `opts.sessionExists`, when provided, skips the per-slug
+ * `tmux has-session` spawn — the caller already knows (from the
+ * batched `tmuxSessionsQuery`'s `dev` set) whether the session is
+ * live. Omit it (CLI callers with no query cache to read) to fall
+ * back to the direct tmux check.
  */
-export async function devServerStatus(slug: string): Promise<DevServerStatus> {
+export async function devServerStatus(
+  slug: string,
+  opts: { sessionExists?: boolean } = {},
+): Promise<DevServerStatus> {
   if (!config.devServer) return DEV_SERVER_STOPPED;
   const port = readWtState().slugs[slug]?.devPort ?? null;
   const session = sessionName(slug, "dev");
-  const has = await run(["tmux", "-L", TMUX_SOCKET, "has-session", "-t", `=${session}`]);
-  if (has.exitCode !== 0) {
+  const has =
+    opts.sessionExists !== undefined
+      ? opts.sessionExists
+      : (await run(["tmux", "-L", TMUX_SOCKET, "has-session", "-t", `=${session}`]))
+          .exitCode === 0;
+  if (!has) {
     // No session, but a crashed marker survives (e.g. the pane was lost
     // to a tmux server restart): "it crashed the last time it ran" is
     // still the honest state until a start/stop rewrites it.

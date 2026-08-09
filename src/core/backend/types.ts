@@ -61,12 +61,6 @@ export type BackendRemoveResult = {
   message?: string;
 };
 
-/** A checkout discovered on disk during listing. */
-export type BackendCheckout = {
-  path: string;
-  branch: string;
-};
-
 export interface WorktreeBackend {
   readonly id: BackendKind;
   /**

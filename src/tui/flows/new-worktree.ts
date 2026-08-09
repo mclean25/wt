@@ -46,6 +46,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     const parsed = parseNewInput(raw, defaultBase);
     if ("error" in parsed) {
       newLog.event.err(parsed.error);
+      toast(parsed.error, theme.err, 3000);
       return;
     }
     newLog.event.info(`resolving ${parsed.input}`);
@@ -69,8 +70,10 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
           }),
       });
     } catch (err) {
-      newLog.event.err(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      newLog.event.err(message);
       newLog.error(err instanceof Error ? err : String(err));
+      toast(message, theme.err, 3000);
       return;
     }
     newLog.event.info(`branch = ${branch}`);
@@ -82,6 +85,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     });
     if (!result.ok) {
       newLog.event.err(result.reason);
+      toast(`worktree failed: ${result.reason}`, theme.err, 3000);
       return;
     }
     if (parsed.gh) {
@@ -89,6 +93,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       newLog.event.info(`gh issue: #${parsed.gh}`);
     }
     newLog.event.ok(`ready at ${result.path}`);
+    toast(`created ${result.slug}`, theme.ok, 2200);
     void refreshAll();
   }
 

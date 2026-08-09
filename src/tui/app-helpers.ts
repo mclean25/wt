@@ -102,6 +102,58 @@ export function isShiftedLetter(
 }
 
 /**
+ * Match a non-letter key (F-keys, Tab, …) by `name` with every modifier
+ * released. Same "no leaking modifier" guard as `isPlainLetter`, for
+ * bindings whose `name` isn't a single letter.
+ */
+export function isBareKey(
+  k: {
+    name: string;
+    shift: boolean;
+    ctrl: boolean;
+    option: boolean;
+    super?: boolean;
+    hyper?: boolean;
+    meta: boolean;
+  },
+  name: string,
+): boolean {
+  return (
+    k.name === name &&
+    !k.shift &&
+    !k.ctrl &&
+    !k.option &&
+    !k.super &&
+    !k.hyper &&
+    !k.meta
+  );
+}
+
+/** Like `isBareKey`, but requires Shift and no other modifier. */
+export function isBareShiftedKey(
+  k: {
+    name: string;
+    shift: boolean;
+    ctrl: boolean;
+    option: boolean;
+    super?: boolean;
+    hyper?: boolean;
+    meta: boolean;
+  },
+  name: string,
+): boolean {
+  return (
+    k.name === name &&
+    k.shift &&
+    !k.ctrl &&
+    !k.option &&
+    !k.super &&
+    !k.hyper &&
+    !k.meta
+  );
+}
+
+/**
  * Filter a key sequence down to printable ASCII so single keypresses
  * and pasted blobs both append cleanly, while control chars (escape,
  * backspace, embedded newlines from multi-line pastes) drop out.

@@ -75,6 +75,7 @@ import { wtStateQuery } from "../../state/queries.ts";
 import {
   evaluateAutomations,
   fireIdentity,
+  isEligible,
   statusTriggerState,
   type AutomationFire,
 } from "../automation-rules.ts";
@@ -455,10 +456,11 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       return;
     }
 
-    const fires = evaluateAutomations(rules, ctx.rows, {
+    const evalCtx = {
       githubFresh: ctx.githubFresh,
-      isPausedSlug: (slug) => ctx.pausedSlugs.has(slug),
-    });
+      isPausedSlug: (slug: string) => ctx.pausedSlugs.has(slug),
+    };
+    const fires = evaluateAutomations(rules, ctx.rows, evalCtx);
     const byId = new Map(fires.map((f) => [fireIdentity(f), f] as const));
 
     // Breaker resets: a (rule, target) with breaker state whose
@@ -468,16 +470,33 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // observe "cleared"); purely local ones (pr.conflict) reset
     // unconditionally, or an offline session could wedge a trip
     // forever.
+    //
+    // Eligibility gates ALL resets: the evaluator skips ineligible rows
+    // (archived, Busy lock, paused) before ever testing the condition,
+    // so an absent fire for one is "not evaluated", not "cleared" —
+    // resetting there would let a Ctrl+A toggle or a restack's own lock
+    // window hand a flapping fix-loop free strikes. For stacks the fire
+    // targets the stackId, so ANY ineligible member blanks that stack's
+    // reset for the pass (the reset re-runs next pass; a missed one is
+    // harmless, a wrong one defeats the breaker).
+    const ineligibleStacks = new Set<string>();
+    for (const row of ctx.rows) {
+      if (row.stack && !isEligible(row, evalCtx)) {
+        ineligibleStacks.add(row.stack.stackId);
+      }
+    }
     for (const rule of rules) {
       if (GITHUB_DRIVEN.has(rule.on) && !ctx.githubFresh) continue;
       if (rule.on === "stack.parent_merged") {
         for (const row of ctx.rows) {
           const sid = row.stack?.stackId;
-          if (sid && !byId.has(`${rule.id}|${sid}`)) resetBreaker(rule.id, sid);
+          if (!sid || ineligibleStacks.has(sid)) continue;
+          if (!byId.has(`${rule.id}|${sid}`)) resetBreaker(rule.id, sid);
         }
       } else {
         const statusWant = statusTriggerState(rule.on);
         for (const row of ctx.rows) {
+          if (!isEligible(row, evalCtx)) continue;
           // `pr.conflict` on a PR-carrying row is freshness-gated in the
           // evaluator (a conflict can't be read off persisted cache), so
           // an absent fire before the first github fetch is "unknown",
@@ -487,10 +506,8 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
           // observable, so it still resets unconditionally (the offline-
           // wedge case the unconditional reset exists for).
           if (rule.on === "pr.conflict" && row.pr && !ctx.githubFresh) continue;
-          // Status triggers: an absent fire can mean "row ineligible
-          // this pass" (busy lock, paused), not "state cleared" — check
-          // the asserted state directly so a transient Busy window
-          // can't hand the loop free strikes.
+          // Status triggers: double-gate on the asserted state itself —
+          // it's directly observable regardless of row eligibility.
           if (statusWant && row.work?.state === statusWant) continue;
           if (!byId.has(`${rule.id}|${row.wt.slug}`)) {
             resetBreaker(rule.id, row.wt.slug);

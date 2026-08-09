@@ -24,11 +24,12 @@ function post(worker: Worker, msg: CodexEventsWorkerMessage): void {
   worker.postMessage(msg);
 }
 
-function emit(result: CodexEventsWorkerResult): void {
+function emit(result: CodexEventsWorkerResult, onActivity?: () => void): void {
   if (result.type === "warn") {
     log.warn("worker poll failed", { err: result.message });
     return;
   }
+  if (result.events.length > 0) onActivity?.();
   for (const event of result.events) {
     log.event[event.level](event.text);
   }
@@ -40,11 +41,17 @@ function emit(result: CodexEventsWorkerResult): void {
  * @param getActiveSlugs - Called on every tick; must return the current
  *   list of active codex tmux slots (slug + worktree path). The caller
  *   should keep this cheap (a Map lookup, not a scan).
+ * @param onActivity - Called once per tick that actually observed a
+ *   real event (not on an empty/no-change poll). The TUI runtime uses
+ *   this to invalidate `codexUsage` — token usage changes exactly when
+ *   codex activity happens, so this is a cheap push trigger instead of
+ *   leaving that query on poll-only.
  * @returns A cleanup function that stops the interval and terminates
  *   the worker. Call it during TUI shutdown.
  */
 export function startCodexEventPolling(
   getActiveSlugs: () => ReadonlyArray<ActiveCodexSlug>,
+  onActivity?: () => void,
 ): () => void {
   const worker = new Worker(new URL("./events-worker.ts", import.meta.url).href);
   let disposed = false;
@@ -53,7 +60,7 @@ export function startCodexEventPolling(
   worker.addEventListener("message", (event: MessageEvent) => {
     inFlight = false;
     if (disposed) return;
-    emit(event.data as CodexEventsWorkerResult);
+    emit(event.data as CodexEventsWorkerResult, onActivity);
   });
   worker.addEventListener("error", (event) => {
     inFlight = false;

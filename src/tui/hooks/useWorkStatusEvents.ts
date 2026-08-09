@@ -21,24 +21,32 @@ import { workStatusSuffix, type WorkStatusRecord } from "../../core/work-status.
 import type { WtState } from "../../core/wtstate.ts";
 
 /**
- * Slugs whose next observed status change was written by THIS process
- * (the `u` picker) — the picker already toasted its own keystroke ack,
- * so the narration below logs the attention line with the toast
- * suppressed instead of double-flashing the same change. Marks expire
- * quickly: a stale one must never mute a real external transition.
+ * Status writes made by THIS process (the `u` picker) — the picker
+ * already toasted its own keystroke ack, so the narration below logs
+ * the attention line with the toast suppressed instead of
+ * double-flashing the same change. Keyed by the exact assertion
+ * timestamp being written, not just the slug: an agent's external
+ * `wt status` landing on the same slug inside the mute window must
+ * still toast. The TTL is only a backstop for a write that never
+ * lands (its mark must not mute a later unrelated transition).
  */
-const selfWrites = new Map<string, number>();
+const selfWrites = new Map<string, { at: string; markedAt: number }>();
 const SELF_WRITE_TTL_MS = 5000;
 
-export function markSelfStatusWrite(slug: string): void {
-  selfWrites.set(slug, Date.now());
+export function markSelfStatusWrite(slug: string, at: string): void {
+  selfWrites.set(slug, { at, markedAt: Date.now() });
 }
 
-function consumeSelfWrite(slug: string): boolean {
-  const at = selfWrites.get(slug);
-  if (at === undefined) return false;
+function consumeSelfWrite(slug: string, observedAt: string): boolean {
+  const mark = selfWrites.get(slug);
+  if (mark === undefined) return false;
+  if (Date.now() - mark.markedAt >= SELF_WRITE_TTL_MS) {
+    selfWrites.delete(slug);
+    return false;
+  }
+  if (mark.at !== observedAt) return false; // someone else's write
   selfWrites.delete(slug);
-  return Date.now() - at < SELF_WRITE_TTL_MS;
+  return true;
 }
 
 function describe(record: WorkStatusRecord): string {
@@ -81,7 +89,7 @@ export function useWorkStatusEvents(wtState: WtState | undefined): void {
       if (!prev.has(slug)) continue;
       const log = createLogger(slug);
       const text = describe(record);
-      const opts = consumeSelfWrite(slug) ? { toast: false } : undefined;
+      const opts = consumeSelfWrite(slug, record.at) ? { toast: false } : undefined;
       if (record.state === "needs-human") log.attention.err(text, opts);
       else if (record.state === "ready") log.attention.ok(text, opts);
       else if (record.state === "needs-testing") log.attention.warn(text, opts);

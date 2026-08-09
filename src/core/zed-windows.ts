@@ -119,7 +119,21 @@ export async function spawnZedAndTrack(path: string): Promise<void> {
     stdio: "ignore",
     detached: true,
   });
+  // A missing `zed` binary surfaces as an async 'error' event; with no
+  // listener that's an uncaught exception that kills the whole process
+  // (Node/Bun special-case unhandled 'error'). Convert it to a rejection
+  // the caller's catch can report.
+  let spawnError: Error | null = null;
+  child.once("error", (err) => {
+    spawnError = err instanceof Error ? err : new Error(String(err));
+  });
   child.unref();
+  // The error event lands within a tick or two of spawn; give it one
+  // poll interval before concluding the spawn took.
+  await new Promise((r) => setTimeout(r, 30));
+  if (spawnError !== null) {
+    throw new Error(`zed failed to launch: ${(spawnError as Error).message}`);
+  }
 
   // Zed needs ~100–500ms to register the new window with the AX tree.
   // Poll for up to ~3s, then give up — worst case the user gets no

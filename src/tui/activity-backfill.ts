@@ -14,7 +14,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { config } from "../core/config.ts";
-import type { EventChannel, EventKind } from "../core/logger.ts";
+import {
+  KIND_PAD,
+  SRC_PAD,
+  TAG_PAD,
+  TS_LEN,
+  type EventChannel,
+  type EventKind,
+} from "../core/logger.ts";
 import { events, isAttentionWorthy, type WtEvent } from "./activity-log.ts";
 
 const KINDS = new Set<EventKind>(["info", "ok", "warn", "err", "dim"]);
@@ -22,30 +29,48 @@ const KINDS = new Set<EventKind>(["info", "ok", "warn", "err", "dim"]);
 const SEED_FIREHOSE = 500;
 const SEED_ATTENTION = 200;
 
+// Column offsets, derived from the same constants `core/logger.ts`
+// `emit()` writes with — one space separates each fixed-width field:
+// `<ts:TS_LEN> <tag:TAG_PAD> <kind:KIND_PAD> <source:SRC_PAD+> <text>`.
+const TAG_START = TS_LEN + 1;
+const TAG_END = TAG_START + TAG_PAD;
+const KIND_START = TAG_END + 1;
+const KIND_END = KIND_START + KIND_PAD;
+const SRC_START = KIND_END + 1;
+/** Shortest possible valid line: the fixed header, a full source pad, and one text char. */
+const MIN_LINE_LEN = SRC_START + SRC_PAD + 1 + 1;
+
 /**
  * Parse one daily-log line into an event, or null for non-event lines
  * (DEBUG/INFO/… records, malformed rows). Format written by
- * core/logger.ts `emit()` — fixed columns after the 24-char ISO stamp:
- * `<iso> <TAG:5> <kind:4> <source:16-padded> <text>`.
+ * core/logger.ts `emit()` — fixed columns after the ISO stamp:
+ * `<iso> <TAG:TAG_PAD> <kind:KIND_PAD> <source:SRC_PAD-padded> <text>`.
  */
 export function parseEventLine(line: string): Omit<WtEvent, "id"> | null {
-  if (line.length < 37) return null;
-  const ts = Date.parse(line.slice(0, 24));
+  if (line.length < MIN_LINE_LEN) return null;
+  const ts = Date.parse(line.slice(0, TS_LEN));
   if (Number.isNaN(ts)) return null;
-  const tag = line.slice(25, 30);
+  const tag = line.slice(TAG_START, TAG_END);
   const channel: EventChannel | null =
     tag === "EVENT" ? "firehose" : tag === "ATTN " ? "attention" : null;
   if (channel === null) return null;
-  const kind = line.slice(31, 35).trim() as EventKind;
+  const kind = line.slice(KIND_START, KIND_END).trim() as EventKind;
   if (!KINDS.has(kind)) return null;
-  const rest = line.slice(36);
-  const firstSpace = rest.indexOf(" ");
-  const source = firstSpace === -1 ? rest : rest.slice(0, firstSpace);
+  const rest = line.slice(SRC_START);
+  // Source is padEnd(SRC_PAD)+" " when it fits the pad — the separator
+  // then always lands exactly at index SRC_PAD, whatever spaces the
+  // source itself contains before that point. A source longer than
+  // SRC_PAD isn't truncated (padEnd is a no-op past its target width),
+  // so the real separator can land past the pad boundary too; searching
+  // from SRC_PAD onward (never from 0) finds it either way instead of
+  // mistaking an internal space for the delimiter.
+  const sepIdx = rest.indexOf(" ", SRC_PAD);
+  if (sepIdx === -1) return null;
+  const source = rest.slice(0, sepIdx).trimEnd();
   if (source === "") return null;
-  // Source is padEnd(16)+" " when short; longer sources shift the text.
-  // Leading whitespace beyond the pad is real (indented multi-line
-  // events) and must survive.
-  const text = rest.slice(Math.max(17, source.length + 1));
+  // Leading whitespace beyond the separator is real (indented
+  // multi-line events) and must survive.
+  const text = rest.slice(sepIdx + 1);
   return { ts, level: kind, channel, source, text };
 }
 

@@ -7,45 +7,21 @@
  * clones sharing one bare origin, and pin the two resolutions that must
  * work cross-clone: the Pass-1 anchor ref and the Pass-2 new base.
  */
-import { afterAll, expect, test } from "bun:test";
-
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { expect, test } from "bun:test";
 
 import { effectiveBaseOrTrunk } from "./git.ts";
 import { resolveAnchor } from "./stack-ops.ts";
 import { anchorParentRef, resolveNewBaseSha } from "./stack-ops/replay.ts";
 import { restackEngine } from "./stack-ops/engine.ts";
+import { git as rawGit, trackedTmpDirs } from "./test-fixtures.ts";
 
-const dirs: string[] = [];
-afterAll(() => {
-  for (const d of dirs) rmSync(d, { recursive: true, force: true });
-});
+const { tmp } = trackedTmpDirs();
 
+// This suite's fixtures pass single-line ref/sha output straight into
+// assertions and further git calls, so trim here — `stack-ops.test.ts`
+// keeps the shared helper's raw (untrimmed) output instead.
 function git(cwd: string, args: string[]): string {
-  const r = Bun.spawnSync(["git", ...args], {
-    cwd,
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_SYSTEM: "/dev/null",
-      GIT_AUTHOR_NAME: "t",
-      GIT_AUTHOR_EMAIL: "t@t",
-      GIT_COMMITTER_NAME: "t",
-      GIT_COMMITTER_EMAIL: "t@t",
-    },
-  });
-  if (r.exitCode !== 0) {
-    throw new Error(`git ${args.join(" ")}: ${new TextDecoder().decode(r.stderr)}`);
-  }
-  return new TextDecoder().decode(r.stdout).trim();
-}
-
-function tmp(name: string): string {
-  const d = mkdtempSync(join(tmpdir(), name));
-  dirs.push(d);
-  return d;
+  return rawGit(cwd, args).trim();
 }
 
 const step = (parentBranch: string | null, baseSha?: string) => ({

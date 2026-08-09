@@ -11,6 +11,7 @@ import {
 } from "../../core/issue-tracker.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import { readWtState, setSlugGithubIssue } from "../../core/wtstate.ts";
+import { hasHelpFlag } from "../args.ts";
 import { cyan, dim, green, red } from "../colors.ts";
 
 const USAGE = `usage: wt issue <slug>              show the worktree's issue ids + urls
@@ -21,10 +22,14 @@ const USAGE = `usage: wt issue <slug>              show the worktree's issue ids
 (eng-1935-… → ENG-1935); --gh never changes the branch.`;
 
 export async function run(argv: string[]): Promise<number> {
-  const [first, ...rest] = argv;
-  if (!first || first === "--help" || first === "-h") {
+  if (hasHelpFlag(argv)) {
     console.log(USAGE);
-    return first ? 0 : 2;
+    return 0;
+  }
+  const [first, ...rest] = argv;
+  if (!first) {
+    console.log(USAGE);
+    return 2;
   }
 
   const slugOrBranch = first;

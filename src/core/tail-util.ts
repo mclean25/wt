@@ -6,6 +6,7 @@
  * they live here so the load-bearing tail logic can't drift.
  */
 import { closeSync, openSync, readSync, type FSWatcher } from "node:fs";
+import type { Database, SQLQueryBindings, Statement } from "bun:sqlite";
 
 /**
  * Read `len` bytes at byte offset `start` from an open fd, decoded as
@@ -55,4 +56,21 @@ export function jsonlTimestamp(obj: Record<string, unknown>): number {
     if (!Number.isNaN(parsed)) return parsed;
   }
   return Date.now();
+}
+
+/**
+ * Prepare a SQLite query, adapted to the single-object-arg param shape
+ * every tail poller's `.get(params)` / `.all(params)` call site uses.
+ * bun-types' `Database.query<Row, Params>(sql)` returns
+ * `Statement<Row, Params>`, but that call convention needs
+ * `Statement<Row, [Params]>` (a one-element params TUPLE) — a real
+ * structural mismatch, not a type error to silence, so the cast is
+ * centralized here instead of repeated as a bare `as unknown as
+ * Statement<...>` at every prepared-query site.
+ */
+export function prepareTailQuery<Row, Params extends SQLQueryBindings>(
+  db: Database,
+  sql: string,
+): Statement<Row, [Params]> {
+  return db.query<Row, Params>(sql) as unknown as Statement<Row, [Params]>;
 }

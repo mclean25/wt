@@ -47,4 +47,29 @@ describe("parseEventLine", () => {
     expect(parseEventLine("not a log line at all")).toBeNull();
     expect(parseEventLine(`${ISO} EVENT nope [gh]             text`)).toBeNull();
   });
+
+  test("a short, padded source containing a space round-trips (fixed-width boundary, not first-space)", () => {
+    const source = "remote hub"; // fits the 16-char pad; the naive first-space split would cut it at "remote"
+    const e = parseEventLine(`${ISO} EVENT info ${source.padEnd(16)} online`);
+    expect(e?.source).toBe(source);
+    expect(e?.text).toBe("online");
+  });
+
+  test("a source longer than the pad, containing a space, round-trips", () => {
+    const source = "[remote:My Server]"; // > 16 chars, space lands before the pad boundary
+    const e = parseEventLine(`${ISO} EVENT ok   ${source} ready`);
+    expect(e?.source).toBe(source);
+    expect(e?.text).toBe("ready");
+  });
+
+  test("lines below the true minimum (header + full pad + 1 text char) are rejected", () => {
+    // The fixed header plus a fully-padded 16-char source, with no text
+    // at all — one char short of the shortest possible valid line. Well
+    // past the old (too-low) 37-char guard, so this only rejects under
+    // the corrected minimum.
+    const prefix = `${ISO} EVENT dim  ${"x".padEnd(16)} `;
+    expect(prefix.length).toBe(53);
+    expect(parseEventLine(prefix)).toBeNull();
+    expect(parseEventLine(`${prefix}z`)).not.toBeNull();
+  });
 });

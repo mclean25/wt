@@ -43,11 +43,9 @@ export function reviewDecisionBadge(
  */
 export function ReviewRequestBody({
   pr,
-  width: _width,
   scrollRef,
 }: {
   pr: ReviewRequestPr;
-  width: number;
   scrollRef?: RefObject<ScrollBoxRenderable | null>;
 }) {
   const created = pr.createdAt ? Date.parse(pr.createdAt) : NaN;
@@ -82,7 +80,8 @@ export function ReviewRequestBody({
         scrollY
         flexGrow={1}
         minHeight={0}
-        contentOptions={{ flexDirection: "column" }}
+        // paddingRight reserves the scrollbar's column (see details.tsx).
+        contentOptions={{ flexDirection: "column", paddingRight: 1 }}
       >
       <box marginBottom={1}>
         <text wrapMode="word">

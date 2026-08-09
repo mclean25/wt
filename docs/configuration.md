@@ -72,10 +72,11 @@ The source of truth for the schema is [`src/core/config.ts`](../src/core/config.
 
 Configure a second machine whose own `wt` installation, clone, config, and
 worktree root remain authoritative. The local TUI polls that host's worktree
-summaries and renders them in the same Inbox with a remote glyph. `Ctrl+N`
-forwards the normal `wt new` lifecycle over SSH; F10/F11/F12 on one of those
-rows attach to that worktree's remote tmux shell, diff, or AI session. Ordinary
-`n` / `N` continue to create locally.
+summaries and renders them in a server-named section of the same list,
+grouped apart from local worktrees. `Ctrl+N` forwards the normal `wt new`
+lifecycle over SSH; F10/F11/F12 on one of those rows attach to that
+worktree's remote tmux shell, diff, or AI session. Ordinary `n` / `N`
+continue to create locally.
 
 The last successful remote inventory is persisted with the rest of wt's query
 cache. If the host sleeps or becomes unreachable, those rows remain visible as
@@ -195,7 +196,7 @@ workspace = "acme"
 |---|---|---|---|
 | `url_template` | no | *(unset)* | URL with an `{id}` placeholder, substituted with the uppercased issue id parsed from the slug (no API calls, no token). Wins over the Linear preset when both are set. |
 | `prefix` | no | *(unset)* | Required id prefix (lowercase, e.g. `"coz"`) for **new** worktree branches. When set, `wt new GH-970 …` (or any other prefix) fails with guidance instead of minting the branch — a GitHub issue attaches as the *secondary* id (`wt new … --gh <n>` / `wt issue <slug> --gh <n>`), never as the worktree's identity. Attaching to existing branches is exempt. |
-| `linear.workspace` | no | — | Linear preset: derives `url_template = "linear://<workspace>/issue/{id}"` (the desktop-app deep-link scheme). |
+| `linear.workspace` | `[issue_tracker.linear]` present: **yes** | — | Linear preset: derives `url_template = "linear://<workspace>/issue/{id}"` (the desktop-app deep-link scheme). |
 
 Id parsing itself is driven by the slug shape (`[a-z]+-\d+`), independent of `[branch] id_pattern`.
 
@@ -343,7 +344,7 @@ Fields:
 | `id` | both | — (required) | Unique id; what `[[automations]].run` references. |
 | `name` | both | — (required) | Picker label. |
 | `prompt` / `shell` | — | — | Exactly one must be set; picks the kind. |
-| `target` | prompt only | `"headless"` | `"headless"` or `"session"` (see above). |
+| `target` | prompt only | `"headless"` | `"headless"`, `"session"`, or `"manager"` (see above). |
 | `affects` | both | prompt: `["git", "github"]`, shell: `[]` | State domains the action mutates; the matching caches are refreshed when the run exits. Tags: `git`, `github`, `dev` (the worktree's `[dev_server]` state). Explicit `[]` opts out. |
 | `requires` | both | `[]` | Preconditions; unmet entries gray out in the picker with the reason. Tags: `pr` (any PR exists), `pr.ready` (open non-draft PR), `deployed` (this worktree's SST stage is live). |
 | `key` | both | auto-derived | Single-char quick-pick letter in the `!` menu. Lowercase only — keys are case-folded and the picker matches `a-z`, so an uppercase key silently degrades to auto-derivation. With `[dev_server]` configured, `d` and `s` are claimed by the pinned built-ins. |
@@ -375,10 +376,10 @@ settle_seconds   = 300
 | key | required | default | meaning |
 |---|---|---|---|
 | `id` | **yes** | — | Unique rule id (used in fire-key bookkeeping and logs). |
-| `on` | **yes** | — | Trigger: `pr.checks.failed`, `review_bot.unresolved` (the `[review_bot]`'s findings; `rabbit.unresolved` is a legacy alias), `review.changes_requested`, `pr.conflict`, `wt.merged` (a non-stacked worktree landed), `stack.parent_merged` (a stack member's parent landed). |
-| `run` | **yes** | — | An `[[actions]]` id, or a builtin: `builtin:restack` (only valid with `stack.parent_merged`), `builtin:clean` (any single-worktree trigger). |
+| `on` | **yes** | — | Trigger: `pr.checks.failed`, `review_bot.unresolved` (the `[review_bot]`'s findings; `rabbit.unresolved` is a legacy alias), `review.changes_requested`, `pr.conflict`, `wt.merged` (a non-stacked worktree landed), `stack.parent_merged` (a stack member's parent landed), `status.needs_human` / `status.needs_testing` / `status.ready` (the worktree's asserted work status is that state; hyphenated spellings are accepted aliases). |
+| `run` | **yes** | — | An `[[actions]]` id, or a builtin: `builtin:restack` (only valid with `stack.parent_merged`), `builtin:clean` (any single-worktree trigger), `builtin:notify` (any trigger; a macOS banner). |
 | `busy` | no | `"queue"` | When the worktree isn't quiescent at delivery time: `queue` holds the intent until it settles, `skip` drops it. |
 | `cooldown_minutes` | no | *(none)* | Minimum minutes between dispatches per (rule, worktree). |
-| `settle_seconds` | no | `120` (merge triggers: `10`) | Quiescence window: the condition must hold and the worktree be edit-free this long before delivery. Doubles as your cancellation grace period. |
+| `settle_seconds` | no | `120` (merge triggers: `10`; status triggers: `0`) | Quiescence window: the condition must hold and the worktree be edit-free this long before delivery. Doubles as your cancellation grace period. Status triggers default to 0 — an assertion is a deliberate write, not flappy derived state. |
 
 At runtime, `A` pauses all automations and `Ctrl+A` pauses the selected worktree (or its whole stack); both persist across restarts.

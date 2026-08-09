@@ -21,12 +21,13 @@ import {
   MANAGER_SLUG,
 } from "../../core/manager.ts";
 import { attachOrCreate, injectIntoSession } from "../../core/tmux.ts";
+import { hasHelpFlag } from "../args.ts";
 import { dim, green, red } from "../colors.ts";
 
 export async function run(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
 
-  if (sub === "--help" || sub === "-h") {
+  if (hasHelpFlag([sub ?? ""])) {
     console.log(
       "usage: wt manager                 attach the manager session (create if missing)\n" +
         "       wt manager send <text...>  inject a message into it",
@@ -35,8 +36,10 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   if (sub === "send") {
-    // `--help` after `send` must not be injected as a literal message.
-    if (rest[0] === "--help" || rest[0] === "-h") {
+    // Only the immediate next token is checked for --help — the rest of
+    // `rest` is free-text message content and must not be scanned for it
+    // (a message that happens to contain the word "--help" still sends).
+    if (hasHelpFlag([rest[0] ?? ""])) {
       console.log("usage: wt manager send <text...>   inject a message into the manager session");
       return 0;
     }

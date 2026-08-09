@@ -104,8 +104,15 @@ export const qk = {
       dirty: () => ["wt", slug, "dirty"] as const,
       lock: () => ["wt", slug, "lock"] as const,
       deploy: () => ["wt", slug, "deploy"] as const,
-      /** `[dev_server]` supervisor state (session + port probe). */
-      dev: () => ["wt", slug, "dev"] as const,
+      /**
+       * `[dev_server]` supervisor state (session + port probe). Keyed
+       * by the batched tmux session-existence read (`null` while that
+       * query hasn't loaded yet) so a flip immediately cache-misses
+       * into a fresh probe instead of waiting out the staleTime — the
+       * same "value drives the key" pattern as `sync`/`gitActivity`.
+       */
+      dev: (sessionExists: boolean | null) =>
+        ["wt", slug, "dev", sessionExists] as const,
       merged: () => ["wt", slug, "merged"] as const,
       gone: () => ["wt", slug, "gone"] as const,
       /**

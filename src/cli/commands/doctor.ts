@@ -16,6 +16,7 @@ import { computeStage } from "../../core/stage.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
 import type { Check, CheckStatus, Worktree } from "../../core/types.ts";
 import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
+import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import {
   renderPrCell,
@@ -23,6 +24,17 @@ import {
   renderStageCell,
   renderTable,
 } from "../render.ts";
+
+const USAGE = `usage: wt doctor [<slug>] [options]
+
+Health report: working tree, sync vs trunk, SST stage pin + deploy
+state, node_modules, locks, merged status, PR/CI. One worktree (or the
+one containing cwd), or all with --all. Also banners machine-level
+issues: a main clone off its trunk branch, and pending agent-skill
+updates.
+
+  --all, -a    force the full summary table
+  --json       machine-readable`;
 
 const STATUS_RANK: Record<CheckStatus, number> = { ok: 0, info: 0, warn: 1, err: 2 };
 function worst(statuses: CheckStatus[]): CheckStatus {
@@ -151,7 +163,7 @@ async function checkLock(wt: Worktree): Promise<Check> {
 
 async function checkMerged(wt: Worktree): Promise<Check> {
   if (!wt.branch) return mkCheck("merged", "info", "no branch");
-  if (await branchIsMerged(wt.branch))
+  if (await branchIsMerged(wt.branch, wt.path))
     return mkCheck("merged", "info", "merged into origin/main");
   return mkCheck("merged", "ok", "not merged into origin/main");
 }
@@ -352,6 +364,10 @@ function parse(argv: string[]): Flags | { error: string } {
 }
 
 export async function run(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
   const parsed = parse(argv);
   if ("error" in parsed) {
     console.error(red(parsed.error));

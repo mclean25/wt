@@ -6,6 +6,19 @@ import { cyan, dim, green, red, yellow } from "../colors.ts";
 import { humanAge } from "../../core/locks.ts";
 import { renderTable } from "../render.ts";
 import { confirm, isInteractive } from "../prompt.ts";
+import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
+
+const USAGE = `usage: wt stages [options]
+
+List SST stages in the configured state bucket and flag orphans (no
+matching live worktree). Requires [deploy.sst].
+
+  --clean       destroy orphaned stages (\`sst remove\` per stage, in the
+                main clone)
+  --yes, -y     skip the destroy confirmation
+  --json        machine-readable {live, orphaned}`;
+
+const KNOWN_FLAGS = new Set(["--json", "--clean", "--yes", "-y", "--help", "-h"]);
 
 function parseFlags(argv: string[]): { json: boolean; clean: boolean; yes: boolean } {
   return {
@@ -22,11 +35,22 @@ function ageOf(s: SstStage, now: number): string {
 }
 
 export async function run(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
+  const unknown = firstUnknownFlag(argv, KNOWN_FLAGS);
+  if (unknown) {
+    console.error(red(`unknown flag: ${unknown}`));
+    return 2;
+  }
   const { json, clean, yes } = parseFlags(argv);
 
   if (!config.sst) {
+    // Optional integration absent, not a usage error — 1, matching
+    // dev/events/remote's guard for their own optional sections.
     console.error(red("[deploy.sst] is not configured in config.toml; nothing to do."));
-    return 2;
+    return 1;
   }
 
   const stages = await listSstStages();

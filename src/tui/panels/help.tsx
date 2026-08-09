@@ -157,7 +157,7 @@ const KEY_BLOCKS: Block[] = [
     items: [
       { key: "n", label: "new worktree" },
       { key: "N", label: "new worktree · base = selected" },
-      { key: "ctrl+n", label: "new worktree on SSH remote · stays in this Inbox" },
+      { key: "ctrl+n", label: "new worktree on SSH remote · lands in a server-named remote section" },
       { key: "c", label: "clean merged/gone" },
       { key: "h", label: "show / hide removed-worktree history" },
       { key: "r", label: "refresh (fetch + recompute)" },
@@ -193,6 +193,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "p", label: "open recorded PR" },
       { key: "i", label: "open issue" },
       { key: "y", label: "copy branch name" },
+      { key: "g / G", label: "jump to top / bottom" },
       { key: "h / esc", label: "back to worktrees" },
     ],
   },

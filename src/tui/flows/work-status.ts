@@ -74,9 +74,10 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
       ? { state: item.state, at: new Date().toISOString() }
       : null;
     // The toast below is this pick's ack; mute the narration's default
-    // toast for the write we're about to make (the attention line
-    // still lands in the pane feed).
-    markSelfStatusWrite(slug);
+    // toast for exactly the write we're about to make (the attention
+    // line still lands in the pane feed). A clear writes no record, so
+    // there's nothing to narrate or mute.
+    if (record) markSelfStatusWrite(slug, record.at);
     setWorkStatus(slug, record).then(
       () => {
         toast(

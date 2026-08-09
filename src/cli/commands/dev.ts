@@ -4,10 +4,11 @@ import {
   startDevServer,
   stopDevServer,
 } from "../../core/dev-server.ts";
-import { sessionName, TMUX_SOCKET } from "../../core/tmux/naming.ts";
+import { sessionName, TMUX_SOCKET } from "../../core/tmux.ts";
 import { run as runProc } from "../../core/proc.ts";
 import type { Worktree } from "../../core/types.ts";
 import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
+import { hasHelpFlag } from "../args.ts";
 import { cyan, dim, green, red, yellow } from "../colors.ts";
 
 const USAGE =
@@ -26,8 +27,12 @@ async function resolveWorktree(slugArg: string | undefined): Promise<Worktree | 
 }
 
 export async function run(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
   const [sub, slugArg, ...extra] = argv;
-  if (!sub || sub === "--help" || sub === "-h" || extra.length > 0) {
+  if (!sub || extra.length > 0) {
     console.log(USAGE);
     return 2;
   }

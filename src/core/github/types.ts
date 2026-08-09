@@ -131,7 +131,6 @@ export type ReviewRequestPr = {
 };
 
 export type GhActionResult = { ok: true } | { ok: false; error: string };
-export type EnableAutoMergeResult = GhActionResult;
 
 export type LivePrInfo = {
   number: number;

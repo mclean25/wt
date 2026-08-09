@@ -65,7 +65,9 @@ async function fetchActiveCommitAuthors(signal?: AbortSignal): Promise<Set<strin
  * `editReviewers` when GitHub's per-PR `suggestedReviewers` is empty,
  * which it often is on small/focused diffs.
  *
- * Returns [] on any failure — same posture as `fetchGithub`. If only
+ * Returns [] on any failure — deliberately laxer than `fetchGithub`
+ * (which throws so transient blips can't blank cached PR state): an
+ * empty reviewer picker is low-stakes and self-heals on reopen. If only
  * the recency check fails (but contributors succeeded), we return
  * the unfiltered contributors so the picker isn't empty.
  */

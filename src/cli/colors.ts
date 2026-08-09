@@ -17,7 +17,6 @@ export const cyan = plainIfNoTty(wrap(36));
 export const green = plainIfNoTty(wrap(32));
 export const yellow = plainIfNoTty(wrap(33));
 export const red = plainIfNoTty(wrap(31));
-export const blue = plainIfNoTty(wrap(34));
 export const magenta = plainIfNoTty(wrap(35));
 export const dim = plainIfNoTty(wrap(2));
 export const bold = plainIfNoTty(wrap(1));

@@ -138,6 +138,21 @@ async function startHarnessSessionDetached(
     new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
   ]);
   if (code !== 0) {
+    // No client attached means no `-A` (it needs a tty), so a plain
+    // `new-session -d` loses the create race against a concurrent
+    // `attachOrCreate` (the user pressing F12 as an automation fires)
+    // with "duplicate session". A live session is exactly what the
+    // caller needs for the paste — recheck reality before failing, or
+    // the injected message silently drops.
+    const nowExists = (await listAllSessionsRaw().catch(() => new Set<string>())).has(name);
+    if (nowExists) {
+      log.warn("detached harness start lost create race; session exists, proceeding", {
+        slug,
+        harnessId,
+        code,
+      });
+      return { ok: true };
+    }
     const reason = stderr.trim() || `tmux new-session exited ${code}`;
     log.warn("detached harness start failed", {
       slug,

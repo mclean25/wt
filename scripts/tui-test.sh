@@ -21,8 +21,10 @@
 #   - `keys` sleeps briefly after sending so the next `snap` sees the
 #     result; slow paths (github fetch, AI summary) may need re-snaps.
 #   - Concurrent probes are fine: give each its own <name>.
-#   - `start` arms WT_AUTOMATIONS=off so a probe instance can never
-#     dispatch automations alongside the user's live instance.
+#   - `start` arms WT_AUTOMATIONS=off (a probe must never dispatch
+#     automations alongside the live instance) and WT_GITHUB=off
+#     (probes render PR badges from the persisted cache instead of
+#     burning API quota — N probes once ate a day's rate limit).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,7 +39,7 @@ case "$cmd" in
     name="${1:-probe}" w="${2:-200}" h="${3:-50}"
     T kill-session -t "$name" 2>/dev/null || true
     T new-session -d -s "$name" -x "$w" -y "$h" \
-      -e WT_AUTOMATIONS=off -c "$ROOT" "exec bun src/main.ts"
+      -e WT_AUTOMATIONS=off -e WT_GITHUB=off -c "$ROOT" "exec bun src/main.ts"
     # Wait for the first painted frame (bun cold start + cache hydrate).
     for _ in $(seq 1 60); do
       out="$(T capture-pane -pt "$name" 2>/dev/null || true)"

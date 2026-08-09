@@ -218,6 +218,11 @@ export async function runTui(): Promise<TuiExit> {
     // here so the session badges flip on the event instead of the
     // (now slower) polling backstop.
     invalidations.key(qk.tmuxSessions());
+    // A registry rewrite IS claude activity (turn start/end) — exactly
+    // when Anthropic API utilization changes. `claudeUsage` was
+    // otherwise poll-only; this rides the same fs.watch as everything
+    // else in this callback instead of waiting out its 60s interval.
+    invalidations.key(qk.claudeUsage());
   });
   // Local git activity → query invalidations. Coarse refs watcher fires
   // on commits, fetches, pushes, branch creates/deletes (anything that
@@ -375,27 +380,36 @@ export async function runTui(): Promise<TuiExit> {
   // Start Codex activity-event polling. Same pattern as opencode: the
   // getter reads from the query cache imperatively (no React) and is
   // safe to call from the interval callback outside the render tree.
-  const stopCodexEvents = startCodexEventPolling(() => {
-    const worktrees = wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
-    const tmux = wtClient.client.getQueryData<TmuxSessionsData>(qk.tmuxSessions());
-    const liveCodex = new Set(tmux?.slugsByHarness.codex ?? []);
-    return worktrees
-      .filter((wt) => liveCodex.has(wt.slug))
-      .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
-  });
+  // `onActivity` invalidates `codexUsage` — a push trigger riding the
+  // same worker-tick sensor instead of leaving that query poll-only.
+  const stopCodexEvents = startCodexEventPolling(
+    () => {
+      const worktrees = wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
+      const tmux = wtClient.client.getQueryData<TmuxSessionsData>(qk.tmuxSessions());
+      const liveCodex = new Set(tmux?.slugsByHarness.codex ?? []);
+      return worktrees
+        .filter((wt) => liveCodex.has(wt.slug))
+        .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
+    },
+    () => invalidations.key(qk.codexUsage()),
+  );
 
   // Start OpenCode activity-event polling. The getter reads from the
   // query cache imperatively (no React) so it's safe to call from the
-  // interval callback outside the render tree.
-  const stopOpencodeEvents = startOpencodeEventPolling(() => {
-    const worktrees = wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
-    const tmux = wtClient.client.getQueryData<TmuxSessionsData>(qk.tmuxSessions());
-    // Only scan slugs that have a live opencode tmux session.
-    const liveOpecode = new Set(tmux?.slugsByHarness.opencode ?? []);
-    return worktrees
-      .filter((wt) => liveOpecode.has(wt.slug))
-      .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
-  });
+  // interval callback outside the render tree. `onActivity` invalidates
+  // `opencodeCost` for the same reason as codex above.
+  const stopOpencodeEvents = startOpencodeEventPolling(
+    () => {
+      const worktrees = wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
+      const tmux = wtClient.client.getQueryData<TmuxSessionsData>(qk.tmuxSessions());
+      // Only scan slugs that have a live opencode tmux session.
+      const liveOpecode = new Set(tmux?.slugsByHarness.opencode ?? []);
+      return worktrees
+        .filter((wt) => liveOpecode.has(wt.slug))
+        .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
+    },
+    () => invalidations.key(qk.opencodeCost()),
+  );
 
   // Wire the session tail's refresh triggers to the query cache. The
   // tailer is already reading every live Claude jsonl for the activity

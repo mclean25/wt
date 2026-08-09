@@ -69,32 +69,41 @@ export const wtDeployQuery = (wt: Pick<Worktree, "slug" | "path">) =>
 
 /**
  * `[dev_server]` state for the slug (tmux session + port probe; cheap
- * and local). The dev-server start/stop actions carry `affects =
- * ["dev"]`, whose dispatch invalidates the slug's fields — this
- * staleTime is the backstop for out-of-band changes (a crash, a
- * hand-run `wt dev`).
+ * and local). `sessionExists` is read by the caller from the batched
+ * `tmuxSessionsQuery`'s `dev` set (`null` while that query hasn't
+ * loaded yet) and passed through to `devServerStatus` so this query
+ * doesn't spawn its own per-worktree `tmux has-session` — the value
+ * is also part of the query key, so a session starting/stopping
+ * cache-misses into an immediate refetch instead of waiting on this
+ * query's own interval. That interval, plus the dev-server start/stop
+ * actions' `affects = ["dev"]` invalidation, remain the backstop for
+ * the port probe half (a crash, a hand-run `wt dev`).
  */
-export const wtDevQuery = (wt: Pick<Worktree, "slug">) =>
+export const wtDevQuery = (
+  wt: Pick<Worktree, "slug">,
+  sessionExists: boolean | null = null,
+) =>
   queryOptions({
-    queryKey: qk.wt(wt.slug).dev(),
-    queryFn: async (): Promise<DevServerStatus> => devServerStatus(wt.slug),
+    queryKey: qk.wt(wt.slug).dev(sessionExists),
+    queryFn: async (): Promise<DevServerStatus> =>
+      devServerStatus(wt.slug, { sessionExists: sessionExists ?? undefined }),
     staleTime: STALE.fast,
     refetchInterval: 15_000,
   });
 
-export const wtMergedQuery = (wt: Pick<Worktree, "slug" | "branch">) =>
+export const wtMergedQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).merged(),
     queryFn: async (): Promise<boolean> =>
-      wt.branch ? branchIsMerged(wt.branch) : false,
+      wt.branch ? branchIsMerged(wt.branch, wt.path) : false,
     staleTime: STALE.mid,
   });
 
-export const wtGoneQuery = (wt: Pick<Worktree, "slug" | "branch">) =>
+export const wtGoneQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).gone(),
     queryFn: async (): Promise<boolean> =>
-      wt.branch ? branchIsGone(wt.branch) : false,
+      wt.branch ? branchIsGone(wt.branch, wt.path) : false,
     staleTime: STALE.mid,
   });
 

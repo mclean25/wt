@@ -3,7 +3,6 @@ import { memo, useMemo } from "react";
 import { config } from "../../core/config.ts";
 import {
   type MergeQueueEntry,
-  type MergeQueueState,
   type PrChecks,
   type PrReview,
   type PullRequest,
@@ -13,6 +12,7 @@ import {
 import { pluralize } from "../../core/text.ts";
 import {
   checkBadge,
+  mqStateBadge,
   prStateBadge,
   reviewBadge,
   reviewBotBadge,
@@ -81,29 +81,6 @@ function reviewBotLabel(
 }
 
 /**
- * Merge-queue state label for the details-pane segment. Color tier
- * follows severity: green when mergeable, yellow while waiting on
- * checks / its turn, red when blocked. Unknown states pass through
- * verbatim (dim) so a new GitHub enum surfaces rather than vanishing.
- */
-function mqStateLabel(state: MergeQueueState): { text: string; fg: string } {
-  switch (state) {
-    case "MERGEABLE":
-      return { text: "mergeable", fg: theme.ok };
-    case "AWAITING_CHECKS":
-      return { text: "awaiting checks", fg: theme.warn };
-    case "QUEUED":
-      return { text: "queued", fg: theme.warn };
-    case "UNMERGEABLE":
-      return { text: "unmergeable", fg: theme.err };
-    case "LOCKED":
-      return { text: "locked", fg: theme.err };
-    default:
-      return { text: state, fg: theme.fgDim };
-  }
-}
-
-/**
  * Build the PR row's segment list. Tiers picked so the PR id is sticky,
  * a real merge-queue entry (next action) outranks ambient signals, and
  * the auto-merge indicator drops first (tier 6) as the least load-
@@ -136,7 +113,7 @@ function buildPrSegments(
   });
 
   if (mq) {
-    const label = mqStateLabel(mq.state);
+    const label = mqStateBadge(mq.state);
     // The merge-queue glyph already prefixes the segment, so a "queue" word
     // is redundant — just the position + state.
     const full = `#${mq.position} ${label.text}`;

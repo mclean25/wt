@@ -240,7 +240,14 @@ export function useHarnessSessions(
   // the combined data array IS structurally shared by TanStack, making
   // the memos below real.
   const rawData = useQueries({
-    queries: HARNESSES.map((h) => harnessSessionsQuery(h.id, slug, wtPath)),
+    queries: HARNESSES.map((h) =>
+      harnessSessionsQuery(
+        h.id,
+        slug,
+        wtPath,
+        (tmux.data?.slugsByHarness[h.id] ?? []).includes(slug),
+      ),
+    ),
     combine: combineSessionData,
   });
   const rawByHarness = useMemo(() => {
@@ -334,7 +341,14 @@ export function useActiveSessionsBySlug(
   // array is structurally shared, so the memo below actually holds.
   const rawData = useQueries({
     queries: liveWorktrees.flatMap((w) =>
-      harnessIds.map((id) => harnessSessionsQuery(id, w.slug, w.path)),
+      harnessIds.map((id) =>
+        harnessSessionsQuery(
+          id,
+          w.slug,
+          w.path,
+          (slugsByHarness?.[id] ?? []).includes(w.slug),
+        ),
+      ),
     ),
     combine: combineSessionData,
   });

@@ -47,6 +47,40 @@ function matchesTrigger(k: KeyEvent, trigger: string): boolean {
   return k.sequence === trigger && !k.ctrl && !k.meta;
 }
 
+/**
+ * Shared yes/no confirm-modal core: `y`/`Enter` confirms, `n`/`Esc`/`q`/
+ * `Ctrl+C` (plus any `extraCancelKeys` sequences) cancels. Always
+ * returns true — an open modal swallows every key, matching
+ * `handleListPickerKey`.
+ */
+export function handleYesNoKey(
+  k: KeyEvent,
+  {
+    onConfirm,
+    onCancel,
+    extraCancelKeys,
+  }: {
+    onConfirm: () => void;
+    onCancel: () => void;
+    extraCancelKeys?: readonly string[];
+  },
+): boolean {
+  if (k.name === "y" || k.name === "return") {
+    onConfirm();
+    return true;
+  }
+  if (
+    k.name === "n" ||
+    k.name === "escape" ||
+    k.sequence === "q" ||
+    (k.ctrl && k.name === "c") ||
+    (extraCancelKeys?.includes(k.sequence ?? "") ?? false)
+  ) {
+    onCancel();
+  }
+  return true;
+}
+
 export function handleListPickerKey(k: KeyEvent, spec: ListPickerSpec): boolean {
   const max = Math.max(0, spec.count - 1);
   const idx = Math.min(Math.max(0, spec.index), max);

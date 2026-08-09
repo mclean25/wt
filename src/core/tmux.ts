@@ -29,7 +29,7 @@
 // a thin barrel reproducing the original export surface.
 
 export { TMUX_SOCKET, WT_SOURCE_SLUG, claudeSessionName, sessionName } from "./tmux/naming.ts";
-export type { SessionKind } from "./tmux/naming.ts";
+export type { SessionKind, SessionShortcut } from "./tmux/naming.ts";
 
 export { buildConfig, writeConfig } from "./tmux/config.ts";
 
@@ -52,7 +52,7 @@ export { killActionSession, startActionSession } from "./tmux/action-sessions.ts
 
 export { listAllSessionsRaw } from "./tmux/process.ts";
 
-export { attachOrCreate, ensureSessionDetached } from "./tmux/attach.ts";
+export { attachOrCreate } from "./tmux/attach.ts";
 export type { AttachResult } from "./tmux/attach.ts";
 
 export { injectIntoSession } from "./tmux/inject.ts";

@@ -909,18 +909,23 @@ class ActionRegistry {
       // entries. Bounded set keeps memory predictable; the on-disk
       // run dirs survive past eviction so a future boot can rehydrate
       // them if desired.
-      const finished: Array<{ slug: string; endedAt: number }> = [];
+      const finished: Array<{ slug: string; endedAt: number; runDir: string }> = [];
       for (const [slug, run] of next) {
         if (run.status === "running") continue;
         if (run.endedAt !== undefined) {
-          finished.push({ slug, endedAt: run.endedAt });
+          finished.push({ slug, endedAt: run.endedAt, runDir: run.runDir });
         }
       }
       if (finished.length > MAX_RETAINED_RUNS) {
         finished.sort((a, b) => a.endedAt - b.endedAt);
         const drop = finished.slice(0, finished.length - MAX_RETAINED_RUNS);
-        for (const { slug } of drop) {
+        for (const { slug, runDir } of drop) {
           next.delete(slug);
+          // The run's chain has long settled by the time it's evicted
+          // here (terminal status, on a 60s timer) and nothing will
+          // write to this runDir again — drop it so `metaChains` doesn't
+          // grow forever like `runs` used to before MAX_RETAINED_RUNS.
+          this.metaChains.delete(runDir);
           changed = true;
         }
       }

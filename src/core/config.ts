@@ -827,6 +827,15 @@ function build(raw: Raw, errs: Errors): Config {
   const branchPrefix = errs.reqStr(branch, "branch", "prefix");
   const branchBase = errs.optStr(branch, "base", GENERIC_DEFAULTS.branch.base);
   const idPattern = errs.optStr(branch, "id_pattern", GENERIC_DEFAULTS.branch.idPattern);
+  // Compile-validate at load time — stage.ts does `new RegExp(idPattern,
+  // "i")` at module init with no try/catch, so a bad pattern would
+  // otherwise throw an uncaught SyntaxError on startup instead of
+  // failing the config loader with a normal error.
+  try {
+    new RegExp(idPattern);
+  } catch (err) {
+    errs.add(`branch.id_pattern: invalid regex (${(err as Error).message})`);
+  }
   const slugMaxLen = errs.optNum(branch, "slug_max_len", GENERIC_DEFAULTS.branch.slugMaxLen);
 
   const mainClone = expandHome(errs.reqStr(paths, "paths", "main_clone"));
@@ -1046,15 +1055,24 @@ function build(raw: Raw, errs: Errors): Config {
   const githubEventsSecretFile = githubEventsRaw
     ? errs.optStrOrNull(githubEventsRaw, "secret_file")
     : null;
-  const githubEvents: GithubEventsConfig | null = githubEventsRaw === null
-    ? null
-    : {
-      port: errs.optNum(githubEventsRaw, "port", 8765),
+  let githubEvents: GithubEventsConfig | null = null;
+  if (githubEventsRaw !== null) {
+    const port = errs.optNum(githubEventsRaw, "port", 8765);
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      errs.add("github.events.port must be a port number (1-65535)");
+    }
+    const backstopPollMs = errs.optNum(githubEventsRaw, "backstop_poll_ms", 600_000);
+    if (!Number.isFinite(backstopPollMs) || backstopPollMs <= 0) {
+      errs.add("github.events.backstop_poll_ms must be a positive number");
+    }
+    githubEvents = {
+      port,
       host: errs.optStr(githubEventsRaw, "host", "127.0.0.1"),
       secret: errs.optStrOrNull(githubEventsRaw, "secret"),
       secretFile: githubEventsSecretFile ? expandHome(githubEventsSecretFile) : null,
-      backstopPollMs: errs.optNum(githubEventsRaw, "backstop_poll_ms", 600_000),
+      backstopPollMs,
     };
+  }
   const github: GithubConfig = {
     ignoredChecks: strArr(githubRaw?.ignored_checks, []),
     defaultReviewer: errs.optStrOrNull(githubRaw, "default_reviewer"),
@@ -1291,9 +1309,13 @@ function parseActions(raw: unknown, errs: Errors): readonly ActionDef[] {
     // Optional picker affordances. `key` must be a single character;
     // `group` a non-empty label. Both default to undefined (auto-derived
     // key / ungrouped) when absent.
+    // Only /^[a-z]$/ is a valid picker binding — core/actions/builtins.ts
+    // reserves uppercase and punctuation for built-ins, and an
+    // out-of-range key silently dies (never rendered, never dispatchable)
+    // instead of erroring, so catch it here.
     const keyRaw = entry.key;
-    if (keyRaw !== undefined && !(typeof keyRaw === "string" && keyRaw.length === 1)) {
-      errs.add(`${tag}.key must be a single character`);
+    if (keyRaw !== undefined && !(typeof keyRaw === "string" && /^[a-z]$/.test(keyRaw))) {
+      errs.add(`${tag}.key must be a single lowercase letter (a-z)`);
       continue;
     }
     const groupRaw = entry.group;

@@ -35,16 +35,18 @@ Freshness is **push-based**; the `r` keybind is a backstop, not the mechanism. E
 
 | trigger | invalidates |
 |---|---|
-| `.git/refs/` watcher (commits, fetches, pushes) | github + per-worktree fields + wtState |
+| `.git/refs/` watcher (commits, fetches, pushes) | github + per-worktree fields + wtState + reviewRequests (deliberately keyed outside the `["github"]` prefix) |
 | `.git/worktrees/` watcher (worktree add/remove) | worktree list |
 | worktree-root watcher (subdir add/remove) | worktree list — catches `rift` checkouts, which are independent clones that never touch `.git/worktrees/`; harmlessly redundant for git worktrees |
 | `.git/worktrees/<slug>/rebase-{merge,apply}` watcher (hand/`/restack` rebase starts or ends) | that slug's conflict probe (the mid-rebase glyph) |
 | per-worktree dir watchers | edits → dirty; `.sst/` writes → deploy |
 | `~/.cache/wt/state.json` + `archive.json` watcher | cross-process fork-base / section / archive writes |
 | `~/.cache/wt/locks/` watcher | per-slug busy state from any process (create/destroy, and every chain member during a restack — the restack glyph rides on this); a release also fans out a per-slug field refresh (`useLockReleasedInvalidator`) **and refreshes the worktree list** — the reliable "a create/destroy just finished" signal, so a new (esp. `rift`) row surfaces immediately instead of waiting on the interval (a rift `.rift` marker is written inside the new dir, after the worktree-root watcher already fired on the bare dir) |
-| github-events webhook marker | github + a staleTime-gated `git fetch origin` |
+| github-events webhook marker | github + a forced `git fetch origin` |
 | 3-minute `fetch origin` interval | backstop for remote drift |
-| claude-registry fs.watch, session-tail triggers (`gh pr …` / `git push` inside a session) | sessions / github |
+| claude-registry fs.watch, session-tail triggers (`gh pr …` / `git push` inside a session) | sessions / github / claudeUsage (a registry rewrite IS claude activity, exactly when API utilization changes) |
+| `tmuxSessionsQuery`'s `dev` set (batched tmux read, 5s poll + push-invalidated) | `wtDevQuery`'s session-liveness half — the value is part of that query's key, so a session start/stop cache-misses into an immediate refetch instead of spawning a redundant per-worktree `tmux has-session`; the port-probe half keeps its own 15s poll as backstop |
+| codex/opencode activity-poller ticks (`startCodexEventPolling` / `startOpencodeEventPolling`, the same 2.5s tickers that feed the activity pane) | codexUsage / opencodeCost, on ticks that actually observed an event — token usage and spend change exactly when those sessions are active, so this rides the existing sensor instead of leaving the query poll-only |
 | action `affects` tags on completion | the declared domains (`git`, `github`, `dev` — the dev-server start/stop builtins declare `dev`, refreshing the slug's fields; a 15s poll backstops out-of-band crashes) |
 
 One deliberate exception: `perfSnapshotQuery` (the `P` overlay) polls as its *primary* mechanism, not as a backstop. Nothing emits an event when some process starts burning CPU, and the overlay's whole job is to show the number moving. It's gated hard on the modal being open (`enabled`), so it samples at 2s while visible and not at all otherwise, and it's excluded from the persister — a restored snapshot is a previous run's dead pids. Don't treat it as precedent for polling a source that *does* have a trigger available.

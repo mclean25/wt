@@ -10,7 +10,8 @@ import {
   unpushedCommits,
   worktreeStatus,
 } from "../../core/worktree.ts";
-import { dim } from "../colors.ts";
+import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
+import { dim, red } from "../colors.ts";
 import {
   renderPrCell,
   renderSlugCell,
@@ -20,7 +21,26 @@ import {
 } from "../render.ts";
 import { existsSync } from "node:fs";
 
+const USAGE = `usage: wt ls [options]
+
+List all non-main worktrees (slug, stage when [deploy.sst] is
+configured, PR, status).
+
+  --json    machine-readable array (slug, branch, path, stage, status,
+            dirty, issue_id, issue_url, …)`;
+
+const KNOWN_FLAGS = new Set(["--json", "--help", "-h"]);
+
 export async function run(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
+  const unknown = firstUnknownFlag(argv, KNOWN_FLAGS);
+  if (unknown) {
+    console.error(red(`unknown flag: ${unknown}`));
+    return 2;
+  }
   const jsonOut = argv.includes("--json");
   const all = await listWorktrees();
   const rows = all.filter((w) => !w.isMain);
@@ -42,6 +62,8 @@ export async function run(argv: string[]): Promise<number> {
           status_age: st.age ?? null,
           status_op: st.op ?? null,
           dirty,
+          // null = couldn't determine (see unpushedCommits) — surfaced
+          // as-is so JSON consumers can distinguish it from 0.
           unpushed: dirty ? 0 : await unpushedCommits(w.path),
           issue_id: issueIdForSlug(w.slug),
           issue_url: issueUrlForSlug(w.slug),

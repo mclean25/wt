@@ -160,8 +160,12 @@ const LABEL_WIDTH =
   RESOLVED_ROWS.reduce((m, r) => Math.max(m, r.label.length), 0) + 1;
 /** Reserved cells for the trailing staleness glyph slot (1-cell `paddingLeft` + 2-cell spinner). */
 const GLYPH_SLOT_WIDTH = 3;
-/** Border (1 left + 1 right) + content padding (1 each side). */
-const PANE_CHROME_WIDTH = 4;
+/**
+ * Border (1 left + 1 right) + content padding (1 each side) + the
+ * scrollbox's reserved scrollbar column (`paddingRight: 1` on its
+ * content — see the scrollbox below).
+ */
+const PANE_CHROME_WIDTH = 5;
 
 /** Compute the row-value cell budget from the pane's outer width. */
 function valueWidthFor(paneWidth: number): number {
@@ -475,7 +479,11 @@ const DetailsBody = memo(function DetailsBody({
         scrollY
         flexGrow={1}
         minHeight={0}
-        contentOptions={{ flexDirection: "column" }}
+        // paddingRight reserves the scrollbar's column: the thumb is
+        // drawn OVER the last content cell, so full-width truncated
+        // rows (title, path) would otherwise lose their real last
+        // character whenever the pane grows a scrollbar.
+        contentOptions={{ flexDirection: "column", paddingRight: 1 }}
       >
         <TitleLine title={row.title} source={row.titleSource} />
         {RESOLVED_ROWS.map((m) => (
@@ -584,7 +592,6 @@ export function Details({
       <ReviewRequestBody
         key={reviewRequest.url}
         pr={reviewRequest}
-        width={width}
         scrollRef={scrollRef}
       />
     );

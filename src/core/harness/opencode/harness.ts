@@ -89,6 +89,11 @@ type StateCacheEntry = {
   tailEndedAt: number | null;
 };
 const stateCache = new Map<string, StateCacheEntry>();
+/** Matches the sibling per-process caches (codex tailCache 128, claude
+ *  jsonl/summaries 256, opencode event snapshots 256) — bounded so a
+ *  long-lived wt process doesn't accumulate one entry per sessionId
+ *  ever seen. */
+const STATE_CACHE_MAX = 256;
 
 /**
  * Derive opencode state from the latest message row, without live info.
@@ -145,7 +150,11 @@ export const opencodeHarness: Harness = {
         { id: string; title: string; time_updated: number },
         { $directory: string }
       >(
-        "SELECT id, title, time_updated FROM session WHERE directory = $directory AND time_archived IS NULL ORDER BY time_updated DESC",
+        // LIMIT matches the sibling harnesses' bounded discovery (codex
+        // caps its rollout scan at SCAN_MAX_DAYS): the picker never
+        // shows more than a handful of sessions, so there's no reason
+        // to pull every row a worktree has ever accumulated.
+        "SELECT id, title, time_updated FROM session WHERE directory = $directory AND time_archived IS NULL ORDER BY time_updated DESC LIMIT 50",
       );
       // bun:sqlite expects named-param keys to keep their `$` prefix.
       rows = stmt.all({ $directory: wtPath });
@@ -197,6 +206,10 @@ export const opencodeHarness: Harness = {
         }
         derivedState = deriveOpencodeState(msgRow);
         tailEndedAt = msgRow?.time_updated ?? null;
+        if (stateCache.size >= STATE_CACHE_MAX) {
+          const oldest = stateCache.keys().next().value;
+          if (oldest !== undefined) stateCache.delete(oldest);
+        }
         stateCache.set(row.id, { timeUpdated: row.time_updated, derivedState, tailEndedAt });
       }
 

@@ -86,8 +86,13 @@ export type AutomationEvalCtx = {
  * A row the engine may evaluate at all: live (not archived — archived
  * rows opted out of the automatic lifecycle, same as `c`), not mid
  * destroy/init, and not individually paused.
+ *
+ * Exported for the breaker-reset pass in `useAutomations`: an absent
+ * fire for an INELIGIBLE row means "not evaluated", never "condition
+ * cleared", so resets must skip these rows or a transient Busy lock /
+ * Ctrl+A toggle hands a flapping fix-loop free strikes.
  */
-function isEligible(row: WorktreeRow, ctx: AutomationEvalCtx): boolean {
+export function isEligible(row: WorktreeRow, ctx: AutomationEvalCtx): boolean {
   if (row.archived) return false;
   if (row.status.kind === StatusKind.Busy) return false;
   if (ctx.isPausedSlug(row.wt.slug)) return false;

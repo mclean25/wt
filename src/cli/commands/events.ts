@@ -22,6 +22,7 @@ import {
   readState,
 } from "../../core/events/store.ts";
 import { run as sh } from "../../core/proc.ts";
+import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 
 const LAUNCHD_LABEL = "com.wt.events";
@@ -248,6 +249,10 @@ function cmdSecret(): number {
 
 export async function run(argv: string[]): Promise<number> {
   const [sub] = argv;
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
   switch (sub) {
     case "serve":
       return runDaemonForeground();
@@ -264,10 +269,8 @@ export async function run(argv: string[]): Promise<number> {
     case "secret":
       return cmdSecret();
     case undefined:
-    case "--help":
-    case "-h":
       console.log(USAGE);
-      return sub ? 0 : 2;
+      return 2;
     default:
       console.error(red(`unknown events subcommand: ${sub}\n`));
       console.error(USAGE);

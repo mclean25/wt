@@ -1,7 +1,6 @@
 import { effectiveBaseOrTrunk } from "../../core/git.ts";
 import { HARNESSES, type HarnessId } from "../../core/harness/index.ts";
-import { attachOrCreate } from "../../core/tmux.ts";
-import type { SessionShortcut } from "../../core/tmux/naming.ts";
+import { attachOrCreate, type SessionShortcut } from "../../core/tmux.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import { readWtState } from "../../core/wtstate.ts";
 

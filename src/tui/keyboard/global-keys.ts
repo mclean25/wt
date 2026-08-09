@@ -184,15 +184,24 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       return true;
     }
     if (k.sequence === ">") {
-      openInZed(WT_SOURCE_SLOT.path);
-      wtSourceLog.event.info(`opened ${WT_SOURCE_SLOT.path}`);
+      void openInZed(WT_SOURCE_SLOT.path)
+        .then(() => wtSourceLog.event.info(`opened ${WT_SOURCE_SLOT.path}`))
+        .catch((err: unknown) =>
+          wtSourceLog.event.err(
+            `zed open failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
       return true;
     }
     if (k.sequence === "O") {
-      openInZed(MAIN_CLONE_SLOT.path);
-      createLogger(MAIN_CLONE_SLOT.label).event.info(
-        `opened ${MAIN_CLONE_SLOT.path}`,
-      );
+      const slotLog = createLogger(MAIN_CLONE_SLOT.label);
+      void openInZed(MAIN_CLONE_SLOT.path)
+        .then(() => slotLog.event.info(`opened ${MAIN_CLONE_SLOT.path}`))
+        .catch((err: unknown) =>
+          slotLog.event.err(
+            `zed open failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
       return true;
     }
     return false;

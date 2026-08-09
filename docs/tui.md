@@ -139,7 +139,7 @@ machine feels slow".
 
 ### Removed-worktrees view (`h`)
 
-`j`/`k` navigate, `p` opens the snapshotted PR, `i` the issue, `y` copies the branch, `Enter` restores the worktree (from the branch if it still exists, else fresh), `h`/`Esc` returns.
+`j`/`k` navigate, `g`/`G` jump to top/bottom, `p` opens the snapshotted PR, `i` the issue, `y` copies the branch, `Enter` restores the worktree (from the branch if it still exists, else fresh), `h`/`Esc` returns.
 
 ## Picker conventions
 

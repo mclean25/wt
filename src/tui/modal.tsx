@@ -97,6 +97,10 @@ export function Modal({
     Math.floor((height * (100 - pct(i.top) - pct(i.bottom))) / 100),
   );
   return (
+    // The outer box paints a 1-cell gutter either side of the border:
+    // the pane behind keeps rendering, and without the gutter its text
+    // sits flush against `║` — a sentence bisected by the modal edge
+    // reads as garbled overprint rather than background.
     <box
       position="absolute"
       top={i.top}
@@ -105,28 +109,38 @@ export function Modal({
       {...(fill ? { bottom: i.bottom } : { maxHeight })}
       zIndex={10}
       backgroundColor={theme.bg}
-      border
-      borderStyle="double"
-      borderColor={borderColor}
-      title={` ${title} `}
-      titleAlignment="left"
-      padding={1}
+      paddingLeft={1}
+      paddingRight={1}
       flexDirection="column"
     >
       <box
+        backgroundColor={theme.bg}
+        border
+        borderStyle="double"
+        borderColor={borderColor}
+        title={` ${title} `}
+        titleAlignment="left"
+        padding={1}
         flexDirection="column"
         flexShrink={1}
         minHeight={0}
-        overflow="hidden"
         {...(fill ? { flexGrow: 1 } : {})}
       >
-        {children}
-      </box>
-      {/* flexWrap: the hint chips flow onto extra rows at narrow widths
-          instead of overrunning the border. Each chip is one unbreakable
-          <text>; wrapping happens only between chips. */}
-      <box flexShrink={0} flexDirection="row" flexWrap="wrap" marginTop={1}>
-        <KeyHint pairs={hints} />
+        <box
+          flexDirection="column"
+          flexShrink={1}
+          minHeight={0}
+          overflow="hidden"
+          {...(fill ? { flexGrow: 1 } : {})}
+        >
+          {children}
+        </box>
+        {/* flexWrap: the hint chips flow onto extra rows at narrow widths
+            instead of overrunning the border. Each chip is one unbreakable
+            <text>; wrapping happens only between chips. */}
+        <box flexShrink={0} flexDirection="row" flexWrap="wrap" marginTop={1}>
+          <KeyHint pairs={hints} />
+        </box>
       </box>
     </box>
   );

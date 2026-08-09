@@ -232,6 +232,12 @@ export function SessionsPickerList({
               <box width={6} flexShrink={0} justifyContent="flex-end">
                 <text fg={theme.fgDim}>{ageText ?? ""}</text>
               </box>
+              {/* `x` kills this row (no confirm) — render the chord dim so
+                  it's visible in-row, since the "+ new" rows' letter chord
+                  (`c`/`x`/`o`) occupies the digit column here instead. */}
+              <box width={2} flexShrink={0} justifyContent="flex-end">
+                <text fg={theme.fgDim}>x</text>
+              </box>
             </box>
           );
         })}

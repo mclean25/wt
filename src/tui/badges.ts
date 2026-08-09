@@ -50,6 +50,7 @@ import type { MergeConflictProbe } from "../core/git.ts";
 import type { DerivedState } from "../core/harness/status.ts";
 import {
   type LockMeta,
+  type MergeQueueState,
   type PrChecks,
   type PrReview,
   type PullRequest,
@@ -304,4 +305,29 @@ export function showReviewBot(pr: {
 }): boolean {
   if (pr.state !== "OPEN") return false;
   return !pr.isDraft || BOT_SHOWS_ON_DRAFT;
+}
+
+/**
+ * Merge-queue state → color + label — used by the list cluster's bare
+ * indicator (color only) AND the details-pane segment (color + text).
+ * Severity tiers: green = about to land, yellow = waiting on checks or
+ * behind others, red = blocked/failed. Unknown states pass their raw
+ * value through as `text` (dim) so a new GitHub enum surfaces rather
+ * than vanishing.
+ */
+export function mqStateBadge(state: MergeQueueState): { text: string; fg: string } {
+  switch (state) {
+    case "MERGEABLE":
+      return { text: "mergeable", fg: theme.ok };
+    case "AWAITING_CHECKS":
+      return { text: "awaiting checks", fg: theme.warn };
+    case "QUEUED":
+      return { text: "queued", fg: theme.warn };
+    case "UNMERGEABLE":
+      return { text: "unmergeable", fg: theme.err };
+    case "LOCKED":
+      return { text: "locked", fg: theme.err };
+    default:
+      return { text: state, fg: theme.fgDim };
+  }
 }

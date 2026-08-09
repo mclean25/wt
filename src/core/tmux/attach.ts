@@ -7,7 +7,7 @@ import { getHarness, type Harness, type HarnessId } from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
 import { shellLogPath } from "../shell-tail.ts";
 import { killServer, resolveDiffCommand } from "./admin.ts";
-import { ensureConfig, writeConfig } from "./config.ts";
+import { writeConfig } from "./config.ts";
 import { capturesInnerStderr, wrapInnerArgs } from "./inner-process.ts";
 import {
   harnessIdForKind,
@@ -95,7 +95,7 @@ function scrubStderr(raw: string): string | null {
  * name, and which physical F-key shortcut owns it (used for the
  * `@wt-shortcut` tag tmux's config reads to decide detach-vs-switch).
  *
- * Shared by `attachOrCreate` and `ensureSessionDetached` — same
+ * Shared with the detached starter in inject.ts — same
  * reasoning as `buildInnerArgs`/`wrapInnerArgs` below: one source of
  * truth so the two creation paths can't resolve a session's identity
  * differently and end up fighting over two different tmux sessions
@@ -128,7 +128,7 @@ export function resolveSessionIdentity(
  * the workspace-trust gate doesn't fire on first launch (rift checkouts
  * otherwise read as new projects to Claude).
  *
- * Shared by `attachOrCreate` and `ensureSessionDetached` so the two
+ * Shared with the detached starter in inject.ts so the two
  * creation paths can never drift on what argv a given (kind, opts)
  * produces.
  */
@@ -494,166 +494,4 @@ export async function attachOrCreate(opts: {
     }
   }
   return { kind: "exited", code, stderr: stderrText };
-}
-
-/**
- * Ensure a session exists, creating it detached (`new-session -d`, no
- * client attach) if it doesn't. Byte-for-byte the same inner-program
- * construction `attachOrCreate` uses — same `sessionName`, same
- * `buildInnerArgs` / `wrapInnerArgs` — so a later `attachOrCreate` on
- * the same (slug, kind, managedName) just attaches to what this
- * created rather than spawning a second session.
- *
- * For any non-interactive caller that needs a session to exist without
- * taking over the terminal (unlike `attachOrCreate`, which inherits
- * stdio and blocks until the client detaches). `kind: "action"` is
- * excluded — action sessions have their own lifecycle in
- * `core/tmux/action-sessions.ts`.
- *
- * Uses `ensureConfig()`, NOT `writeConfig()` + `killServer()`: this can
- * run from arbitrary contexts (e.g. from inside the wt tmux server
- * itself), where the kill-server-on-config-change dance would be
- * actively destructive. See `ensureConfig`'s header for the full
- * rationale.
- */
-export async function ensureSessionDetached(opts: {
-  slug: string;
-  cwd: string;
-  kind: Exclude<SessionKind, "action" | "dev">;
-  managedName?: string | null;
-  resumeSessionId?: string | null;
-  claudeDisplayName?: string;
-  /** Resolved diff base for `{{base}}` in `[diff].command` (diff kind only). */
-  base?: string;
-}): Promise<{ ok: true; created: boolean } | { ok: false; reason: string }> {
-  const { slug, cwd, kind, managedName, resumeSessionId, claudeDisplayName, base } = opts;
-  const { harness, managedNameNorm, name, shortcut } = resolveSessionIdentity(
-    slug,
-    kind,
-    managedName,
-  );
-  const configPath = ensureConfig();
-
-  const exists = (await listAllSessionsRaw().catch(() => new Set<string>())).has(name);
-  if (exists) {
-    if (kind === "shell") {
-      // Idempotent re-run of the pipe-pane chain (see attachOrCreate):
-      // `-o` makes this a no-op when the pipe's already attached, so
-      // it's safe to call on every ensure regardless of whether the
-      // tail was already wired up.
-      const shellLog = shellLogPath(slug);
-      const quotedLog = shQuote(shellLog);
-      const rerun = Bun.spawn(
-        [
-          "tmux",
-          "-L",
-          TMUX_SOCKET,
-          "-f",
-          configPath,
-          "pipe-pane",
-          "-o",
-          "-t",
-          name,
-          `cat > ${quotedLog}`,
-        ],
-        { cwd: tmuxClientCwd(), stdout: "ignore", stderr: "pipe" },
-      );
-      const [rerunCode, rerunErr] = await Promise.all([
-        rerun.exited,
-        new Response(rerun.stderr).text(),
-      ]);
-      if (rerunCode !== 0) {
-        log.warn("ensureSessionDetached: pipe-pane re-run failed", {
-          slug,
-          code: rerunCode,
-          stderr: rerunErr.trim() || null,
-        });
-      }
-    }
-    return { ok: true, created: false };
-  }
-
-  const stderrPath = join(sessionsDir(), `${name}.err`);
-  const innerArgs = buildInnerArgs({
-    cwd,
-    kind,
-    harness,
-    managedNameNorm,
-    resumeSessionId,
-    claudeDisplayName,
-    base,
-  });
-
-  const createBase = [
-    "tmux",
-    "-L",
-    TMUX_SOCKET,
-    "-f",
-    configPath,
-    "new-session",
-    "-d",
-    "-s",
-    name,
-    "-c",
-    cwd,
-    ...wrapInnerArgs(kind, stderrPath, innerArgs),
-  ];
-  const tagArgs = ["set-option", "-t", name, "@wt-shortcut", shortcut];
-  // Chain every setup command onto the one `tmux` invocation (`;`
-  // separates commands within a single call) so there's no window
-  // between session-create and pipe-pane/tag where output could be
-  // lost or the session briefly appear untagged.
-  const createArgs =
-    kind === "shell"
-      ? [
-          ...createBase,
-          ";",
-          "pipe-pane",
-          "-o",
-          "-t",
-          name,
-          `cat > ${shQuote(shellLogPath(slug))}`,
-          ";",
-          ...tagArgs,
-        ]
-      : [...createBase, ";", ...tagArgs];
-
-  const proc = Bun.spawn(createArgs, {
-    cwd: tmuxClientCwd(),
-    stdout: "ignore",
-    stderr: "pipe",
-  });
-  const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
-  if (code !== 0) {
-    const reason = stderr.trim() || `tmux new-session exited ${code}`;
-    // A non-zero exit here is ambiguous, not necessarily a failed
-    // create — two distinct scenarios collapse to the same exit code:
-    //
-    //  1. Duplicate-session race: another caller's `ensureSessionDetached`
-    //     (or an `attachOrCreate`) won the create between our exists-check
-    //     above and this spawn — the `exists` snapshot is TOCTOU by
-    //     construction, there's no lock across the gap. tmux's
-    //     `new-session` then fails with "duplicate session" even though
-    //     the session the caller wanted now exists.
-    //  2. Partial chain failure: `new-session` itself succeeded (the
-    //     session IS running) but a later command chained onto it with
-    //     `;` (`pipe-pane` / `set-option`) failed, which still exits the
-    //     whole `tmux` invocation non-zero.
-    //
-    // Both leave a live session behind despite the non-zero exit, so
-    // re-check reality rather than trusting the exit code: if the
-    // session now exists, treat this as a (degraded) success instead
-    // of reporting a create failure for a session that's actually up.
-    const nowExists = (await listAllSessionsRaw().catch(() => new Set<string>())).has(name);
-    if (nowExists) {
-      log.warn(
-        "ensureSessionDetached: create exited non-zero but session exists (race or partial chain failure)",
-        { slug, kind, code, reason },
-      );
-      return { ok: true, created: false };
-    }
-    log.warn("ensureSessionDetached: create failed", { slug, kind, code, reason });
-    return { ok: false, reason };
-  }
-  return { ok: true, created: true };
 }

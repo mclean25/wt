@@ -64,14 +64,15 @@ describe("fire ledger", () => {
 
 describe("circuit breaker", () => {
   test("counts consecutive dispatches, trips, and resets on clear", () => {
-    expect(breakerState("fix-ci", "a")).toEqual({ count: 0, trippedAt: null });
+    expect(breakerState("fix-ci", "a")).toEqual({ count: 0, trippedAt: null, updatedAt: 0 });
     expect(bumpBreaker("fix-ci", "a")).toBe(1);
     expect(bumpBreaker("fix-ci", "a")).toBe(2);
+    expect(breakerState("fix-ci", "a").updatedAt).toBeGreaterThan(0);
     tripBreaker("fix-ci", "a");
     expect(breakerState("fix-ci", "a").trippedAt).not.toBeNull();
     // Condition observed clear → full reset.
     resetBreaker("fix-ci", "a");
-    expect(breakerState("fix-ci", "a")).toEqual({ count: 0, trippedAt: null });
+    expect(breakerState("fix-ci", "a")).toEqual({ count: 0, trippedAt: null, updatedAt: 0 });
   });
 
   test("breaker state is per (rule, slug)", () => {

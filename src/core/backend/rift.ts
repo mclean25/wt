@@ -14,7 +14,7 @@ import type {
 const log = createLogger("[backend:rift]");
 
 /** True when the `rift` binary is on the process PATH. */
-export function riftAvailable(): boolean {
+function riftAvailable(): boolean {
   return Bun.which("rift") !== null;
 }
 

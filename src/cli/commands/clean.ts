@@ -8,8 +8,22 @@ import {
   listWorktrees,
   worktreeStatus,
 } from "../../core/worktree.ts";
+import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import { confirm, isInteractive } from "../prompt.ts";
+
+const USAGE = `usage: wt clean [options]
+
+Remove every worktree that is merged or whose remote branch is gone
+("gone" only auto-cleans when a merged PR confirms the content
+actually landed; anything riskier is left for an explicit \`wt rm\`).
+
+  --yes, -y               skip confirmation (required non-interactively)
+  --destroy-stage / --no-destroy-stage
+                           apply to all candidates (default: per-worktree,
+                           destroy iff its stage is live)
+  --foreground             run removals synchronously (background dispatch
+                           is the default here, unlike \`rm\`)`;
 
 type Flags = {
   yes: boolean;
@@ -33,6 +47,10 @@ function parse(argv: string[]): Flags | { error: string } {
 }
 
 export async function run(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
   const parsed = parse(argv);
   if ("error" in parsed) {
     console.error(red(parsed.error));

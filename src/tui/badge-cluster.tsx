@@ -15,6 +15,7 @@
 import {
   type Badge,
   checkBadge,
+  mqStateBadge,
   prStateBadge,
   rebaseBadge,
   reviewBadge,
@@ -27,7 +28,7 @@ import { getHarness } from "../core/harness/index.ts";
 import type { HarnessId } from "../core/harness/index.ts";
 import type { DerivedState } from "../core/harness/status.ts";
 import { stateColor } from "./claude-state.ts";
-import { type MergeQueueState, REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
+import { REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
 import { type BadgeSlot, config } from "../core/config.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
 
@@ -66,14 +67,16 @@ export function badgeClusterCells(
   const showSessionSlot = activeHarnessId !== undefined && shows("session");
   const rebase = rebaseHint(row);
   const dirty = dirtyHint(row);
+  const bot = reviewBotHint(row);
+  const review = reviewHint(row);
   const hasAnyBadge =
     showAction ||
     showSessionSlot ||
     !!rebase ||
     !!dirty ||
     !!(prSlot || mq || isDeployed) ||
-    !!reviewBotHint(row) ||
-    !!reviewHint(row) ||
+    !!bot ||
+    !!review ||
     showChecks;
   if (!hasAnyBadge) return 0;
   let cells = 2; // leading gap
@@ -81,8 +84,8 @@ export function badgeClusterCells(
   if (dirty) cells += 2;
   if (showSessionSlot) cells += 2;
   if (rebase) cells += 2;
-  if (reviewBotHint(row)) cells += 2;
-  if (reviewHint(row)) cells += 2;
+  if (bot) cells += 2;
+  if (review) cells += 2;
   // The PR-state slot doubles as the merge-queue slot: a queued PR
   // swaps the PR glyph for the mq indicator and the slot widens to 4
   // (icon + space + position digit); otherwise it's the 2-cell PR icon.
@@ -91,25 +94,6 @@ export function badgeClusterCells(
   if (showChecks) cells += 2;
   if (isDeployed) cells += 2;
   return cells;
-}
-
-/**
- * Color the merge-queue indicator by state. Green = about to land,
- * yellow = waiting on checks or behind others, red = blocked/failed.
- */
-function mqColor(state: MergeQueueState): string {
-  switch (state) {
-    case "MERGEABLE":
-      return theme.ok;
-    case "AWAITING_CHECKS":
-    case "QUEUED":
-      return theme.warn;
-    case "UNMERGEABLE":
-    case "LOCKED":
-      return theme.err;
-    default:
-      return theme.fgDim;
-  }
 }
 
 /**
@@ -247,7 +231,7 @@ export function BadgeCluster({
   // both, since they're one slot that swaps contents.
   const mq = shows("pr") ? row.mq : null;
   const prSlot = shows("pr") ? row.pr : null;
-  const mqFg = row.archived || !mq ? theme.fgDim : mqColor(mq.state);
+  const mqFg = row.archived || !mq ? theme.fgDim : mqStateBadge(mq.state).fg;
   const mqText = mqGlyph(row);
   const showChecks =
     shows("checks") &&

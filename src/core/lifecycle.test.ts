@@ -1,48 +1,16 @@
-import { afterAll, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { REPOSITORY_CONFIG_ENV } from "./config-layer.ts";
+import { git, trackedTmpDirs } from "./test-fixtures.ts";
 
-const dirs: string[] = [];
-
-afterAll(() => {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-});
-
-function git(cwd: string, args: string[]): void {
-  const result = Bun.spawnSync(["git", ...args], {
-    cwd,
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_SYSTEM: "/dev/null",
-      GIT_AUTHOR_NAME: "wt test",
-      GIT_AUTHOR_EMAIL: "wt@example.test",
-      GIT_COMMITTER_NAME: "wt test",
-      GIT_COMMITTER_EMAIL: "wt@example.test",
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(result.stderr.toString());
-  }
-}
+const { tmp } = trackedTmpDirs();
 
 test("createWorktree copies configured glob matches from the main clone", () => {
-  const root = mkdtempSync(join(tmpdir(), "wt-copy-globs-"));
-  dirs.push(root);
+  const root = tmp("wt-copy-globs-");
   const origin = join(root, "origin.git");
   const main = join(root, "main");
   const worktrees = join(root, "worktrees");

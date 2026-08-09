@@ -64,6 +64,14 @@ export type BreakerEntry = {
   count: number;
   /** Set when the breaker tripped; cleared when the condition clears. */
   trippedAt: number | null;
+  /**
+   * Last write (bump or trip). Stamped fresh on every mutation so
+   * `loadLedger` can apply the same `FIRED_RETENTION_MS` cutoff `fired`/
+   * `lastDispatch` already get — otherwise a breaker for a long-
+   * destroyed slug survives forever. `0` on the synthetic "no entry"
+   * default `breakerState` returns when nothing is persisted.
+   */
+  updatedAt: number;
 };
 
 type Ledger = {
@@ -111,13 +119,19 @@ function loadLedger(): Ledger {
       }
     }
     if (raw?.breaker && typeof raw.breaker === "object") {
+      const now = Date.now();
       for (const [k, v] of Object.entries(raw.breaker)) {
         if (!v || typeof v !== "object") continue;
         const e = v as Partial<BreakerEntry>;
         const count = typeof e.count === "number" && Number.isFinite(e.count) ? e.count : 0;
         const trippedAt = typeof e.trippedAt === "number" ? e.trippedAt : null;
         if (count <= 0 && trippedAt === null) continue;
-        next.breaker[k] = { count, trippedAt };
+        // Pre-existing records predate this field — stamp with `now`
+        // rather than mass-dropping the user's live breaker state; only
+        // a record that genuinely carries a stale `updatedAt` ages out.
+        const updatedAt = typeof e.updatedAt === "number" ? e.updatedAt : now;
+        if (updatedAt < cutoff) continue;
+        next.breaker[k] = { count, trippedAt, updatedAt };
       }
     }
     if (raw?.lastDispatch && typeof raw.lastDispatch === "object") {
@@ -243,15 +257,17 @@ export function reconcileDispatchedFires(
 }
 
 export function breakerState(ruleId: string, slug: string): BreakerEntry {
-  return loadLedger().breaker[pairKey(ruleId, slug)] ?? { count: 0, trippedAt: null };
+  return (
+    loadLedger().breaker[pairKey(ruleId, slug)] ?? { count: 0, trippedAt: null, updatedAt: 0 }
+  );
 }
 
 /** Increment the consecutive-dispatch count; returns the new count. */
 export function bumpBreaker(ruleId: string, slug: string): number {
   const l = loadLedger();
   const key = pairKey(ruleId, slug);
-  const prev = l.breaker[key] ?? { count: 0, trippedAt: null };
-  const next = { ...prev, count: prev.count + 1 };
+  const prev = l.breaker[key] ?? { count: 0, trippedAt: null, updatedAt: 0 };
+  const next = { ...prev, count: prev.count + 1, updatedAt: Date.now() };
   l.breaker[key] = next;
   saveLedger();
   return next.count;
@@ -261,8 +277,8 @@ export function bumpBreaker(ruleId: string, slug: string): number {
 export function tripBreaker(ruleId: string, slug: string): void {
   const l = loadLedger();
   const key = pairKey(ruleId, slug);
-  const prev = l.breaker[key] ?? { count: 0, trippedAt: null };
-  l.breaker[key] = { ...prev, trippedAt: Date.now() };
+  const prev = l.breaker[key] ?? { count: 0, trippedAt: null, updatedAt: 0 };
+  l.breaker[key] = { ...prev, trippedAt: Date.now(), updatedAt: Date.now() };
   saveLedger();
 }
 

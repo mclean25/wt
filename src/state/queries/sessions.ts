@@ -38,6 +38,12 @@ export type TmuxSessionsData = {
   /** Slugs with a live action session (wt-managed wrapper). */
   action: string[];
   /**
+   * Slugs with a live `[dev_server]` supervisor session (`<slug>-dev`).
+   * `wtDevQuery` reads this instead of spawning its own per-worktree
+   * `tmux has-session` — one batched shell-out already knows.
+   */
+  dev: string[];
+  /**
    * Raw set of every live tmux session name on the wt-private server.
    * Consumers that need to know whether a specific harness's tmux name
    * is live (e.g. `useHarnessSessions`) read this rather than running
@@ -61,7 +67,7 @@ export const tmuxSessionsQuery = () =>
   queryOptions({
     queryKey: qk.tmuxSessions(),
     queryFn: async (): Promise<TmuxSessionsData> => {
-      const { claude, claudeSlugs, codex, opencode, diff, shell, action, all } =
+      const { claude, claudeSlugs, codex, opencode, diff, shell, action, dev, all } =
         await listTmuxSessions();
       return {
         claude,
@@ -73,6 +79,7 @@ export const tmuxSessionsQuery = () =>
         diff: [...diff],
         shell: [...shell],
         action: [...action],
+        dev: [...dev],
         all: [...all],
       };
     },
@@ -86,7 +93,9 @@ export const tmuxSessionsQuery = () =>
  * picker / row don't pay the cost on every render. Liveness is NOT
  * baked into the cached value — the consumer hook reannotates against
  * the live tmux name set so a tmux flip doesn't invalidate the
- * discovery cache.
+ * discovery cache. `isLive` (the caller's read of that same tmux name
+ * set, via `slugsByHarness`) is deliberately NOT part of the query
+ * key for the same reason — it only gates `refetchInterval` below.
  *
  * `enabled` short-circuits to false when wtPath is empty (defensive —
  * the row pipeline can briefly show empty paths during reordering).
@@ -95,6 +104,7 @@ export const harnessSessionsQuery = (
   harnessId: HarnessId,
   slug: string,
   wtPath: string,
+  isLive: boolean,
 ) =>
   queryOptions({
     queryKey: qk.harnessSessions(harnessId, slug),
@@ -107,13 +117,10 @@ export const harnessSessionsQuery = (
     // (its status lives in the fs-watched registry). Codex/OpenCode bake
     // their state into discovery and have no such watcher, so a working
     // session would otherwise show stale state until spawn/kill/refresh —
-    // poll while at least one session exists (no empty-dir re-scans).
-    refetchInterval: (query) =>
-      harnessId === "claude"
-        ? false
-        : (query.state.data?.length ?? 0) > 0
-          ? 3_000
-          : false,
+    // poll while the tmux slot is CURRENTLY live (not merely "ever had a
+    // session on disk" — a worktree with old rollouts/DB rows but no live
+    // tmux slot must not poll forever).
+    refetchInterval: () => (harnessId === "claude" ? false : isLive ? 3_000 : false),
     enabled: wtPath !== "",
   });
 

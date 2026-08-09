@@ -4,6 +4,7 @@ import {
   rebaseStack,
   type RebaseResult,
 } from "../../core/stack-ops.ts";
+import { hasHelpFlag } from "../args.ts";
 import { bold, dim, green, red, yellow } from "../colors.ts";
 
 const USAGE = `usage: wt restack [<branch>] [--onto <ref>]
@@ -86,11 +87,11 @@ async function branchFromCwd(): Promise<string | null> {
 }
 
 export async function run(argv: string[]): Promise<number> {
-  const [first] = argv;
-  if (first === "--help" || first === "-h") {
+  if (hasHelpFlag(argv)) {
     console.log(USAGE);
     return 0;
   }
+  const [first] = argv;
   if (first === "prune-backups") {
     return runPruneBackups(argv.slice(1));
   }

@@ -17,6 +17,13 @@ import type {
 import { qk } from "../keys.ts";
 import { KEEP_PREV, STALE } from "./shared.ts";
 
+// WT_GITHUB=off pins the github source to whatever the persisted cache
+// holds — no gh round-trips at all. Set by the TUI probe harness
+// (scripts/tui-test.sh): N concurrent probe instances each running the
+// full fetch fan-out is how the review swarm burned through a day's API
+// rate limit in an hour. Stale badges are fine in a probe.
+const GITHUB_OFF = process.env.WT_GITHUB === "off";
+
 export type GithubData = {
   prs: Record<string, PullRequest>;
   /** Merge-queue entries keyed by head branch. */
@@ -58,7 +65,9 @@ export const githubQuery = (branches: readonly string[]) =>
     // Poll-only setups keep the 60s staleTime and no interval (the refs
     // watcher + manual refresh drive them).
     staleTime: config.github.events?.backstopPollMs ?? STALE.slow,
-    refetchInterval: config.github.events ? config.github.events.backstopPollMs : false,
+    refetchInterval:
+      !GITHUB_OFF && config.github.events ? config.github.events.backstopPollMs : false,
+    enabled: !GITHUB_OFF,
     ...KEEP_PREV,
   });
 
@@ -83,7 +92,9 @@ export const reviewRequestsQuery = () =>
     // lingering in the section) until the next unrelated trigger. Poll-only
     // setups keep the 60s staleTime and no interval.
     staleTime: config.github.events?.backstopPollMs ?? STALE.slow,
-    refetchInterval: config.github.events ? config.github.events.backstopPollMs : false,
+    refetchInterval:
+      !GITHUB_OFF && config.github.events ? config.github.events.backstopPollMs : false,
+    enabled: !GITHUB_OFF,
     ...KEEP_PREV,
   });
 

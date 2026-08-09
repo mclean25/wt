@@ -2,9 +2,13 @@ import { config } from "../../core/config.ts";
 import { createWorktree, parseInput } from "../../core/lifecycle.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import { setSlugGithubIssue } from "../../core/wtstate.ts";
+import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import { isInteractive, pickIndex } from "../prompt.ts";
 import { openInZed } from "../../core/zed.ts";
+
+const USAGE =
+  "usage: wt new <id [title…]|url|branch|slug> [--slug s] [--gh n] [--attach] [--any] [--base ref] [--no-open] [--no-install]";
 
 type Flags = {
   slug?: string;
@@ -62,17 +66,17 @@ function parse(argv: string[]): Flags | { error: string } {
 }
 
 export async function run(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
   const parsed = parse(argv);
   if ("error" in parsed) {
     console.error(red(parsed.error));
     return 2;
   }
   if (!parsed.raw) {
-    console.error(
-      red(
-        "usage: wt new <id [title…]|url|branch|slug> [--slug s] [--gh n] [--attach] [--any] [--base ref] [--no-open] [--no-install]",
-      ),
-    );
+    console.error(red(USAGE));
     return 2;
   }
 
@@ -104,7 +108,7 @@ export async function run(argv: string[]): Promise<number> {
       setSlugGithubIssue(existing.slug, parsed.gh);
       console.log(`  ${dim("gh:")}    #${parsed.gh}`);
     }
-    if (parsed.open) await openInZed(existing.path);
+    if (parsed.open) await openInZed(existing.path).catch((err: unknown) => console.error(red(err instanceof Error ? err.message : String(err))));
     return 0;
   }
 
@@ -126,6 +130,6 @@ export async function run(argv: string[]): Promise<number> {
   if (parsed.gh) console.log(`  ${dim("gh:")}    #${parsed.gh}`);
   if (config.sst) console.log(`  ${dim("stage:")} ${result.stage}`);
 
-  if (parsed.open) await openInZed(result.path);
+  if (parsed.open) await openInZed(result.path).catch((err: unknown) => console.error(red(err instanceof Error ? err.message : String(err))));
   return 0;
 }

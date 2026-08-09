@@ -3,6 +3,7 @@ import { gitRun, revParse } from "../../core/git.ts";
 import { readWtState, setSlugBase } from "../../core/wtstate.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import type { Worktree } from "../../core/types.ts";
+import { hasHelpFlag } from "../args.ts";
 import { dim, green, red, yellow } from "../colors.ts";
 
 const USAGE = `usage: wt base <slug>                show the recorded fork base
@@ -73,10 +74,14 @@ function clear(slug: string): number {
 }
 
 export async function run(argv: string[]): Promise<number> {
-  const [first, ...rest] = argv;
-  if (!first || first === "--help" || first === "-h") {
+  if (hasHelpFlag(argv)) {
     console.log(USAGE);
-    return first ? 0 : 2;
+    return 0;
+  }
+  const [first, ...rest] = argv;
+  if (!first) {
+    console.log(USAGE);
+    return 2;
   }
   if (first === "set") {
     const [slug, ref] = rest;

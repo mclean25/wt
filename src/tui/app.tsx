@@ -521,6 +521,7 @@ export function App({ onExit }: Props) {
     } catch (err) {
       log.event.err(`pbcopy failed: ${err instanceof Error ? err.message : String(err)}`);
       log.error(err instanceof Error ? err : String(err));
+      toast(`copy failed: ${label}`, theme.err, 3000);
       return;
     }
     log.event.info(`yanked ${label}: ${value}`);

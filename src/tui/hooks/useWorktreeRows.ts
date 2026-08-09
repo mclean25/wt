@@ -30,6 +30,7 @@ import { qk } from "../../state/keys.ts";
 import {
   aiSummaryQuery,
   archiveQuery,
+  tmuxSessionsQuery,
   worktreesQuery,
   wtClaudeQuery,
   wtDeployQuery,
@@ -527,6 +528,17 @@ export function useWorktreeRows(): WorktreeRowsResult {
   const github = useGithub();
   const archive = useQuery(archiveQuery());
   const wtState = useQuery(wtStateQuery());
+  // Batched tmux session set — read here (rather than letting
+  // `wtDevQuery` spawn its own per-worktree `has-session`) so the dev
+  // badge rides this query's freshness (5s poll + push invalidation)
+  // instead of a redundant per-row shell-out. `undefined` data (not
+  // yet loaded) is distinguished from "loaded, empty" via `devSlugs`
+  // being `null` so `wtDevQuery` falls back to its own tmux check.
+  const tmuxSessions = useQuery(tmuxSessionsQuery());
+  const devSlugs = useMemo(
+    () => (tmuxSessions.data ? new Set(tmuxSessions.data.dev) : null),
+    [tmuxSessions.data],
+  );
   const archivedSet = useMemo(() => new Set(archive.data ?? []), [archive.data]);
   const stateSlugs = wtState.data?.slugs ?? EMPTY_STATE_SLUGS;
   // Keyed by slug; lets us return the same `WorktreeRow` reference
@@ -582,7 +594,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
     wtDirtyQuery(wt),
     wtLockQuery(wt),
     wtDeployQuery(wt),
-    wtDevQuery(wt),
+    wtDevQuery(wt, devSlugs ? devSlugs.has(wt.slug) : null),
     wtMergedQuery(wt),
     wtGoneQuery(wt),
     wtSyncQuery(wt, rowLayout.bases[i]!),

@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { config } from "../../core/config.ts";
 import { latestLogFor } from "../../core/logs.ts";
 import { listWorktrees } from "../../core/worktree.ts";
+import { hasHelpFlag } from "../args.ts";
 import { dim, red } from "../colors.ts";
+
+const USAGE = `usage: wt logs [<slug>]
+
+Tail a destroy log (\`tail -F\`). No slug ⇒ the most recently modified
+log.`;
 
 /** Newest log across *any* slug — used for `wt logs` with no arg. */
 function mostRecentLog(): string | null {
@@ -31,6 +37,10 @@ function mostRecentLog(): string | null {
 }
 
 export async function run(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
   const slug = argv.find((a) => !a.startsWith("-")) ?? null;
 
   let logPath: string | null = null;

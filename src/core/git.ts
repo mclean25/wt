@@ -169,10 +169,16 @@ export async function localOrOriginRef(branch: string): Promise<string> {
   return (await localBranchExists(branch)) ? branch : `origin/${branch}`;
 }
 
-export async function branchIsGone(branch: string): Promise<boolean> {
+/**
+ * `wtPath` is required for rift worktrees: an independent clone keeps
+ * its branch + upstream config in its own `.git`, invisible to the main
+ * clone. Linked git worktrees share refs, so main clone (the default)
+ * and the worktree path are equivalent there.
+ */
+export async function branchIsGone(branch: string, wtPath?: string): Promise<boolean> {
   const r = await run(
     ["git", "for-each-ref", "--format=%(upstream:track)", `refs/heads/${branch}`],
-    { cwd: config.paths.mainClone },
+    { cwd: wtPath ?? config.paths.mainClone },
   );
   if (r.exitCode !== 0) return false;
   return r.stdout.trim() === "[gone]";
@@ -232,24 +238,32 @@ export async function firstCommitSubject(wtPath: string): Promise<string | null>
   return first ?? null;
 }
 
-export async function branchIsMerged(branch: string): Promise<boolean> {
+/**
+ * `wtPath` (see `branchIsGone`) is where the branch NAME resolves; the
+ * ancestry checks below deliberately stay in the main clone, by SHA —
+ * its `origin/<base>` is the one `fetchOrigin` keeps fresh, while a
+ * rift clone's own origin ref can lag its last fetch. A pushed branch's
+ * objects are reachable in the main clone via `origin/<branch>`; an
+ * unpushed tip is unknown there, and unknown-to-origin means unmerged.
+ */
+export async function branchIsMerged(branch: string, wtPath?: string): Promise<boolean> {
+  let branchSha: string;
+  let mainSha: string;
+  try {
+    branchSha = await git(["rev-parse", "--verify", branch], wtPath ?? config.paths.mainClone);
+    mainSha = await git(["rev-parse", "--verify", `origin/${config.branch.base}`]);
+  } catch {
+    return false;
+  }
   // Real-divergence gate; FF-aligned branches skip out below.
   if (
     !(await gitQuiet([
       "merge-base",
       "--is-ancestor",
-      branch,
+      branchSha,
       `origin/${config.branch.base}`,
     ]))
   ) {
-    return false;
-  }
-  let branchSha: string;
-  let mainSha: string;
-  try {
-    branchSha = await git(["rev-parse", "--verify", branch]);
-    mainSha = await git(["rev-parse", "--verify", `origin/${config.branch.base}`]);
-  } catch {
     return false;
   }
   if (branchSha === mainSha) return false;

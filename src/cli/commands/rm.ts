@@ -13,8 +13,24 @@ import {
   unpushedCommits,
   worktreeIsDirty,
 } from "../../core/worktree.ts";
+import { hasHelpFlag } from "../args.ts";
 import { bold, dim, green, red, yellow } from "../colors.ts";
 import { confirm, isInteractive, pickIndex } from "../prompt.ts";
+
+const USAGE = `usage: wt rm [<slug>] [options]
+
+Remove a worktree (with dirty/unpushed guards, optional SST stage
+destroy, optional branch delete). No slug picks interactively.
+
+  --yes, -y              skip confirmations
+  --force                remove despite uncommitted / unpushed work
+  --destroy-stage / --no-destroy-stage
+                          force the SST stage decision (default: prompt
+                          when your stage looks deployed)
+  --delete-branch / --keep-branch
+                          default deletes the branch
+  --background, -b       dispatch as a background job (watch with
+                          \`wt logs <slug>\`)`;
 
 type Flags = {
   slug?: string;
@@ -86,6 +102,10 @@ async function decideDeleteBranch(
 }
 
 export async function run(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
   const parsed = parse(argv);
   if ("error" in parsed) {
     console.error(red(parsed.error));
@@ -141,13 +161,18 @@ export async function run(argv: string[]): Promise<number> {
     // so a landed worktree tears down without a spurious --force.
     const landed =
       !dirty && target.branch
-        ? (await branchIsMerged(target.branch)) || (await branchIsGone(target.branch))
+        ? (await branchIsMerged(target.branch, target.path)) ||
+          (await branchIsGone(target.branch, target.path))
         : false;
     const unpushed = dirty || landed ? 0 : await unpushedCommits(target.path);
-    if (dirty || unpushed > 0) {
+    // null = git couldn't answer; a data-loss guard fails cautious, so
+    // treat unknown like unpushed work rather than like a clean tree.
+    if (dirty || unpushed === null || unpushed > 0) {
       const reason = dirty
         ? "uncommitted changes"
-        : `${unpushed} unpushed commit${unpushed === 1 ? "" : "s"}`;
+        : unpushed === null
+          ? "couldn't verify pushed state"
+          : `${unpushed} unpushed commit${unpushed === 1 ? "" : "s"}`;
       console.log(yellow(`${target.slug}: ${reason}`));
       if (parsed.yes) {
         console.error(red("Refusing to remove without --force."));

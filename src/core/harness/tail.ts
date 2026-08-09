@@ -29,7 +29,7 @@ import {
   MAX_BUFFERED_LINES,
 } from "./claude/events.ts";
 import { createLogger } from "../logger.ts";
-import { jsonlTimestamp, readFileSlice } from "../tail-util.ts";
+import { jsonlTimestamp, prepareTailQuery, readFileSlice } from "../tail-util.ts";
 
 import { latestRolloutForCwd } from "./codex/harness.ts";
 import { openDb } from "./opencode/harness.ts";
@@ -333,12 +333,14 @@ function ensureOcStmts(): OcStmts | null {
   if (!db) return null;
   try {
     ocStmts = {
-      latestSession: db.query<LatestSessionRow, { $dir: string }>(
+      latestSession: prepareTailQuery<LatestSessionRow, { $dir: string }>(
+        db,
         `SELECT id FROM session
          WHERE directory = $dir AND time_archived IS NULL
          ORDER BY time_updated DESC LIMIT 1`,
-      ) as unknown as Statement<LatestSessionRow, [{ $dir: string }]>,
-      partsAfter: db.query<TailPartRow, { $sid: string; $after: number }>(
+      ),
+      partsAfter: prepareTailQuery<TailPartRow, { $sid: string; $after: number }>(
+        db,
         `SELECT p.id AS id,
                 p.time_created AS time_created,
                 json_extract(p.data,'$.type') AS ptype,
@@ -347,8 +349,9 @@ function ensureOcStmts(): OcStmts | null {
          FROM part p JOIN message m ON m.id = p.message_id
          WHERE p.session_id = $sid AND p.time_created > $after
          ORDER BY p.time_created ASC`,
-      ) as unknown as Statement<TailPartRow, [{ $sid: string; $after: number }]>,
-      seedParts: db.query<TailPartRow, { $sid: string; $limit: number }>(
+      ),
+      seedParts: prepareTailQuery<TailPartRow, { $sid: string; $limit: number }>(
+        db,
         `SELECT id, time_created, ptype, pdata, role FROM (
            SELECT p.id AS id,
                   p.time_created AS time_created,
@@ -359,7 +362,7 @@ function ensureOcStmts(): OcStmts | null {
            WHERE p.session_id = $sid
            ORDER BY p.time_created DESC LIMIT $limit
          ) ORDER BY time_created ASC`,
-      ) as unknown as Statement<TailPartRow, [{ $sid: string; $limit: number }]>,
+      ),
     };
     return ocStmts;
   } catch (err) {

@@ -8,13 +8,12 @@ import type { BackendKind, WorktreeBackend } from "./backend/types.ts";
 
 export type {
   BackendKind,
-  BackendCheckout,
   BackendCreateInput,
   BackendRemoveInput,
   BackendRemoveResult,
   WorktreeBackend,
 } from "./backend/types.ts";
-export { isRiftWorktree, listRiftWorktreePaths, riftAvailable } from "./backend/rift.ts";
+export { isRiftWorktree, listRiftWorktreePaths } from "./backend/rift.ts";
 
 const BY_KIND: Record<BackendKind, WorktreeBackend> = {
   "git-worktree": gitWorktreeBackend,

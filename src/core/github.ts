@@ -4,7 +4,6 @@ export type {
   GithubData,
   ReviewRequestPr,
   GhActionResult,
-  EnableAutoMergeResult,
   LivePrInfo,
 } from "./github/types.ts";
 export { fetchGithub, fetchPrs } from "./github/fetch.ts";

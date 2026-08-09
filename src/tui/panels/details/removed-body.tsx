@@ -96,7 +96,7 @@ export function RemovedBody({ entry }: { entry: RemovedWorktree }) {
       ) : null}
       <box flexGrow={1} flexShrink={1} minHeight={0} />
       <text fg={theme.fgDim} wrapMode="none" truncate>
-        ⏎ restore worktree · h back
+        ⏎ restore worktree · p PR · i issue · y yank branch · h back
       </text>
     </box>
   );

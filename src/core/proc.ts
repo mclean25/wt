@@ -52,13 +52,26 @@ export type RunOptions = {
  */
 export async function run(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
   const { cwd = config.paths.mainClone, input, timeoutMs, env, signal } = opts;
-  const proc = Bun.spawn(argv, {
-    cwd,
-    stdin: input !== undefined ? "pipe" : "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: env ? { ...process.env, ...env } : process.env,
-  });
+  let proc: Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
+  try {
+    proc = Bun.spawn(argv, {
+      cwd,
+      stdin: input !== undefined ? "pipe" : "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: env ? { ...process.env, ...env } : process.env,
+    });
+  } catch (err) {
+    // Bun.spawn throws SYNCHRONOUSLY on a missing binary / bad cwd; in
+    // this async body that becomes a rejected promise, and fire-and-
+    // forget callers would die on the unhandled rejection (Bun kills
+    // the process). Honor the documented contract instead.
+    return {
+      stdout: "",
+      stderr: err instanceof Error ? err.message : String(err),
+      exitCode: -1,
+    };
+  }
   if (input !== undefined && proc.stdin) {
     proc.stdin.write(input);
     proc.stdin.end();
