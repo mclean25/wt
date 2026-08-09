@@ -17,7 +17,11 @@
  */
 import { isRiftWorktree } from "../../backend.ts";
 import { claudeStatus, wtSessionArgs, wtSessionUuid } from "./jsonl.ts";
-import { readRegistry, type RegistryStatus } from "./registry.ts";
+import {
+  readRegistry,
+  type RegistrySession,
+  type RegistryStatus,
+} from "./registry.ts";
 import {
   buildClaudeSessionEntries,
   reapClaudeNames,
@@ -78,13 +82,32 @@ export const claudeHarness: Harness = {
   async discoverSessions({ slug, wtPath }) {
     const status = await claudeStatus({ slug, path: wtPath });
     const tailByName = new Map(status.sessions.map((t) => [t.name, t]));
+    // Two live claude processes can share one sessionId: the primary
+    // conversation UUID is keyed on wtPath alone, and the main-clone
+    // and manager slots run in the SAME directory. A flat by-sessionId
+    // map would let whichever registry file parses last win — main's
+    // `busy` painting the manager's footer button (or vice versa). The
+    // registry's `name` field carries the `--name` label wt spawned
+    // with (slot label == slot slug; worktree primaries use "primary"),
+    // so on collision prefer the entry whose name matches THIS slug,
+    // then the generic primary label, then whatever's there.
+    const bySessionId = new Map<string, RegistrySession[]>();
+    for (const r of readRegistry()) {
+      const list = bySessionId.get(r.sessionId);
+      if (list) list.push(r);
+      else bySessionId.set(r.sessionId, [r]);
+    }
     const registryStatusBySessionId: Record<string, RegistryStatus> = {};
     const waitingForBySessionId: Record<string, string | null> = {};
     const updatedAtBySessionId: Record<string, number> = {};
-    for (const r of readRegistry()) {
-      registryStatusBySessionId[r.sessionId] = r.status;
-      waitingForBySessionId[r.sessionId] = r.waitingFor;
-      updatedAtBySessionId[r.sessionId] = r.updatedAt;
+    for (const [sessionId, list] of bySessionId) {
+      const r =
+        list.find((e) => e.name === slug) ??
+        list.find((e) => e.name === "primary") ??
+        list[0]!;
+      registryStatusBySessionId[sessionId] = r.status;
+      waitingForBySessionId[sessionId] = r.waitingFor;
+      updatedAtBySessionId[sessionId] = r.updatedAt;
     }
     const entries = buildClaudeSessionEntries({
       slug,
@@ -120,6 +143,7 @@ export const claudeHarness: Harness = {
         // 0/absent (no live registry entry) → null so the row falls back
         // to the jsonl `lastActiveMs` age.
         statusSince: updatedAtBySessionId[e.sessionId] || null,
+        sessionSummary: e.sessionSummary,
       },
     }));
     return out;

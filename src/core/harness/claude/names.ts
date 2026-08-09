@@ -197,6 +197,8 @@ export type ClaudeSessionPickerEntry = {
   lastEntryMs: number | null;
   queued: number;
   summary: SessionSummary | null;
+  /** Claude's own current wrap-up line — see `SessionTail.sessionSummary`. */
+  sessionSummary: string | null;
 };
 
 /**
@@ -274,6 +276,7 @@ export function buildClaudeSessionEntries(opts: {
         queued: 0,
         pendingAsk: null,
         lastAssistantText: null,
+        sessionSummary: null,
       } satisfies SessionTail);
     const regStatus = registryStatusBySessionId[sessionId] ?? null;
     const isLive = liveSet.has(name);
@@ -285,6 +288,7 @@ export function buildClaudeSessionEntries(opts: {
       lastEntryMs: tail.lastEntryMs,
       queued: tail.queued,
       summary: summaryBySessionId[sessionId] ?? null,
+      sessionSummary: tail.sessionSummary,
     };
   });
 

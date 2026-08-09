@@ -28,8 +28,10 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { config } from "../../core/config.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import type { DerivedState } from "../../core/harness/status.ts";
-import { StatusKind, type PrComment } from "../../core/types.ts";
+import { StatusKind, type PrComment, type Worktree } from "../../core/types.ts";
 import { useGithub } from "../../state/hooks.ts";
+import { useHarnessSessions } from "../hooks/useHarnessSessions.ts";
+import { usePrimaryHarness } from "../hooks/usePrimaryHarness.ts";
 import {
   aiSummaryQuery,
   wtDiffContextQuery,
@@ -285,6 +287,29 @@ function AutomationsPausedLine({ scope }: { scope: "worktree" | "stack" }) {
 }
 
 /**
+ * The harness's own wrap-up line for the row's F12-target session —
+ * claude appends a `summary` entry when a session winds down, and the
+ * tail exposes it only while nothing newer follows (stale summaries
+ * vanish). Sits directly above the AI diff summary: "what the agent
+ * says it did" over "what the diff says changed". Muted but upright,
+ * against the description's italics. No header — the voice contrast
+ * is the label.
+ */
+function SessionSummaryLine({ wt }: { wt: Worktree }) {
+  const primary = usePrimaryHarness();
+  const { f12Target } = useHarnessSessions(wt.slug, wt.path, primary);
+  const summary = f12Target?.extras.sessionSummary ?? null;
+  if (!summary) return null;
+  return (
+    <box marginTop={1}>
+      <text fg={theme.fgDim} wrapMode="word">
+        {summary}
+      </text>
+    </box>
+  );
+}
+
+/**
  * Multi-line AI summary below the rows. Renders muted text, falls back
  * to a placeholder while the first generation is in flight, and stays
  * silent on errors / when the row is dirty-but-uncached (avoid noise).
@@ -462,6 +487,7 @@ const DetailsBody = memo(function DetailsBody({
             format. */}
         <RebaseBlock row={row} sessionState={sessionState} />
         {pausedScope ? <AutomationsPausedLine scope={pausedScope} /> : null}
+        <SessionSummaryLine wt={row.wt} />
         <DescriptionBlock
           summary={summary.data?.description ?? null}
           isLlmRunning={summary.isFetching}

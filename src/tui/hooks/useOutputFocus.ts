@@ -8,11 +8,9 @@ import {
   destroyOutputId,
   eventsOutputId,
   outputsForSlug,
-  sessionOutputId,
 } from "../../core/outputs.ts";
 import { StatusKind } from "../../core/types.ts";
 import { useOutputs } from "./useOutputs.ts";
-import type { ActiveSessionGlyph } from "./useHarnessSessions.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
 
 type SlugFocus = { focused: string | null };
@@ -24,8 +22,6 @@ type Args = {
   currentSlug: string | undefined;
   currentRun: ActionRun | null;
   showActionViewer: boolean;
-  claudeSessionsBySlug: ReadonlyMap<string, ReadonlyArray<string | null>>;
-  activeSessionBySlug: ReadonlyMap<string, ActiveSessionGlyph>;
 };
 
 export function useOutputFocus({
@@ -33,8 +29,6 @@ export function useOutputFocus({
   currentSlug,
   currentRun,
   showActionViewer,
-  claudeSessionsBySlug,
-  activeSessionBySlug,
 }: Args) {
   const [slugFocus, setSlugFocus] = useState<Record<string, SlugFocus>>({});
 
@@ -57,6 +51,13 @@ export function useOutputFocus({
   const isDestroying =
     currentSlug !== undefined && destroyingSlugs.includes(currentSlug);
 
+  // Auto-focus shows the attention feed by default — navigating onto a
+  // row no longer surfaces its harness session output (that was churn:
+  // every j/k flipped the pane). The two exceptions are event-driven,
+  // not navigation-driven: a destroy in flight and a just-launched
+  // action run genuinely ARE "what's happening right now". An explicit
+  // `'` pick is remembered per worktree (slugFocus below) until the
+  // output dies or the worktree goes away.
   const autoOutputId = useMemo<string>(() => {
     if (currentSlug && isDestroying) {
       return destroyOutputId(currentSlug);
@@ -64,36 +65,8 @@ export function useOutputFocus({
     if (currentSlug && currentRun && showActionViewer) {
       return actionOutputId(currentSlug, currentRun.startedAt);
     }
-    if (currentSlug) {
-      const active = activeSessionBySlug.get(currentSlug);
-      if (active && active.harnessId !== "claude") {
-        const id = sessionOutputId(currentSlug, active.harnessId);
-        if (visibleOutputs.some((o) => o.id === id)) return id;
-      }
-      const liveNames = claudeSessionsBySlug.get(currentSlug);
-      if (liveNames && liveNames.length > 0) {
-        if (liveNames.includes(null)) {
-          return sessionOutputId(currentSlug, "claude", null);
-        }
-        const liveClaude = visibleOutputs.find(
-          (o) =>
-            o.kind === "session" &&
-            o.sessionKind === "claude" &&
-            o.sessionName !== null,
-        );
-        if (liveClaude) return liveClaude.id;
-      }
-    }
     return eventsOutputId();
-  }, [
-    currentSlug,
-    isDestroying,
-    currentRun?.startedAt,
-    showActionViewer,
-    claudeSessionsBySlug,
-    activeSessionBySlug,
-    visibleOutputs,
-  ]);
+  }, [currentSlug, isDestroying, currentRun?.startedAt, showActionViewer]);
 
   const desiredOutputId = focusBucket.focused ?? autoOutputId;
   const displayedOutput: Output =

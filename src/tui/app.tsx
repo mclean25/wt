@@ -347,8 +347,6 @@ export function App({ onExit }: Props) {
     currentSlug,
     currentRun,
     showActionViewer,
-    claudeSessionsBySlug,
-    activeSessionBySlug,
   });
 
   // Action launch + completion dispatch — extracted to

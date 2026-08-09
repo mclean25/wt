@@ -61,6 +61,13 @@ export type HarnessExtras = {
    * message rows independently.
    */
   tailEndedAt?: number | null;
+  /**
+   * The harness's own end-of-session wrap-up line, when current (see
+   * `SessionTail.sessionSummary` — no newer message may follow it).
+   * Claude-only; rendered above the AI diff summary in the details
+   * pane. Undefined/null elsewhere.
+   */
+  sessionSummary?: string | null;
 };
 
 export type HarnessSession = {

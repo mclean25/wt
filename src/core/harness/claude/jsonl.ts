@@ -76,6 +76,14 @@ export type SessionTail = {
   pendingAsk: string | null;
   /** First non-empty line of the most recent assistant TEXT block in the tail window; null when none. */
   lastAssistantText: string | null;
+  /**
+   * Claude's own end-of-session summary line, when it's CURRENT: the
+   * tail's most recent `summary` entry with no user/assistant entry
+   * after it (claude appends one when a session wraps up; any later
+   * message makes it describe a stale past). Sanitized single line.
+   * Null when absent or stale.
+   */
+  sessionSummary: string | null;
 };
 
 export type ClaudeStatus = {
@@ -239,6 +247,28 @@ function assistantStopReason(raw: Record<string, unknown>): string | null {
  * `end_turn`, `max_tokens`, `stop_sequence`, `refusal` — collapses
  * to `end_turn` since the row only cares about mid-turn vs. not.
  */
+/**
+ * The tail's CURRENT session summary: scan backward; a `summary` entry
+ * found before any user/assistant message is the wrap-up line for the
+ * conversation as it stands. Hitting a message first means whatever
+ * summary exists describes an older state — return null rather than a
+ * stale line. Agent-influenced text headed for the TUI, so it gets the
+ * same `sanitizeLine` scrub as every other jsonl-derived string.
+ * Exported for unit tests (like `describePendingToolUse`).
+ */
+export function currentSessionSummary(entries: readonly Entry[]): string | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    if (e.type === "user" || e.type === "assistant") return null;
+    if (e.type !== "summary") continue;
+    const text = e.raw.summary;
+    if (typeof text !== "string") return null;
+    const line = firstNonEmptyLine(text);
+    return line ? sanitizeLine(line) : null;
+  }
+  return null;
+}
+
 function classifyLast(entries: readonly Entry[]): {
   kind: LastEntryKind;
   ts: number | null;
@@ -412,6 +442,7 @@ function emptyTail(name: string | null, hasJsonl: boolean): SessionTail {
     queued: 0,
     pendingAsk: null,
     lastAssistantText: null,
+    sessionSummary: null,
   };
 }
 
@@ -478,6 +509,7 @@ function tailSession(wtPath: string, name: string | null): SessionTail {
       queued,
       pendingAsk,
       lastAssistantText: pending.lastAssistantText,
+      sessionSummary: currentSessionSummary(parsed),
     };
   } catch {
     return emptyTail(name, true);
