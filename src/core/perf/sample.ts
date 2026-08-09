@@ -266,21 +266,29 @@ const SCRIPT_BUILD_RE = /\b(typecheck|lint|build|format)\b/;
 const SCRIPT_DEV_RE = /\b(dev|preview|start|serve)\b/;
 
 /**
+ * A command line that IS a wt process (TUI or CLI), in either launch
+ * form: the bin wrapper (`bun /…/.wt/bin/../src/main.ts`, via WT_RE)
+ * and a repo-cwd `bun src/main.ts` (how the probe harness and dev runs
+ * start it). The bare relative form could in principle be another
+ * project's main.ts — accepted by both callers: the orphan list is a
+ * warning, and rooting the downstream tree at a lookalike only widens
+ * "us", never hides load.
+ */
+export function isWtInstanceCommand(command: string): boolean {
+  return WT_RE.test(command) || /^bun src\/main\.ts$/.test(command);
+}
+
+/**
  * A wt TUI process whose parent is launchd (ppid 1) lost its terminal
  * and should have exited — SIGHUP handling makes new builds do so, but
- * older builds (and a wedged teardown) survive headless. Matches both
- * launch forms: the bin wrapper (`bun /…/.wt/bin/../src/main.ts`, via
- * WT_RE) and a repo-cwd `bun src/main.ts` (how the probe harness and
- * dev runs start it). The bare relative form could in principle be
- * another project's main.ts — accepted: this feeds a warning list, and
- * a headless orphaned `bun src/main.ts` is a leak whoever owns it.
+ * older builds (and a wedged teardown) survive headless.
  */
 export function isOrphanedWtInstance(
   p: { pid: number; ppid: number; command: string },
   selfPid: number = process.pid,
 ): boolean {
   if (p.ppid !== 1 || p.pid === selfPid) return false;
-  return WT_RE.test(p.command) || /^bun src\/main\.ts$/.test(p.command);
+  return isWtInstanceCommand(p.command);
 }
 
 export function classifyProcess(command: string): PerfCategory {
@@ -404,13 +412,30 @@ function sessionSummary(procs: PerfProc[]): string {
     .join(" + ");
 }
 
+export type SamplePerfOpts = {
+  /**
+   * Also root the downstream tree at every live wt process found in the
+   * process table. The overlay never needs this — the TUI *is*
+   * `process.pid` — but the `wt perf` CLI does: a one-shot CLI process
+   * is nobody's ancestor, so without it the running TUI (which lives
+   * under the user's terminal, not the wt tmux server) would land in
+   * "NOT downstream of wt". Orphans (ppid 1) are deliberately excluded
+   * so they keep reporting through the LEAKED list instead of quietly
+   * joining "us".
+   */
+  rootAtWtInstances?: boolean;
+};
+
 /**
  * Take one sample. Four shell-outs (`ps`, `vm_stat`, tmux `list-panes`,
  * tmux `display-message`) run concurrently; a dead tmux server degrades
  * to "no sessions" rather than failing the snapshot, so the overlay
  * still answers the system-level half of the question.
  */
-export async function samplePerf(signal?: AbortSignal): Promise<PerfSnapshot> {
+export async function samplePerf(
+  signal?: AbortSignal,
+  opts?: SamplePerfOpts,
+): Promise<PerfSnapshot> {
   // The four run concurrently, so they observe slightly different
   // instants. A process that exits in that window can be mis-attributed
   // for exactly one sample (wrong session tag, or landing outside wt's
@@ -437,6 +462,11 @@ export async function samplePerf(signal?: AbortSignal): Promise<PerfSnapshot> {
 
   // Downstream = wt's own process tree + the whole tmux server tree.
   const roots = [process.pid, ...(serverPid === null ? [] : [serverPid])];
+  if (opts?.rootAtWtInstances) {
+    for (const p of procs) {
+      if (p.ppid !== 1 && isWtInstanceCommand(p.command)) roots.push(p.pid);
+    }
+  }
   const downstream = descendants(roots, kids);
 
   const mine: PerfProc[] = [];

@@ -134,6 +134,11 @@ Sampling runs only while the overlay is open (every 2s, four shell-outs)
 and stops entirely when it closes — nothing polls in the background, and
 the snapshot is never persisted to the query cache.
 
+The same snapshot is available headless as [`wt perf`](cli.md#wt-perf---json)
+(`--json` for the raw structure) — the default output is the `i`-key
+report, so an agent outside the TUI can be handed one command instead
+of a screenshot.
+
 Two accuracy notes. CPU percentages come from `ps` `%CPU`, which is a
 **lifetime decaying average, not an instantaneous sample** — a process
 showing 130% may be idle right now. Read it as sustained pressure; the

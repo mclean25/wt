@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { classifyProcess, isOrphanedWtInstance } from "./sample.ts";
+import {
+  classifyProcess,
+  isOrphanedWtInstance,
+  isWtInstanceCommand,
+} from "./sample.ts";
 
 /**
  * `classifyProcess` is the only pure, high-consequence piece of the
@@ -57,6 +61,18 @@ describe("classifyProcess", () => {
     // "eslint" appears later; `vite build` must not read as a dev server.
     expect(classifyProcess("npm exec vitest run eslint-rules")).toBe("test");
     expect(classifyProcess("npx vite build --outDir dist")).toBe("build");
+  });
+});
+
+describe("isWtInstanceCommand", () => {
+  // Feeds both the orphan list and `wt perf`'s extra downstream roots
+  // (rootAtWtInstances) — a miss here makes the CLI file the running
+  // TUI under "NOT downstream of wt".
+  test("matches both launch forms, rejects lookalikes", () => {
+    expect(isWtInstanceCommand("bun /Users/michael/.wt/bin/../src/main.ts")).toBe(true);
+    expect(isWtInstanceCommand("bun src/main.ts")).toBe(true);
+    expect(isWtInstanceCommand("bun src/index.ts")).toBe(false);
+    expect(isWtInstanceCommand("/usr/sbin/distnoted")).toBe(false);
   });
 });
 

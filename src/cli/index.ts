@@ -7,6 +7,7 @@ import * as cleanCmd from "./commands/clean.ts";
 import * as doctorCmd from "./commands/doctor.ts";
 import * as stagesCmd from "./commands/stages.ts";
 import * as logsCmd from "./commands/logs.ts";
+import * as perfCmd from "./commands/perf.ts";
 import * as openCmd from "./commands/open.ts";
 import * as baseCmd from "./commands/base.ts";
 import * as issueCmd from "./commands/issue.ts";
@@ -32,6 +33,7 @@ commands:
   doctor      report health of worktree(s)
   stages      list SST stages, optionally clean orphans
   logs        tail a destroy log
+  perf        one-shot perf snapshot: wt-downstream vs the rest of the machine
   open        open a worktree in Zed
   restack     rebase a stack of worktrees onto its updated parents
   skills      keep wt's agent skills + instructions installed and current
@@ -56,6 +58,7 @@ const RUNNERS: Record<string, Runner> = {
   doctor: doctorCmd.run,
   stages: stagesCmd.run,
   logs: logsCmd.run,
+  perf: perfCmd.run,
   open: openCmd.run,
   restack: restackCmd.run,
   skills: skillsCmd.run,

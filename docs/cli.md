@@ -89,6 +89,12 @@ Manage the worktree's `[dev_server]` (see [configuration.md](configuration.md#de
 
 Tail a destroy log (`tail -F`). No slug ⇒ the most recently modified log.
 
+### `wt perf [--json]`
+
+One-shot perf snapshot framed as **wt-downstream vs the rest of the machine** — the headless form of the TUI's [`P` overlay](tui.md#perf-overlay-p): verdict numbers, per-category and per-worktree-session breakdowns, the heaviest processes on both sides, and any leaked headless wt instances. The default output is the same plain-text report the overlay's `i` key injects, written for handing to an agent ("is this load reasonable, and if not, whose is it?"); `--json` emits the raw `PerfSnapshot` instead. Same accuracy caveats as the overlay: `%CPU` is `ps`'s lifetime decaying average, not a profile.
+
+Unlike the overlay (where the TUI process itself anchors the tree), the CLI also roots at any live wt instance it finds in the process table, so the running TUI counts as "us" rather than showing up as an outsider.
+
 ### `wt base <slug>` / `wt base set <slug> <ref>` / `wt base clear <slug>`
 
 Show / record / forget a worktree's fork base — the branch it's based on when that isn't trunk. This record is the stack primitive (see [stacked-prs.md](stacked-prs.md)): the TUI's base row, stack grouping, sync counts, diff, and AI summary all resolve against it, and `wt restack` replays onto it.
