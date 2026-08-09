@@ -271,6 +271,22 @@ export function setSlugWorkStatus(
     const state = readWtState();
     const prev = state.slugs[slug];
     if (!prev && record === null) return;
+    // Idempotent re-assert: same state, note, risk, and sha as the
+    // current record is a no-op that KEEPS the original `at`. Agents
+    // (and their hooks) re-assert freely; without this every repeat
+    // bumps the timestamp, and each bump re-narrates + re-toasts the
+    // same news in every watching TUI.
+    if (record !== null && prev?.work) {
+      const w = prev.work;
+      if (
+        w.state === record.state &&
+        (w.note ?? null) === (record.note ?? null) &&
+        (w.risk ?? null) === (record.risk ?? null) &&
+        (w.sha ?? null) === (record.sha ?? null)
+      ) {
+        return;
+      }
+    }
     const next: WtState = { ...state, slugs: { ...state.slugs } };
     const entry: WtSlugState = { section: null, order: 0, ...prev };
     delete entry.work;
@@ -387,7 +403,12 @@ function seedVisualStacks(
     const g = visualOrder[i]!;
     if (out.includes(g)) continue;
     if (stackIdFromSectionKey(g) === null) continue;
-    let anchor = -1; // -1 → splice at 0 (front)
+    // No preceding visual anchor → front, EXCEPT past a top-ranked
+    // Inbox: an empty Inbox is invisible (so never in `visualOrder`),
+    // and seeding before it would persist the stack above the Inbox —
+    // display-identical today, but it silently costs the Inbox its top
+    // slot for when it next has rows.
+    let anchor = out[0] === GROUP_INBOX ? 0 : -1;
     for (let j = i - 1; j >= 0; j--) {
       const at = out.indexOf(visualOrder[j]!);
       if (at >= 0) {
@@ -429,7 +450,12 @@ export function moveGroupPast(
     // same rows) still gets registered so the move can't silently fail.
     for (const k of [key, pastKey]) {
       if (!order.includes(k) && stackIdFromSectionKey(k) !== null) {
-        order = [k, ...order];
+        // Register at the front, but never above a top-ranked Inbox
+        // (same policy as `seedVisualStacks`).
+        order =
+          order[0] === GROUP_INBOX
+            ? [order[0]!, k, ...order.slice(1)]
+            : [k, ...order];
       }
     }
     if (!order.includes(key)) return false;

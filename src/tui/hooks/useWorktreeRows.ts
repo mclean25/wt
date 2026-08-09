@@ -444,9 +444,16 @@ function sortActiveRows(
     rank.set(sectionsOrder[i]!, i);
   }
   const groupOf = (r: WorktreeRow): string => r.section ?? GROUP_INBOX;
+  // Unranked stack keys sort to the front (where new stacks live) —
+  // but never above an Inbox that currently holds the top slot: the
+  // Inbox is where new worktrees land, and a freshly formed stack
+  // displacing it from the top reads as the list rearranging itself.
+  // When the user has deliberately ranked something above the Inbox,
+  // front means front.
+  const unrankedStackRank = sectionsOrder[0] === GROUP_INBOX ? 0.5 : -1;
   const rankOf = (g: string): number =>
     rank.get(g) ??
-    (g.startsWith(STACK_SECTION_PREFIX) ? -1 : Number.MAX_SAFE_INTEGER);
+    (g.startsWith(STACK_SECTION_PREFIX) ? unrankedStackRank : Number.MAX_SAFE_INTEGER);
   return active.slice().sort((a, b) => {
     const groupA = groupOf(a);
     const groupB = groupOf(b);

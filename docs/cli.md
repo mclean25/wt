@@ -102,7 +102,7 @@ The rules that make statuses trustworthy are enforced here (the TUI's `u` picker
 - `needs-human` requires `-m` naming exactly what's needed — it's the only state that means "the human must act".
 - `ready` requires `--risk low|medium|high` (judged broadly: end users, coworker workflows, costs, migrations), and medium/high additionally require `-m` naming the notable impacts. High-value notes only — nothing notable is `--risk low` with no note.
 
-States accept unique prefixes plus `nh`/`nt` aliases. `--clear` drops the record, `--all [--json]` prints the fleet overview (the manager session's eyes). Each record stamps the assert time and HEAD sha, so both the CLI and the details-pane `status` row can flag a status that predates newer commits. Statuses also ride `wt ls --json` (`work_state`/`work_note`/`work_risk`/`work_at`), which carries them across SSH for remote worktrees.
+States accept unique prefixes plus `nh`/`nt` aliases. `--clear` drops the record, `--all [--json]` prints the fleet overview (the manager session's eyes). Each record stamps the assert time and HEAD sha, so both the CLI and the details-pane `status` row can flag a status that predates newer commits. Re-asserting an identical status (same state, note, risk, and HEAD) is a no-op that keeps the original timestamp — agents and hooks can assert freely without re-narrating (and re-toasting) the same news in every watching TUI. Statuses also ride `wt ls --json` (`work_state`/`work_note`/`work_risk`/`work_at`), which carries them across SSH for remote worktrees.
 
 ### `wt manager` / `wt manager send <text…>`
 
