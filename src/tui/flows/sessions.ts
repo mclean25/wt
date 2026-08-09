@@ -245,6 +245,9 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         cwd: slot.path,
         harnessId: primaryHarness,
         managedName: slot.claudeName,
+        // F10/F11/F12 inside a slot return to wt — slots aren't
+        // worktrees; there's no shell/diff sibling to switch to.
+        switchable: false,
         // Surface the slot's label in claude's /resume listing so the
         // conversation is recognizable by name; ignored by codex /
         // opencode (their tmux name is the discriminator).

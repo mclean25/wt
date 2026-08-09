@@ -32,8 +32,16 @@ export async function enterWorktreeSession(opts: {
   initial: WorktreeSessionTarget;
   diffBase: string;
   harness: HarnessRoute;
+  /**
+   * Whether the F10/F11/F12 tmux bindings may SWITCH between this
+   * slug's shell/diff/harness sessions (the worktree navigator).
+   * `false` for the special session slots (`,`/`.`/`/`/`m`): an F-key
+   * there returns straight to wt instead of minting a stranded
+   * `manager-diff`-style sibling for a non-worktree slug.
+   */
+  switchable?: boolean;
 }): Promise<WorktreeSessionResult> {
-  const { renderer, slug, cwd, diffBase, harness } = opts;
+  const { renderer, slug, cwd, diffBase, harness, switchable = true } = opts;
   let target = opts.initial;
   let harnessPrepared = false;
 
@@ -68,6 +76,7 @@ export async function enterWorktreeSession(opts: {
     for (;;) {
       const result = await attachTarget();
       if (result.kind !== "switch") return result;
+      if (!switchable) return { kind: "detached" };
       target = result.target;
     }
   });

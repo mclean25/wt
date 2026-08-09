@@ -56,6 +56,9 @@ export async function enterHarnessSession(opts: {
   freshSlot?: boolean;
   /** Resolved base used if F11 is pressed while inside the harness. */
   diffBase: string;
+  /** False for session slots: F10/F11/F12 return to wt instead of
+   *  switching to shell/diff siblings (see `enterWorktreeSession`). */
+  switchable?: boolean;
 }): Promise<EnterResult> {
   const {
     renderer,
@@ -67,6 +70,7 @@ export async function enterHarnessSession(opts: {
     claudeDisplayName,
     freshSlot,
     diffBase,
+    switchable,
   } = opts;
   return await enterWorktreeSession({
     renderer,
@@ -74,6 +78,7 @@ export async function enterHarnessSession(opts: {
     cwd,
     initial: "harness",
     diffBase,
+    switchable,
     harness: {
       harnessId,
       managedName,
