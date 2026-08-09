@@ -62,3 +62,5 @@ Dispatch goes through the exact same paths keystrokes use (`launchAction`, the c
 One identity caveat: the circuit breaker and cooldown for `stack.parent_merged` are keyed by the stack id, which changes when the root lands and is cleaned — their accumulated state starts fresh for the re-rooted stack.
 
 Both persist across restarts. Paused rules still evaluate (so state stays current); they just don't dispatch.
+
+There is also a process-level kill switch: `WT_AUTOMATIONS=off` in the environment pins the engine paused for that wt instance regardless of the persisted flags. It exists for probe instances (the TUI test harness, `scripts/tui-test.sh`) running alongside your live one — two engines over the same ledger could double-dispatch.

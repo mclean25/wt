@@ -189,8 +189,14 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
   // Global pause lives in wtstate (persisted across restarts, toggled
   // via Shift+A). Until the state file loads, treat as paused — the
   // engine must not fire before it knows the pause flags.
+  // WT_AUTOMATIONS=off pins the engine paused for the whole process:
+  // the TUI test harness (scripts/tui-test.sh) sets it so probe
+  // instances never dispatch alongside the user's live instance.
   const wtStateReady = wtState.data !== undefined;
-  const paused = !wtStateReady || wtState.data.automationsPaused === true;
+  const paused =
+    process.env.WT_AUTOMATIONS === "off" ||
+    !wtStateReady ||
+    wtState.data.automationsPaused === true;
   // Freshness subscription extracted to `useGithubFresh` (same
   // persisted-cache hard rule).
   const githubFresh = useGithubFresh(configured);
