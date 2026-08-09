@@ -148,7 +148,9 @@ export function PostFooterModals({
       {modal?.kind === "cleanConfirm" ? (
         <CleanConfirmModal candidates={cleanCandidates} />
       ) : null}
-      {modal?.kind === "yank" && current ? <YankModal row={current} /> : null}
+      {modal?.kind === "yank" && current ? (
+        <YankModal row={current} selectedIndex={modal.index} />
+      ) : null}
       {modal?.kind === "branchPicker" ? (
         <PickerModal
           title={modal.title}
@@ -173,6 +175,7 @@ export function PostFooterModals({
           itemKeys={modal.items.map((it) =>
             it.state === null ? "x" : WORK_STATE_CHORDS[it.state],
           )}
+          extraHints={[["m", "pick + note"]]}
         />
       ) : null}
       {modal?.kind === "reviewerPicker" ? (

@@ -4,9 +4,9 @@
 
 ## Layout
 
-- **List pane** (left): one line per worktree — a work-status dot, slug, PR/CI badges, session indicators — grouped into sections, with stacks rendered as trees. The leftmost slot is the colored **work-status dot** (`wt status` / `u`: red needs-human, yellow needs-testing, green ready, magenta review, cyan working, hollow todo; unasserted rows show the same dim hollow dot as todo), overridden by the loud git states (busy op, missing, gone, merged); uncommitted changes show as a pencil in the right badge cluster. With `[ui] sort = "status"` (default), rows auto-sort inside each section by that urgency — the cursor follows the worktree, not the position. A pinned "review requests" section surfaces PRs waiting on your review.
+- **List pane** (left): one line per worktree — a work-status dot, slug, PR/CI badges, session indicators — grouped into sections, with stacks rendered as trees. The leftmost slot is the colored **work-status dot** (`wt status` / `u`: red needs-human, yellow needs-testing, green ready, magenta review, cyan working, hollow todo; unasserted rows show the same dim hollow dot as todo; a **hollow dot in a state's color** means the assertion is stale — commits landed after it, so re-verify before trusting it), overridden by the loud git states (busy op, missing, gone, merged); uncommitted changes show as a pencil in the right badge cluster. With `[ui] sort = "status"` (default), rows auto-sort inside each section by that urgency — the cursor follows the worktree, not the position. A pinned "review requests" section surfaces PRs waiting on your review.
 - **Details pane** (right): the configured rows (`[ui].rows` in [configuration.md](configuration.md#ui)) for the selected worktree — branch, base, tracker issue, work status (with risk, age, and note), stage, PR, sessions, git state — then a rebase-state block (restacking / mid-rebase / conflict with the clashing files) when something is moving, plus the AI-generated title/description band when `[ai]` is configured. When the row's session just wrapped up, the harness's own summary line renders muted above the AI description (it disappears as soon as the conversation moves on).
-- **Bottom pane**: live outputs — harness sessions, action runs, and two event feeds: the curated **attention** feed (status transitions, needs-you signals, errors) and the full firehose. The attention feed is the default whatever row is selected — navigating never flips the pane to a session's output; only a destroy in flight or a just-launched action takes over. `'` picks an output explicitly (remembered per worktree until that output dies), `[` / `]` cycle, `"` jumps to attention (again for the firehose), `Esc` forgets the pick and returns to the default. The feeds **survive restarts** — at boot they're restored from the daily app log (yesterday + today, up to the buffer caps), so the attention trail is still there after wt (or the machine) bounced. Scroll them with `Ctrl+E`/`Ctrl+Y` (or `Alt+J`/`Alt+K`, or the mouse wheel); the view re-follows the live tail when you return to the bottom.
+- **Bottom pane**: live outputs — harness sessions, action runs, and two event feeds: the curated **attention** feed (status transitions, needs-you signals, errors) and the full firehose. The attention feed is the default whatever row is selected — navigating never flips the pane to a session's output; only a destroy in flight or a just-launched action takes over. `'` picks an output explicitly (remembered per worktree until that output dies), `[` / `]` cycle, `"` jumps to attention (again for the firehose), `Esc` forgets the pick and returns to the default. The feeds **survive restarts** — at boot they're restored from the daily app log (yesterday + today, up to the buffer caps), so the attention trail is still there after wt (or the machine) bounced; identical lines written within a few seconds of each other (several wt processes observing the same transition) are collapsed to one on restore. Scroll them with `Ctrl+E`/`Ctrl+Y` (or `Alt+J`/`Alt+K`, or the mouse wheel); the view re-follows the live tail when you return to the bottom.
 - **Footer**: transient content on the left — the active **toast** (keystroke acks like "copied branch", plus background completions: work-status changes, automation fires, action results) or a quiet `? help` hint when idle — and the four special-session buttons grouped at the right: `[.]` the main clone, `[m]` the [manager](manager.md), `[,]` the wt repo, `[/]` dotfiles, each key colored by that session's live state (dim when none). Replaced by a text prompt when one is active (`n` local new-worktree, `Ctrl+N` remote new-worktree, `L` rename section). Background toasts are always also a line in the bottom pane's feeds — the toast is the flash, the feed is the record — while keystroke acks are toast-only (they answer a key you just pressed).
 
 Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the state files — plus the optional [GitHub webhook daemon](github-events.md) — invalidate exactly what changed. `r` re-fetches as a backstop; `Ctrl+R` (with confirm) nukes all cached data and refetches from scratch.
@@ -19,6 +19,7 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 |---|---|
 | `j`/`k`, arrows | move cursor |
 | `g` / `G` | jump to top / bottom |
+| `Space` | jump to the next row needing attention (`needs-human` / `needs-testing` / `ready`), scanning forward and wrapping — the cross-section scan that per-section status sort can't express |
 | `Tab` | fold/unfold the section under the cursor |
 | `Ctrl+J` / `Ctrl+K` | scroll the details pane |
 | `Ctrl+E` / `Ctrl+Y` | scroll the bottom event feed (also `Alt+J`/`Alt+K`, mouse wheel); re-follows at the bottom |
@@ -28,7 +29,7 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 
 | key | action |
 |---|---|
-| `n` / `N` | new local worktree prompt (accepts an issue id + optional title words, a tracker URL, branch, or slug, plus `--attach`, `--gh <n>`, `--any`, `--base <ref>` — same resolution as [`wt new`](cli.md#wt-new-id-titleurlbranchslug)); `N` pre-fills `--base` with the selected row's branch |
+| `n` / `N` | new local worktree prompt (accepts an issue id + optional title words, a tracker URL, branch, or slug, plus `--attach`, `--gh <n>`, `--any`, `--base <ref>` — same resolution as [`wt new`](cli.md#wt-new-id-titleurlbranchslug)); `N` pre-fills `--base` with the selected row's branch. On success the cursor lands on the new row; on a resolution failure the prompt reopens with your input intact |
 | `Ctrl+N` | create on `[remote]`; the worktree appears under the server-named remote section with normal status glyphs, and F10/F11/F12 route that row's sessions over SSH |
 | `o` | open the worktree in Zed |
 | `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning when dirty/unpushed) |
@@ -38,7 +39,7 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `I` | open the primary tracker issue (needs `[issue_tracker]` with a URL template, or a `gh-`prefixed slug id) |
 | `s` | open the deployed stage URL, or the running `[dev_server]` URL when no stage is deployed |
 | `t` | regenerate the AI summary |
-| `y` | yank menu — copy branch (`b`), stage (`s`), stage URL (`S`), dev-server URL (`d`), path (`p`), slug (`n`), most-specific issue (`i`), primary tracker issue (`I`), PR URL (`r`) |
+| `y` | yank picker — copy branch (`b`), stage (`s`), stage URL (`S`), dev-server URL (`d`), path (`p`), slug (`n`), most-specific issue (`i`), primary tracker issue (`I`), PR URL (`r`); a full picker since the rebuild: `j`/`k` move, `1`–`9` quick-pick, `y`/`Enter` confirm the highlight, direct letters still fire immediately |
 | `r` / `Ctrl+R` | refresh / hard refresh (clear caches, confirm) |
 
 When the SSH host is sleeping or offline, its last-known worktrees remain in
@@ -72,8 +73,8 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 | `F11` | enter the row's diff session (`[diff].command`, default `revdiff`, against the resolved diff base); from another session, switch straight to it; press again to return home |
 | `F10` | enter the row's plain shell session; from another session, switch straight to it; press again to return home |
 | `Shift+F10` / `Shift+F11` | kill the shell / diff session (confirm) |
-| `;` | sessions picker — attach (`; ;`), new named claude (`; c`), new codex/opencode (`; x` / `; o`), graceful close (`; d`), kill (`; x` on a session row) |
-| `!` | action picker — run a configured `[[actions]]` entry, `! c` for a custom prompt; with `[dev_server]` configured the start/stop pair is pinned at the top; `!` on a running action offers to kill it |
+| `;` | sessions picker — attach (`; ;`), new named claude (`; c`), new codex/opencode (`; x` / `; o`), graceful close (`; d`), kill (`; x` on a live session row — asks for confirmation, matching the Shift+F10/F11 kills) |
+| `!` | action picker — run a configured `[[actions]]` entry, `! c` for a custom prompt; `!` on a running action offers to kill it. Two agent-delegation builtins are pinned at the top: `! u` has the row's agent re-assess and assert `wt status`, `! g` has it continue the work per the current status (both inject into the primary harness session, cold-starting it if needed); with `[dev_server]` configured the start/stop pair is pinned below them |
 | `,` / `.` / `/` | attach the persistent harness session for the wt repo / main clone / dotfiles |
 | `m` | attach the [manager session](manager.md) — the singleton fleet coordinator (auto-merge moved to `M`) |
 
@@ -89,7 +90,7 @@ Inside these four special sessions, `F10`/`F11`/`F12` all return to wt — slots
 | `L` | rename the current section |
 | `J` / `K` | move the row (or its whole stack / folded group) down / up — under status sort, within the same status rank only |
 | `b` | base picker — record which branch this worktree forked from (`b b` confirms; record-only, never rebases) |
-| `u` | work-status picker (`u u` confirms; `t`/`w`/`r`/`n`/`h`/`y` set the state directly, `x` clears) — same record as [`wt status`](cli.md#wt-status-slug-state--m-note---risk-r), minus the CLI's risk/note rules (you're the human it escalates to) |
+| `u` | work-status picker (`u u` confirms; `t`/`w`/`r`/`n`/`h`/`y` set the state directly, `x` clears; `m` picks the highlighted state and collects an optional note in the footer — Enter on an empty note is a plain pick, Esc cancels the whole pick) — same record as [`wt status`](cli.md#wt-status-slug-state--m-note---risk-r), minus the CLI's risk/note rules (you're the human it escalates to) |
 | `R` | rebase/restack the selected row — a stack member restacks the whole stack, a standalone worktree rebases onto its recorded base or trunk; same engine as [`wt restack`](stacked-prs.md) (fetch + reconcile + squash-safe replay). On a conflict bail it hands off automatically: `/restack` is injected into the failing worktree's session (cold-starting it if needed) to resolve and finish. Locks per chain, so different stacks/worktrees restack concurrently; members show the sync glyph while it runs (warn-tinted when mid-rebase). Refuses on an already-landed row — that's `c`'s job |
 
 ### Automations
@@ -115,10 +116,18 @@ instead of sending you hunting through worktrees.
 
 | key | action |
 |---|---|
-| `P` | open / close |
+| `P` / `Esc` / `q` | open / close |
 | `j` / `k` | scroll |
 | `i` | send the snapshot to the wt-source session (`,`) as an investigation prompt, then enter that session |
 | `r` | resample now |
+
+The overlay also hunts for **leaked headless wt instances** — processes
+orphaned to launchd when a terminal died without the process exiting
+(the SIGHUP handler makes current builds exit; older builds and wedged
+teardowns can survive). Any found get a verdict-level warning plus a
+LEAKED section listing pids, CPU, and a ready-to-run `kill` line —
+they'd otherwise keep polling GitHub and duplicating attention-feed
+lines invisibly. The `i` investigation prompt includes them.
 
 Sampling runs only while the overlay is open (every 2s, four shell-outs)
 and stops entirely when it closes — nothing polls in the background, and
@@ -143,5 +152,9 @@ machine feels slow".
 
 ## Picker conventions
 
-Every list picker follows the same shape: the key that opened it confirms the highlight when pressed again (`l l`, `; ;`, `' '`, `! !`, `b b`, `v v`, `u u`), `Enter` always confirms, `Esc`/`q`/`Ctrl+C` always cancel, `j`/`k` move, and digits `1`–`9` quick-pick when the list is short. Rows with a natural name carry a direct letter chord, shown dim in the row (`u t` → todo, `u y` → ready, `; c` new claude session); special rows get their own letter too (`l n` new section, `! c` custom prompt).
+Every list picker follows the same shape: the key that opened it confirms the highlight when pressed again (`l l`, `; ;`, `' '`, `! !`, `b b`, `v v`, `u u`, `y y`, and `Shift+F12` again in the harness picker), `Enter` always confirms, `Esc`/`q`/`Ctrl+C` always cancel, `j`/`k` move, and digits `1`–`9` quick-pick when the list is short — except the action picker (config-assigned letters instead) and the reviewer picker (`Space` toggles; digits would be ambiguous in a multi-select). Rows with a natural name carry a direct letter chord, shown dim in the row (`u t` → todo, `u y` → ready, `; c` new claude session); special rows get their own letter too (`l n` new section, `! c` custom prompt).
+
+Confirm modals follow the same muscle-memory rule in reverse: the key that opened one also **cancels** it (`d`, `c`, `e`, `E`, `M`, `w`, `; x`'s `x`, `!`'s kill confirm), alongside the universal `n`/`Esc`/`q`/`Ctrl+C`.
+
+The title bar's `auto ⏸` chip (inverse, warn-colored) means all automations are paused — a fleet-tier fact deliberately louder than the CPU/usage telemetry next to it.
 

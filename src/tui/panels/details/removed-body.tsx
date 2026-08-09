@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core";
 
 import type { RemovedWorktree } from "../../../core/wtstate.ts";
 import { slugLabel } from "../../../core/stage.ts";
-import { ageMsToText } from "../../text.ts";
+import { ageMsToText, truncateEnd } from "../../text.ts";
 import { NF } from "../../icons.ts";
 import { theme } from "../../theme.ts";
 import { RRRow } from "./row-cell.tsx";
@@ -31,7 +31,7 @@ export function removedPrBadge(state: string | undefined): {
  * sources, no AI pipeline — so it renders straight from the persisted
  * record. `⏎` restores, `p`/`i` open the PR/issue from the parent.
  */
-export function RemovedBody({ entry }: { entry: RemovedWorktree }) {
+export function RemovedBody({ entry, width }: { entry: RemovedWorktree; width: number }) {
   const removedMs = Date.parse(entry.removedAt);
   const removedText = Number.isFinite(removedMs)
     ? `${ageMsToText(Date.now() - removedMs)} ago · ${new Date(removedMs).toLocaleString()}`
@@ -95,8 +95,18 @@ export function RemovedBody({ entry }: { entry: RemovedWorktree }) {
         </box>
       ) : null}
       <box flexGrow={1} flexShrink={1} minHeight={0} />
-      <text fg={theme.fgDim} wrapMode="none" truncate>
-        ⏎ restore worktree · p PR · i issue · y yank branch · h back
+      {/* Hand-rolled end-truncation, not opentui's native `truncate`:
+          this line teaches keybinds, so a middle-clip silently deleting
+          `p PR · i issue` from the middle is the worst possible failure
+          mode. End-truncation at least drops from the tail (`h back`),
+          which is the least critical hint. No scrollbox here (unlike
+          the worktree details pane), so the budget is just border +
+          padding on each side. */}
+      <text fg={theme.fgDim} wrapMode="none">
+        {truncateEnd(
+          "⏎ restore worktree · p PR · i issue · y yank branch · h back",
+          Math.max(0, width - 4),
+        )}
       </text>
     </box>
   );

@@ -54,7 +54,7 @@ import { handleNormalKey, type NormalKeysCtx } from "./keyboard/normal-keys.ts";
 import { handleRemovedViewKey } from "./keyboard/removed-view-keys.ts";
 import { makeActionPickerFlows } from "./flows/action-picker.ts";
 import { makeBaseFlows } from "./flows/base.ts";
-import { makeWorkStatusFlows } from "./flows/work-status.ts";
+import { makeWorkStatusFlows, type PendingStatusNote } from "./flows/work-status.ts";
 import { makeDestroyFlows } from "./flows/destroy.ts";
 import { makeGithubPrFlows } from "./flows/github-pr.ts";
 import { makeWorktreeCreateFlows } from "./flows/new-worktree.ts";
@@ -159,6 +159,10 @@ export function App({ onExit }: Props) {
   // identity of the thing being renamed). Not folded into `modal`
   // because the rename UX uses the footer, not an overlay.
   const [pendingRename, setPendingRename] = useState<string | null>(null);
+  // The status picker's `m` pick parks {slug, state} here while the
+  // footer input collects the note; Esc there clears it (no write).
+  const [pendingStatusNote, setPendingStatusNote] =
+    useState<PendingStatusNote | null>(null);
 
   // Auto-tail every busy worktree so logs surface in the activity pane
   // without user intervention. Returns the active set so rows can flag
@@ -420,13 +424,17 @@ export function App({ onExit }: Props) {
   });
 
   // Work-status picker flow (`u`) — extracted to `flows/work-status.ts`.
-  const { openStatusPicker, commitStatusPick } = makeWorkStatusFlows({
-    current,
-    setModal,
-    toast,
-    reportActionError,
-    setWorkStatus,
-  });
+  const { openStatusPicker, commitStatusPick, beginStatusNote, commitStatusWithNote } =
+    makeWorkStatusFlows({
+      current,
+      setModal,
+      toast,
+      reportActionError,
+      setWorkStatus,
+      setFooter,
+      setPendingStatusNote,
+      isSlugLive: (slug) => rows.some((r) => r.wt.slug === slug),
+    });
 
   // Destroy / clean / restack flows — extracted to `flows/destroy.ts`.
   // Rebuilt per render so the closures see fresh rows / selection.
@@ -601,6 +609,7 @@ export function App({ onExit }: Props) {
           doPerfInvestigate,
           commitBasePick,
           commitStatusPick,
+          beginStatusNote,
           doYank,
           doClean,
           doRemove,
@@ -657,6 +666,9 @@ export function App({ onExit }: Props) {
         toast,
         doNew,
         doRemoteNew,
+        pendingStatusNote,
+        setPendingStatusNote,
+        commitStatusWithNote,
       });
       return;
     }
@@ -785,10 +797,17 @@ export function App({ onExit }: Props) {
           ) : null}
         </box>
         {automations.configured && automations.paused ? (
-          <text fg={theme.warn}>{"auto ⏸  "}</text>
+          // Inverse chip, not plain warn text: while paused the whole
+          // automated leg of the escalation ladder is inert, which is a
+          // different tier of fact than the CPU/mem telemetry it sits
+          // next to — it must not blend into that cluster.
+          <text fg={theme.bg} bg={theme.warn} attributes={1}>
+            {" auto ⏸ "}
+          </text>
         ) : automations.pendingCount > 0 ? (
           <text fg={theme.fgDim}>{`auto ${automations.pendingCount} queued  `}</text>
         ) : null}
+        {automations.configured && automations.paused ? <text>{"  "}</text> : null}
         <UsageBadge primary={primaryHarness} />
         <PrimaryHarnessBadge primary={primaryHarness} />
       </box>

@@ -111,6 +111,14 @@ export type PerfSnapshot = {
   sessions: PerfSession[];
   top: PerfProc[];
   outsiders: PerfProc[];
+  /**
+   * wt TUI instances reparented to launchd — a terminal died and the
+   * process survived. Always a leak (a headless TUI serves nobody):
+   * each one keeps polling GitHub and duplicating attention lines.
+   * One probe sweep left 33 of these; the overlay exists to make a
+   * recurrence visible instead of a mystery CPU tax.
+   */
+  orphans: PerfProc[];
 };
 
 // ── Sampling ───────────────────────────────────────────────────────────
@@ -256,6 +264,24 @@ const RUNNER = /\b(pnpm|npm|npx|yarn|bun)\b/;
 const SCRIPT_TEST_RE = /\b(test|test:edge|test:unit|test:watch)\b/;
 const SCRIPT_BUILD_RE = /\b(typecheck|lint|build|format)\b/;
 const SCRIPT_DEV_RE = /\b(dev|preview|start|serve)\b/;
+
+/**
+ * A wt TUI process whose parent is launchd (ppid 1) lost its terminal
+ * and should have exited — SIGHUP handling makes new builds do so, but
+ * older builds (and a wedged teardown) survive headless. Matches both
+ * launch forms: the bin wrapper (`bun /…/.wt/bin/../src/main.ts`, via
+ * WT_RE) and a repo-cwd `bun src/main.ts` (how the probe harness and
+ * dev runs start it). The bare relative form could in principle be
+ * another project's main.ts — accepted: this feeds a warning list, and
+ * a headless orphaned `bun src/main.ts` is a leak whoever owns it.
+ */
+export function isOrphanedWtInstance(
+  p: { pid: number; ppid: number; command: string },
+  selfPid: number = process.pid,
+): boolean {
+  if (p.ppid !== 1 || p.pid === selfPid) return false;
+  return WT_RE.test(p.command) || /^bun src\/main\.ts$/.test(p.command);
+}
 
 export function classifyProcess(command: string): PerfCategory {
   // Shell FIRST, and only when the shell is argv[0] (SHELL_RE is
@@ -462,6 +488,16 @@ export async function samplePerf(signal?: AbortSignal): Promise<PerfSnapshot> {
     sessions,
     top: mine.slice().sort((a, b) => b.cpu - a.cpu).slice(0, TOP_N),
     outsiders: theirs.slice().sort((a, b) => b.cpu - a.cpu).slice(0, OUTSIDER_N),
+    // Checked against ALL processes: an orphan is by definition outside
+    // wt's live descendant tree (its parent is launchd).
+    orphans: procs
+      .filter((p) => isOrphanedWtInstance(p))
+      .map((p) => ({
+        ...p,
+        category: "wt" as const,
+        session: null,
+      }))
+      .sort((a, b) => b.cpu - a.cpu),
   };
 }
 
@@ -529,6 +565,18 @@ export function formatPerfReport(s: PerfSnapshot): string {
   lines.push("", "## Heaviest processes NOT downstream of wt");
   for (const p of s.outsiders) {
     lines.push(`- ${pct(p.cpu)}  ${gb(p.rssMb)}  ${shortCommand(p.command, 100)}`);
+  }
+  if (s.orphans.length > 0) {
+    lines.push(
+      "",
+      `## LEAKED: ${s.orphans.length} headless wt instance(s)`,
+      "These lost their terminal but never exited (orphaned to launchd).",
+      "They poll GitHub and duplicate attention-feed lines until killed:",
+      `  kill ${s.orphans.map((p) => p.pid).join(" ")}`,
+    );
+    for (const p of s.orphans) {
+      lines.push(`- pid ${p.pid}  ${pct(p.cpu)}  ${gb(p.rssMb)}  up ${p.etime}`);
+    }
   }
   return lines.join("\n");
 }

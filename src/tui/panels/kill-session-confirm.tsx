@@ -1,4 +1,5 @@
 import type { SessionKind } from "../../core/tmux.ts";
+import type { KeyHintPair } from "../key-hint.tsx";
 import { Modal } from "../modal.tsx";
 import { theme } from "../theme.ts";
 
@@ -49,15 +50,21 @@ const COPY: Record<Props["sessionKind"], { title: string; body: string }> = {
 
 export function KillSessionConfirmModal({ slug, sessionKind }: Props) {
   const copy = COPY[sessionKind];
+  // The harness variants (claude/codex/opencode) open via `x` on a
+  // live session row and toggle-dismiss on it; shell/diff open via
+  // Shift+F10/F11 chords with no single re-pressable key, so they
+  // fall back to the universal cancels only.
+  const isHarness =
+    sessionKind === "claude" || sessionKind === "codex" || sessionKind === "opencode";
+  const hints: KeyHintPair[] = [["y", "kill"]];
+  if (isHarness) hints.push(["x", "cancel"]);
+  hints.push(["n / esc / q", "cancel"]);
   return (
     <Modal
       title="kill session"
       borderColor={theme.warn}
       inset={{ top: "30%", right: "25%", bottom: "30%", left: "25%" }}
-      hints={[
-        ["y", "kill"],
-        ["n / esc / q", "cancel"],
-      ]}
+      hints={hints}
     >
       <box flexDirection="column">
         <text fg={theme.fg}>

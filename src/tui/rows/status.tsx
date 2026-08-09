@@ -8,7 +8,7 @@
  * "what did the agent last claim".
  */
 import { workStateColor, workStateGlyph } from "../badges.ts";
-import { workAge } from "../../core/work-status.ts";
+import { isWorkStatusStale, workAge } from "../../core/work-status.ts";
 import { theme } from "../theme.ts";
 import type { RowModule } from "./types.ts";
 
@@ -24,12 +24,10 @@ export const statusRow: RowModule = {
     // Time-based staleness: commits after the assertion mean the
     // status describes an older tree. (The CLI's `stale` flag uses the
     // recorded sha; here `lastCommitMs` is what's already fetched.)
-    const lastCommitMs = row.fields.gitActivity.data?.lastCommitMs ?? null;
-    const assertedMs = Date.parse(record.at);
-    const stale =
-      lastCommitMs !== null &&
-      !Number.isNaN(assertedMs) &&
-      lastCommitMs > assertedMs;
+    const stale = isWorkStatusStale(
+      record,
+      row.fields.gitActivity.data?.lastCommitMs ?? null,
+    );
     return (
       <text wrapMode="none" truncate>
         <span fg={color}>{glyph}  </span>

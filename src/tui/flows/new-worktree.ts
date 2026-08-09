@@ -42,12 +42,16 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     toast,
   } = ctx;
 
-  async function doNew(raw: string, defaultBase?: string): Promise<void> {
+  // Returns whether the create succeeded. The footer-input handler awaits
+  // this to decide between the optimistic legend reset (success) and
+  // restoring the typed line for editing in place (failure) — see
+  // `handleFooterInputKey`'s new/new-remote submit path.
+  async function doNew(raw: string, defaultBase?: string): Promise<boolean> {
     const parsed = parseNewInput(raw, defaultBase);
     if ("error" in parsed) {
       newLog.event.err(parsed.error);
       toast(parsed.error, theme.err, 3000);
-      return;
+      return false;
     }
     newLog.event.info(`resolving ${parsed.input}`);
     if (parsed.anyAuthor) newLog.event.info("searching all authors (--any)");
@@ -74,7 +78,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       newLog.event.err(message);
       newLog.error(err instanceof Error ? err : String(err));
       toast(message, theme.err, 3000);
-      return;
+      return false;
     }
     newLog.event.info(`branch = ${branch}`);
     const result = await createWorktree(branch, {
@@ -86,7 +90,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     if (!result.ok) {
       newLog.event.err(result.reason);
       toast(`worktree failed: ${result.reason}`, theme.err, 3000);
-      return;
+      return false;
     }
     if (parsed.gh) {
       setSlugGithubIssue(result.slug, parsed.gh);
@@ -94,20 +98,26 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     }
     newLog.event.ok(`ready at ${result.path}`);
     toast(`created ${result.slug}`, theme.ok, 2200);
+    setSel(result.slug);
     void refreshAll();
+    return true;
   }
 
-  /** Create on the remote host, then refresh its rows in this TUI. */
-  async function doRemoteNew(raw: string): Promise<void> {
+  /**
+   * Create on the remote host, then refresh its rows in this TUI. Returns
+   * whether it succeeded — same contract as `doNew`, so the footer-input
+   * handler can restore the typed line on failure.
+   */
+  async function doRemoteNew(raw: string): Promise<boolean> {
     const remote = config.remote;
     if (!remote) {
       toast("[remote] is not configured", theme.warn, 2200);
-      return;
+      return false;
     }
     const parsed = parseNewInput(raw);
     if ("error" in parsed) {
       newLog.event.err(parsed.error);
-      return;
+      return false;
     }
     const args = ["new", parsed.input, "--no-open"];
     if (parsed.anyAuthor) args.push("--any");
@@ -145,7 +155,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       remoteLog.event.err(message);
       toast(`remote create failed: ${message}`, theme.err, 3500);
       setRemoteCreation(null);
-      return;
+      return false;
     } finally {
       refreshStopped = true;
       if (refreshTimer) clearTimeout(refreshTimer);
@@ -154,7 +164,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       remoteLog.event.err(`create failed (exit ${code})`);
       toast(`remote create failed (exit ${code})`, theme.err, 3000);
       setRemoteCreation(null);
-      return;
+      return false;
     }
     remoteLog.event.ok(`ready on ${remote.label}`);
     try {
@@ -163,6 +173,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     } finally {
       setRemoteCreation(null);
     }
+    return true;
   }
 
   // Check out a review-requested PR's branch as a worktree and drop it
@@ -187,6 +198,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     await setSection(result.slug, REVIEW_SECTION);
     log.event.ok(`ready at ${result.path} → ${REVIEW_SECTION}`);
     toast(`created ${result.slug} in ${REVIEW_SECTION}`, theme.info, 2200);
+    setSel(result.slug);
     void refreshAll();
   }
 

@@ -7,6 +7,10 @@
 # confirm destructive prompts (d, c, Ctrl+R), and never press keys that
 # attach sessions (F10/F11/F12, ; , . m /) — those hand the terminal to
 # wt's private tmux server and the probe pane will just look hung.
+# Also never press keys that mutate real state WITHOUT a confirm step:
+# a (archive/restore), J/K (move row), L (rename section), ! (actions —
+# even opening the picker risks a stray dispatch). A probe once archived
+# a real row and another cold-started a live agent session this way.
 #
 #   scripts/tui-test.sh start [name] [width] [height]  # default: probe 200x50
 #   scripts/tui-test.sh keys  <name> <tmux keys...>    # e.g. keys probe j j Escape
@@ -65,10 +69,34 @@ case "$cmd" in
     T ls 2>/dev/null || echo "(no probe server running)"
     ;;
   stop)
-    T kill-session -t "${1:-probe}" 2>/dev/null || true
+    name="${1:-probe}"
+    # kill-session alone HUPs the pane process, which wt (pre-fix) and a
+    # wedged bun can survive headless — reap by pane pid to guarantee
+    # death. (33 leaked instances were once found burning CPU this way.)
+    pid="$(T display-message -pt "$name" '#{pane_pid}' 2>/dev/null || true)"
+    T kill-session -t "$name" 2>/dev/null || true
+    # Poll ~3s before SIGKILL: wt's own hangup handler allows teardown
+    # up to 2.5s before force-exiting, and the harness must not shoot
+    # a probe that's mid-graceful-shutdown (that would skip the log
+    # flush and re-create the very leak class this reaping guards).
+    if [ -n "$pid" ]; then
+      for _ in $(seq 1 15); do
+        kill -0 "$pid" 2>/dev/null || exit 0
+        sleep 0.2
+      done
+      kill -9 "$pid" 2>/dev/null || true
+    fi
     ;;
   stop-all)
+    pids="$(T list-panes -a -F '#{pane_pid}' 2>/dev/null || true)"
     T kill-server 2>/dev/null || true
+    for pid in $pids; do
+      for _ in $(seq 1 15); do
+        kill -0 "$pid" 2>/dev/null || continue 2
+        sleep 0.2
+      done
+      kill -9 "$pid" 2>/dev/null || true
+    done
     ;;
   *)
     sed -n '2,27p' "${BASH_SOURCE[0]}"

@@ -277,6 +277,15 @@ export function PerfOverlay({
     >
       <box flexShrink={0} flexDirection="column" marginBottom={1}>
         <Verdict snapshot={snapshot} />
+        {/* Leaked headless instances are ALWAYS a defect — surface them
+            at verdict level, not buried in a process list. */}
+        {snapshot.orphans.length > 0 ? (
+          <text fg={theme.err} wrapMode="word">
+            {snapshot.orphans.length} headless wt instance
+            {snapshot.orphans.length === 1 ? "" : "s"} leaked (terminal died,
+            process survived) — see the LEAKED section below
+          </text>
+        ) : null}
         {/* A later sample failing leaves the last good one on screen —
             say so rather than letting it read as live. */}
         {error ? (
@@ -360,6 +369,29 @@ export function PerfOverlay({
           note="%cpu is a lifetime decaying average, not an instantaneous sample — read it as sustained pressure."
         />
         <ProcList procs={snapshot.top} ceiling={ceiling} width={contentW} />
+
+        {snapshot.orphans.length > 0 ? (
+          <>
+            <SectionHeader
+              title={`LEAKED: ${snapshot.orphans.length} headless wt instance${snapshot.orphans.length === 1 ? "" : "s"}`}
+              note="orphaned to launchd when a terminal died; they keep polling GitHub and duplicating attention lines until killed."
+            />
+            <box flexDirection="column">
+              {snapshot.orphans.map((p) => (
+                <text key={p.pid} wrapMode="none">
+                  <span fg={theme.err}>{pad(pct(p.cpu), 5)}</span>
+                  <span fg={theme.fgDim}>{pad(mem(p.rssMb), 6)}</span>
+                  {"  "}
+                  <span fg={theme.fg}>{`pid ${p.pid}`}</span>
+                  <span fg={theme.fgDim}>{`  up ${p.etime}`}</span>
+                </text>
+              ))}
+              <text fg={theme.warn} wrapMode="none">
+                {`  kill ${snapshot.orphans.map((p) => p.pid).join(" ")}`}
+              </text>
+            </box>
+          </>
+        ) : null}
 
         <SectionHeader
           title="heaviest processes NOT downstream of wt"

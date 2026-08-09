@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   effectiveWorkState,
+  isWorkStatusStale,
   LANDED_RANK,
   NO_STATUS_RANK,
   parseWorkStatus,
@@ -114,5 +115,33 @@ describe("workAge", () => {
     expect(workAge("2026-08-08T06:00:00Z", now)).toBe("6h");
     expect(workAge("2026-08-05T12:00:00Z", now)).toBe("3d");
     expect(workAge("not a date", now)).toBeNull();
+  });
+});
+
+describe("isWorkStatusStale", () => {
+  const at = "2026-08-08T12:00:00.000Z";
+  const record = { state: "ready" as const, at };
+  const atMs = Date.parse(at);
+
+  test("commits after the assertion make it stale", () => {
+    expect(isWorkStatusStale(record, atMs + 60_000)).toBe(true);
+  });
+
+  test("commits before the assertion do not", () => {
+    expect(isWorkStatusStale(record, atMs - 60_000)).toBe(false);
+  });
+
+  test("unknown commit signal never reads as stale", () => {
+    expect(isWorkStatusStale(record, null)).toBe(false);
+    expect(isWorkStatusStale(record, undefined)).toBe(false);
+  });
+
+  test("no record is never stale", () => {
+    expect(isWorkStatusStale(null, atMs)).toBe(false);
+    expect(isWorkStatusStale(undefined, atMs)).toBe(false);
+  });
+
+  test("an unparseable assertion timestamp is not stale", () => {
+    expect(isWorkStatusStale({ state: "ready", at: "garbage" }, atMs)).toBe(false);
   });
 });

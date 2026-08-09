@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseEventLine } from "./activity-backfill.ts";
+import { dedupeBursts, parseEventLine } from "./activity-backfill.ts";
 
 // Lines below mirror core/logger.ts `emit()` exactly:
 // `${iso} ${tag} ${kind.padEnd(4)} ${source.padEnd(16)} ${text}` with
@@ -71,5 +71,42 @@ describe("parseEventLine", () => {
     expect(prefix.length).toBe(53);
     expect(parseEventLine(prefix)).toBeNull();
     expect(parseEventLine(`${prefix}z`)).not.toBeNull();
+  });
+});
+
+describe("dedupeBursts", () => {
+  const base = Date.parse("2026-08-09T00:28:13.203Z");
+  const ev = (ts: number, text: string, source = "meeting-time") => ({
+    ts,
+    level: "warn" as const,
+    channel: "attention" as const,
+    source,
+    text,
+  });
+
+  test("N concurrent-instance copies of one transition collapse to the first", () => {
+    // Real shape from the leak incident: one line at .203, three more at
+    // .567 — four instances observing the same wtstate write.
+    const burst = [
+      ev(base, "needs testing"),
+      ev(base + 364, "needs testing"),
+      ev(base + 364, "needs testing"),
+      ev(base + 364, "needs testing"),
+    ];
+    expect(dedupeBursts(burst)).toEqual([ev(base, "needs testing")]);
+  });
+
+  test("genuine repeats outside the window survive", () => {
+    const later = base + 3 * 60 * 60 * 1000;
+    const out = dedupeBursts([ev(base, "needs testing"), ev(later, "needs testing")]);
+    expect(out.length).toBe(2);
+  });
+
+  test("same text from different sources is never merged", () => {
+    const out = dedupeBursts([
+      ev(base, "needs testing", "slug-a"),
+      ev(base + 10, "needs testing", "slug-b"),
+    ]);
+    expect(out.length).toBe(2);
   });
 });

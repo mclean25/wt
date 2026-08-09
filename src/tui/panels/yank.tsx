@@ -5,17 +5,25 @@ import {
 } from "../../core/issue-tracker.ts";
 import { stageUrl } from "../../core/stage.ts";
 import { Modal } from "../modal.tsx";
+import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 
-type Item = { key: string; label: string; value: string | null };
+export type Item = { key: string; label: string; value: string | null };
 
-type Props = { row: WorktreeRow };
+type Props = { row: WorktreeRow; selectedIndex: number };
+
+/**
+ * `padEnd` budget for the label column, one char past the longest
+ * label ("stage url", 9) so there's always a gap before the value.
+ */
+const LABEL_WIDTH = 10;
 
 /**
  * Items the `y` chord can yank. Order matches their key letters; the
  * modal renders this list verbatim. A null `value` shows as a dim "—"
- * and the keystroke errors with a "nothing to yank" toast.
+ * and committing it (Enter/digit/chord) errors with a "nothing to
+ * yank" toast instead of copying the placeholder.
  */
 export function yankItemsFor(row: WorktreeRow): Item[] {
   const stageUrlValue =
@@ -48,27 +56,73 @@ export function yankItemsFor(row: WorktreeRow): Item[] {
   ];
 }
 
-export function YankModal({ row }: Props) {
+/** Index of the first row with a real value, for the modal's initial cursor. */
+export function firstYankIndex(items: readonly Item[]): number {
+  const i = items.findIndex((it) => it.value !== null);
+  return i === -1 ? 0 : i;
+}
+
+export function YankModal({ row, selectedIndex }: Props) {
   const items = yankItemsFor(row);
   return (
     <Modal
       title="yank · pick what to copy"
       inset={{ top: "25%", right: "20%", bottom: "20%", left: "20%" }}
-      hints={[["esc / q / y", "cancel"]]}
+      hints={[
+        ["j/k", "move"],
+        ["1-9", "quick pick"],
+        ["letter", "direct"],
+        ["y / ⏎", "pick"],
+        ["esc / q", "cancel"],
+      ]}
     >
-      {/* One <text> per row (spans, padEnd alignment) — sibling boxes
-          with fixed widths overprinted each other at narrow widths. */}
-      {items.map((it) => (
-        <text key={it.key} wrapMode="none" truncate>
-          <span fg={theme.accent} attributes={1}>
-            {it.key.padEnd(3)}
-          </span>
-          <span fg={theme.fg}>{it.label.padEnd(11)}</span>
-          <span fg={it.value ? theme.fgDim : theme.warn}>
-            {it.value ?? "—"}
-          </span>
-        </text>
-      ))}
+      <ScrollableList
+        selectedId={items[selectedIndex] ? `yank:${items[selectedIndex]!.key}` : undefined}
+        revision={items}
+      >
+        {items.map((it, i) => {
+          const selected = i === selectedIndex;
+          const bg = selected ? theme.rowSelectedBg : undefined;
+          return (
+            <box
+              id={`yank:${it.key}`}
+              key={it.key}
+              flexDirection="row"
+              backgroundColor={bg}
+              paddingLeft={1}
+              paddingRight={1}
+            >
+              {/* Cursor + chord + label as one text node (spans, padEnd
+                  alignment), wrapped in a flexShrink={0} box so it
+                  never gives up width to the value column — without
+                  it, long values pressure the row and eat the padEnd
+                  padding first (row-cell.tsx's Row applies the same
+                  flexShrink={0} to its label box for the same reason).
+                  Only the value gets flexShrink/overflow="hidden" —
+                  the part that must clip instead of pushing the row
+                  wider than the modal. */}
+              <box flexShrink={0}>
+                <text wrapMode="none">
+                  <span fg={selected ? theme.accent : theme.fgDim}>
+                    {selected ? "▸ " : "  "}
+                  </span>
+                  <span fg={theme.accent} attributes={1}>
+                    {it.key.padEnd(2)}
+                  </span>
+                  <span fg={selected ? theme.fgBright : theme.fg}>
+                    {it.label.padEnd(LABEL_WIDTH)}
+                  </span>
+                </text>
+              </box>
+              <box flexShrink={1} overflow="hidden">
+                <text fg={theme.fgDim} wrapMode="none" truncate>
+                  {it.value ?? "—"}
+                </text>
+              </box>
+            </box>
+          );
+        })}
+      </ScrollableList>
     </Modal>
   );
 }

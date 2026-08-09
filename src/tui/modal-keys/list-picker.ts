@@ -12,7 +12,7 @@
  */
 import type { KeyEvent } from "@opentui/core";
 
-import { isPlainLetter } from "../app-helpers.ts";
+import { isPlainLetter, isShiftedLetter } from "../app-helpers.ts";
 
 export type ListPickerSpec = {
   /** Number of navigable rows. */
@@ -74,11 +74,27 @@ export function handleYesNoKey(
     k.name === "escape" ||
     k.sequence === "q" ||
     (k.ctrl && k.name === "c") ||
-    (extraCancelKeys?.includes(k.sequence ?? "") ?? false)
+    (extraCancelKeys?.some((key) => matchesCancelKey(k, key)) ?? false)
   ) {
     onCancel();
   }
   return true;
+}
+
+/**
+ * `extraCancelKeys` matcher. A raw `k.sequence` compare is NOT enough
+ * for shifted letters: `M`'s opener goes through `isShiftedLetter`
+ * precisely because tmux's csi-u encoding delivers Shift+letter with a
+ * shift flag rather than the uppercase literal in `sequence` — an
+ * uppercase cancel key must accept both forms or it silently no-ops in
+ * the environment wt primarily runs in.
+ */
+function matchesCancelKey(k: KeyEvent, key: string): boolean {
+  if (/^[a-z]$/.test(key)) return isPlainLetter(k, key);
+  if (/^[A-Z]$/.test(key)) {
+    return isShiftedLetter(k, key.toLowerCase()) || k.sequence === key;
+  }
+  return k.sequence === key && !k.ctrl && !k.meta;
 }
 
 export function handleListPickerKey(k: KeyEvent, spec: ListPickerSpec): boolean {

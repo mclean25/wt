@@ -45,14 +45,78 @@ export const BUILTIN_ACTIONS: readonly ActionDef[] = config.reviewBot.rerunComma
   : [];
 
 /**
- * Built-ins pinned ABOVE the user's actions in the `!` picker — the
- * dev-server start/stop pair, present only with `[dev_server]`
- * configured. Pinned because they're the structural "environment" slot
- * (where the SST stage controls conceptually live), not workflow
- * actions. They shell out to `wt dev` so the picker, keybindings, and
+ * The two agent-delegation builtins, pinned at the very top of the `!`
+ * picker. Both inject into the row's primary harness session (cold-
+ * starting it when needed) — the same delivery the automations engine
+ * uses — because their whole point is moving work the human would
+ * otherwise do onto the row's own agent:
+ *
+ *   `! u` — the agent reassesses and re-asserts `wt status` (the manual
+ *           backstop for a status that drifted or was never asserted).
+ *   `! g` — the agent picks the work back up and CONTINUES from
+ *           whatever the current status implies (build / test / address
+ *           review / verify-and-ready).
+ *
+ * Universal (not gated on any config section): they parameterize
+ * nothing project-specific — the status vocabulary and its rules ship
+ * with `wt status` itself, which every harness session learns from the
+ * bundled skills/instructions contract.
+ */
+const AGENT_BUILTIN_ACTIONS: readonly ActionDef[] = [
+  {
+    kind: "claude",
+    id: "agent-status-sync",
+    name: "Agent: update work status",
+    prompt: [
+      "Reassess this worktree's work status right now and assert it with `wt status`.",
+      "Check the actual state — tree, recent commits, PR/CI, your own conversation",
+      "context — rather than trusting the recorded status. Then run the matching",
+      "`wt status <state>` (bare `wt status` prints the vocabulary and rules; use",
+      "--risk and -m per those rules). If the recorded status is already accurate,",
+      "re-assert it anyway so the timestamp reflects this check. Reply with one",
+      "line: the state you asserted and why.",
+    ].join(" "),
+    target: "session",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "u",
+    group: "agent",
+  },
+  {
+    kind: "claude",
+    id: "agent-continue",
+    name: "Agent: continue work",
+    prompt: [
+      "Pick this worktree back up and continue from its current work status.",
+      "First recheck the actual state (tree, PR/CI, review findings) rather than",
+      "trusting the recorded status blindly. Then do the next real unit of work:",
+      "unfinished implementation → keep building; review findings pending →",
+      "address them; needs-testing → run the manual testing yourself; everything",
+      "genuinely done → verify and assert `wt status ready` with an honest --risk.",
+      "Assert status transitions as you go, and escalate with",
+      '`wt status needs-human -m "..."` only if truly blocked on the human.',
+    ].join(" "),
+    target: "session",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "g",
+    group: "agent",
+  },
+];
+
+/**
+ * Built-ins pinned ABOVE the user's actions in the `!` picker: the
+ * agent-delegation pair (always), then the dev-server start/stop pair
+ * when `[dev_server]` is configured. Pinned because they're structural
+ * slots — delegate-to-agent and environment — not workflow actions.
+ * The dev pair shells out to `wt dev` so the picker, keybindings, and
  * CLI all share one code path.
  */
-export const PINNED_BUILTIN_ACTIONS: readonly ActionDef[] = config.devServer
+const DEV_BUILTIN_ACTIONS: readonly ActionDef[] = config.devServer
   ? [
       {
         kind: "shell",
@@ -83,6 +147,12 @@ export const PINNED_BUILTIN_ACTIONS: readonly ActionDef[] = config.devServer
       },
     ]
   : [];
+
+/** The pinned set the picker leads with: agent pair, then dev pair. */
+export const PINNED_BUILTIN_ACTIONS: readonly ActionDef[] = [
+  ...AGENT_BUILTIN_ACTIONS,
+  ...DEV_BUILTIN_ACTIONS,
+];
 
 /** Every code-defined action, for id-resolution sites (dispatch, automations). */
 export const ALL_BUILTIN_ACTIONS: readonly ActionDef[] = [

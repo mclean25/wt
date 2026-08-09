@@ -136,6 +136,22 @@ export function effectiveWorkState(
 }
 
 /**
+ * A status assertion is STALE once commits land after it: the record
+ * describes an older tree, so its badge can't be trusted at a glance.
+ * `lastCommitMs` is whatever commit signal the caller already has (the
+ * TUI's gitActivity field); null/unknown never reads as stale — "can't
+ * tell" must not dim a trustworthy dot.
+ */
+export function isWorkStatusStale(
+  record: WorkStatusRecord | null | undefined,
+  lastCommitMs: number | null | undefined,
+): boolean {
+  if (!record || lastCommitMs == null) return false;
+  const asserted = Date.parse(record.at);
+  return !Number.isNaN(asserted) && lastCommitMs > asserted;
+}
+
+/**
  * Compact "how long ago" label (`3m`, `2h`, `4d`). Mirrors the tone of
  * the lock-age label without importing the locks module (this module
  * stays leaf-level).

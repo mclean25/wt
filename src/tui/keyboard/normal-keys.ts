@@ -15,6 +15,7 @@ import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 import type { RefObject } from "react";
 
 import { actionRegistry } from "../../core/actions.ts";
+import type { WorkState } from "../../core/work-status.ts";
 import { config, type PullRequestTarget } from "../../core/config.ts";
 import { effectiveBaseOrTrunk } from "../../core/git.ts";
 import { getHarness, HARNESSES, type HarnessId } from "../../core/harness/index.ts";
@@ -35,6 +36,7 @@ import {
   sessionLaunchBlockedReason,
 } from "../app-helpers.ts";
 import { activityScroll } from "../panels/activity.tsx";
+import { firstYankIndex, yankItemsFor } from "../panels/yank.tsx";
 import { enterDiffSession } from "../sessions/diff.ts";
 import { enterShellSession } from "../sessions/shell.ts";
 import type { HarnessRoute } from "../sessions/worktree.ts";
@@ -433,6 +435,30 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       setSel(last ? visualKey(last) : null);
       return;
     }
+    // `Space` — jump to the next row needing attention (needs-human /
+    // needs-testing / ready), scanning forward from the cursor and
+    // wrapping. Status sort ranks urgency only WITHIN each group, so on
+    // a multi-section fleet this is the cross-section scan the sort
+    // can't express. Record states only (the asserted queue); rows
+    // hidden inside folded sections aren't in `visualItems` and are
+    // skipped by construction.
+    if (k.name === "space" || k.sequence === " ") {
+      const urgent = new Set<WorkState>(["needs-human", "needs-testing", "ready"]);
+      const n = visualItems.length;
+      for (let step = 1; step <= n; step++) {
+        const it = visualItems[(Math.max(0, cursorIndex) + step) % n];
+        if (
+          it?.kind === "wt" &&
+          it.row.work &&
+          urgent.has(it.row.work.state)
+        ) {
+          setSel(visualKey(it));
+          return;
+        }
+      }
+      toast("nothing needs you", theme.fgDim, 1500);
+      return;
+    }
     // `R` — rebase/restack whatever's selected: a stack member restacks
     // the whole stack, a standalone worktree rebases onto its recorded
     // base or trunk (algorithmic; escalates to /restack on a conflict bail).
@@ -592,7 +618,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toast(`no shell session on ${slug}`, theme.fgDim, 1500);
         return;
       }
-      setModal({ kind: "killSessionConfirm", slug, sessionKind: "shell" });
+      setModal({ kind: "killSessionConfirm", slug, sessionKind: "shell", managedName: null });
       return;
     }
     // Shift+F11 — kill-confirm for the selected worktree's diff
@@ -609,7 +635,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toast(`no diff session on ${slug}`, theme.fgDim, 1500);
         return;
       }
-      setModal({ kind: "killSessionConfirm", slug, sessionKind: "diff" });
+      setModal({ kind: "killSessionConfirm", slug, sessionKind: "diff", managedName: null });
       return;
     }
     // Shift+F12 — open the harness selector for a fresh spawn.
@@ -898,7 +924,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       return;
     }
     if (k.sequence === "y") {
-      setModal({ kind: "yank" });
+      setModal({ kind: "yank", index: firstYankIndex(yankItemsFor(current)) });
       return;
     }
     if (isPlainLetter(k, "d")) {

@@ -1,5 +1,6 @@
 import type { ActionDef } from "../core/actions.ts";
 import type { HistoryEntry } from "../core/actions.ts";
+import type { HarnessId } from "../core/harness/index.ts";
 import type { WorkState } from "../core/work-status.ts";
 import type { RemovedWorktree } from "../core/wtstate.ts";
 import type { ActionPickerState } from "./panels/action-picker.tsx";
@@ -45,7 +46,7 @@ export type Modal =
       /** Payload for the `restore` pendingKey (removed-worktrees view). */
       restoreEntry?: RemovedWorktree;
     }
-  | { kind: "yank" }
+  | { kind: "yank"; index: number }
   | {
       kind: "branchPicker";
       title: string;
@@ -103,7 +104,20 @@ export type Modal =
   | { kind: "harnessSelect"; slug: string; index: number }
   | { kind: "killActionConfirm"; slug: string; actionName: string }
   | {
+      /**
+       * Session kill confirm — one shape for all killable kinds:
+       * shell/diff (opened by Shift+F10/F11) and harness sessions
+       * (opened by `x` on a live row in the sessions picker). One
+       * handler in confirm.ts branches on `sessionKind`; the harness
+       * kinds toggle-dismiss on `x` since they have a real single-key
+       * opener, unlike the Shift chords.
+       */
       kind: "killSessionConfirm";
       slug: string;
-      sessionKind: "shell" | "diff";
+      sessionKind: "shell" | "diff" | HarnessId;
+      /**
+       * Named claude slot being killed (`null` for the primary).
+       * Always `null` for every other sessionKind.
+       */
+      managedName: string | null;
     };

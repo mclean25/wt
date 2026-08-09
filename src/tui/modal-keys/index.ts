@@ -63,7 +63,7 @@ export function handleSimpleModalKey(
     case "statusPicker":
       return handleStatusPickerKey(k, modal, ctx);
     case "yank":
-      return handleYankKey(k, ctx);
+      return handleYankKey(k, modal, ctx);
     case "cleanConfirm":
       return handleCleanConfirmKey(k, ctx);
     case "confirm":

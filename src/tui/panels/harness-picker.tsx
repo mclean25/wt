@@ -6,7 +6,8 @@
  *
  * Per-harness letters come from each impl's `letter` field — `c` for
  * Claude, `o` for OpenCode, `x` for Codex. Pressing the letter jumps
- * the highlight to that row; F12 / Enter then confirms.
+ * the highlight to that row; Shift+F12 (re-press, the trigger-key
+ * convention), bare F12, or Enter then confirms.
  */
 import { HARNESSES } from "../../core/harness/index.ts";
 import { Modal } from "../modal.tsx";
@@ -25,8 +26,11 @@ export function HarnessPickerModal({ slug, selectedIndex }: Props) {
       inset={{ top: "30%", right: "30%", bottom: "30%", left: "30%" }}
       hints={[
         ["j/k", "move"],
+        // HARNESSES is always ≤9 entries (3 today), so digits are
+        // unconditionally live — see handleListPickerKey's default.
+        ["1-9", "quick pick"],
         ["c / o / x", "jump"],
-        ["F12 / ⏎", "spawn"],
+        ["⇧F12 / F12 / ⏎", "spawn"],
         ["esc / q", "cancel"],
       ]}
     >

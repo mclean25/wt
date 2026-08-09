@@ -74,6 +74,32 @@ export function parseEventLine(line: string): Omit<WtEvent, "id"> | null {
   return { ts, level: kind, channel, source, text };
 }
 
+/**
+ * Collapse burst-duplicates: identical (channel, source, text) lines
+ * within `windowMs` of the last kept copy become one line. The daily
+ * log is shared across processes, so N concurrent instances observing
+ * the same wtstate transition each write the same attention line
+ * within a few hundred ms — replaying all N at boot turns the curated
+ * feed into `needs testing` ×4. Genuine repeats (same status asserted
+ * hours apart) stay: they land outside the window. Input must be in
+ * chronological order (it is: file order).
+ */
+export function dedupeBursts(
+  parsed: ReadonlyArray<Omit<WtEvent, "id">>,
+  windowMs = 5_000,
+): Array<Omit<WtEvent, "id">> {
+  const lastKept = new Map<string, number>();
+  const out: Array<Omit<WtEvent, "id">> = [];
+  for (const e of parsed) {
+    const key = `${e.channel}\0${e.source}\0${e.text}`;
+    const prev = lastKept.get(key);
+    if (prev !== undefined && e.ts - prev < windowMs) continue;
+    lastKept.set(key, e.ts);
+    out.push(e);
+  }
+  return out;
+}
+
 function localDay(offsetDays: number): string {
   const d = new Date();
   d.setDate(d.getDate() + offsetDays);
@@ -101,12 +127,13 @@ export function backfillActivityLog(): void {
       }
     }
     if (parsed.length === 0) return;
+    const deduped = dedupeBursts(parsed);
     // Select per feed, then union: attention lines are RARE relative
     // to firehose chatter, so slicing one recent window would evict
     // exactly the needs-you trail this backfill exists to preserve.
     // Set dedupes by object identity (both slices share elements).
-    const recent = parsed.slice(-SEED_FIREHOSE);
-    const attention = parsed.filter(isAttentionWorthy).slice(-SEED_ATTENTION);
+    const recent = deduped.slice(-SEED_FIREHOSE);
+    const attention = deduped.filter(isAttentionWorthy).slice(-SEED_ATTENTION);
     const chosen = [...new Set([...attention, ...recent])].sort((a, b) => a.ts - b.ts);
     events.seed(chosen);
   } catch {

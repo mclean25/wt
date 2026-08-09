@@ -498,13 +498,40 @@ export async function runTui(): Promise<TuiExit> {
     targetFps: 60,
   });
   const root = createRoot(renderer);
+  // A dying terminal (tmux kill-session/-server, window close, SSH drop)
+  // delivers SIGHUP — without an explicit handler this process SURVIVES
+  // it (opentui's raw-mode stdin keeps the loop alive), reparents to
+  // launchd, and keeps polling GitHub and writing duplicate attention
+  // lines forever. One probe sweep left 33 of these burning ~20% CPU
+  // each. Route the signal through the same resolve the quit key uses
+  // so the full teardown below runs; the unref'd force-exit backstop
+  // covers a teardown that wedges (which would re-create the leak this
+  // handler exists to prevent).
+  let onHangup: (() => void) | null = null;
   return new Promise<TuiExit>((resolve) => {
+    onHangup = () => {
+      // File-log the reason first: distinguishing a hangup exit from a
+      // normal quit is exactly what post-mortems of the orphan leak
+      // needed. The graceful path flushes this in the finally below;
+      // if only the force-exit lands there'll be no flush — acceptable,
+      // the absence of a subsequent clean-shutdown line IS the signal.
+      startupLog.warn("terminal hangup (SIGHUP/SIGTERM) — tearing down");
+      const force = setTimeout(() => process.exit(129), 2500);
+      force.unref();
+      resolve({ kind: "quit" });
+    };
+    process.on("SIGHUP", onHangup);
+    process.on("SIGTERM", onHangup);
     root.render(
       <QueryClientProvider client={wtClient.client}>
         <App onExit={resolve} />
       </QueryClientProvider>,
     );
   }).finally(async () => {
+    if (onHangup) {
+      process.off("SIGHUP", onHangup);
+      process.off("SIGTERM", onHangup);
+    }
     // Tear down listeners, timers, and the SQLite handle so the
     // process can exit cleanly. Each step may throw if an earlier
     // one already disposed state — we swallow so all three run.

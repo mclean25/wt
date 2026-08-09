@@ -68,6 +68,8 @@ The current contract. These are deliberate, not accidental — expanding one (sa
 
 **wt itself** stays deterministic: automations fire once per instance (ledger), notifications only for the two states that mean "look at me" (`needs_human`, `ready` — the human merges manually, so ready IS actionable), and nothing edge-triggered or bespoke.
 
+**Manual delegation triggers** (the pinned `! u` / `! g` builtins) sit deliberately between the levels: the HUMAN pulls the trigger, the AGENT does the work. `! u` has the row's agent re-assess and re-assert its own status (the backstop for a record that drifted or was never asserted); `! g` has it continue the task from whatever the status implies. Neither expands agent authority — both delegate work the agent already owns, on demand, so the human's remedy for a stale row is one keystroke rather than attaching and typing. If these fire often, something upstream (the always-on status contract, the automations) is failing — treat frequency as a signal, not a workflow.
+
 **The human** keeps: merges, logins/credentials, final QA whenever they want it, risk acceptance on medium/high `ready`s, external-tracker status, and any expansion of the levels above.
 
 ## Known deliberate omissions

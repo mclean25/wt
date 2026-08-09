@@ -40,7 +40,7 @@ import {
 import { resolveRows, type RowModule } from "../rows/index.ts";
 import type { FetchLike, RowContext } from "../rows/types.ts";
 import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
-import { ageMsToText, ELLIPSIS } from "../text.ts";
+import { ageMsToText, ELLIPSIS, truncateEnd } from "../text.ts";
 import { Spinner, useBouncingBall } from "../spinner.tsx";
 import { theme } from "../theme.ts";
 import type { TitleSource, WorktreeRow } from "../hooks/useWorktreeRows.ts";
@@ -204,15 +204,26 @@ function RenderedRow({ module: m, ctx }: { module: RowModule; ctx: RowContext })
 function TitleLine({
   title,
   source,
+  width,
 }: {
   title: string;
   source: TitleSource;
+  width: number;
 }) {
+  // opentui's native `truncate` mid-clips ("Classify meeting
+  // reschedule...ent time-changed hint (llm)") — the most prominent
+  // line in the pane loses its tail, not its least-important part. We
+  // hand-roll end-truncation instead, budgeted off the pane's content
+  // width (same PANE_CHROME_WIDTH accounting as `valueWidthFor`, minus
+  // the label column this line doesn't have) with the ` (source)` tag
+  // reserved so it always stays visible.
+  const suffix = ` (${source})`;
+  const budget = Math.max(0, width - PANE_CHROME_WIDTH - Bun.stringWidth(suffix));
   return (
     <box marginBottom={1}>
-      <text wrapMode="none" truncate>
-        <span fg={theme.fg} attributes={1}>{title}</span>
-        <span fg={theme.fgDim}>{` (${source})`}</span>
+      <text wrapMode="none">
+        <span fg={theme.fg} attributes={1}>{truncateEnd(title, budget)}</span>
+        <span fg={theme.fgDim}>{suffix}</span>
       </text>
     </box>
   );
@@ -485,7 +496,7 @@ const DetailsBody = memo(function DetailsBody({
         // character whenever the pane grows a scrollbar.
         contentOptions={{ flexDirection: "column", paddingRight: 1 }}
       >
-        <TitleLine title={row.title} source={row.titleSource} />
+        <TitleLine title={row.title} source={row.titleSource} width={width} />
         {RESOLVED_ROWS.map((m) => (
           <RenderedRow key={m.id} module={m} ctx={ctx} />
         ))}
@@ -580,7 +591,7 @@ export function Details({
 }: Props) {
   if (removed) {
     // Key by slug so cursor moves across history entries remount cleanly.
-    return <RemovedBody key={`removed:${removed.slug}`} entry={removed} />;
+    return <RemovedBody key={`removed:${removed.slug}`} entry={removed} width={width} />;
   }
   if (section) {
     return <SectionSummaryBody key={`section:${section.sectionKey}`} section={section} width={width} />;

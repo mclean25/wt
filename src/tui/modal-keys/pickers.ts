@@ -49,7 +49,7 @@ export function handleBasePickerKey(
 export function handleStatusPickerKey(
   k: KeyEvent,
   modal: Extract<Modal, { kind: "statusPicker" }>,
-  { setModal, commitStatusPick }: SimpleModalContext,
+  { setModal, commitStatusPick, beginStatusNote }: SimpleModalContext,
 ): boolean {
   // Every state has a direct chord (`u t` → todo, …, `x` clears) —
   // the letters render dim in the picker rows.
@@ -58,6 +58,12 @@ export function handleStatusPickerKey(
     const letter = item.state === null ? "x" : WORK_STATE_CHORDS[item.state];
     chords[letter] = () => commitStatusPick(item, modal.slug);
   }
+  // `m` — pick the HIGHLIGHTED state and attach a note via the footer
+  // input. Off the chord letters so the fast path stays one keystroke.
+  chords["m"] = () => {
+    const item = modal.items[modal.index];
+    if (item) beginStatusNote(item, modal.slug);
+  };
   return handleListPickerKey(k, {
     count: modal.items.length,
     index: modal.index,

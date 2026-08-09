@@ -11,6 +11,7 @@ import { createLogger } from "../core/logger.ts";
  */
 const REMOTE_LABELS: Record<string, { source: string; label: string }> = {
   github: { source: "[gh]", label: "GitHub" },
+  reviewRequests: { source: "[gh]", label: "review requests" },
   fetchOrigin: { source: "[origin]", label: "git origin" },
 };
 
@@ -28,6 +29,13 @@ function formatDuration(ms: number): string {
 
 export function attachFetchLogs(client: QueryClient): () => void {
   const starts = new Map<string, number>();
+  // Sources currently in a failing streak (keyed by label). The FIRST
+  // failure is attention-worthy (`event.err` surfaces in the attention
+  // feed by level); repeats during a sustained outage — e.g. a rate-limit
+  // storm refetching every backstop interval — stay on the dim firehose
+  // so the curated feed gets one line per outage, not one per poll.
+  // Recovery logs once too, closing the loop.
+  const failing = new Set<string>();
   return client.getQueryCache().subscribe((event: QueryCacheNotifyEvent) => {
     if (event.type !== "updated") return;
     const first = event.query.queryKey[0];
@@ -49,12 +57,20 @@ export function attachFetchLogs(client: QueryClient): () => void {
       // completion of a fetch we saw start.
       if (start === undefined) return;
       starts.delete(event.query.queryHash);
+      if (failing.delete(meta.label)) {
+        log.event.ok(`${meta.label} fetch recovered`, { toast: true });
+      }
       log.event.dim(`fetched ${meta.label} (${formatDuration(Date.now() - start)})`);
     } else if (action.type === "error") {
       starts.delete(event.query.queryHash);
       const err = action.error;
       const msg = err instanceof Error ? err.message : String(err);
-      log.event.err(`failed to fetch ${meta.label}: ${msg}`);
+      if (failing.has(meta.label)) {
+        log.event.dim(`still failing to fetch ${meta.label}: ${msg}`);
+      } else {
+        failing.add(meta.label);
+        log.event.err(`failed to fetch ${meta.label}: ${msg}`);
+      }
     }
   });
 }

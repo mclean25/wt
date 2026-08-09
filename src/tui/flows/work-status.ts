@@ -12,11 +12,15 @@
 import type { WorkState, WorkStatusRecord } from "../../core/work-status.ts";
 import { WORK_STATES } from "../../core/work-status.ts";
 import type { Modal } from "../modal-state.ts";
+import type { FooterMode } from "../panels/footer.tsx";
 import { markSelfStatusWrite } from "../hooks/useWorkStatusEvents.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
 
 export type StatusPickerItem = { label: string; state: WorkState | null };
+
+/** What `m` in the status picker parked while the footer collects a note. */
+export type PendingStatusNote = { slug: string; state: WorkState };
 
 /**
  * Direct chords inside the `u` picker (`u t` → todo, `u y` → ready).
@@ -40,10 +44,23 @@ type WorkStatusFlowsCtx = {
   toast: (message: string, color?: string, ms?: number) => void;
   reportActionError: (label: string, err: unknown) => void;
   setWorkStatus: (slug: string, record: WorkStatusRecord | null) => Promise<void>;
+  setFooter: (f: FooterMode) => void;
+  setPendingStatusNote: (v: PendingStatusNote | null) => void;
+  /** Is the slug still a live worktree? Note-typing time is unbounded. */
+  isSlugLive: (slug: string) => boolean;
 };
 
 export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
-  const { current, setModal, toast, reportActionError, setWorkStatus } = ctx;
+  const {
+    current,
+    setModal,
+    toast,
+    reportActionError,
+    setWorkStatus,
+    setFooter,
+    setPendingStatusNote,
+    isSlugLive,
+  } = ctx;
 
   function openStatusPicker(): void {
     if (!current) return;
@@ -90,5 +107,52 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     );
   }
 
-  return { openStatusPicker, commitStatusPick };
+  /**
+   * `m` in the status picker: pick the highlighted state AND attach a
+   * note — the fast path (chords / Enter) never pays for this. Closes
+   * the picker and hands off to the footer input; the actual write
+   * happens in `commitStatusWithNote` once the note is typed. Esc there
+   * cancels the whole pick (no write), matching "the record describes
+   * one moment" — there's no half-committed state to clean up.
+   */
+  function beginStatusNote(item: StatusPickerItem, slug: string): void {
+    if (!item.state) {
+      toast("clear takes no note", theme.fgDim, 1500);
+      return;
+    }
+    setModal(null);
+    setPendingStatusNote({ slug, state: item.state });
+    setFooter({
+      kind: "input",
+      prompt: `${slug} → ${item.state} · note: `,
+      value: "",
+      purpose: "status-note",
+    });
+  }
+
+  /** Footer-input Enter for a pending `m` pick. Empty note = plain pick. */
+  function commitStatusWithNote(pending: PendingStatusNote, note: string): void {
+    // The note took human-paced time to type; the worktree can be gone
+    // by now (destroy, clean, another instance). Writing anyway would
+    // resurrect a ghost wtstate entry until the next boot reap.
+    if (!isSlugLive(pending.slug)) {
+      toast(`${pending.slug} is gone — status not written`, theme.warn, 2500);
+      return;
+    }
+    const trimmed = note.trim();
+    const record: WorkStatusRecord = {
+      state: pending.state,
+      at: new Date().toISOString(),
+      ...(trimmed ? { note: trimmed } : {}),
+    };
+    markSelfStatusWrite(pending.slug, record.at);
+    setWorkStatus(pending.slug, record).then(
+      () => {
+        toast(`${pending.slug} → ${record.state}`, theme.info, 2000);
+      },
+      (err) => reportActionError("set status", err),
+    );
+  }
+
+  return { openStatusPicker, commitStatusPick, beginStatusNote, commitStatusWithNote };
 }

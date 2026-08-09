@@ -126,11 +126,18 @@ export function workStateGlyph(state: WorkState): string {
 export function workStatusBadge(
   record: WorkStatusRecord | null | undefined,
   sessionState?: DerivedState,
+  stale = false,
 ): Badge {
   const eff = effectiveWorkState(record, sessionState);
   if (!eff) return { glyph: NF.dotOutline, fg: theme.fgDim };
   return {
-    glyph: workStateGlyph(eff.state),
+    // Stale (commits landed after the assertion — see
+    // `isWorkStatusStale`) hollows the dot but keeps the state color:
+    // green-but-hollow reads "was ready, tree moved since", distinct
+    // from both a solid trustworthy dot and todo's dim hollow. A
+    // session-derived state (`asking`) is live information, never
+    // hollowed — staleness describes the RECORD, not the session.
+    glyph: stale && !eff.derived ? NF.dotOutline : workStateGlyph(eff.state),
     fg: workStateColor(eff.state),
   };
 }

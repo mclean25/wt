@@ -12,6 +12,7 @@ import { TextAttributes } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
 import { type Badge, checkBadge, statusBadge, workStatusBadge } from "../badges.ts";
+import { isWorkStatusStale } from "../../core/work-status.ts";
 import { BadgeCluster, badgeClusterCells } from "../badge-cluster.tsx";
 import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
 import { useScrollToEdge } from "../hooks/useScrollToEdge.ts";
@@ -122,6 +123,11 @@ function statusKeepsGutter(kind: StatusKind): boolean {
   return kind !== StatusKind.Dirty && kind !== StatusKind.Clean;
 }
 
+/** Stale signal for the row's work-status dot (see `isWorkStatusStale`). */
+function rowWorkStale(row: WorktreeRow): boolean {
+  return isWorkStatusStale(row.work, row.fields.gitActivity.data?.lastCommitMs ?? null);
+}
+
 /**
  * Leftmost glyph — the loud git states (busy / missing / gone /
  * merged) when present, else the work-status dot (a dim hollow
@@ -139,7 +145,7 @@ function StatusMarker({
 }) {
   const base = statusKeepsGutter(row.status.kind)
     ? statusBadge(row.status)
-    : workStatusBadge(row.work, sessionState);
+    : workStatusBadge(row.work, sessionState, rowWorkStale(row));
   const fg = row.archived ? theme.fgDim : base.fg;
   return <text fg={fg}>{base.glyph}</text>;
 }
@@ -163,7 +169,7 @@ function StackGutter({
     ? theme.fgDim
     : statusKeepsGutter(row.status.kind)
       ? statusBadge(row.status).fg
-      : workStatusBadge(row.work, sessionState).fg;
+      : workStatusBadge(row.work, sessionState, rowWorkStale(row)).fg;
   const ord = stackOrdinalLabel(info.ordinal);
   return (
     <box flexShrink={0} flexDirection="row">

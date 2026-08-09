@@ -75,7 +75,16 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       return true;
     }
     if (k.sequence === "r") {
-      appLog.event.dim("refresh");
+      // File-only: a manual refresh is worth a grep-able marker (it
+      // explains the fetch burst that follows in the log) but not a
+      // pane line — the toast below is the keystroke's ONLY surfaced
+      // ack, per the toast contract (acks are toast-only, never fed to
+      // the pane).
+      appLog.info("manual refresh");
+      // Refetches don't always produce a visible change (already fresh,
+      // or the row just doesn't move) — ack the keystroke so `r` doesn't
+      // look like a no-op.
+      toast("refreshing", theme.fgDim, 800);
       void refreshAll();
       return true;
     }

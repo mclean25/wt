@@ -8,6 +8,7 @@ import type { KeyEvent } from "@opentui/core";
 
 import { createLogger } from "../../core/logger.ts";
 import { printableText } from "../app-helpers.ts";
+import type { PendingStatusNote } from "../flows/work-status.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { theme } from "../theme.ts";
 
@@ -15,14 +16,27 @@ const appLog = createLogger("[app]");
 
 export type FooterInputKeysCtx = {
   footer: Extract<FooterMode, { kind: "input" }>;
-  setFooter: (f: FooterMode) => void;
+  /**
+   * React state setter (updater form included): the async failure-
+   * restore path must check the CURRENT footer before overwriting —
+   * a create can take seconds, and the user may have started another
+   * footer interaction in the meantime.
+   */
+  setFooter: (f: FooterMode | ((prev: FooterMode) => FooterMode)) => void;
   pendingRename: string | null;
   setPendingRename: (v: string | null) => void;
   renameSection: (oldName: string, newName: string) => Promise<void>;
   setLastMoveTarget: (updater: (prev: string | null) => string | null) => void;
   toast: (message: string, color?: string, ms?: number) => void;
-  doNew: (raw: string, defaultBase?: string) => Promise<void>;
-  doRemoteNew: (raw: string) => Promise<void>;
+  // Both resolve to whether the create succeeded — the return, not a
+  // thrown error, is the failure signal (both flows already catch their
+  // own errors and toast). Used below to restore the typed line on
+  // failure instead of leaving the user to retype it.
+  doNew: (raw: string, defaultBase?: string) => Promise<boolean>;
+  doRemoteNew: (raw: string) => Promise<boolean>;
+  pendingStatusNote: PendingStatusNote | null;
+  setPendingStatusNote: (v: PendingStatusNote | null) => void;
+  commitStatusWithNote: (pending: PendingStatusNote, note: string) => void;
 };
 
 export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void {
@@ -36,10 +50,15 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
     toast,
     doNew,
     doRemoteNew,
+    pendingStatusNote,
+    setPendingStatusNote,
+    commitStatusWithNote,
   } = ctx;
       if (k.name === "escape" || (k.ctrl && k.name === "c")) {
         setFooter({ kind: "legend" });
         setPendingRename(null);
+        // Esc during a status-note cancels the whole pick — no write.
+        setPendingStatusNote(null);
         return;
       }
       if (k.name === "return") {
@@ -47,6 +66,13 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
         const base = footer.base;
         const purpose = footer.purpose;
         setFooter({ kind: "legend" });
+        if (purpose === "status-note") {
+          const pending = pendingStatusNote;
+          setPendingStatusNote(null);
+          // Empty note = plain pick; the flow drops the note field.
+          if (pending) commitStatusWithNote(pending, raw);
+          return;
+        }
         if (purpose === "rename-section") {
           const oldName = pendingRename;
           setPendingRename(null);
@@ -63,8 +89,30 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
           return;
         }
         if (raw) {
-          if (purpose === "new-remote") void doRemoteNew(raw);
-          else void doNew(raw, base);
+          // Optimistic reset above already cleared the footer to legend.
+          // On failure, put the typed line back in input mode (same
+          // prompt/purpose/base) so a bad flag or a resolution error
+          // doesn't cost the user a full retype — the flow's own toast
+          // already explains why.
+          // Guarded restore: the create can take seconds and the user
+          // may have started ANOTHER footer interaction meanwhile — a
+          // failed create must never clobber it. Only resurrect the
+          // typed line if the footer is still idle.
+          const restore = () =>
+            setFooter((prev) =>
+              prev.kind === "legend"
+                ? { kind: "input", prompt: footer.prompt, value: raw, purpose, base }
+                : prev,
+            );
+          if (purpose === "new-remote") {
+            void doRemoteNew(raw).then((ok) => {
+              if (!ok) restore();
+            });
+          } else {
+            void doNew(raw, base).then((ok) => {
+              if (!ok) restore();
+            });
+          }
         }
         return;
       }
@@ -72,6 +120,7 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
         // Backspace on empty input exits, matching the filter convention.
         if (footer.value.length === 0) {
           setFooter({ kind: "legend" });
+          setPendingStatusNote(null);
           return;
         }
         setFooter({ ...footer, value: footer.value.slice(0, -1) });

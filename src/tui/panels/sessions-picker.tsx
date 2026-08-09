@@ -288,6 +288,7 @@ export function SessionsPickerNew({ slug, input, autoName, error }: NewProps) {
       hints={[
         ["⏎", "spawn & attach"],
         ["esc", "back"],
+        ["^C", "cancel"],
       ]}
     >
       <box flexDirection="row" paddingLeft={1} paddingRight={1}>

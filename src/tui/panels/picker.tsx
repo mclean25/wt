@@ -1,4 +1,5 @@
 import type { HistoryEntry } from "../../core/actions.ts";
+import type { KeyHintPair } from "../key-hint.tsx";
 import { Modal } from "../modal.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
@@ -18,6 +19,8 @@ type Props = {
    * chordless rows). Same length as `items` when provided.
    */
   itemKeys?: readonly (string | null)[];
+  /** Picker-specific hints, slotted between "pick" and "cancel". */
+  extraHints?: readonly KeyHintPair[];
 };
 
 export function PickerModal({
@@ -26,17 +29,24 @@ export function PickerModal({
   selectedIndex,
   toggleKey,
   itemKeys,
+  extraHints,
 }: Props) {
   const pickKeys = toggleKey ? `${toggleKey} / ⏎` : "⏎";
+  // Digits are live by default whenever the list has ≤9 rows
+  // (list-picker.ts's `handleListPickerKey`) — surface the hint so
+  // quick-pick isn't invisible.
+  const showDigits = items.length <= 9;
+  // A digit column would crowd the letter-chord column (statusPicker's
+  // `itemKeys`), so only render it when rows don't already carry a
+  // chord; chorded pickers keep the hint text without the column.
+  const showDigitColumn = showDigits && !itemKeys;
+  const hints: KeyHintPair[] = [["j/k", "move"]];
+  if (showDigits) hints.push(["1-9", "quick pick"]);
+  hints.push([pickKeys, "pick"]);
+  if (extraHints) hints.push(...extraHints);
+  hints.push(["esc / q", "cancel"]);
   return (
-    <Modal
-      title={title}
-      hints={[
-        ["j/k", "move"],
-        [pickKeys, "pick"],
-        ["esc / q", "cancel"],
-      ]}
-    >
+    <Modal title={title} hints={hints}>
       <ScrollableList
         selectedId={items[selectedIndex] ? `pick:${items[selectedIndex]}` : undefined}
         revision={items}
@@ -46,6 +56,7 @@ export function PickerModal({
           const bg = selected ? theme.rowSelectedBg : undefined;
           const fg = selected ? theme.fgBright : theme.fg;
           const chord = itemKeys?.[i] ?? null;
+          const digit = showDigitColumn && i < 9 ? `${i + 1}` : null;
           return (
             <box
               id={`pick:${item}`}
@@ -58,6 +69,11 @@ export function PickerModal({
               <text fg={selected ? theme.accent : theme.fgDim}>
                 {selected ? "▸ " : "  "}
               </text>
+              {showDigitColumn ? (
+                <text fg={selected ? theme.accent : theme.fgDim}>
+                  {digit ? `${digit} ` : "  "}
+                </text>
+              ) : null}
               {itemKeys ? (
                 <text fg={selected ? theme.accent : theme.fgDim}>
                   {chord ? `${chord} ` : "  "}
@@ -198,6 +214,7 @@ export function ArgPickerModal({
         hints={[
           ["⏎", "launch"],
           ["esc", "back"],
+          ["^C", "cancel"],
         ]}
       >
         <box flexDirection="row" paddingLeft={1} paddingRight={1}>
@@ -218,15 +235,15 @@ export function ArgPickerModal({
     });
   }
   rows.push({ label: "+ new value…", isNew: true });
+  // Digits quick-pick history rows only (the "+ new" row is Enter-only
+  // — see handleArgPickerKey), so gate the hint on history size, not
+  // the full row count.
+  const showDigits = history.length > 0 && history.length <= 9;
+  const listHints: KeyHintPair[] = [["j/k", "move"]];
+  if (showDigits) listHints.push(["1-9", "quick pick"]);
+  listHints.push(["⏎", "pick"], ["esc / q", "cancel"]);
   return (
-    <Modal
-      title={title}
-      hints={[
-        ["j/k", "move"],
-        ["⏎", "pick"],
-        ["esc / q", "cancel"],
-      ]}
-    >
+    <Modal title={title} hints={listHints}>
       <ScrollableList selectedId={`arg:${index}`} revision={rows.length}>
         {rows.map((row, i) => {
           const selected = i === index;

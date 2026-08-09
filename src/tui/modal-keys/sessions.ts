@@ -3,10 +3,8 @@ import type { KeyEvent } from "@opentui/core";
 import { nextAutoName, removeClaudeName, validateSessionName } from "../../core/harness/claude/names.ts";
 import { getHarness, HARNESSES, type HarnessId } from "../../core/harness/index.ts";
 import { sessionOutputId } from "../../core/outputs.ts";
-import {
-  closeHarnessSessionGracefully,
-  killHarnessSession,
-} from "../../core/tmux.ts";
+import { closeHarnessSessionGracefully } from "../../core/tmux.ts";
+import { isBareShiftedKey } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import { previewFocusPatch } from "../picker-preview.ts";
 import { isSyntheticLiveSessionId } from "../hooks/useHarnessSessions.ts";
@@ -23,7 +21,6 @@ export function handleClaudeSessionsPickerKey(
     pickerRows,
     setFocus,
     doEnterHarnessSession,
-    doKillClaudeSession,
     refreshTmuxSessions,
     refreshHarnessSessions,
     refreshClaudeSummaries,
@@ -31,7 +28,6 @@ export function handleClaudeSessionsPickerKey(
     reportActionError,
     fgDimColor,
     logInfo,
-    logWarn,
   } = ctx;
   const slug = modal.slug;
   const rowsLocal = pickerRows;
@@ -88,23 +84,33 @@ export function handleClaudeSessionsPickerKey(
       const e = r.entry;
       if (e.harnessId === "claude") {
         if (e.isLive) {
-          doKillClaudeSession(slug, e.extras.managedName);
-        } else if (e.extras.managedName !== null) {
-          removeClaudeName(slug, e.extras.managedName);
-          void refreshClaudeSummaries(slug);
-          logInfo(`forgot ghost session "${e.extras.managedName}" on ${slug}`);
+          // Route through the shared kill-confirm modal (confirm.ts)
+          // rather than killing inline — mirrors the Shift+F10/F11
+          // shell/diff kill paths; `x` toggle-dismisses it.
+          setModal({
+            kind: "killSessionConfirm",
+            slug,
+            sessionKind: "claude",
+            managedName: e.extras.managedName,
+          });
+        } else {
+          // Ghost cleanup (forgetting a dead session's stored name)
+          // stays UNCONFIRMED — forgetting a dead name is harmless,
+          // unlike killing a live process.
+          if (e.extras.managedName !== null) {
+            removeClaudeName(slug, e.extras.managedName);
+            void refreshClaudeSummaries(slug);
+            logInfo(`forgot ghost session "${e.extras.managedName}" on ${slug}`);
+          }
+          setModal(null);
         }
-        setModal(null);
       } else if (e.isLive) {
-        void (async () => {
-          await killHarnessSession(slug, e.harnessId);
-          await Promise.all([
-            refreshTmuxSessions(),
-            refreshHarnessSessions(slug),
-          ]);
-          logWarn(`killed ${getHarness(e.harnessId).label} session on ${slug}`);
-        })();
-        setModal(null);
+        setModal({
+          kind: "killSessionConfirm",
+          slug,
+          sessionKind: e.harnessId,
+          managedName: null,
+        });
       } else {
         toast(
           `${getHarness(e.harnessId).label} session is dead; remove via ${e.harnessId} CLI`,
@@ -233,6 +239,13 @@ export function handleHarnessSelectKey(
   // F12 confirms too — the picker opens from Shift+F12, so the bare
   // spawn key doubles as "yes, this one".
   if (k.name === "f12" && !k.shift) {
+    commit(HARNESSES[idx]!.id);
+    return true;
+  }
+  // Shift+F12-again also confirms — the trigger-key re-press
+  // convention (docs/architecture.md#modal-ux-rules), matched against
+  // the same detection normal-keys.ts uses to open this picker.
+  if (isBareShiftedKey(k, "f12")) {
     commit(HARNESSES[idx]!.id);
     return true;
   }

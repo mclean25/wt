@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { classifyProcess } from "./sample.ts";
+import { classifyProcess, isOrphanedWtInstance } from "./sample.ts";
 
 /**
  * `classifyProcess` is the only pure, high-consequence piece of the
@@ -57,5 +57,39 @@ describe("classifyProcess", () => {
     // "eslint" appears later; `vite build` must not read as a dev server.
     expect(classifyProcess("npm exec vitest run eslint-rules")).toBe("test");
     expect(classifyProcess("npx vite build --outDir dist")).toBe("build");
+  });
+});
+
+describe("isOrphanedWtInstance", () => {
+  const SELF = 999_999;
+
+  test("launchd-parented wt processes match in both launch forms", () => {
+    expect(
+      isOrphanedWtInstance({ pid: 1882, ppid: 1, command: "bun src/main.ts" }, SELF),
+    ).toBe(true);
+    expect(
+      isOrphanedWtInstance(
+        { pid: 8562, ppid: 1, command: "bun /Users/michael/.wt/bin/../src/main.ts" },
+        SELF,
+      ),
+    ).toBe(true);
+  });
+
+  test("live-parented instances and self are never orphans", () => {
+    expect(
+      isOrphanedWtInstance({ pid: 8562, ppid: 61353, command: "bun src/main.ts" }, SELF),
+    ).toBe(false);
+    expect(
+      isOrphanedWtInstance({ pid: SELF, ppid: 1, command: "bun src/main.ts" }, SELF),
+    ).toBe(false);
+  });
+
+  test("unrelated launchd children don't match", () => {
+    expect(
+      isOrphanedWtInstance({ pid: 42, ppid: 1, command: "bun src/index.ts" }, SELF),
+    ).toBe(false);
+    expect(
+      isOrphanedWtInstance({ pid: 43, ppid: 1, command: "/usr/sbin/distnoted" }, SELF),
+    ).toBe(false);
   });
 });

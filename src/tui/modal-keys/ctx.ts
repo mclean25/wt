@@ -28,6 +28,11 @@ export type SimpleModalContext = {
     item: { label: string; state: WorkState | null },
     slug: string,
   ) => void;
+  /** `m` in the status picker: pick highlight + collect a note. */
+  beginStatusNote: (
+    item: { label: string; state: WorkState | null },
+    slug: string,
+  ) => void;
   doYank: (slug: string, label: string, value: string | null) => void;
   doClean: () => void;
   doRemove: (slug: string, opts?: { force?: boolean }) => Promise<void>;

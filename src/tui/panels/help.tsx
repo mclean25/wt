@@ -75,6 +75,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "k / ↑", label: "up" },
       { key: "g", label: "top" },
       { key: "G", label: "bottom" },
+      { key: "space", label: "jump to next row needing attention (needs-human / needs-testing / ready), wraps" },
       { key: "TAB", label: "fold / unfold the section under the cursor (Inbox too)" },
       { key: "ctrl+j / ctrl+k", label: "scroll details pane" },
     ],
@@ -90,7 +91,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "i", label: "open issue (gh issue when attached, else tracker)" },
       { key: "I", label: "open primary tracker issue" },
       { key: "s", label: "open deployed app / dev server" },
-      { key: "y", label: "yank menu (b/s/S/d/p/n/i/I/r)" },
+      { key: "y", label: "yank picker (direct letters b/s/S/d/p/n/i/I/r · j/k + y/⏎ + 1-9 too)" },
       { key: "t", label: "regenerate AI summary" },
       { key: "a", label: "archive / restore" },
       { key: "d", label: "remove worktree" },
@@ -114,10 +115,12 @@ const KEY_BLOCKS: Block[] = [
       { key: "!", label: "run action (picker) · kill if one's running" },
       { key: "! <key>", label: "run action by its quick-pick letter" },
       { key: "! c", label: "open action picker, jump to custom prompt" },
+      { key: "! u", label: "agent updates the work status (re-assesses, runs `wt status`)" },
+      { key: "! g", label: "agent continues the work per current status (build / test / address review)" },
       { key: ";", label: "sessions picker (all harnesses for current row)" },
       { key: "; c / x / o", label: "jump to + new claude / codex / opencode" },
       { key: "; d", label: "close highlighted session gracefully (ctrl+d ×2)" },
-      { key: "; x", label: "kill highlighted session" },
+      { key: "; x", label: "kill highlighted session (confirm)" },
       { key: "⇧TAB", label: "cycle primary harness (top-right)" },
       { key: "⇧F12", label: "harness picker (one-off spawn)" },
       { key: "F10", label: "enter shell · F10 again to detach" },
@@ -137,7 +140,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "l n", label: "new section (chord)" },
       { key: "L", label: "rename current section" },
       { key: "b", label: "set fork base (picker · b b confirms) · record only, never rebases" },
-      { key: "u", label: "set work status (picker · t/w/r/n/h/y quick-set, x clears) — same record as `wt status`" },
+      { key: "u", label: "set work status (picker · t/w/r/n/h/y quick-set, x clears, m adds a note) — same record as `wt status`" },
       { key: "R", label: "rebase/restack row — whole stack, or standalone onto base/main (/restack on conflict)" },
       { key: "J / K", label: "move row · stack/folded section: move whole group (status sort: within same status)" },
     ],
@@ -145,7 +148,7 @@ const KEY_BLOCKS: Block[] = [
   {
     kind: "keys",
     title: "automations",
-    note: "Config-driven [[automations]] fire actions off PR/stack state. Runs appear as normal action output (killable with !).",
+    note: "Config-driven [[automations]] fire actions off PR/stack state. Runs appear as normal action output (killable with !). While paused the title bar shows an inverse `auto ⏸` chip; `auto N queued` (dim) counts fires waiting on the settle window.",
     items: [
       { key: "A", label: "pause / resume all automations (persisted)" },
       { key: "ctrl+a", label: "pause / resume automations for current worktree — whole stack if it's a stack member or header (persisted)" },
@@ -154,6 +157,7 @@ const KEY_BLOCKS: Block[] = [
   {
     kind: "keys",
     title: "global",
+    note: "the footer's [.] [m] [,] [/] buttons are the four special-session keys below — the letter is colored by that session's live state (dim when none).",
     items: [
       { key: "n", label: "new worktree" },
       { key: "N", label: "new worktree · base = selected" },
@@ -230,7 +234,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "key key", label: "confirm highlighted (trigger re-press)" },
       { key: "⏎", label: "confirm highlighted" },
       { key: "esc / q", label: "cancel" },
-      { key: "1-9", label: "quick pick by row digit" },
+      { key: "1-9", label: "quick pick by row digit (action picker uses letters, reviewer picker uses space)" },
     ],
   },
 ];
@@ -267,12 +271,22 @@ const WORK_STATUS_ORDER: readonly WorkState[] = [
   "working",
   "todo",
 ];
-const WORK_STATUS_GLYPHS: GlyphItem[] = WORK_STATUS_ORDER.map((state) => ({
-  glyph: workStateGlyph(state),
-  color: workStateColor(state),
-  label: WORK_STATUS_LABELS[state],
-  search: `${state.replace("-", " ")} status`,
-}));
+const WORK_STATUS_GLYPHS: GlyphItem[] = [
+  ...WORK_STATUS_ORDER.map((state) => ({
+    glyph: workStateGlyph(state),
+    color: workStateColor(state),
+    label: WORK_STATUS_LABELS[state],
+    search: `${state.replace("-", " ")} status`,
+  })),
+  // Not a state: the stale rendering of any asserted state (see
+  // `isWorkStatusStale`). Shown in ready's color as the exemplar.
+  {
+    glyph: NF.dotOutline,
+    color: workStateColor("ready"),
+    label: "hollow + state color = stale (commits landed after the assertion)",
+    search: "stale status hollow commits since",
+  },
+];
 
 const BADGES: GlyphItem[] = [
   { glyph: NF.pencil, color: theme.warn, label: "uncommitted changes", search: "dirty uncommitted" },

@@ -36,6 +36,17 @@ const NARROW_INSET: Required<Inset> = {
   left: "0%",
 };
 
+/**
+ * Rendered modal width (border included) never grows past this many
+ * cells. Percent insets alone keep stretching with the terminal — at
+ * 200 cols the default 20% side insets leave ~40-col gutters of bare
+ * background either side, which reads as disconnected fragments
+ * rather than a centered dialog. Only kicks in once the percent
+ * insets would exceed it (see `capWidth`); narrow terminals can never
+ * reach it, so `NARROW_INSET` above is untouched by this.
+ */
+const MAX_CONTENT_WIDTH = 100;
+
 type Props = {
   /** Title format: `name [· subtitle]`. Never include keystroke hints. */
   title: string;
@@ -65,11 +76,14 @@ type Props = {
 /**
  * Modal conventions every caller should follow:
  *
- *   1. **Toggle dismiss.** The key that opens the modal also closes it
- *      (e.g. `?` opens & closes help, `y` opens & closes the yank chord,
- *      `v` opens & closes the reviewer picker). Always accept it
- *      alongside the universal `esc` / `q` / `ctrl+c` dismiss keys, so
- *      muscle-memory works in both directions.
+ *   1. **Trigger re-press.** For a plain overlay (no selection to make),
+ *      the key that opened it also closes it (`?` opens & closes help).
+ *      For a list/multi-select picker, re-pressing the trigger instead
+ *      CONFIRMS the highlight — it's the same shape as `Enter`, not a
+ *      dismiss (`v` opens the reviewer picker, `v v` submits the
+ *      selected set; same for `l l`, `; ;`, `b b`, `u u`). Either way,
+ *      always accept the universal `esc` / `q` / `ctrl+c` dismiss keys
+ *      too, so muscle-memory works in both directions.
  *   2. **Universal dismiss.** Always accept `esc`, `q`, and `ctrl+c`.
  *   3. **Hints.** List dismiss keys in the `hints` prop so the user
  *      sees them along the bottom edge.
@@ -85,6 +99,7 @@ export function Modal({
   const { width, height } = useTerminalDimensions();
   const i =
     width < NARROW_WIDTH ? NARROW_INSET : { ...DEFAULT_INSET, ...inset };
+  const { left, right } = capWidth(i.left, i.right, width);
   // Height is content-driven by default: the box grows with its
   // children and the vertical insets only bound the MAXIMUM. A seven-
   // row picker renders as a seven-row modal instead of a fixed
@@ -104,8 +119,8 @@ export function Modal({
     <box
       position="absolute"
       top={i.top}
-      left={i.left}
-      right={i.right}
+      left={left}
+      right={right}
       {...(fill ? { bottom: i.bottom } : { maxHeight })}
       zIndex={10}
       backgroundColor={theme.bg}
@@ -149,4 +164,26 @@ export function Modal({
 function pct(p: Percent): number {
   const n = parseFloat(p);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Resolves the outer box's left/right insets, capping the rendered
+ * modal (border included) at `MAX_CONTENT_WIDTH`. The percent insets
+ * pass through unchanged until the terminal is wide enough that they'd
+ * produce a wider modal than the cap — at that point we switch to
+ * absolute-cell insets that center a fixed-width modal instead of
+ * continuing to stretch it. `+2` accounts for the outer box's own
+ * 1-cell gutter padding on each side (see the JSX below) between the
+ * inset and the visible double border.
+ */
+function capWidth(
+  left: Percent,
+  right: Percent,
+  termWidth: number,
+): { left: Percent | number; right: Percent | number } {
+  const outerWidth = termWidth - (termWidth * pct(left)) / 100 - (termWidth * pct(right)) / 100;
+  const contentWidth = outerWidth - 2;
+  if (contentWidth <= MAX_CONTENT_WIDTH) return { left, right };
+  const gutter = Math.floor((termWidth - (MAX_CONTENT_WIDTH + 2)) / 2);
+  return { left: gutter, right: gutter };
 }

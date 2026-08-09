@@ -33,6 +33,7 @@ export function SectionPickerModal({ title, items, selectedIndex, newName }: Pro
         hints={[
           ["⏎", "create"],
           ["esc", "back"],
+          ["^C", "cancel"],
         ]}
       >
         <box flexDirection="row" paddingLeft={1}>
