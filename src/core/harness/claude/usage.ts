@@ -16,22 +16,26 @@ export type UsagePeriod = {
   /** ISO8601 timestamp when this window resets, or null when unknown. */
   resetsAt: string | null;
   /**
-   * Model this window is scoped to (e.g. "Fable") when the API reports a
-   * per-model limit rather than an account-wide one; null when it covers
-   * the whole account. Optional because codex's reader has no equivalent.
+   * Model this window is scoped to (e.g. "Fable") when it caps one model
+   * rather than the whole account; null for account-wide windows.
+   * Optional because codex's reader has no equivalent.
    */
   label?: string | null;
 };
 
 export type ClaudeUsage = {
-  /**
-   * Either window is null when the account's plan doesn't report one —
-   * a plan without an account-wide weekly limit still has a valid 5h
-   * reading, and dropping both because one is missing is how this went
-   * blank in the first place.
-   */
+  /** Rolling 5-hour session window. */
   fiveHour: UsagePeriod | null;
+  /** Account-wide weekly window (`weekly_all` / legacy `seven_day`). */
   sevenDay: UsagePeriod | null;
+  /**
+   * Per-model weekly windows (`weekly_scoped` / legacy `seven_day_<model>`),
+   * highest utilization first. Separate from `sevenDay` because they cap
+   * different things: a plan can report a Fable weekly at 20% while the
+   * account-wide weekly sits at 3%, and collapsing them to one number hides
+   * whichever is about to bite.
+   */
+  sevenDayScoped: UsagePeriod[];
   /**
    * Cache-file mtime in epoch ms. Lets the consumer decide whether the
    * cache is too stale to render — the statusline considers anything
@@ -70,47 +74,74 @@ export function readClaudeUsage(): ClaudeUsage | null {
   return { ...windows, cachedAtMs: stat.mtimeMs };
 }
 
-type LimitGroup = "session" | "weekly";
+type ParsedWindows = Pick<
+  ClaudeUsage,
+  "fiveHour" | "sevenDay" | "sevenDayScoped"
+>;
 
 /**
  * Anthropic serves two response shapes, and which one an account gets
  * depends on its plan — so this flips over on a subscription change with
- * no client update, and both shapes stay in the wild at once:
+ * no client update:
  *
- *   newer  `limits: [{ group: "session" | "weekly", percent, resets_at,
- *          scope: { model: { display_name } } }]`, weekly optionally
- *          scoped per-model, `percent` an integer
- *   older  flat `five_hour` / `seven_day` / `seven_day_opus` /
- *          `seven_day_sonnet` objects, `utilization` a float
+ *   newer  `limits: [{ kind, group, percent, resets_at, scope }]`, where
+ *          kind is "session" | "weekly_all" | "weekly_scoped" and a scoped
+ *          row names its model in `scope.model.display_name`
+ *   older  flat `five_hour` / `seven_day` / `seven_day_<model>` objects
  *
- * Read `limits[]` first and fall back to the flat fields.
+ * The two mix in the wild — an account can report its account-wide weekly
+ * in flat `seven_day` while the per-model weeklies arrive as `limits[]`
+ * rows — so each of the three categories resolves independently, reading
+ * `limits[]` first and falling back to the flat field for that category
+ * alone. Resolving them together would let a populated `limits[]` hide a
+ * flat window that has no `limits[]` equivalent.
  */
-export function parseClaudeUsage(
-  parsed: unknown,
-): Pick<ClaudeUsage, "fiveHour" | "sevenDay"> | null {
+export function parseClaudeUsage(parsed: unknown): ParsedWindows | null {
   if (!parsed || typeof parsed !== "object") return null;
   const obj = parsed as Record<string, unknown>;
-  const fiveHour = pickWindow(obj, "session");
-  const sevenDay = pickWindow(obj, "weekly");
-  if (!fiveHour && !sevenDay) return null;
-  return { fiveHour, sevenDay };
+
+  const fiveHour = highest(
+    orElse(limitRows(obj, "session", false), () => flatRows(obj, SESSION_FLAT)),
+  );
+  const sevenDay = highest(
+    orElse(limitRows(obj, "weekly", false), () =>
+      flatRows(obj, WEEKLY_ALL_FLAT),
+    ),
+  );
+  const sevenDayScoped = orElse(limitRows(obj, "weekly", true), () =>
+    flatRows(obj, WEEKLY_SCOPED_FLAT),
+  ).sort((a, b) => b.utilization - a.utilization);
+
+  if (!fiveHour && !sevenDay && sevenDayScoped.length === 0) return null;
+  return { fiveHour, sevenDay, sevenDayScoped };
 }
 
-function pickWindow(
-  obj: Record<string, unknown>,
-  group: LimitGroup,
-): UsagePeriod | null {
-  const fromLimits = limitsCandidates(obj, group);
-  const list = fromLimits.length > 0 ? fromLimits : flatCandidates(obj, group);
-  if (list.length === 0) return null;
-  // A group can hold several scoped windows (one per model). The highest
-  // is the one that will actually bite, so that's the one worth showing.
-  return list.reduce((a, b) => (b.utilization > a.utilization ? b : a));
+function orElse(
+  rows: UsagePeriod[],
+  fallback: () => UsagePeriod[],
+): UsagePeriod[] {
+  return rows.length > 0 ? rows : fallback();
 }
 
-function limitsCandidates(
+/**
+ * A category should hold one window, but the API is free to send several
+ * (and does, for scoped weeklies). The highest is the one that will
+ * actually bite, so that's the one worth surfacing.
+ */
+function highest(rows: UsagePeriod[]): UsagePeriod | null {
+  if (rows.length === 0) return null;
+  return rows.reduce((a, b) => (b.utilization > a.utilization ? b : a));
+}
+
+/**
+ * Rows from `limits[]` for one group, split on whether they name a model.
+ * Keyed on `group` + `scope` rather than `kind` so a new kind string
+ * (Anthropic renames these freely) doesn't silently drop a window.
+ */
+function limitRows(
   obj: Record<string, unknown>,
-  group: LimitGroup,
+  group: "session" | "weekly",
+  scoped: boolean,
 ): UsagePeriod[] {
   if (!Array.isArray(obj.limits)) return [];
   const out: UsagePeriod[] = [];
@@ -119,10 +150,12 @@ function limitsCandidates(
     const e = entry as Record<string, unknown>;
     if (e.group !== group) continue;
     if (typeof e.percent !== "number") continue;
+    const label = scopeLabel(e.scope);
+    if (scoped !== (label !== null)) continue;
     out.push({
       utilization: e.percent,
       resetsAt: typeof e.resets_at === "string" ? e.resets_at : null,
-      label: scopeLabel(e.scope),
+      label,
     });
   }
   return out;
@@ -134,38 +167,53 @@ function scopeLabel(scope: unknown): string | null {
   const model = (scope as Record<string, unknown>).model;
   if (!model || typeof model !== "object") return null;
   const name = (model as Record<string, unknown>).display_name;
-  return typeof name === "string" && name.length > 0 ? name : null;
+  if (typeof name !== "string") return null;
+  const trimmed = name.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
-/** Flat-shape keys per group, with the scope label they stand for. */
-const FLAT_KEYS: Record<LimitGroup, ReadonlyArray<[string, string | null]>> = {
-  session: [["five_hour", null]],
-  weekly: [
-    ["seven_day", null],
-    ["seven_day_opus", "Opus"],
-    ["seven_day_sonnet", "Sonnet"],
-  ],
-};
+/** Flat-shape keys per category, with the scope label each stands for. */
+const SESSION_FLAT: ReadonlyArray<[string, string | null]> = [
+  ["five_hour", null],
+];
+const WEEKLY_ALL_FLAT: ReadonlyArray<[string, string | null]> = [
+  ["seven_day", null],
+];
+const WEEKLY_SCOPED_FLAT: ReadonlyArray<[string, string | null]> = [
+  ["seven_day_opus", "Opus"],
+  ["seven_day_sonnet", "Sonnet"],
+  ["seven_day_fable", "Fable"],
+];
 
-function flatCandidates(
+function flatRows(
   obj: Record<string, unknown>,
-  group: LimitGroup,
+  keys: ReadonlyArray<[string, string | null]>,
 ): UsagePeriod[] {
   const out: UsagePeriod[] = [];
-  for (const [key, label] of FLAT_KEYS[group]) {
-    const p = period(obj[key]);
-    if (p) out.push({ ...p, label });
+  for (const [key, label] of keys) {
+    const raw = obj[key];
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.utilization !== "number") continue;
+    out.push({
+      utilization: r.utilization,
+      resetsAt: typeof r.resets_at === "string" ? r.resets_at : null,
+      label,
+    });
   }
   return out;
 }
 
-function period(raw: unknown): UsagePeriod | null {
-  if (!raw || typeof raw !== "object") return null;
-  const r = raw as Record<string, unknown>;
-  if (typeof r.utilization !== "number") return null;
-  return {
-    utilization: r.utilization,
-    resetsAt: typeof r.resets_at === "string" ? r.resets_at : null,
-    label: null,
-  };
+/**
+ * Two-character cluster key for a window: "5h", "7d", or "7" plus the
+ * initial of the scoped model ("Fable" → "7f"). `display_name` sometimes
+ * carries a family prefix ("Claude 3.5 Fable"), so the initial comes from
+ * the last word.
+ */
+export function windowKey(period: UsagePeriod, weekly: boolean): string {
+  if (!weekly) return "5h";
+  const label = period.label?.trim();
+  if (!label) return "7d";
+  const word = label.split(/\s+/).at(-1) ?? label;
+  return `7${word.slice(0, 1).toLowerCase()}`;
 }

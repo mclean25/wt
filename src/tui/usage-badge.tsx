@@ -14,9 +14,10 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import type {
-  ClaudeUsage,
-  UsagePeriod,
+import {
+  windowKey,
+  type ClaudeUsage,
+  type UsagePeriod,
 } from "../core/harness/claude/usage.ts";
 import type { CodexUsage } from "../core/harness/codex/usage.ts";
 import { getHarness, type HarnessId } from "../core/harness/index.ts";
@@ -83,22 +84,17 @@ export function UsageBadge({ primary }: { primary: HarnessId }) {
     );
   }
 
-  const formatted = formatPctUsage(
+  const clusters = formatPctUsage(
     primary === "claude" ? claude.data : codex.data,
     nowMs,
   );
-  if (!formatted) return null;
-  // Either window can be absent — a plan may report no account-wide weekly
-  // limit — so the " · " separator rides with the second cluster instead of
-  // being emitted unconditionally, or a lone 5h reading trails a dangling dot.
-  const clusters = [
-    formatted.fiveHour ? { key: "5h", win: formatted.fiveHour } : null,
-    formatted.sevenDay ? { key: "7d", win: formatted.sevenDay } : null,
-  ].filter((c) => c !== null);
   if (clusters.length === 0) return null;
 
   const nodes: React.ReactNode[] = [];
   for (const [i, c] of clusters.entries()) {
+    // Any cluster can be absent, so the " · " separator rides with the
+    // cluster that follows one rather than being emitted unconditionally —
+    // otherwise a lone 5h reading trails a dangling dot.
     if (i > 0) {
       nodes.push(
         <span key={`${c.key}-sep`} fg={theme.fgDim}>
@@ -107,21 +103,14 @@ export function UsageBadge({ primary }: { primary: HarnessId }) {
       );
     }
     nodes.push(
-      <span key={`${c.key}-pct`} fg={pctColor(c.win.pct)}>
-        {`${c.key} ${c.win.pct}%`}
+      <span key={`${c.key}-pct`} fg={pctColor(c.pct)}>
+        {`${c.key} ${c.pct}%`}
       </span>,
     );
-    if (c.win.label) {
-      nodes.push(
-        <span key={`${c.key}-scope`} fg={theme.fgDim}>
-          {` ${c.win.label}`}
-        </span>,
-      );
-    }
-    if (c.win.remaining) {
+    if (c.remaining) {
       nodes.push(
         <span key={`${c.key}-rem`} fg={theme.fgDim}>
-          {` (${c.win.remaining})`}
+          {` (${c.remaining})`}
         </span>,
       );
     }
@@ -155,16 +144,8 @@ function pctColor(pct: number): string {
   return theme.fg;
 }
 
-type PctWindow = {
-  pct: number;
-  remaining: string | null;
-  /** Model this window is scoped to, when it isn't account-wide. */
-  label: string | null;
-};
-type FormattedUsage = {
-  fiveHour: PctWindow | null;
-  sevenDay: PctWindow | null;
-};
+/** One rendered cluster: `5h 52% (5m)`. */
+type PctCluster = { key: string; pct: number; remaining: string | null };
 
 /**
  * Format one window. Past its `resetsAt` the cached percentage describes
@@ -174,31 +155,62 @@ type FormattedUsage = {
  * reset window briefly hits before the source rewrites its `resetsAt`.
  * The real value (and countdown) returns on the next refresh.
  */
-function pctWindow(p: UsagePeriod | null, nowMs: number): PctWindow | null {
+function pctCluster(
+  p: UsagePeriod | null | undefined,
+  key: string,
+  nowMs: number,
+): PctCluster | null {
   if (!p) return null;
-  const label = p.label ?? null;
   if (p.resetsAt) {
     const t = Date.parse(p.resetsAt);
-    if (!Number.isNaN(t) && nowMs >= t) {
-      return { pct: 0, remaining: null, label };
-    }
+    if (!Number.isNaN(t) && nowMs >= t) return { key, pct: 0, remaining: null };
   }
   return {
+    key,
     pct: Math.round(p.utilization),
     remaining: formatRemaining(p.resetsAt, nowMs),
-    label,
   };
 }
 
-function formatPctUsage(
+/**
+ * Build the display order: session, then each per-model weekly, then the
+ * account-wide weekly — `5h 52% (5m) · 7f 20% · 7d 20% (1d13h)`. Any of
+ * them can be missing (a plan need not report an account-wide weekly, and
+ * an account with no scoped limits has none), so this returns only what
+ * exists.
+ */
+export function formatPctUsage(
   usage: ClaudeUsage | CodexUsage | null | undefined,
   nowMs: number,
-): FormattedUsage | null {
-  if (!usage) return null;
-  const fiveHour = pctWindow(usage.fiveHour, nowMs);
-  const sevenDay = pctWindow(usage.sevenDay, nowMs);
-  if (!fiveHour && !sevenDay) return null;
-  return { fiveHour, sevenDay };
+): PctCluster[] {
+  if (!usage) return [];
+  const scoped = "sevenDayScoped" in usage ? usage.sevenDayScoped : [];
+  const clusters = [
+    pctCluster(usage.fiveHour, "5h", nowMs),
+    ...scoped.map((p) => pctCluster(p, windowKey(p, true), nowMs)),
+    pctCluster(usage.sevenDay, "7d", nowMs),
+  ].filter((c) => c !== null);
+  return dedupeCountdowns(clusters);
+}
+
+/**
+ * The weekly windows share a reset instant, so printing the countdown on
+ * each just repeats it. Blank a cluster's countdown when a *later* one
+ * shows the same value, leaving it on the last of the run:
+ * `7f 20% · 7d 20% (1d13h)`.
+ *
+ * Compared on the formatted string, not `resetsAt`: the API stamps each
+ * window with its own microseconds ("...:00.973683" vs "...:00.973897"),
+ * so two windows that reset together are never byte-identical.
+ */
+function dedupeCountdowns(clusters: PctCluster[]): PctCluster[] {
+  return clusters.map((c, i) => {
+    if (!c.remaining) return c;
+    const repeatedLater = clusters
+      .slice(i + 1)
+      .some((later) => later.remaining === c.remaining);
+    return repeatedLater ? { ...c, remaining: null } : c;
+  });
 }
 
 /**
