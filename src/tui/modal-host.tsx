@@ -119,6 +119,7 @@ export function PostFooterModals({
   cleanCandidates,
   primaryHarness,
   buildActionPickerItems,
+  buildManagerPickerItems,
   perfSnapshot,
   perfError,
 }: {
@@ -128,6 +129,7 @@ export function PostFooterModals({
   cleanCandidates: WorktreeRow[];
   primaryHarness: HarnessId;
   buildActionPickerItems: (slug: string) => PickerItem[];
+  buildManagerPickerItems: (rowSlug: string | null) => PickerItem[];
   /** Undefined until the first sample lands (the overlay shows "sampling…"). */
   perfSnapshot: PerfSnapshot | undefined;
   /** Sampler failure, so a broken `ps` doesn't render as an idle machine. */
@@ -198,22 +200,33 @@ export function PostFooterModals({
       {modal?.kind === "actionPicker" && modal.state.mode === "list" ? (
         <ActionPickerModal
           slug={modal.state.slug}
-          items={buildActionPickerItems(modal.state.slug)}
+          surface={modal.state.surface}
+          items={
+            modal.state.surface === "manager"
+              ? buildManagerPickerItems(modal.state.rowSlug)
+              : buildActionPickerItems(modal.state.slug)
+          }
           selectedIndex={modal.state.index}
         />
       ) : null}
       {modal?.kind === "actionPicker" && modal.state.mode === "edit" ? (
         <ActionEditModal
           slug={modal.state.slug}
+          surface={modal.state.surface}
           def={modal.state.def}
           extras={modal.state.extras}
           vars={(() => {
-            const row = rows.find((r) => r.wt.slug === modal.state.slug);
+            // Manager surface: fleet builtins and custom text render
+            // verbatim (no templates); the row-scoped entries preview
+            // against the row captured at open time — the same row
+            // launchAction will render against.
+            const st = modal.state;
+            const subject = st.surface === "manager" ? st.rowSlug : st.slug;
+            const row = subject
+              ? rows.find((r) => r.wt.slug === subject)
+              : undefined;
             return row
-              ? buildActionVars(
-                  row,
-                  actionSkillPrefix(modal.state.def, primaryHarness),
-                )
+              ? buildActionVars(row, actionSkillPrefix(st.def, primaryHarness))
               : {};
           })()}
         />

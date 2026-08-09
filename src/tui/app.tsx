@@ -35,6 +35,7 @@ import { useLogTails } from "./hooks/useLogTails.ts";
 import { usePaste } from "./hooks/usePaste.ts";
 import { useTerminalFocus } from "./hooks/useTerminalFocus.ts";
 import { useWorkStatusEvents } from "./hooks/useWorkStatusEvents.ts";
+import { useManagerReports } from "./hooks/useManagerSignals.ts";
 import { useWorktreeRows } from "./hooks/useWorktreeRows.ts";
 import { useStackSections } from "./hooks/useStackSections.ts";
 import { useVisualItems } from "./hooks/useVisualItems.ts";
@@ -216,6 +217,8 @@ export function App({ onExit }: Props) {
   // Narrate work-status transitions (from any process) into the
   // attention feed.
   useWorkStatusEvents(wtStateForStacks.data);
+  // `wt manager report` spool → attention feed (cross-process watcher).
+  useManagerReports();
 
   const cleanCandidates = useMemo(
     () => rows.filter((r) => isCleanCandidate(r)),
@@ -357,7 +360,7 @@ export function App({ onExit }: Props) {
   // `hooks/useActionDispatch.ts`. Subscribes once to the action
   // registry (affects-tag invalidations, arg-history refinement) and
   // returns `launchAction`.
-  const { launchAction } = useActionDispatch({
+  const { launchAction, launchManagerCommand } = useActionDispatch({
     rows,
     primaryHarness,
     toast,
@@ -555,9 +558,15 @@ export function App({ onExit }: Props) {
     mutate,
   });
 
-  // Action-picker helpers (`!`) — extracted to `flows/action-picker.ts`.
-  const { buildActionPickerItems, canPickAction, openActionPicker } =
-    makeActionPickerFlows({ rows, setModal, toast });
+  // Action-picker (`!`) + manager palette (`M`) helpers — extracted to
+  // `flows/action-picker.ts`.
+  const {
+    buildActionPickerItems,
+    buildManagerPickerItems,
+    canPickAction,
+    openActionPicker,
+    openManagerPalette,
+  } = makeActionPickerFlows({ rows, setModal, toast });
 
   // Worktree-creation flows (`n`/`N`, review checkout, removed-history
   // restore) — extracted to `flows/new-worktree.ts`.
@@ -589,6 +598,7 @@ export function App({ onExit }: Props) {
       automations,
       cyclePrimaryHarness,
       doEnterSlotSession,
+      openManagerPalette: () => openManagerPalette(current?.wt.slug ?? null),
     });
 
   // Keyboard dispatch. Layer order is load-bearing: modal swallows
@@ -632,8 +642,10 @@ export function App({ onExit }: Props) {
           setFocus,
           rows,
           buildActionPickerItems,
+          buildManagerPickerItems,
           canPickAction,
           launchAction,
+          launchManagerCommand,
           doSpawnNamedClaudeSession,
           doEnterHarnessSession,
           pickerRows,
@@ -867,6 +879,7 @@ export function App({ onExit }: Props) {
         cleanCandidates={cleanCandidates}
         primaryHarness={primaryHarness}
         buildActionPickerItems={buildActionPickerItems}
+        buildManagerPickerItems={buildManagerPickerItems}
         perfSnapshot={perf.data}
         perfError={perf.error}
       />

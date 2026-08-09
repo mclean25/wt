@@ -8,7 +8,8 @@ One identity subtlety: the manager shares the main clone's directory with the `.
 
 ## Entry points
 
-- **`m`** in the TUI attaches it (F12 detaches back), creating it on first use with the Shift+TAB-selected primary harness. Auto-merge moved to `M` to free the key.
+- **`m`** in the TUI attaches it (F12 detaches back), creating it on first use with the Shift+TAB-selected primary harness.
+- **`M`** opens the [command palette](#the-command-palette-m) — push a canned play (or free text) into the manager without attaching. (Auto-merge, which once lived on `M`, is now the `! m` picker row.)
 - **`wt manager`** attaches from a shell; **`wt manager send <text…>`** injects a message (cold-starting the session detached if needed) — the escalation path for worktree agents (`wt manager send "who owns the shared migration ordering?"`) and scripts.
 - **`[[actions]]` with `target = "manager"`** inject their rendered prompt into the manager instead of the worktree's session, prefixed `[re: <slug>]` so the subject is explicit. Combined with [automations](automations.md), that's how wt briefs the manager hands-free:
 
@@ -27,6 +28,34 @@ run = "brief-manager-needs-human"
 
 Manager briefings (like `builtin:notify`) bypass the automation quiescence gate — they don't touch the worktree, and the interesting fires happen exactly while the worktree's session is busy.
 
+## The command palette (`M`)
+
+`M` opens a picker of manager plays, built from the same two-screen machinery as the `!` action picker (letter quick-picks, an extras screen before launch, `M` re-press / Enter confirms). Builtins, in order:
+
+| key | command | what it asks for |
+|---|---|---|
+| `d` | Digest: what needs me | ≤5 bullets — what needs the human now, what's mergeable in what order, what's stalled |
+| `t` | Triage needs-human rows | unblock what it can itself, re-assert statuses, distill the remainder to one ask per row |
+| `o` | Plan merge order | concrete order + conflict risks + forced restacks |
+| `n` | Nudge stalled workers | pointed `wt claude send` to quiet working/review rows |
+| `a` | Audit work statuses | cross-check every assertion against PR/CI/session reality, fix drifted records |
+| `s` | Start next todo | pick the highest-value `todo` row(s) and kick their agents off |
+| `r` | Ask about selected row | free text about the list-pane selection, delivered `[re: <slug>]` |
+| `m` | Compact manager context | raw `/compact`, sent directly (no extras screen) |
+| `c` | Custom message… | free text to the manager, fleet-scoped |
+
+Fleet-scoped commands (`d`/`t`/`o`/`n`/`a`/`s` and custom text) inject with no row context and no `[re:]` prefix. The row-scoped entries (`r`, plus any of your `[[actions]]` with `target = "manager"`, which also appear in the palette) launch against the row selected when the palette opened — grayed out when there isn't one.
+
+**Reporting back.** Every fleet builtin's prompt ends with the same contract: finish by running
+
+```
+wt manager report [--ok|--warn|--err] "<one or two lines>"
+```
+
+The report lands on the TUI's **attention feed** (source `manager`, with a toast) via a watched spool file — so the human sees the outcome of a palette command without attaching, and a missed toast is still in the pane record. Reports written while no TUI is running are not replayed at the next boot (stale triage isn't news); the daily log keeps the durable copy of everything that surfaced.
+
+**Context %.** The footer shows the manager conversation's context occupancy immediately left of `[m]` (from the session tail's per-turn usage; dim, warn ≥70%, red ≥85%). Claude auto-compacts in the low 90s, so red means "run `M m` now, on your terms". The number appears once a live manager claude session has produced a turn.
+
 ## The manager's toolbox
 
 Everything is ordinary CLI surface, so any harness can drive it:
@@ -34,6 +63,7 @@ Everything is ordinary CLI surface, so any harness can drive it:
 - `wt status --all --json` — the fleet overview (state, risk, note, staleness per worktree).
 - `wt status <slug> <state> …` — assert on a worktree's behalf after acting on it.
 - `wt claude send <slug> "<text>"` — nudge a worktree's live session.
+- `wt manager report [--ok|--warn|--err] "<text>"` — surface a terse result on the TUI's attention feed (the palette's report-back channel).
 - `gh` — PR state, merges (only when the human asked), CI.
 - Cross-session messaging, when the harness supports it — worktree sessions and the manager are plain sessions on one machine.
 

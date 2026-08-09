@@ -6,32 +6,13 @@ import { theme } from "../theme.ts";
 type Props = {
   slug: string;
   /** Which session kind is being killed — drives the body copy. */
-  sessionKind: Exclude<SessionKind, "action" | "dev">;
+  sessionKind: Extract<SessionKind, "shell" | "diff">;
 };
 
+// Harness sessions (claude/codex/opencode) kill DIRECTLY from the
+// sessions picker's `x` — no confirm — so only the Shift+F10/F11
+// shell/diff chords route through this modal.
 const COPY: Record<Props["sessionKind"], { title: string; body: string }> = {
-  claude: {
-    title: "Kill the interactive Claude session on",
-    body:
-      "The tmux session and the running Claude process are " +
-      "terminated. Conversation history is preserved on disk, " +
-      "next F12 resumes the same conversation. Use /clear inside " +
-      "Claude if you want a fresh context.",
-  },
-  codex: {
-    title: "Kill the Codex session on",
-    body:
-      "The tmux session and the running Codex process are " +
-      "terminated. The session rollout is preserved on disk; " +
-      "resume it from the picker via `codex resume`.",
-  },
-  opencode: {
-    title: "Kill the OpenCode session on",
-    body:
-      "The tmux session and the running OpenCode process are " +
-      "terminated. The session is preserved in opencode.db; " +
-      "resume it from the picker.",
-  },
   diff: {
     title: "Kill the diff session on",
     body:
@@ -50,15 +31,12 @@ const COPY: Record<Props["sessionKind"], { title: string; body: string }> = {
 
 export function KillSessionConfirmModal({ slug, sessionKind }: Props) {
   const copy = COPY[sessionKind];
-  // The harness variants (claude/codex/opencode) open via `x` on a
-  // live session row and toggle-dismiss on it; shell/diff open via
-  // Shift+F10/F11 chords with no single re-pressable key, so they
-  // fall back to the universal cancels only.
-  const isHarness =
-    sessionKind === "claude" || sessionKind === "codex" || sessionKind === "opencode";
-  const hints: KeyHintPair[] = [["y", "kill"]];
-  if (isHarness) hints.push(["x", "cancel"]);
-  hints.push(["n / esc / q", "cancel"]);
+  // Shell/diff open via Shift+F10/F11 chords with no single
+  // re-pressable key, so they use the universal cancels only.
+  const hints: KeyHintPair[] = [
+    ["y", "kill"],
+    ["n / esc / q", "cancel"],
+  ];
   return (
     <Modal
       title="kill session"

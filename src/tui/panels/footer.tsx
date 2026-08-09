@@ -1,7 +1,16 @@
+import { useSyncExternalStore } from "react";
+
 import type { DerivedState } from "../../core/harness/status.ts";
 import type { HarnessId } from "../../core/harness/index.ts";
+import {
+  contextWindowTokens,
+  sessionTailRegistry,
+  tailKey,
+} from "../../core/harness/claude/tail.ts";
+import { MANAGER_CLAUDE_NAME, MANAGER_SLUG } from "../../core/manager.ts";
 import { stateColor } from "../claude-state.ts";
 import { useActiveSessionsBySlug } from "../hooks/useHarnessSessions.ts";
+import { useManagerAskingSignal } from "../hooks/useManagerSignals.ts";
 import { usePrimaryHarness } from "../hooks/usePrimaryHarness.ts";
 import {
   DOTFILES_SLOT,
@@ -59,13 +68,45 @@ function SlotButton({
   );
 }
 
-/** Buttons in checking order: main, manager, then wt-source, dotfiles. */
+/**
+ * Buttons in checking order. `[m]` leads the group so the manager's
+ * context-% readout can sit immediately to its left without visually
+ * belonging to another slot's button.
+ */
 const BUTTON_SLOTS: readonly SessionSlot[] = [
-  MAIN_CLONE_SLOT,
   MANAGER_SLOT,
+  MAIN_CLONE_SLOT,
   WT_SOURCE_SLOT,
   DOTFILES_SLOT,
 ];
+
+/**
+ * Manager conversation context occupancy in percent, from the session
+ * tail's `lastUsage` (see `SessionContextUsage`). Null while no live
+ * manager claude session is tailed or before its first assistant turn.
+ * Push-based: the tail registry notifies as each turn lands, so a
+ * `/compact` (palette `m` command) snaps the number on the next turn.
+ */
+function useManagerContextPct(): number | null {
+  const runs = useSyncExternalStore(
+    sessionTailRegistry.subscribe,
+    sessionTailRegistry.getSnapshot,
+  );
+  const usage = runs.get(tailKey(MANAGER_SLUG, MANAGER_CLAUDE_NAME))?.lastUsage;
+  if (!usage) return null;
+  return Math.min(
+    100,
+    Math.round((100 * usage.tokens) / contextWindowTokens(usage.model)),
+  );
+}
+
+/** warn at 70, err at 85 — Claude auto-compacts in the low 90s, so red
+ *  means "compact now or it compacts itself mid-thought". */
+function contextPctColor(pct: number): string {
+  if (pct >= 85) return theme.err;
+  if (pct >= 70) return theme.warn;
+  return theme.fgDim;
+}
 
 export function Footer({ mode, hint }: Props) {
   // Every special session gets a permanent `[key]` button, grouped at
@@ -75,6 +116,10 @@ export function Footer({ mode, hint }: Props) {
   // session here", not "no session at all".
   const primary = usePrimaryHarness();
   const slotSessions = useActiveSessionsBySlug(SESSION_SLOTS, primary, primary);
+  const managerPct = useManagerContextPct();
+  // One attention line when the manager flips to asking — its only
+  // other surface is the tiny [m] color below.
+  useManagerAskingSignal(slotSessions.get(MANAGER_SLOT.slug)?.state ?? null);
   // The left region belongs to transient content: the active toast
   // when there is one, else a quiet help hint. Input mode replaces it.
   const activeToast = useToast();
@@ -120,6 +165,13 @@ export function Footer({ mode, hint }: Props) {
         </box>
       ) : null}
       <box flexShrink={0} marginLeft={2} flexDirection="row">
+        {managerPct !== null ? (
+          <box flexShrink={0} marginRight={1}>
+            <text wrapMode="none" fg={contextPctColor(managerPct)}>
+              {`${managerPct}%`}
+            </text>
+          </box>
+        ) : null}
         {BUTTON_SLOTS.map((slot, i) => (
           <box
             key={slot.slug}

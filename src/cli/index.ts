@@ -39,7 +39,7 @@ commands:
   remote      enter or run wt on the configured SSH remote
   base        show / set / clear a worktree's recorded fork base
   status      show / assert a worktree's work status (agent-facing)
-  manager     attach the fleet-coordinator session / send it a message
+  manager     attach the fleet-coordinator session / send it a message / report a result
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
   claude      drive a worktree's Claude Code session (send / ls / kill)
   dev         start / stop / inspect a worktree's [dev_server]

@@ -1,6 +1,5 @@
 import type { ActionDef } from "../core/actions.ts";
 import type { HistoryEntry } from "../core/actions.ts";
-import type { HarnessId } from "../core/harness/index.ts";
 import type { WorkState } from "../core/work-status.ts";
 import type { RemovedWorktree } from "../core/wtstate.ts";
 import type { ActionPickerState } from "./panels/action-picker.tsx";
@@ -32,7 +31,7 @@ export type Modal =
       danger?: boolean;
       /**
        * Worktree slug the confirm targets, captured at open time for the
-       * row-scoped pendingKeys (`d`/`d!`/`e`/`E`/`m+`/`m-`). The dispatch
+       * row-scoped pendingKeys (`d`/`d!`/`e`/`E`). The dispatch
        * MUST act on this, not the live-selected `current`: while the modal
        * is open a background refetch can drop the original row from the
        * list, and `current` then silently resolves to whatever row now
@@ -105,19 +104,12 @@ export type Modal =
   | { kind: "killActionConfirm"; slug: string; actionName: string }
   | {
       /**
-       * Session kill confirm — one shape for all killable kinds:
-       * shell/diff (opened by Shift+F10/F11) and harness sessions
-       * (opened by `x` on a live row in the sessions picker). One
-       * handler in confirm.ts branches on `sessionKind`; the harness
-       * kinds toggle-dismiss on `x` since they have a real single-key
-       * opener, unlike the Shift chords.
+       * Session kill confirm for the shell/diff sessions (opened by
+       * Shift+F10/F11). Harness sessions kill DIRECTLY from the
+       * sessions picker's `x` — reaching that row already took two
+       * deliberate steps, so no confirm gate there.
        */
       kind: "killSessionConfirm";
       slug: string;
-      sessionKind: "shell" | "diff" | HarnessId;
-      /**
-       * Named claude slot being killed (`null` for the primary).
-       * Always `null` for every other sessionKind.
-       */
-      managedName: string | null;
+      sessionKind: "shell" | "diff";
     };

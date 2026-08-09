@@ -15,23 +15,58 @@ export function handleActionPickerKey(
     setModal,
     rows,
     buildActionPickerItems,
+    buildManagerPickerItems,
     canPickAction,
     launchAction,
+    launchManagerCommand,
+    doAutoMerge,
     toast,
     warnColor,
   } = ctx;
   const ap = modal.state;
+  const manager = ap.surface === "manager";
+  const buildItems = () =>
+    manager ? buildManagerPickerItems(ap.rowSlug) : buildActionPickerItems(ap.slug);
   if (ap.mode === "list") {
-    const items = buildActionPickerItems(ap.slug);
+    const items = buildItems();
     const commitIndex = (i: number): void => {
       const item = items[i];
       if (!item) return;
       if (!canPickAction(item)) return;
-      if (item.kind === "action" && item.def.argPrompt) {
+      if (item.kind === "autoMerge") {
+        // Direct toggle, no confirm — `!` + `m` is already deliberate,
+        // matching the `; x` direct-kill convention.
+        setModal(null);
+        void doAutoMerge(ap.slug, item.armed ? "disable" : "enable");
+        return;
+      }
+      if (manager && item.kind === "action" && item.def.direct) {
+        // Direct-launch builtins (the palette's raw `/compact`): the
+        // prompt IS the message; an extras screen would be noise. The
+        // `manager` gate is load-bearing: this launch path is fleet-
+        // only, so a hypothetical future row-surface `direct` builtin
+        // must NOT route here (it'd silently address the manager).
+        setModal(null);
+        void launchManagerCommand(item.def, "");
+        return;
+      }
+      // Fleet defs never take the argPicker: its launch path is
+      // row-scoped (`launchAction`), which would either no-op on the
+      // manager pseudo-slug or wrongly `[re:]`-prefix a fleet prompt.
+      // No fleet builtin declares an argPrompt today; if one ever
+      // does, it falls through to the extras editor instead.
+      if (
+        item.kind === "action" &&
+        item.def.argPrompt &&
+        !(manager && item.def.fleet)
+      ) {
         const history = recentValues(item.def.id);
         setModal({
           kind: "argPicker",
-          slug: ap.slug,
+          // Manager surface: arg-prompting defs are row-scoped user
+          // actions; launch against the captured row (canPickAction
+          // already blocked them when no row was selected).
+          slug: manager ? (ap.rowSlug ?? ap.slug) : ap.slug,
           def: item.def,
           history,
           index: 0,
@@ -49,7 +84,9 @@ export function handleActionPickerKey(
         kind: "actionPicker",
         state: {
           mode: "edit",
+          surface: ap.surface,
           slug: ap.slug,
+          rowSlug: ap.rowSlug,
           def: def && def.kind === "claude" ? def : null,
           extras: "",
         },
@@ -62,13 +99,20 @@ export function handleActionPickerKey(
     if (k.sequence === "c") {
       setModal({
         kind: "actionPicker",
-        state: { mode: "edit", slug: ap.slug, def: null, extras: "" },
+        state: {
+          mode: "edit",
+          surface: ap.surface,
+          slug: ap.slug,
+          rowSlug: ap.rowSlug,
+          def: null,
+          extras: "",
+        },
       });
       return true;
     }
     if (k.sequence && /^[a-z]$/.test(k.sequence)) {
       const i = items.findIndex(
-        (it) => it.kind === "action" && it.key === k.sequence,
+        (it) => it.kind !== "custom" && it.key === k.sequence,
       );
       if (i >= 0) {
         commitIndex(i);
@@ -82,7 +126,7 @@ export function handleActionPickerKey(
         setModal({ kind: "actionPicker", state: { ...ap, index: next } }),
       onCommit: commitIndex,
       onCancel: () => setModal(null),
-      confirm: ["!"],
+      confirm: [manager ? "M" : "!"],
       // Actions are picked by their assigned letters, not positions.
       digits: false,
     });
@@ -95,18 +139,26 @@ export function handleActionPickerKey(
   if (k.name === "escape") {
     const def = ap.def;
     if (def) {
-      if (!rows.find((r) => r.wt.slug === ap.slug)) {
+      // Manager surface always has a list to return to; the row surface
+      // guards against the worktree vanishing while the editor was up.
+      if (!manager && !rows.find((r) => r.wt.slug === ap.slug)) {
         setModal(null);
         toast("worktree gone", warnColor, 2000);
         return true;
       }
-      const items = buildActionPickerItems(ap.slug);
+      const items = buildItems();
       const idx = items.findIndex(
         (it) => it.kind === "action" && it.def.id === def.id,
       );
       setModal({
         kind: "actionPicker",
-        state: { mode: "list", slug: ap.slug, index: Math.max(0, idx) },
+        state: {
+          mode: "list",
+          surface: ap.surface,
+          slug: ap.slug,
+          rowSlug: ap.rowSlug,
+          index: Math.max(0, idx),
+        },
       });
     } else {
       setModal(null);
@@ -114,9 +166,19 @@ export function handleActionPickerKey(
     return true;
   }
   if (k.name === "return") {
-    const { slug, def, extras } = ap;
+    const { slug, rowSlug, def, extras } = ap;
     setModal(null);
-    void launchAction(slug, def, extras);
+    if (manager) {
+      // Fleet builtins and free-text go straight to the manager; the
+      // row-scoped entries (ask-about-row, user `target = "manager"`
+      // actions) ride the normal launch path against the captured row
+      // so they get template vars and the `[re: <slug>]` prefix.
+      if (def === null || def.fleet) void launchManagerCommand(def, extras);
+      else if (rowSlug) void launchAction(rowSlug, def, extras);
+      else toast("no row selected", warnColor, 2000);
+    } else {
+      void launchAction(slug, def, extras);
+    }
     return true;
   }
   if (k.name === "backspace") {

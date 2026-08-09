@@ -81,6 +81,10 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     arg?: string,
     launchOpts?: LaunchActionOpts,
   ) => Promise<LaunchOutcome>;
+  launchManagerCommand: (
+    def: ActionDef | null,
+    extras: string,
+  ) => Promise<LaunchOutcome>;
 } {
   // Custom action effect dispatch — each action carries an `affects`
   // tag set captured at start time; on every transition from
@@ -339,6 +343,14 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
             sessionLog.event.err(`inject failed: ${res.reason}`, { toast: true });
           }
         },
+        // injectIntoSession resolves {ok:false} for its own failures,
+        // but the cross-process inject lock can REJECT on timeout
+        // (withAsyncFileLock) — unhandled, that's a process-level
+        // rejection, not a logged miss.
+        (err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          sessionLog.event.err(`inject failed: ${msg}`, { toast: true });
+        },
       );
       return { launched: true };
     }
@@ -370,5 +382,65 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     return { launched: true };
   }
 
-  return { launchAction };
+  /**
+   * Fleet-scoped manager delivery — the `M` palette's launch path for
+   * `fleet: true` builtins and free-text messages. Unlike the row path
+   * above there is no subject worktree: no row gates, no template vars
+   * (fleet prompts are static; rendering free text through `applyVars`
+   * could eat literal `{{…}}` the user typed), and no `[re: <slug>]`
+   * prefix. Same fire-and-forget inject + logging contract otherwise.
+   */
+  async function launchManagerCommand(
+    def: ActionDef | null,
+    extras: string,
+  ): Promise<LaunchOutcome> {
+    const { primaryHarness, toast } = opts;
+    const trimmedExtras = extras.trim();
+    const prompt = def && def.kind === "claude" ? def.prompt : "";
+    const body = trimmedExtras
+      ? prompt
+        ? `${prompt}\n\n${trimmedExtras}`
+        : trimmedExtras
+      : prompt;
+    if (!body) {
+      toast("prompt is empty", theme.warn, 1500);
+      return { launched: false, reason: "prompt is empty" };
+    }
+    ensureManagerClaudeName();
+    const label = def?.name ?? "custom message";
+    const managerLog = createLogger("manager");
+    managerLog.event.info(`${label} → manager`);
+    toast(`sending ${label} to manager…`, theme.info, 2000);
+    void injectIntoSession({
+      slug: MANAGER_SLOT.slug,
+      cwd: MANAGER_SLOT.path,
+      harnessId: primaryHarness,
+      managedName: MANAGER_SLOT.claudeName,
+      text: body,
+    }).then(
+      (res) => {
+        if (res.ok) {
+          // Toast: the "sending…" ack above has long expired by the time
+          // a cold start finishes.
+          managerLog.event.ok(
+            res.coldStarted
+              ? `started manager and sent ${label}`
+              : `sent ${label} to manager`,
+            { toast: true },
+          );
+        } else {
+          managerLog.event.err(`inject failed: ${res.reason}`, { toast: true });
+        }
+      },
+      // Same rejection leg as the row path above: the manager slot is a
+      // multi-writer singleton, so the inject lock CAN time out.
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        managerLog.event.err(`inject failed: ${msg}`, { toast: true });
+      },
+    );
+    return { launched: true };
+  }
+
+  return { launchAction, launchManagerCommand };
 }

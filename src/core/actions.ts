@@ -16,6 +16,7 @@ export { applyVars } from "./actions/template.ts";
 export {
   ALL_BUILTIN_ACTIONS,
   BUILTIN_ACTIONS,
+  MANAGER_BUILTIN_ACTIONS,
   PINNED_BUILTIN_ACTIONS,
   RECENT_WINDOW_MS,
   MAX_RETAINED_RUNS,

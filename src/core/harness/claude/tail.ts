@@ -188,12 +188,39 @@ const READ_DEBOUNCE_MS = 80;
  */
 const POLL_INTERVAL_MS = 3_000;
 
+/**
+ * Context occupancy of the conversation, from the most recent assistant
+ * entry's `message.usage`: prompt tokens actually in the window
+ * (`input_tokens` + both cache buckets). Powers the footer's manager
+ * context-% readout; updates push-based as the tail reads each turn,
+ * and a `/compact` reflects on the first post-compaction turn.
+ */
+export type SessionContextUsage = {
+  tokens: number;
+  /** Model id from the same entry, for window-size resolution. */
+  model: string | null;
+};
+
+/**
+ * Context-window size for a claude model id. Deliberately NOT a
+ * per-model registry (checked: the session jsonl carries no window
+ * size, and scraping the pane is worse): every claude model to date
+ * ships a 200k window, with the `[1m]` id suffix as the only opt-in
+ * exception. If that convention ever breaks, this one function is the
+ * place to teach — resist growing a model table here.
+ */
+export function contextWindowTokens(model: string | null): number {
+  return model && model.includes("[1m]") ? 1_000_000 : 200_000;
+}
+
 export type SessionRun = {
   slug: string;
   /** `null` = primary, otherwise the user-typed name. */
   name: string | null;
   startedAt: number;
   lines: readonly ActionLine[];
+  /** Latest observed context usage; null until an assistant turn lands. */
+  lastUsage: SessionContextUsage | null;
 };
 
 type Listener = () => void;
@@ -279,7 +306,9 @@ class SessionTailRegistry {
     this.state.set(key, st);
 
     const startedAt = Date.now();
-    this.commit((m) => m.set(key, { slug, name, startedAt, lines: [] }));
+    this.commit((m) =>
+      m.set(key, { slug, name, startedAt, lines: [], lastUsage: null }),
+    );
 
     if (existsSync(path)) {
       this.seedAndWatch(key);
@@ -489,12 +518,14 @@ class SessionTailRegistry {
     // in messageToLines. Acceptable for a seed of bounded size.
     const startIdx = start === 0 ? 0 : 1;
     let accum: ActionLine[] = [];
+    let usage: SessionContextUsage | null = null;
     const nextId = () => st.nextLineId++;
     for (let i = startIdx; i < lines.length; i++) {
       const line = lines[i];
       if (!line) continue;
       const out = parseEntry(line, st.toolStarts, nextId);
       accum = applyEmit(accum, out);
+      if (out.usage) usage = out.usage;
     }
     st.lastByte = size;
     st.pending = "";
@@ -502,7 +533,11 @@ class SessionTailRegistry {
       accum.length > MAX_BUFFERED_LINES
         ? accum.slice(-MAX_BUFFERED_LINES)
         : accum;
-    this.update(key, (r) => ({ ...r, lines: trimmed }));
+    this.update(key, (r) => ({
+      ...r,
+      lines: trimmed,
+      lastUsage: usage ?? r.lastUsage,
+    }));
   }
 
   private scheduleRead(key: string): void {
@@ -542,10 +577,12 @@ class SessionTailRegistry {
     st.pending = lines.pop() ?? "";
     const nextId = () => st.nextLineId++;
     const emits: MessageEmit[] = [];
+    let usage: SessionContextUsage | null = null;
     for (const line of lines) {
       if (!line) continue;
       const out = parseEntry(line, st.toolStarts, nextId);
       if (out.append.length > 0 || out.patch.length > 0) emits.push(out);
+      if (out.usage) usage = out.usage;
       // Live tail only: scan for `gh pr …` / `git push` &c and schedule
       // a debounced query refresh. `readSeed` deliberately skips this —
       // replaying hours-old history must not fire refreshes.
@@ -558,7 +595,7 @@ class SessionTailRegistry {
     // here snaps the badge on turn end regardless of whether the line
     // produced a UI-visible emit (system events, queue-ops, etc).
     scheduleSlugChange(st.slug);
-    if (emits.length === 0) return;
+    if (emits.length === 0 && usage === null) return;
     this.update(key, (r) => {
       let next: ActionLine[] = r.lines.slice();
       for (const emit of emits) next = applyEmit(next, emit);
@@ -566,7 +603,7 @@ class SessionTailRegistry {
         next.length > MAX_BUFFERED_LINES
           ? next.slice(-MAX_BUFFERED_LINES)
           : next;
-      return { ...r, lines };
+      return { ...r, lines, lastUsage: usage ?? r.lastUsage };
     });
   }
 
@@ -594,11 +631,35 @@ function applyEmit(prev: readonly ActionLine[], emit: MessageEmit): ActionLine[]
 
 const EMPTY_EMIT: MessageEmit = { append: [], patch: [] };
 
+/**
+ * Context tokens occupied per an assistant entry's `message.usage`:
+ * fresh input plus both cache buckets (cache reads ARE in the window;
+ * only their price differs). Null for non-assistant entries or when
+ * the envelope carries no numeric usage.
+ */
+function extractUsage(e: Record<string, unknown>): SessionContextUsage | null {
+  if (e.type !== "assistant") return null;
+  // Sidechain (subagent) turns carry the SUBAGENT's window, not the
+  // conversation's — surfacing them would make the % sawtooth.
+  if (e.isSidechain === true) return null;
+  const m = asObj(e.message);
+  if (!m) return null;
+  const u = asObj(m.usage);
+  if (!u) return null;
+  const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+  if (typeof u.input_tokens !== "number") return null;
+  const tokens =
+    num(u.input_tokens) +
+    num(u.cache_read_input_tokens) +
+    num(u.cache_creation_input_tokens);
+  return { tokens, model: typeof m.model === "string" ? m.model : null };
+}
+
 function parseEntry(
   raw: string,
   toolStarts: ToolStartMap,
   nextId: () => number,
-): MessageEmit {
+): MessageEmit & { usage?: SessionContextUsage } {
   let evt: unknown;
   try {
     evt = JSON.parse(raw);
@@ -617,13 +678,15 @@ function parseEntry(
     // marker (token deltas, trigger), and rendering the full summary
     // would dump several hundred lines of internal detail into the pane.
     if (t === "user" && e.isCompactSummary === true) return EMPTY_EMIT;
-    return messageToLines({
+    const usage = extractUsage(e);
+    const emit = messageToLines({
       role: t,
       message: e.message,
       ts,
       toolStarts,
       nextId,
     });
+    return usage ? { ...emit, usage } : emit;
   }
   // system.compact_boundary — fired when the conversation is compacted
   // (manual `/compact` or auto when the context window fills). Surface

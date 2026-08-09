@@ -618,7 +618,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toast(`no shell session on ${slug}`, theme.fgDim, 1500);
         return;
       }
-      setModal({ kind: "killSessionConfirm", slug, sessionKind: "shell", managedName: null });
+      setModal({ kind: "killSessionConfirm", slug, sessionKind: "shell" });
       return;
     }
     // Shift+F11 — kill-confirm for the selected worktree's diff
@@ -635,7 +635,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toast(`no diff session on ${slug}`, theme.fgDim, 1500);
         return;
       }
-      setModal({ kind: "killSessionConfirm", slug, sessionKind: "diff", managedName: null });
+      setModal({ kind: "killSessionConfirm", slug, sessionKind: "diff" });
       return;
     }
     // Shift+F12 — open the harness selector for a fresh spawn.
@@ -1038,38 +1038,9 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       });
       return;
     }
-    // Shift+M — auto-merge toggle (plain `m` is the manager session).
-    if (isShiftedLetter(k, "m")) {
-      if (!current.pr) {
-        toast("no PR for this row", theme.warn, 2000);
-        return;
-      }
-      if (current.pr.state !== "OPEN") {
-        toast("PR is not open", theme.warn, 2000);
-        return;
-      }
-      // Toggle: if already armed, the same key prompts to disable.
-      if (current.pr.autoMerge) {
-        setModal({
-          kind: "confirm",
-          pendingKey: "m-",
-          slug: current.wt.slug,
-          title: "disable auto-merge",
-          message: `Disable auto-merge for #${current.pr.number}?`,
-          confirmLabel: "disable",
-        });
-        return;
-      }
-      setModal({
-        kind: "confirm",
-        pendingKey: "m+",
-        slug: current.wt.slug,
-        title: "merge when ready",
-        message: `Enable merge-when-ready for #${current.pr.number}?`,
-        confirmLabel: "enable",
-      });
-      return;
-    }
+    // Shift+M — the manager command palette — is handled in
+    // global-keys.ts (it works without a selected row); the auto-merge
+    // toggle that used to live here moved into the `!` picker.
     if (isPlainLetter(k, "f")) {
       // Tail the failing PR's `--log-failed` CI logs into the activity
       // pane. The flow refuses cleanly when checks aren't red.

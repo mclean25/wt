@@ -101,7 +101,7 @@ const KEY_BLOCKS: Block[] = [
     kind: "keys",
     title: "pull request",
     items: [
-      { key: "M", label: "merge when ready (toggle auto-merge)" },
+      { key: "! m", label: "arm / disarm auto-merge (merge when ready)" },
       { key: "e", label: "exit draft (mark ready for review)" },
       { key: "E", label: "ship: mark ready + request default_reviewer + arm auto-merge" },
       { key: "f", label: "tail failed CI logs (gh run view --log-failed)" },
@@ -120,7 +120,7 @@ const KEY_BLOCKS: Block[] = [
       { key: ";", label: "sessions picker (all harnesses for current row)" },
       { key: "; c / x / o", label: "jump to + new claude / codex / opencode" },
       { key: "; d", label: "close highlighted session gracefully (ctrl+d ×2)" },
-      { key: "; x", label: "kill highlighted session (confirm)" },
+      { key: "; x", label: "kill highlighted session" },
       { key: "⇧TAB", label: "cycle primary harness (top-right)" },
       { key: "⇧F12", label: "harness picker (one-off spawn)" },
       { key: "F10", label: "enter shell · F10 again to detach" },
@@ -156,8 +156,20 @@ const KEY_BLOCKS: Block[] = [
   },
   {
     kind: "keys",
+    title: "manager",
+    note: "the singleton fleet-coordinator session. Palette commands inject prompts and expect results back via `wt manager report`, which lands on the attention feed. The footer shows the manager's context % left of [m] (warn ≥70, red ≥85 — compact before it auto-compacts).",
+    items: [
+      { key: "m", label: "enter the manager session (fleet coordinator) · F12 to detach" },
+      { key: "M", label: "manager palette — digest / triage / merge order / nudge / audit / start next todo" },
+      { key: "M r", label: "ask the manager about the selected row" },
+      { key: "M m", label: "compact the manager's context (/compact)" },
+      { key: "M c", label: "custom free-text message to the manager" },
+    ],
+  },
+  {
+    kind: "keys",
     title: "global",
-    note: "the footer's [.] [m] [,] [/] buttons are the four special-session keys below — the letter is colored by that session's live state (dim when none).",
+    note: "the footer's [m] [.] [,] [/] buttons are the four special-session keys below — the letter is colored by that session's live state (dim when none).",
     items: [
       { key: "n", label: "new worktree" },
       { key: "N", label: "new worktree · base = selected" },
@@ -169,7 +181,6 @@ const KEY_BLOCKS: Block[] = [
       { key: ",", label: "enter wt source session · F12 to detach" },
       { key: ".", label: "enter main repo session · F12 to detach" },
       { key: "/", label: "enter dotfiles session · F12 to detach" },
-      { key: "m", label: "enter the manager session (fleet coordinator) · F12 to detach" },
       { key: ">", label: "open wt source in zed" },
       { key: "O", label: "open main repo in zed" },
       { key: "P", label: "perf overlay — CPU/memory for everything downstream of wt" },

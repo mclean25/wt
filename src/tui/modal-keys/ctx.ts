@@ -55,6 +55,8 @@ export type SimpleModalContext = {
   setFocus: (slug: string | null, patch: { focused?: string | null }) => void;
   rows: readonly WorktreeRow[];
   buildActionPickerItems: (slug: string) => PickerItem[];
+  /** `M` palette items — fleet builtins + row-scoped manager entries. */
+  buildManagerPickerItems: (rowSlug: string | null) => PickerItem[];
   canPickAction: (item: PickerItem) => boolean;
   // Return is deliberately loose: callers here fire-and-forget, and the
   // real impl returns a `LaunchOutcome` the automations engine consumes.
@@ -63,6 +65,11 @@ export type SimpleModalContext = {
     def: ActionDef | null,
     extras: string,
     arg?: string,
+  ) => void | Promise<unknown>;
+  /** Fleet-scoped manager delivery (no row context, no [re:] prefix). */
+  launchManagerCommand: (
+    def: ActionDef | null,
+    extras: string,
   ) => void | Promise<unknown>;
   doSpawnNamedClaudeSession: (slug: string, name: string) => void;
   doEnterHarnessSession: (

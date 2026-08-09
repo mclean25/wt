@@ -40,6 +40,8 @@ export type GlobalKeysCtx = {
   automations: { configured: boolean; togglePaused: () => Promise<boolean> };
   cyclePrimaryHarness: () => Promise<HarnessId>;
   doEnterSlotSession: (slot: SessionSlot) => void;
+  /** `M` — the manager command palette (works with or without a row). */
+  openManagerPalette: () => void;
 };
 
 export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
@@ -54,6 +56,7 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
     automations,
     cyclePrimaryHarness,
     doEnterSlotSession,
+    openManagerPalette,
   } = ctx;
     if (k.sequence === "?") {
       setModal({ kind: "help", query: "", searching: false });
@@ -187,9 +190,14 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       return true;
     }
     // `m` — the manager session (fleet coordinator). Global like the
-    // other slots; the old row-scoped auto-merge toggle moved to `M`.
+    // other slots. `M` opens the manager command palette (auto-merge,
+    // which once lived on M, is now a `!` picker row).
     if (isPlainLetter(k, "m")) {
       doEnterSlotSession(MANAGER_SLOT);
+      return true;
+    }
+    if (isShiftedLetter(k, "m")) {
+      openManagerPalette();
       return true;
     }
     if (k.sequence === ">") {

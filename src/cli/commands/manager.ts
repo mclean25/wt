@@ -16,9 +16,11 @@
 import { config } from "../../core/config.ts";
 import { readPrimaryHarness } from "../../core/harness/primary.ts";
 import {
+  appendManagerReport,
   ensureManagerClaudeName,
   MANAGER_CLAUDE_NAME,
   MANAGER_SLUG,
+  type ManagerReportLevel,
 } from "../../core/manager.ts";
 import { attachOrCreate, injectIntoSession } from "../../core/tmux.ts";
 import { hasHelpFlag } from "../args.ts";
@@ -30,8 +32,38 @@ export async function run(argv: string[]): Promise<number> {
   if (hasHelpFlag([sub ?? ""])) {
     console.log(
       "usage: wt manager                 attach the manager session (create if missing)\n" +
-        "       wt manager send <text...>  inject a message into it",
+        "       wt manager send <text...>  inject a message into it\n" +
+        "       wt manager report [--ok|--warn|--err] <text...>\n" +
+        "                                  surface a result on wt's attention feed",
     );
+    return 0;
+  }
+
+  if (sub === "report") {
+    if (hasHelpFlag([rest[0] ?? ""])) {
+      console.log(
+        "usage: wt manager report [--info|--ok|--warn|--err] <text...>\n" +
+          "surface a short result line on the wt TUI's attention feed (default level: info)",
+      );
+      return 0;
+    }
+    // Level flags are only recognized at the FRONT of the message —
+    // the rest is free text and a literal `--err` mid-sentence sends.
+    let level: ManagerReportLevel = "info";
+    let words = rest;
+    const flag = words[0];
+    if (flag === "--ok" || flag === "--warn" || flag === "--err" || flag === "--info") {
+      level = flag.slice(2) as ManagerReportLevel;
+      words = words.slice(1);
+    }
+    const text = words.join(" ").trim();
+    if (!text) {
+      console.error(red("wt manager report requires a message"));
+      return 2;
+    }
+    appendManagerReport(level, text);
+    console.log(green("✓ reported"));
+    console.log(dim("» surfaces on the wt attention feed (a running TUI picks it up live)"));
     return 0;
   }
 

@@ -154,10 +154,196 @@ export const PINNED_BUILTIN_ACTIONS: readonly ActionDef[] = [
   ...DEV_BUILTIN_ACTIONS,
 ];
 
+/**
+ * Shared closing line for every fleet-scoped manager command: the
+ * report-back contract. `wt manager report` is the channel that lands
+ * in wt's attention feed, so the human sees the outcome without
+ * attaching to the manager session (docs/manager.md#reporting-back).
+ */
+const REPORT_BACK =
+  "When finished, run `wt manager report [--ok|--warn|--err] \"...\"` with a" +
+  " one-or-two-line result — that line lands in wt's attention feed, so keep" +
+  " it terse and information-dense. Reply in your own conversation only with" +
+  " what the report doesn't carry.";
+
+/**
+ * The manager command palette (`M`) builtins. All target the singleton
+ * manager session; `fleet: true` entries address the whole fleet and
+ * are injected WITHOUT row context or the `[re: <slug>]` prefix.
+ * `manager-ask-row` is the one row-scoped entry — it rides the normal
+ * `[[actions]] target="manager"` path against the selected row.
+ *
+ * Universal builtins (no config gate): the vocabulary they lean on
+ * (`wt status --all --json`, `wt claude send`, `wt manager report`) is
+ * wt's own CLI surface, which every harness can drive.
+ */
+export const MANAGER_BUILTIN_ACTIONS: readonly ActionDef[] = [
+  {
+    kind: "claude",
+    id: "manager-digest",
+    name: "Digest: what needs me",
+    prompt: [
+      "Produce a fleet digest for the human. Read `wt status --all --json` and",
+      "check PR/CI state (`gh`) where it matters. Reply with at most five",
+      "bullets covering: what needs the human RIGHT NOW (and exactly what for),",
+      "what is mergeable and in what order, and what looks stalled or",
+      "abandoned. No restating the board — only what's actionable or surprising.",
+      REPORT_BACK,
+    ].join(" "),
+    target: "manager",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "d",
+    group: "manager",
+    fleet: true,
+  },
+  {
+    kind: "claude",
+    id: "manager-triage",
+    name: "Triage needs-human rows",
+    prompt: [
+      "Triage every worktree currently asserting needs-human (`wt status --all",
+      "--json`). For each: first try to unblock it yourself — gh operations,",
+      "answering the worker's question from fleet knowledge, nudging its session",
+      "with `wt claude send <slug> \"...\"` — and re-assert its status on the",
+      "worker's behalf when you do. Distill whatever genuinely remains into one",
+      "short ask per row.",
+      REPORT_BACK,
+    ].join(" "),
+    target: "manager",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "t",
+    group: "manager",
+    fleet: true,
+  },
+  {
+    kind: "claude",
+    id: "manager-merge-order",
+    name: "Plan merge order",
+    prompt: [
+      "Plan the merge order. Look at the ready rows and open PRs (`wt status",
+      "--all --json`, `gh pr list`), stack relationships, and overlapping files",
+      "across branches. Propose a concrete merge order with the conflict risks,",
+      "which restacks each merge will force, and anything that should NOT merge",
+      "yet and why.",
+      REPORT_BACK,
+    ].join(" "),
+    target: "manager",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "o",
+    group: "manager",
+    fleet: true,
+  },
+  {
+    kind: "claude",
+    id: "manager-nudge",
+    name: "Nudge stalled workers",
+    prompt: [
+      "Find stalled workers: rows asserting working/review whose sessions have",
+      "gone quiet or whose status timestamps are old (`wt status --all --json`).",
+      "Nudge each live-but-idle one with a pointed `wt claude send <slug>",
+      "\"...\"` naming what it should do next; note the ones that are genuinely",
+      "blocked rather than stalled.",
+      REPORT_BACK,
+    ].join(" "),
+    target: "manager",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "n",
+    group: "manager",
+    fleet: true,
+  },
+  {
+    kind: "claude",
+    id: "manager-audit",
+    name: "Audit work statuses",
+    prompt: [
+      "Audit every asserted work status against reality (`wt status --all",
+      "--json`, `gh`, session liveness): PR merged but row not cleaned? CI red",
+      "under a ready? New commits after the assertion? Session dead mid",
+      "working? Fix drifted records by asserting the true state on the row's",
+      "behalf (`wt status <slug> <state> ...`).",
+      REPORT_BACK,
+    ].join(" "),
+    target: "manager",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "a",
+    group: "manager",
+    fleet: true,
+  },
+  {
+    kind: "claude",
+    id: "manager-start-next",
+    name: "Start next todo",
+    prompt: [
+      "Pick the next todo work to start. From rows asserting todo (`wt status",
+      "--all --json`), choose the highest-value one(s) given current fleet load",
+      "(don't flood — a couple at most), and kick each off by injecting a",
+      "starting prompt into its session with `wt claude send <slug> \"...\"`",
+      "that tells the agent to begin the task and own its status transitions.",
+      REPORT_BACK,
+    ].join(" "),
+    target: "manager",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "s",
+    group: "manager",
+    fleet: true,
+  },
+  {
+    kind: "claude",
+    id: "manager-ask-row",
+    name: "Ask about selected row",
+    prompt: [
+      "Question about {{slug}} (branch {{branch}}) — answer from fleet",
+      "knowledge, `wt status`, and `gh`; delegate to the row's own session only",
+      "if it requires the worktree's conversation context:",
+    ].join(" "),
+    target: "manager",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "r",
+    group: "manager",
+  },
+  {
+    kind: "claude",
+    id: "manager-compact",
+    name: "Compact manager context",
+    prompt: "/compact",
+    target: "manager",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "m",
+    group: "manager",
+    fleet: true,
+    direct: true,
+  },
+];
+
 /** Every code-defined action, for id-resolution sites (dispatch, automations). */
 export const ALL_BUILTIN_ACTIONS: readonly ActionDef[] = [
   ...PINNED_BUILTIN_ACTIONS,
   ...BUILTIN_ACTIONS,
+  ...MANAGER_BUILTIN_ACTIONS,
 ];
 
 /**

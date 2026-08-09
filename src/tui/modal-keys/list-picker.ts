@@ -44,6 +44,12 @@ export type ListPickerSpec = {
 
 function matchesTrigger(k: KeyEvent, trigger: string): boolean {
   if (/^[a-z]$/.test(trigger)) return isPlainLetter(k, trigger);
+  // Uppercase = shifted letter. Same dual check as `matchesCancelKey`:
+  // tmux's csi-u encoding delivers Shift+letter as a shift-flagged
+  // event whose `sequence` never equals the uppercase literal.
+  if (/^[A-Z]$/.test(trigger)) {
+    return isShiftedLetter(k, trigger.toLowerCase()) || k.sequence === trigger;
+  }
   return k.sequence === trigger && !k.ctrl && !k.meta;
 }
 

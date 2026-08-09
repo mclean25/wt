@@ -15,12 +15,13 @@ import { theme } from "../theme.ts";
 type ClaudeActionDef = Extract<ActionDef, { kind: "claude" }>;
 
 /**
- * Picker-mode item: one of the configured actions, or the trailing
- * "Custom prompt..." entry that drops you straight into a freeform
- * editor with no template prefix. `availability` reflects the def's
- * `requires` evaluated against the current row state — `ok: false`
- * grays the entry and surfaces the reason as the dim subtitle. The
- * Custom entry is always available.
+ * Picker-mode item: one of the configured actions, the auto-merge
+ * toggle row (a TS flow, not an ActionDef — it needs the optimistic
+ * `doAutoMerge` path), or the trailing "Custom prompt..." entry that
+ * drops you straight into a freeform editor with no template prefix.
+ * `availability` reflects the def's `requires` evaluated against the
+ * current row state — `ok: false` grays the entry and surfaces the
+ * reason as the dim subtitle. The Custom entry is always available.
  */
 export type PickerItem =
   | {
@@ -28,6 +29,13 @@ export type PickerItem =
       def: ActionDef;
       /** Resolved quick-pick letter (see `assignActionKeys`); "" = none. */
       key: string;
+      availability: ActionAvailability;
+    }
+  | {
+      kind: "autoMerge";
+      key: string;
+      /** Current PR auto-merge state; drives the toggle label. */
+      armed: boolean;
       availability: ActionAvailability;
     }
   | { kind: "custom" };
@@ -52,9 +60,10 @@ const RESERVED_KEYS = new Set(["c", "j", "k", "q"]);
  */
 export function assignActionKeys(
   defs: readonly ActionDef[],
+  extraReserved: readonly string[] = [],
 ): Map<string, string> {
   const out = new Map<string, string>();
-  const taken = new Set<string>(RESERVED_KEYS);
+  const taken = new Set<string>([...RESERVED_KEYS, ...extraReserved]);
   for (const def of defs) {
     const k = def.key?.toLowerCase();
     if (k && /^[a-z]$/.test(k) && !taken.has(k)) {
@@ -89,47 +98,86 @@ export function assignActionKeys(
 }
 
 /**
+ * Which surface the picker fronts: the row-scoped `!` action picker,
+ * or the `M` manager command palette. Same two-screen machinery, item
+ * builder and dispatch differ (see `handleActionPickerKey`).
+ */
+export type ActionPickerSurface = "row" | "manager";
+
+/**
  * Two-screen state machine. Esc in `edit` pops back to `list` when a
  * pre-built was selected (informative restore point) or cancels out
  * entirely from custom (no list state worth restoring). Only claude-
  * flavored actions reach `edit`; shell actions launch directly from
  * `list`.
  *
+ * `slug` is the launch subject: the worktree for the `row` surface,
+ * the fixed manager slug for `manager`. `rowSlug` is only meaningful
+ * on the manager surface — the list-pane selection captured at open
+ * time, which the palette's row-scoped entries (ask-about-row, user
+ * `target = "manager"` actions) launch against.
+ *
  * `items` is deliberately not in the state — it's recomputed at each
- * use site from `buildActionPickerItems(slug)`. That lets `requires`
- * predicates re-evaluate against live row state, so an optimistic
- * patch (or a background refetch) that flips a PR's draft status
- * unblocks/blocks actions in the open picker without requiring a
- * close-and-reopen.
+ * use site from `buildActionPickerItems(slug)` /
+ * `buildManagerPickerItems(rowSlug)`. That lets `requires` predicates
+ * re-evaluate against live row state, so an optimistic patch (or a
+ * background refetch) that flips a PR's draft status unblocks/blocks
+ * actions in the open picker without requiring a close-and-reopen.
  */
 export type ActionPickerState =
-  | { mode: "list"; slug: string; index: number }
-  | { mode: "edit"; slug: string; def: ClaudeActionDef | null; extras: string };
+  | {
+      mode: "list";
+      surface: ActionPickerSurface;
+      slug: string;
+      rowSlug: string | null;
+      index: number;
+    }
+  | {
+      mode: "edit";
+      surface: ActionPickerSurface;
+      slug: string;
+      rowSlug: string | null;
+      def: ClaudeActionDef | null;
+      extras: string;
+    };
 
 type Props = {
   slug: string;
+  surface: ActionPickerSurface;
   items: PickerItem[];
   selectedIndex: number;
 };
 
-export function ActionPickerModal({ slug, items, selectedIndex }: Props) {
+/** Group label for header clustering; autoMerge sits in "github". */
+function itemGroup(item: PickerItem): string | null {
+  if (item.kind === "custom") return null;
+  if (item.kind === "autoMerge") return "github";
+  return item.def.group ?? null;
+}
+
+export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props) {
   // Claude Code's robot glyph, reused verbatim from the harness registry
   // so the action-kind marker matches the session badges.
   const claudeGlyph = getHarness("claude").glyph;
   const rowId = (item: PickerItem): string =>
-    item.kind === "custom" ? "action:__custom__" : `action:${item.def.id}`;
+    item.kind === "custom"
+      ? "action:__custom__"
+      : item.kind === "autoMerge"
+        ? "action:__auto-merge__"
+        : `action:${item.def.id}`;
   const selectedId = items[selectedIndex]
     ? rowId(items[selectedIndex]!)
     : undefined;
+  const manager = surface === "manager";
   return (
     <Modal
-      title={`action · ${slug}`}
+      title={manager ? "manager palette" : `action · ${slug}`}
       inset={{ top: "12%", right: "18%", bottom: "12%", left: "18%" }}
       hints={[
         ["j/k", "move"],
         ["a-z", "quick pick"],
-        ["c", "custom prompt"],
-        ["! / ⏎", "select"],
+        ["c", manager ? "custom message" : "custom prompt"],
+        [manager ? "M / ⏎" : "! / ⏎", "select"],
         ["esc / q", "cancel"],
       ]}
     >
@@ -142,14 +190,8 @@ export function ActionPickerModal({ slug, items, selectedIndex }: Props) {
         // Group header: rendered once above the first item of each group
         // (groups are pre-clustered in `buildActionPickerItems`). The
         // custom entry has no group, so it sits below the last section.
-        const group = isCustom ? null : item.def.group ?? null;
-        const prevGroup =
-          i === 0
-            ? null
-            : items[i - 1]!.kind === "action"
-              ? (items[i - 1] as Extract<PickerItem, { kind: "action" }>).def
-                  .group ?? null
-              : null;
+        const group = itemGroup(item);
+        const prevGroup = i === 0 ? null : itemGroup(items[i - 1]!);
         const showHeader = group !== null && group !== prevGroup;
         // Custom entry gets the `c` chord prefix (mirrors `n` for "+ new
         // section"); configured actions get their assigned quick-pick
@@ -170,7 +212,15 @@ export function ActionPickerModal({ slug, items, selectedIndex }: Props) {
             ? theme.fgBright
             : theme.fg;
         const labelFg = isCustom ? theme.accent : fg;
-        const label = isCustom ? "Custom prompt…" : item.def.name;
+        const label = isCustom
+          ? manager
+            ? "Custom message…"
+            : "Custom prompt…"
+          : item.kind === "autoMerge"
+            ? item.armed
+              ? "Disarm auto-merge"
+              : "Arm auto-merge (merge when ready)"
+            : item.def.name;
         // Trailing hint: a kind/target marker plus the action id. `$` for
         // shell commands; the Claude robot glyph for claude prompts (two
         // spaces: the nerd-font glyph renders wide and reads cramped with
@@ -182,13 +232,15 @@ export function ActionPickerModal({ slug, items, selectedIndex }: Props) {
           ? "freeform"
           : blocked
             ? `(${(item.availability as { reason: string }).reason})`
-            : item.def.kind === "shell"
-              ? `$ ${item.def.id}`
-              : item.def.target === "session"
-                ? `${claudeGlyph}  ↪ ${item.def.id}`
-                : `${claudeGlyph}  ${item.def.id}`;
+            : item.kind === "autoMerge"
+              ? "gh · merge queue aware"
+              : item.def.kind === "shell"
+                ? `$ ${item.def.id}`
+                : item.def.target === "session"
+                  ? `${claudeGlyph}  ↪ ${item.def.id}`
+                  : `${claudeGlyph}  ${item.def.id}`;
         return (
-          <Fragment key={isCustom ? "__custom__" : item.def.id}>
+          <Fragment key={rowId(item)}>
             {showHeader ? (
               <box flexDirection="row" paddingLeft={1} marginTop={i > 0 ? 1 : 0}>
                 <text fg={theme.fgDim} attributes={1} wrapMode="none" truncate>
@@ -228,6 +280,7 @@ export function ActionPickerModal({ slug, items, selectedIndex }: Props) {
 
 type EditProps = {
   slug: string;
+  surface: ActionPickerSurface;
   /** `null` = custom prompt (extras IS the entire prompt). */
   def: ClaudeActionDef | null;
   extras: string;
@@ -239,8 +292,15 @@ type EditProps = {
   vars: ActionVars;
 };
 
-export function ActionEditModal({ slug, def, extras, vars }: EditProps) {
-  const title = def ? `action · ${def.name} · ${slug}` : `action · custom · ${slug}`;
+export function ActionEditModal({ slug, surface, def, extras, vars }: EditProps) {
+  const title =
+    surface === "manager"
+      ? def
+        ? `manager · ${def.name}`
+        : "manager · custom message"
+      : def
+        ? `action · ${def.name} · ${slug}`
+        : `action · custom · ${slug}`;
   const renderedPrompt = def ? applyVars(def.prompt, vars) : "";
   return (
     <Modal
