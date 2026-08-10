@@ -7,7 +7,19 @@
  * gets the pane's full width and word-wraps.
  */
 import { isWorkStatusStale, workAge } from "../../../core/work-status.ts";
-import { workStateColor, workStateGlyph } from "../../badges.ts";
+import { workStateColor } from "../../badges.ts";
+import type { WorkState } from "../../../core/work-status.ts";
+
+/**
+ * Base-font circle, not the Nerd Font dot the list uses: the NF icon
+ * is measured 1 cell but its ink spills wide, so its visual center
+ * lands right of the cell center — visibly off-axis from the note
+ * rail's `│` (a base-font glyph, dead-centered) directly below it.
+ * `●`/`○` center exactly like `│`, so dot and rail line up.
+ */
+function bannerGlyph(state: WorkState): string {
+  return state === "todo" ? "○" : "●";
+}
 import type { WorktreeRow } from "../../hooks/useWorktreeRows.ts";
 import { theme } from "../../theme.ts";
 
@@ -23,7 +35,7 @@ export function WorkStatusBlock({ row }: { row: WorktreeRow }) {
   return (
     <box flexDirection="column" marginBottom={1}>
       <text wrapMode="none" truncate>
-        <span fg={color}>{workStateGlyph(record.state)}{"  "}</span>
+        <span fg={color}>{bannerGlyph(record.state)}{" "}</span>
         <span fg={color} attributes={1}>
           {record.state}
         </span>
