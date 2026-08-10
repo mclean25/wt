@@ -90,7 +90,11 @@ export function PickerModal({
               ) : null}
               {itemGlyphs ? (
                 itemGlyphs[i] ? (
-                  <text fg={itemGlyphs[i]!.color}>{`${itemGlyphs[i]!.glyph} `}</text>
+                  // Two trailing spaces: Nerd Font dots draw wider than
+                  // their single cell, so one space reads as glyph-glued-
+                  // to-label. Null rows pad the same 3 cells to stay
+                  // aligned.
+                  <text fg={itemGlyphs[i]!.color}>{`${itemGlyphs[i]!.glyph}  `}</text>
                 ) : (
                   <text>{"   "}</text>
                 )
