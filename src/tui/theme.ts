@@ -7,6 +7,10 @@ export const theme = {
   borderDim: "#2e3440",
   fg: "#d8dee9",
   fgDim: "#747b8a",
+  // Halfway between fg and fgDim: body text that should recede below
+  // a colored header without dropping to metadata-gray (the work-status
+  // note is the tenant).
+  fgMid: "#a6acb9",
   fgBright: "#eceff4",
   accent: "#88c0d0",
   accentAlt: "#81a1c1",
