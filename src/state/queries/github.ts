@@ -24,6 +24,20 @@ import { KEEP_PREV, STALE } from "./shared.ts";
 // rate limit in an hour. Stale badges are fine in a probe.
 const GITHUB_OFF = process.env.WT_GITHUB === "off";
 
+/**
+ * Poll backstop for setups WITHOUT the webhook daemon. Every local
+ * trigger for this query (refs watcher, session tails, `r`) fires on
+ * something *we* did; a comment, a review, or a check finishing happens
+ * entirely on GitHub's side and moves nothing local, so a repo with no
+ * push activity would sit on stale PR data — and the attention feed
+ * would narrate a coworker's comment whenever the next unrelated
+ * invalidation happened to land. Matched to the `fetch origin`
+ * interval in runtime.tsx: same "bound how stale remote state can get"
+ * job, same cadence, one batched GraphQL round trip per tick. With the
+ * daemon configured, its own (usually shorter) backstop wins.
+ */
+const POLL_BACKSTOP_MS = 3 * 60 * 1000;
+
 export type GithubData = {
   prs: Record<string, PullRequest>;
   /** Merge-queue entries keyed by head branch. */
@@ -65,8 +79,9 @@ export const githubQuery = (branches: readonly string[]) =>
     // Poll-only setups keep the 60s staleTime and no interval (the refs
     // watcher + manual refresh drive them).
     staleTime: config.github.events?.backstopPollMs ?? STALE.slow,
-    refetchInterval:
-      !GITHUB_OFF && config.github.events ? config.github.events.backstopPollMs : false,
+    refetchInterval: !GITHUB_OFF
+      ? (config.github.events?.backstopPollMs ?? POLL_BACKSTOP_MS)
+      : false,
     enabled: !GITHUB_OFF,
     ...KEEP_PREV,
   });

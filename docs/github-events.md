@@ -1,6 +1,6 @@
 # GitHub webhooks
 
-Without this, PR / checks / merge-queue badges stay fresh via a local `.git/refs` watcher, a 3-minute `git fetch origin` backstop, and manual `r`. That works, but check churn on the GitHub side (CI finishing, reviews landing) only shows up when one of those fires.
+Without this, PR / checks / merge-queue badges stay fresh via a local `.git/refs` watcher, a 3-minute PR-fetch poll, a 3-minute `git fetch origin` backstop, and manual `r`. That works, but everything that happens on the GitHub side (CI finishing, reviews landing, someone commenting on your PR) waits out the poll — up to three minutes, and the attention feed's comment lines wait with it.
 
 Add a `[github.events]` section and run the small local daemon to have GitHub **push** updates instead: badges flip within a second or two of the event, far fewer `gh` calls, and the daemon keeps a warm snapshot so a freshly opened TUI already shows current state. Config keys: [configuration.md](configuration.md#githubevents--optional-webhook-daemon).
 
@@ -14,7 +14,7 @@ wt events start       # load the daemon
 wt events status      # liveness, last delivery, snapshot age
 ```
 
-`install` prints exactly what to paste into the repo's **Settings → Webhooks**: the payload URL, content type `application/json`, the generated secret, and the event checklist (`pull_request`, `pull_request_review`, `pull_request_review_thread`, `issue_comment`, `check_suite`, `check_run`, `status`, `merge_group`, `push`). `issue_comment` feeds the details-pane conversation and, for a checklist-mode [`[review_bot]`](configuration.md#review_bot--the-bot-review-track), the summary comment + checkbox ticks that drive its badge.
+`install` prints exactly what to paste into the repo's **Settings → Webhooks**: the payload URL, content type `application/json`, the generated secret, and the event checklist (`pull_request`, `pull_request_review`, `pull_request_review_thread`, `issue_comment`, `check_suite`, `check_run`, `status`, `merge_group`, `push`). `issue_comment` feeds the details-pane conversation, the attention feed's "someone commented on your PR" lines ([tui.md](tui.md)), and, for a checklist-mode [`[review_bot]`](configuration.md#review_bot--the-bot-review-track), the summary comment + checkbox ticks that drive its badge.
 
 The daemon listens on `[github.events].host` (default loopback); map a public HTTPS URL to it however you route traffic into your network — a tunnel or reverse proxy on the same machine forwarding to localhost is the simple case. If a reverse proxy on a *different* host has to reach this machine, set `host` to a LAN IP or `0.0.0.0`; the HMAC secret is then the only auth boundary, so keep the listener on a trusted network.
 
