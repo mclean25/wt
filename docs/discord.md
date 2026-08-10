@@ -19,8 +19,11 @@ enabled — that id is public by design; it powers the README badge).
 `.github/workflows/discord-digest.yml` + `.github/scripts/discord-digest.ts`.
 Full mechanics are documented in those files' header comments; the shape:
 
-- Triggers via `workflow_run` when typecheck goes green on `main` (a red tree
-  is never digested; its commits roll into the next green digest).
+- Triggers via `workflow_run` when the `ci` workflow goes green on `main` (a
+  red tree is never digested; its commits roll into the next green digest).
+  The trigger names the workflow by its `name:` — if `ci` is ever renamed,
+  update `workflows: [ci]` here in the same commit, or digests silently stop
+  (this bit us once when `typecheck` became `ci`).
 - Debounce: the run sleeps 30 minutes inside a `concurrency` group with
   `cancel-in-progress: true`, so every newer green push cancels the sleeping
   run and restarts the countdown — one digest per burst. The idle runner is
@@ -32,11 +35,11 @@ Full mechanics are documented in those files' header comments; the shape:
   OpenAI failure degrades to posting raw commit titles.
 - Attribution is built in: the embed footer lists commit authors' GitHub
   logins.
-- A GitHub Actions outage can wedge a `push`-triggered typecheck run in
+- A GitHub Actions outage can wedge a `push`-triggered ci run in
   `queued` indefinitely — `gh run cancel`/`rerun` both error unhelpfully on
   it ("already completed" / "already running") rather than clearing it. The
   stuck run itself has no fix; a new push supersedes it and the debounce
-  resumes normally once typecheck runs are getting picked up again.
+  resumes normally once ci runs are getting picked up again.
 
 **Actions secrets** (repo Settings → Secrets → Actions): `OPENAI_API_KEY`,
 `DISCORD_UPDATES_WEBHOOK` (the #updates channel webhook URL). These are the
