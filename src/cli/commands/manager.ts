@@ -8,10 +8,11 @@
  *
  * The manager is a plain harness session in the main clone whose role
  * comes from its playbook skill + what wt sends it. Worktree agents
- * can `wt manager send "..."` to escalate fleet-level questions
- * without pulling the human in; `[[actions]]` with `target =
- * "manager"` and automations brief it through the same injection
- * path.
+ * can `wt manager send "..."` to escalate fleet-level questions or
+ * report papercuts (`"papercut: ..."`) without pulling the human in —
+ * fire-and-forget in both directions, nothing is returned to the
+ * caller; `[[actions]]` with `target = "manager"` and automations
+ * brief it through the same injection path.
  */
 import { config } from "../../core/config.ts";
 import { readPrimaryHarness } from "../../core/harness/primary.ts";
@@ -32,7 +33,8 @@ export async function run(argv: string[]): Promise<number> {
   if (hasHelpFlag([sub ?? ""])) {
     console.log(
       "usage: wt manager                 attach the manager session (create if missing)\n" +
-        "       wt manager send <text...>  inject a message into it\n" +
+        "       wt manager send <text...>  inject a message into it (fleet question,\n" +
+        "                                  or \"papercut: ...\" — fire and forget)\n" +
         "       wt manager report [--ok|--warn|--err] <text...>\n" +
         "                                  surface a result on wt's attention feed",
     );

@@ -83,6 +83,7 @@ function guidance(state: WorkState): string[] {
         `The human will see this — the note should name the blocker AND what you`,
         `already tried ("blocked on X; tried Y, Z"). Keep making progress on anything`,
         `not blocked, and assert the next status the moment you're unblocked.`,
+        `Not blocked, just a rough edge worth reporting? ${bold('wt manager send "papercut: ..."')} — fire and forget, then carry on.`,
       ];
     case "ready":
       return [

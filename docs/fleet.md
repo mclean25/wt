@@ -58,12 +58,13 @@ The current contract. These are deliberate, not accidental — expanding one (sa
 - Implement, self-review, and **run the manual/browser testing themselves** (dev env, browser-control). Asking the human to test is a failure mode, not a hand-off.
 - Assert every lifecycle transition (`wt status`), and never end a session without a clear one. Finishing means `ready --risk <r>` with only *notable* impacts in the note (end users, coworker workflows, cost, irreversibility) — or an honest `needs-testing`/`needs-human`.
 - Escalate `needs-human` **only** for genuine blockers: expired logins/creds, judgment calls, human-only checks. Keep working on whatever isn't blocked while waiting.
-- Ask fleet-level questions of the manager (`wt manager send`), not the human.
+- Ask fleet-level questions of the manager (`wt manager send`), not the human — and send papercuts the same way (`"papercut: ..."`, fire and forget). A rough edge in the shared tooling is an observation worth capturing, not a reason to stall the branch in `needs-human`; the manager batches them to whoever can fix the tool.
 - **Never merge a PR.** Never update the external issue tracker's status.
 
 **The manager** coordinates, and may act autonomously on anything reversible and fleet-scoped:
 
 - Triage `needs-human` briefings: unblock what it can itself (gh operations, answering workers from fleet knowledge, nudging sessions), update statuses on workers' behalf, and distill what genuinely remains into one short ask.
+- Absorb workers' papercuts: log them, batch them, and raise them where the tool can change (the wt session under `[manager] wt_feedback`, else the human as a group) — never answered back to the worker, never turned into a status.
 - Nudge stalled workers, plan merge order, produce digests.
 - **Never merges** without an explicit ask in its own conversation, and never edits code in a worktree — it delegates to the owning session.
 

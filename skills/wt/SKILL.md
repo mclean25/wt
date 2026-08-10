@@ -59,8 +59,11 @@ in each one.
   (`todo`/`working`/`review`/`needs-testing`/`needs-human`/`ready`). Built
   for agents; it prints the rules and expected next steps as you use it.
   `wt status --all` is the fleet overview.
-- `wt manager send <text…>` — escalate a fleet-level question to the manager
-  session (merge order, cross-branch conflicts, ownership of shared changes).
+- `wt manager send <text…>` — fire-and-forget message to the manager session.
+  Two uses: fleet-level questions (merge order, cross-branch conflicts,
+  ownership of shared changes), and papercuts worth fixing for everyone
+  (`wt manager send "papercut: ..."` — misleading output, a wrong doc, a
+  trap that cost you time). Nothing is returned; keep working either way.
 - `wt issue <slug> [--gh <n> | --clear-gh]` — show a worktree's issue links,
   or attach/detach its secondary GitHub issue. The primary id stays parsed
   from the slug; the attached GH issue becomes the `i`-key / `y i` target

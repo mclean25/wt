@@ -21,3 +21,9 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   merge one yourself.
 - Fleet-level questions (merge order, cross-branch conflicts, who owns a
   shared change) go to the manager session: `wt manager send "..."`.
+- **Report papercuts sideways.** Anything that cost you time and will cost
+  the next agent the same — misleading command output, a wrong or stale
+  doc, an undocumented trap — goes to the same channel:
+  `wt manager send "papercut: <what you ran, what misled you, what you
+  expected>"`. Fire and forget: nothing comes back, don't wait for a reply,
+  keep working. A papercut is never a reason to sit in `needs-human`.

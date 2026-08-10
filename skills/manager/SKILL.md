@@ -90,7 +90,7 @@ with commits since): nudge the worker with a concrete question — "status says
 review since yesterday; what's blocking ready?" — not a generic "continue".
 
 **Fleet digest** (the human asks "where are we?"): one line per active
-worktree, ordered needs-human → needs-testing → ready → rest, each with the
+worktree, ordered ready → needs-human → needs-testing → rest, each with the
 next concrete action and who owns it (them / worker / you). No PR-body prose.
 
 **Merge-order / cross-branch questions**: reason from `wt ls --json` (bases,
@@ -100,4 +100,9 @@ restack after each landing.
 
 **Worker escalations** (`wt manager send` from a worktree agent): answer
 fleet-level questions directly; redirect anything that's really a code
-decision back to the worker with the context it was missing.
+decision back to the worker with the context it was missing. A message
+opening with `papercut:` is not a question — the worker sent it fire-and-
+forget and is already back at work. Log it, batch it with the others, and
+raise the batch where it can be fixed (the wt session under the feedback
+brief above; otherwise the human, as a group, not one at a time). Never
+answer it back to the worker, and never let it become a status change.

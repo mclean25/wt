@@ -10,7 +10,7 @@ One identity subtlety: the manager shares the main clone's directory with the `.
 
 - **`m`** in the TUI attaches it (F12 detaches back), creating it on first use with the Shift+TAB-selected primary harness.
 - **`M`** opens the [command palette](#the-command-palette-m) — push a canned play (or free text) into the manager without attaching. (Auto-merge, which once lived on `M`, is now the `! m` picker row.)
-- **`wt manager`** attaches from a shell; **`wt manager send <text…>`** injects a message (cold-starting the session detached if needed) — the escalation path for worktree agents (`wt manager send "who owns the shared migration ordering?"`) and scripts.
+- **`wt manager`** attaches from a shell; **`wt manager send <text…>`** injects a message (cold-starting the session detached if needed) — the fire-and-forget outbound channel for worktree agents (`wt manager send "who owns the shared migration ordering?"`) and scripts. Workers use it for fleet-level questions and for **papercuts** (`wt manager send "papercut: ..."`); nothing is returned either way, so a papercut costs the worker one line and never parks its branch in `needs-human`.
 - **`[[actions]]` with `target = "manager"`** inject their rendered prompt into the manager instead of the worktree's session, prefixed `[re: <slug>]` so the subject is explicit. Combined with [automations](automations.md), that's how wt briefs the manager hands-free:
 
 ```toml

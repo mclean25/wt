@@ -121,7 +121,7 @@ Merge fields (`merge_state` from GitHub's `mergeStateStatus`, `mergeable`) are l
 
 ### `wt manager` / `wt manager send <text…>` / `wt manager report [--ok|--warn|--err] <text…>`
 
-Attach the singleton [manager session](manager.md) (create on first use), or inject a message into it — the escalation path for worktree agents and scripts (`wt manager send` cold-starts the session detached when it isn't running; the message lands as its next turn). Same session the TUI's `m` key enters.
+Attach the singleton [manager session](manager.md) (create on first use), or inject a message into it — the fire-and-forget outbound channel for worktree agents and scripts, carrying both fleet-level questions and `papercut:` reports (`wt manager send` cold-starts the session detached when it isn't running; the message lands as its next turn, and nothing comes back). Same session the TUI's `m` key enters.
 
 `wt manager report` is the reverse channel: it appends a short result line to a spool a running TUI watches and surfaces on the **attention feed** (with a toast). It's how [`M` palette](manager.md#the-command-palette-m) commands hand their outcome back without the human attaching; the level flag (default `info`) picks the line's color/loudness. Reports while no TUI runs aren't replayed later — it's a live-delivery channel, not a log (the daily log records whatever surfaced).
 
