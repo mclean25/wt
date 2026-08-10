@@ -153,9 +153,17 @@ async function materializeBranch(input: {
   onLog?: (line: string) => void;
 }): Promise<void> {
   const { path, branch, baseRef, baseSourcePath, onLog } = input;
+  // --discard-changes: `--copy-all` CoW-copies the main clone's working
+  // tree INCLUDING its uncommitted modifications, and a plain switch
+  // refuses when those files differ across the jump ("Your local
+  // changes... would be overwritten") — which used to abort creation
+  // whenever the main clone was dirty (an agent-edited CLAUDE.md was
+  // enough). The dirt lives only in this throwaway copy; the main
+  // clone's working tree is never touched, so discarding is safe and
+  // removes the whole clean-main-clone requirement.
   if (baseRef === null) {
     onLog?.(`switch to ${branch}`);
-    await git(["switch", branch], path);
+    await git(["switch", "--discard-changes", branch], path);
     return;
   }
 
@@ -187,7 +195,7 @@ async function materializeBranch(input: {
     );
   }
   onLog?.(`new branch ${branch} off ${baseRef}`);
-  await git(["switch", "-c", branch, start], path);
+  await git(["switch", "--discard-changes", "-c", branch, start], path);
 }
 
 /**

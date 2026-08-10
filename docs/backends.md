@@ -61,8 +61,15 @@ there's no startup pre-check.
 
 A rift checkout is a full, independent clone: its own `.git` directory,
 its own object db and refs, detached at the main clone's HEAD, then
-switched onto the target branch. This is the crucial difference from a
-git worktree, and it drives the rest of the design:
+switched onto the target branch. That switch runs with
+`--discard-changes`: `--copy-all` copies the main clone's working tree
+INCLUDING any uncommitted modifications, and a plain switch would
+refuse whenever those files differ across the jump — which used to
+abort creation any time the main clone was dirty. The dirt exists only
+in the throwaway copy (the main clone is never touched), so discarding
+it is safe and removes the clean-main-clone requirement entirely. This
+independent-clone model is the crucial difference from a git worktree,
+and it drives the rest of the design:
 
 - **Discovery.** A rift checkout never appears in `git worktree list`.
   `listWorktrees` scans the worktree root for immediate children carrying

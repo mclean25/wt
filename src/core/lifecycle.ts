@@ -254,10 +254,11 @@ export async function createWorktree(
   clearDevServerFiles(slug);
 
   try {
+    const backend = getBackend(config.backend.kind);
+
     opts.onPhase?.("fetching origin");
     await fetchOrigin();
 
-    const backend = getBackend(config.backend.kind);
     handle.phase(`creating worktree (${backend.id})`);
     const existing = await branchExists(branch);
     if (existing && opts.base) {
@@ -381,6 +382,16 @@ export async function createWorktree(
         }
       }
     }
+  } catch (err) {
+    // Backend and setup failures THROW (the rift backend rolls back its
+    // partial clone first). Fold them into the `ok: false` contract so
+    // every caller's existing failure path (CLI stderr, TUI toast +
+    // attention line) surfaces the reason — an escaped rejection here
+    // used to leave the flashed-and-vanished row with no explanation.
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
   } finally {
     handle.release();
   }

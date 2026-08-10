@@ -88,8 +88,11 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       base: parsed.base,
     });
     if (!result.ok) {
-      newLog.event.err(result.reason);
-      toast(`worktree failed: ${result.reason}`, theme.err, 3000);
+      // Attention-channel: a create failure is an async completion whose
+      // trigger keystroke is long past, and it needs acting on (fix the
+      // main clone, retry). The emit toasts by default — no ctx.toast on
+      // top, per the single-emit contract.
+      newLog.attention.err(`worktree failed: ${result.reason}`);
       return false;
     }
     if (parsed.gh) {
@@ -191,8 +194,8 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       runInstall: true,
     });
     if (!result.ok) {
-      log.event.err(result.reason);
-      toast(`worktree failed: ${result.reason}`, theme.err, 3000);
+      // Attention-channel (toasts by default) — see doNew's failure path.
+      log.attention.err(`worktree failed: ${result.reason}`);
       return;
     }
     await setSection(result.slug, REVIEW_SECTION);
@@ -216,8 +219,8 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       runInstall: true,
     });
     if (!result.ok) {
-      log.event.err(result.reason);
-      toast(`restore failed: ${result.reason}`, theme.err, 3000);
+      // Attention-channel (toasts by default) — see doNew's failure path.
+      log.attention.err(`restore failed: ${result.reason}`);
       return;
     }
     log.event.ok(`restored at ${result.path}`);

@@ -40,7 +40,7 @@ Issue-id input resolves like this:
 - `--open` / `--no-open` — open in Zed after creation (default: open when interactive).
 - `--no-install` — skip the package-install step. Ignored under the `rift` backend, which copies packages via its clone.
 
-If the branch already has a worktree, prints its path instead of erroring.
+If the branch already has a worktree, prints its path instead of erroring. A dirty main clone never blocks creation: the `rift` backend's CoW clone copies the main clone's uncommitted changes, and the post-clone branch switch discards them in the copy (`--discard-changes` — the main clone itself is never touched). Any create failure surfaces its reason on the CLI and the TUI attention feed instead of a row silently vanishing.
 
 ### `wt rm [<slug>]`
 
