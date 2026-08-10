@@ -37,18 +37,15 @@ export function WorkStatusBlock({ row }: { row: WorktreeRow }) {
         {stale ? <span fg={theme.warn}>{" · commits since"}</span> : null}
       </text>
       {record.note ? (
-        // Blockquote rail: a 1-cell bar in the state color contains
-        // the note (it stretches to however many lines the text wraps
-        // to) and marks where the block ends; the mid-tone text keeps
-        // the colored header dominant without dimming the note to
-        // metadata-gray.
-        <box flexDirection="row">
-          <box width={1} flexShrink={0} backgroundColor={color} />
-          <box flexGrow={1} flexShrink={1} paddingLeft={1}>
-            <text fg={theme.fgMid} wrapMode="word">
-              {record.note}
-            </text>
-          </box>
+        // Blockquote rail: a left-only border draws a hairline `│` in
+        // the state color down however many lines the note wraps to (a
+        // backgroundColor cell reads as a chunky block); the mid-tone
+        // text keeps the colored header dominant without dimming the
+        // note to metadata-gray.
+        <box border={["left"]} borderStyle="single" borderColor={color} paddingLeft={1}>
+          <text fg={theme.fgMid} wrapMode="word">
+            {record.note}
+          </text>
         </box>
       ) : null}
     </box>
