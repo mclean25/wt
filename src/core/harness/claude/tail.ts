@@ -522,14 +522,19 @@ class SessionTailRegistry {
     // in messageToLines. Acceptable for a seed of bounded size.
     const startIdx = start === 0 ? 0 : 1;
     let accum: ActionLine[] = [];
-    let usage: SessionContextUsage | null = null;
+    // `undefined` = no usage-affecting line seen yet this pass (keep
+    // whatever the run already has). A compact_boundary line sets this
+    // to `null` (explicit reset); an assistant turn's usage sets it to
+    // the parsed figure. Later lines in the forward scan win, matching
+    // jsonl order.
+    let usage: SessionContextUsage | null | undefined;
     const nextId = () => st.nextLineId++;
     for (let i = startIdx; i < lines.length; i++) {
       const line = lines[i];
       if (!line) continue;
       const out = parseEntry(line, st.toolStarts, nextId);
       accum = applyEmit(accum, out);
-      if (out.usage) usage = out.usage;
+      if (Object.hasOwn(out, "usage")) usage = out.usage;
     }
     st.lastByte = size;
     st.pending = "";
@@ -540,7 +545,7 @@ class SessionTailRegistry {
     this.update(key, (r) => ({
       ...r,
       lines: trimmed,
-      lastUsage: usage ?? r.lastUsage,
+      lastUsage: usage !== undefined ? usage : r.lastUsage,
     }));
   }
 
@@ -581,12 +586,15 @@ class SessionTailRegistry {
     st.pending = lines.pop() ?? "";
     const nextId = () => st.nextLineId++;
     const emits: MessageEmit[] = [];
-    let usage: SessionContextUsage | null = null;
+    // See the matching comment in `readSeed`: `undefined` = no signal
+    // this batch, `null` = explicit reset (compact_boundary), an object
+    // = fresh usage. Last signal in the batch wins.
+    let usage: SessionContextUsage | null | undefined;
     for (const line of lines) {
       if (!line) continue;
       const out = parseEntry(line, st.toolStarts, nextId);
       if (out.append.length > 0 || out.patch.length > 0) emits.push(out);
-      if (out.usage) usage = out.usage;
+      if (Object.hasOwn(out, "usage")) usage = out.usage;
       // Live tail only: scan for `gh pr …` / `git push` &c and schedule
       // a debounced query refresh. `readSeed` deliberately skips this —
       // replaying hours-old history must not fire refreshes.
@@ -599,7 +607,7 @@ class SessionTailRegistry {
     // here snaps the badge on turn end regardless of whether the line
     // produced a UI-visible emit (system events, queue-ops, etc).
     scheduleSlugChange(st.slug);
-    if (emits.length === 0 && usage === null) return;
+    if (emits.length === 0 && usage === undefined) return;
     this.update(key, (r) => {
       let next: ActionLine[] = r.lines.slice();
       for (const emit of emits) next = applyEmit(next, emit);
@@ -607,7 +615,7 @@ class SessionTailRegistry {
         next.length > MAX_BUFFERED_LINES
           ? next.slice(-MAX_BUFFERED_LINES)
           : next;
-      return { ...r, lines, lastUsage: usage ?? r.lastUsage };
+      return { ...r, lines, lastUsage: usage !== undefined ? usage : r.lastUsage };
     });
   }
 
@@ -659,11 +667,17 @@ function extractUsage(e: Record<string, unknown>): SessionContextUsage | null {
   return { tokens, model: typeof m.model === "string" ? m.model : null };
 }
 
-function parseEntry(
+/**
+ * Exported for unit tests only — the registry is the real caller. Parses
+ * one raw jsonl line into a buffer delta plus an optional context-usage
+ * signal (see the `usage` field: absent = no change, `null` = explicit
+ * reset from a compact boundary, an object = fresh figure).
+ */
+export function parseEntry(
   raw: string,
   toolStarts: ToolStartMap,
   nextId: () => number,
-): MessageEmit & { usage?: SessionContextUsage } {
+): MessageEmit & { usage?: SessionContextUsage | null } {
   let evt: unknown;
   try {
     evt = JSON.parse(raw);
@@ -721,6 +735,13 @@ function parseEntry(
         },
       ],
       patch: [],
+      // Explicit reset (not just "no info this line" — that's `usage`
+      // absent). The pre-compact tokens/model no longer describe the
+      // window; clearing to null makes the footer hide the % until the
+      // next assistant turn lands with a fresh usage figure. Distinct
+      // from the sidechain/non-numeric skip in `extractUsage`, which
+      // omits the `usage` key entirely so callers keep the prior value.
+      usage: null,
     };
   }
   // system.away_summary — claude's auto-generated context-recap when
