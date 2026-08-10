@@ -113,7 +113,12 @@ export async function reapWorktreeListeners(wtPath: string): Promise<ReapedProce
     if (wtPath === config.paths.mainClone || wtPath.split("/").length < 3) return [];
     if (!Bun.which("lsof")) return [];
 
+    // Explicit cwd: `run()` defaults to the main clone, and a destroy
+    // must not depend on that directory existing (it also doesn't on
+    // CI's synthetic config, where the default cwd made this spawn
+    // throw and the reaper silently no-op).
     const listeners = await run(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"], {
+      cwd: "/",
       timeoutMs: 8000,
     });
     // lsof exits 1 for "no matches" (and for harmless per-fd warnings)
@@ -125,7 +130,7 @@ export async function reapWorktreeListeners(wtPath: string): Promise<ReapedProce
 
     const cwds = await run(
       ["lsof", "-a", "-p", all.map((p) => p.pid).join(","), "-d", "cwd", "-Fpn"],
-      { timeoutMs: 8000 },
+      { cwd: "/", timeoutMs: 8000 },
     );
     const cwdByPid = parseCwdMap(cwds.stdout);
     const mine = all.filter((p) => {
