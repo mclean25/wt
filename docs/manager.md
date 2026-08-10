@@ -67,7 +67,18 @@ Everything is ordinary CLI surface, so any harness can drive it:
 - `wt claude ls --json` — live sessions with `busy` / `last_activity` per session.
 - `wt manager report [--ok|--warn|--err] "<text>"` — surface a terse result on the TUI's attention feed (the palette's report-back channel).
 - `gh` — PR state, merges (only when the human asked), CI.
-- Cross-session messaging, when the harness supports it — worktree sessions and the manager are plain sessions on one machine.
+- Cross-session messaging, when the harness supports it — see below.
+
+### Session names are addresses
+
+Every Claude session wt spawns is named after its wt identity: `<slug>` for a worktree's primary session, `<slug>~<name>` for a named one, the slot label for the `wt` / `main` / `dotfiles` / `manager` slots. That name is the `/resume` label, the process registry's `name`, and — the reason it's slug-derived rather than a generic `primary` — **the address peer Claude instances reach the session by**. An agent that can list its peers can therefore map a row straight back to a worktree, and message it without going through tmux at all.
+
+wt does not implement that transport, and shouldn't: it guarantees the names, nothing more. Direct messaging only reaches a session that is **already live**, only works for Claude, and delivers text into a conversation rather than typed input — so it cannot cold-start a stopped worktree, cannot invoke a slash command, and cannot carry wt's own traffic (automations, briefings, `[[actions]]`) since wt is a Bun process, not a Claude instance. Those all stay on tmux injection, which boots what it needs to and pastes as though the human typed it:
+
+- `wt claude send <slug>` / `wt manager send` — work whether or not the target is running, and the `!` menu's custom actions deliberately act like keystrokes.
+- Worker → manager escalations and papercuts stay on `wt manager send` for exactly this reason: fire-and-forget with a cold start beats "list peers, find the manager, handle it being down".
+
+An agent nudging a peer it can see live may use direct messaging and skip the paste machinery; anything that must arrive regardless of the target's state uses wt.
 
 ## Feedback channel (opt-in)
 

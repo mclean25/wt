@@ -98,6 +98,13 @@ export type HarnessSession = {
 export type HarnessSpawnArgs = {
   wtPath: string;
   /**
+   * Worktree slug (or slot slug) this session belongs to. Claude uses
+   * it to derive the session's `--name`, which is both its `/resume`
+   * label and the address other Claude instances message it by — see
+   * `claudeHarness.buildArgs`.
+   */
+  slug: string;
+  /**
    * Wt-managed name (Claude only). For others, ignored — they generate
    * their own session ids on spawn.
    */
@@ -107,8 +114,10 @@ export type HarnessSpawnArgs = {
    */
   resumeSessionId: string | null;
   /**
-   * Optional display label for Claude's `/resume` picker (primary
-   * session only). Ignored by other harnesses.
+   * Explicit display label, overriding the slug-derived default.
+   * Session slots pass their label here (the manager's cwd-sharing
+   * managed name would otherwise read as `manager~manager`). Claude
+   * only; ignored by other harnesses.
    */
   displayLabel?: string;
 };

@@ -158,15 +158,18 @@ async function ls(json: boolean): Promise<number> {
     const registry = readRegistry();
     const payload = entries.map((e) => {
       const cwd = cwdBySlug.get(e.slug);
-      // Registry `name` is the `--name` label wt spawned claude with:
-      // named sessions carry their name, worktree primaries carry
-      // "primary", slot primaries carry the slot label (== slug). The
-      // name leg matters because slots can share a cwd (main clone +
-      // manager) — cwd alone would cross-wire their statuses.
+      // Registry `name` is the `--name` label wt spawned claude with —
+      // the tmux session name, so `<slug>` for a primary and
+      // `<slug>~<name>` for a named session (slot primaries carry the
+      // slot label, == slug). The name leg matters because slots can
+      // share a cwd (main clone + manager) — cwd alone would cross-wire
+      // their statuses. The bare-name / "primary" forms are what
+      // sessions spawned before names became slug-derived registered
+      // as; still matched so a long-lived one keeps reporting.
       const nameMatches = (r: { name: string | null }): boolean =>
         e.name !== null
-          ? r.name === e.name
-          : r.name === "primary" || r.name === e.slug || r.name === null;
+          ? r.name === `${e.slug}~${e.name}` || r.name === e.name
+          : r.name === e.slug || r.name === "primary" || r.name === null;
       const match =
         cwd === undefined
           ? undefined

@@ -93,6 +93,7 @@ async function startHarnessSessionDetached(
   // buildInnerArgs also calls harness.ensureTrusted?.(cwd) — rift
   // checkouts otherwise trip Claude's per-project trust prompt.
   const innerArgs = buildInnerArgs({
+    slug,
     cwd,
     kind: harnessId,
     harness,

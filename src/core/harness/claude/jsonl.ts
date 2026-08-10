@@ -156,9 +156,10 @@ export function sessionJsonlPath(wtPath: string, uuid: string): string {
 /**
  * Args to splice into a `claude` invocation that pin it to a
  * wt-managed conversation. Resumes when the jsonl exists, otherwise
- * creates with our deterministic UUID. `--name` tags the session so
- * `/resume` listings stay readable; `displayName` is the label that
- * shows up there.
+ * creates with our deterministic UUID. `--name` tags the session with
+ * `displayName` — the `/resume` label, the registry's `name`, and the
+ * address peer Claude instances message it by; `claudeHarness.buildArgs`
+ * derives it from the session's wt identity.
  *
  * Resume vs. create is decided by file existence — claude rejects
  * `--session-id` for an already-used ID and `--resume` for a

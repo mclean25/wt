@@ -88,9 +88,11 @@ export const claudeHarness: Harness = {
     // map would let whichever registry file parses last win — main's
     // `busy` painting the manager's footer button (or vice versa). The
     // registry's `name` field carries the `--name` label wt spawned
-    // with (slot label == slot slug; worktree primaries use "primary"),
-    // so on collision prefer the entry whose name matches THIS slug,
-    // then the generic primary label, then whatever's there.
+    // with (the tmux session name, so a slug for primaries; slots pass
+    // their label, also == slug), so on collision prefer the entry
+    // whose name matches THIS slug, then the legacy "primary" label
+    // (sessions started before names became slug-derived), then
+    // whatever's there.
     const bySessionId = new Map<string, RegistrySession[]>();
     for (const r of readRegistry()) {
       const list = bySessionId.get(r.sessionId);
@@ -149,11 +151,21 @@ export const claudeHarness: Harness = {
     return out;
   },
 
+  // `--name` is not cosmetic: it's the label in `/resume`, the
+  // registry's `name` field, AND the address other Claude instances
+  // reach this session by (`ListAgents` / `SendMessage`). So it gets
+  // the session's wt identity — the tmux session name — which is
+  // unique across the fleet. Before this, every worktree primary
+  // spawned as `primary` and a peer agent saw N indistinguishable
+  // rows with no way back to a slug.
+  //
+  // Safe to change for live conversations: the conversation UUID is
+  // `wtSessionUuid(wtPath, managedName)`, so relabeling never forks or
+  // orphans one. Anything matching on the registry's `name` must
+  // accept the old `primary`/bare-managed-name forms too, for sessions
+  // spawned before this (`cli/commands/{claude,fleet}.ts`).
   buildArgs(args: HarnessSpawnArgs) {
-    const displayName =
-      args.managedName !== null
-        ? args.managedName
-        : (args.displayLabel ?? "primary");
+    const displayName = args.displayLabel ?? claudeTmuxName(args.slug, args.managedName);
     return [
       "claude",
       ...wtSessionArgs({

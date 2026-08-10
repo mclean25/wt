@@ -133,6 +133,7 @@ export function resolveSessionIdentity(
  * produces.
  */
 export function buildInnerArgs(params: {
+  slug: string;
   cwd: string;
   kind: Exclude<SessionKind, "action" | "dev">;
   harness: Harness | null;
@@ -141,12 +142,21 @@ export function buildInnerArgs(params: {
   claudeDisplayName?: string;
   base?: string;
 }): string[] {
-  const { cwd, kind, harness, managedNameNorm, resumeSessionId, claudeDisplayName, base } =
-    params;
+  const {
+    slug,
+    cwd,
+    kind,
+    harness,
+    managedNameNorm,
+    resumeSessionId,
+    claudeDisplayName,
+    base,
+  } = params;
   if (harness) {
     harness.ensureTrusted?.(cwd);
     return harness.buildArgs({
       wtPath: cwd,
+      slug,
       managedName: managedNameNorm,
       resumeSessionId: resumeSessionId ?? null,
       displayLabel: claudeDisplayName,
@@ -291,6 +301,7 @@ export async function attachOrCreate(opts: {
   // (pyenv, mise, …) apply. The shell branch is just the login shell
   // with no command — exit (Ctrl+D / `exit`) ends the session.
   const innerArgs = buildInnerArgs({
+    slug,
     cwd,
     kind,
     harness,

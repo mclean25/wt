@@ -82,7 +82,9 @@ type SessionInfo = {
  * `wt claude ls --json` joins: tmux (alive) and Claude's process
  * registry (busy / last_activity, matched by cwd + name; see
  * commands/claude.ts for the name-leg rationale). Worktree primaries
- * register as name "primary" or null.
+ * register under the slug; "primary" and null are the pre-slug-naming
+ * forms, still matched so a session started before that change (or by
+ * hand, without `--name`) keeps reporting liveness.
  */
 function sessionInfoFor(
   wt: Worktree,
@@ -92,7 +94,9 @@ function sessionInfoFor(
   const alive = liveClaudeSlugs.has(wt.slug);
   if (!alive) return { alive: false, busy: null, last_activity: null };
   const match = registry
-    .filter((r) => r.cwd === wt.path && (r.name === "primary" || r.name === null))
+    .filter(
+      (r) => r.cwd === wt.path && (r.name === wt.slug || r.name === "primary" || r.name === null),
+    )
     .sort((a, b) => b.updatedAt - a.updatedAt)[0];
   return {
     alive: true,
