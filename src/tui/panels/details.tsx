@@ -197,38 +197,23 @@ function RenderedRow({ module: m, ctx }: { module: RowModule; ctx: RowContext })
 }
 
 /**
- * Title above the row stack. Bold title followed by a muted `(source)`
- * tag so it's obvious where the text came from — useful for spotting
- * stale PR titles vs. fresh LLM-generated ones at a glance. Always
- * renders: `useWorktreeRows` guarantees a slug-derived fallback, so
- * the line count stays stable as the better sources fill in.
+ * Border title for the details pane: the worktree's TITLE (best
+ * available source), not its slug — the slug is already the list-pane
+ * row and the `path` row, while the title used to cost two body lines
+ * right at the top of a vertically tight pane. The muted `(source)`
+ * tag stays so stale PR titles vs. fresh LLM ones remain spottable at
+ * a glance; the whole thing renders in the border color (a border
+ * title is chrome, not content). End-truncated by hand, with margin:
+ * opentui's native drawBox DROPS a title that doesn't fit between the
+ * corner chrome rather than clipping it, so an over-budget title
+ * blanks the whole bar — observed at 110 cols, where titles within 3
+ * cells of the pane width vanished under the old
+ * `width - PANE_CHROME_WIDTH` budget while shorter ones rendered.
  */
-function TitleLine({
-  title,
-  source,
-  width,
-}: {
-  title: string;
-  source: TitleSource;
-  width: number;
-}) {
-  // opentui's native `truncate` mid-clips ("Classify meeting
-  // reschedule...ent time-changed hint (llm)") — the most prominent
-  // line in the pane loses its tail, not its least-important part. We
-  // hand-roll end-truncation instead, budgeted off the pane's content
-  // width (same PANE_CHROME_WIDTH accounting as `valueWidthFor`, minus
-  // the label column this line doesn't have) with the ` (source)` tag
-  // reserved so it always stays visible.
+function paneTitle(title: string, source: TitleSource, width: number): string {
   const suffix = ` (${source})`;
-  const budget = Math.max(0, width - PANE_CHROME_WIDTH - Bun.stringWidth(suffix));
-  return (
-    <box marginBottom={1}>
-      <text wrapMode="none">
-        <span fg={theme.fg} attributes={1}>{truncateEnd(title, budget)}</span>
-        <span fg={theme.fgDim}>{suffix}</span>
-      </text>
-    </box>
-  );
+  const budget = Math.max(0, width - 8 - Bun.stringWidth(suffix));
+  return ` ${truncateEnd(title, budget)}${suffix} `;
 }
 
 /**
@@ -482,7 +467,7 @@ const DetailsBody = memo(function DetailsBody({
       border
       borderStyle="single"
       borderColor={theme.border}
-      title={` ${row.wt.slug} `}
+      title={paneTitle(row.title, row.titleSource, width)}
       titleAlignment="left"
       padding={1}
       flexDirection="column"
@@ -501,7 +486,6 @@ const DetailsBody = memo(function DetailsBody({
         {/* Asserted work status, full width — the note is the payload
             (merge impacts, needs-human asks) and must never truncate. */}
         <WorkStatusBlock row={row} />
-        <TitleLine title={row.title} source={row.titleSource} width={width} />
         {RESOLVED_ROWS.map((m) => (
           <RenderedRow key={m.id} module={m} ctx={ctx} />
         ))}
