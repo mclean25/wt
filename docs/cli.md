@@ -141,6 +141,18 @@ Keep wt's bundled agent skills (`wt`, `restack`, `manager`, `start`, `triage`) a
 - `diff <name>` — what a sync would change, as a unified diff.
 - `reset [--answers|--declines]` — forget remembered template answers and/or declined updates.
 
+### `wt update [--check]`
+
+Update wt itself. The install is a git clone (see the README), so updating is a fast-forward: `git fetch`, `git merge --ff-only`, and a `bun install` when the dependency manifest changed across the jump. Prints the incoming commits before applying and names any still-running wt instances afterwards — they keep the old code until restarted. Refuses to touch a clone with local changes or unpushed commits; update those by hand with git.
+
+- `--check` — only report whether an update is available; don't apply.
+
+The TUI runs the same check at startup, before the terminal is taken over: at most once a day, prompting y/n, with a "no" remembered per origin head — it never re-asks until new commits land. Skipped silently when the clone is dirty/ahead (a wt being developed updates itself by hand). An accepted update re-execs wt so the fresh code is what actually runs. `[update] startup_check = false` ([configuration.md](configuration.md#update)) disables the startup check; `WT_UPDATE=off` disables it for a single run (the probe harness arms this). The check's daily stamp and remembered declines live in `~/.cache/wt/update.json`, shared machine-wide like the skills memory.
+
+### `wt version`
+
+Print the running version — the source clone's git short hash and commit date (`98d1250 (2026-08-08)`), with a `-dirty` suffix when the clone has local modifications. Notes when origin is ahead as of the last fetch (touches no network; `wt update --check` does the live comparison). Also available as `wt --version` / `-v`, and shown in the title of the TUI's help overlay (`?`).
+
 ## Integrations
 
 ### `wt events <sub>`

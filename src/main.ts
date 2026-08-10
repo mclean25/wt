@@ -37,6 +37,25 @@ async function main(): Promise<number> {
     const { startupSkillsPrompt } = await import("./cli/skills-sync.ts");
     await startupSkillsPrompt();
   }
+  // Self-update check, after skills (both prompt on this terminal).
+  // An accepted pull re-execs a fresh process instead of continuing:
+  // main.ts/config.ts are already loaded from the old code, and lazy
+  // TUI imports would come from the new checkout — never run the mix.
+  // WT_UPDATE=off is the per-run kill switch (probe harness arms it).
+  if (config.update.startupCheck && process.env.WT_UPDATE !== "off") {
+    const { startupUpdatePrompt } = await import("./cli/commands/update.ts");
+    if ((await startupUpdatePrompt()) === "updated") {
+      const { WT_REPO_ROOT } = await import("./core/update.ts");
+      const { join } = await import("node:path");
+      const child = Bun.spawnSync({
+        cmd: [process.execPath, join(WT_REPO_ROOT, "src", "main.ts")],
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      return child.exitCode ?? 1;
+    }
+  }
   const { setWezTermTabTitle } = await import("./core/wezterm.ts");
   await setWezTermTabTitle("wt", config.paths.weztermCli);
   const { runTui } = await import("./tui/runtime.tsx");

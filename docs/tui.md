@@ -1,6 +1,6 @@
 # TUI guide
 
-`wt` with no arguments launches the TUI. Press `?` inside for the built-in keymap + glyph legend (with `/` to filter it) — that overlay is always the most current reference; this page is the tour.
+`wt` with no arguments launches the TUI. Press `?` inside for the built-in keymap + glyph legend (with `/` to filter it) — that overlay is always the most current reference; this page is the tour. The overlay's title also shows the running version (the source clone's git short hash — see [`wt version`](cli.md#wt-version)).
 
 ## Layout
 

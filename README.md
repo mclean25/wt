@@ -45,6 +45,8 @@ Add to your shell rc:
 alias wt='~/.wt/bin/wt'
 ```
 
+Updating is a fast-forward of that clone: `wt update` does it on demand, and the TUI offers it at startup when new commits have landed (once a day at most, declines remembered). `wt version` prints the running git hash.
+
 ## Configure
 
 `wt` refuses to start without a config. The minimal `~/.config/wt/config.toml`:

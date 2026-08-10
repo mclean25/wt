@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { config } from "../../core/config.ts";
 import { getHarness } from "../../core/harness/index.ts";
+import { wtVersion } from "../../core/update.ts";
 import type { WorkState } from "../../core/work-status.ts";
 import { workStateColor, workStateGlyph } from "../badges.ts";
 import { STATE_DOT, STATE_FG } from "../claude-state.ts";
@@ -564,7 +565,7 @@ export function HelpOverlay({
 
   return (
     <Modal
-      title="help"
+      title={`help · wt ${wtVersion()}`}
       inset={{ top: "6%", right: "6%", bottom: "6%", left: "6%" }}
       hints={hints}
       fill

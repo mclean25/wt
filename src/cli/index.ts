@@ -17,6 +17,8 @@ import * as claudeCmd from "./commands/claude.ts";
 import * as devCmd from "./commands/dev.ts";
 import * as restackCmd from "./commands/restack.ts";
 import * as skillsCmd from "./commands/skills.ts";
+import * as updateCmd from "./commands/update.ts";
+import * as versionCmd from "./commands/version.ts";
 import * as eventsCmd from "./commands/events.ts";
 import * as remoteCmd from "./commands/remote.ts";
 import * as remoteExecCmd from "./commands/_remote.ts";
@@ -37,6 +39,8 @@ commands:
   open        open a worktree in Zed
   restack     rebase a stack of worktrees onto its updated parents
   skills      keep wt's agent skills + instructions installed and current
+  update      update wt itself (fast-forward the source clone)
+  version     print the running wt version (git short hash)
   events      manage the optional GitHub webhook daemon
   remote      enter or run wt on the configured SSH remote
   base        show / set / clear a worktree's recorded fork base
@@ -62,6 +66,8 @@ const RUNNERS: Record<string, Runner> = {
   open: openCmd.run,
   restack: restackCmd.run,
   skills: skillsCmd.run,
+  update: updateCmd.run,
+  version: versionCmd.run,
   events: eventsCmd.run,
   remote: remoteCmd.run,
   _remote: remoteExecCmd.run,
@@ -80,6 +86,9 @@ export async function dispatch(argv: string[]): Promise<number> {
   if (cmd === "--help" || cmd === "-h") {
     console.log(HELP);
     return 0;
+  }
+  if (cmd === "--version" || cmd === "-v") {
+    return versionCmd.run(rest);
   }
   const run = cmd ? RUNNERS[cmd] : undefined;
   if (!run) {

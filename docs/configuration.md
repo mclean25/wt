@@ -315,6 +315,12 @@ Omit for classic poll-only behavior. When present, the `wt events` daemon accept
 |---|---|---|---|
 | `startup_check` | no | `true` | Check wt's bundled agent skills + managed instructions block for pending updates when the TUI starts, prompting y/n once per update before the terminal is taken over (so agent sessions spawned from that run see the updates). A "no" is remembered per content version and never re-asked; copies wt didn't install are never overwritten without an explicit yes. `false` disables the startup prompt — `wt skills` keeps working on demand. See [skills.md](skills.md). |
 
+## `[update]`
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `startup_check` | no | `true` | Check the wt source clone for upstream commits when the TUI starts — at most once a day — and prompt y/n to fast-forward ([`wt update`](cli.md#wt-update---check) semantics: skipped silently when the clone is dirty or ahead, a "no" is remembered until origin moves again, and an accepted update re-execs wt on the new code). `false` disables the startup check — `wt update` keeps working on demand; `WT_UPDATE=off` disables it for a single run. |
+
 ## `[[actions]]` — the `!` menu
 
 Pre-built actions surfaced by the `!` picker (and available as automation targets). Two kinds, distinguished by which field you set:

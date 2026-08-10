@@ -603,6 +603,17 @@ export type Config = {
      */
     startupCheck: boolean;
   };
+  update: {
+    /**
+     * Check the wt source clone for upstream commits when the TUI
+     * starts — at most once a day — and prompt y/n to fast-forward
+     * (a "no" is remembered until origin moves again). Skipped
+     * silently when the clone is dirty or ahead. `[update]
+     * startup_check = false` turns it off; `wt update` stays
+     * available. See core/update.ts.
+     */
+    startupCheck: boolean;
+  };
 };
 
 /**
@@ -1082,6 +1093,13 @@ function build(raw: Raw, errs: Errors): Config {
   }
   const skills = { startupCheck: startupCheckRaw !== false };
 
+  const updateRaw = obj(raw.update);
+  const updateStartupRaw = updateRaw?.startup_check;
+  if (updateStartupRaw !== undefined && typeof updateStartupRaw !== "boolean") {
+    errs.add("update.startup_check must be a boolean");
+  }
+  const update = { startupCheck: updateStartupRaw !== false };
+
   const githubRaw = obj(raw.github);
   const githubEventsRaw = githubRaw ? obj(githubRaw.events) : null;
   const githubEventsSecretFile = githubEventsRaw
@@ -1155,6 +1173,7 @@ function build(raw: Raw, errs: Errors): Config {
     automations,
     ui: { rows, hiddenBadges, sort: uiSort },
     skills,
+    update,
   };
 }
 
