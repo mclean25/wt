@@ -313,6 +313,10 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         reportActionError("mark seen", err);
         return;
       }
+      // Snap to the live tail: "marked seen" means "show me only new
+      // stuff", which is at the bottom — and the jump re-engages
+      // sticky-bottom if the user had scrolled back.
+      activityScroll.current?.scrollBy(9999, "viewport");
       toast("attention marked seen", theme.fgDim, 1500);
       return;
     }
