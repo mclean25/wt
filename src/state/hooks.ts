@@ -119,6 +119,7 @@ import {
   fetchOriginNow,
   fetchOriginQuery,
   githubQuery,
+  remoteWorktreesQuery,
   tmuxSessionsQuery,
   worktreesQuery,
   type GithubData,
@@ -160,20 +161,23 @@ export function patchPullRequest(
 }
 
 /**
- * Observe the combined GitHub query, scoped to the current set of
- * worktree branches. Derives branches from `worktreesQuery` so both
- * consumers (list-row aggregator + details pane) share one observer
- * and one fetch. Sort stabilizes the queryKey against worktree-list
- * ordering changes.
+ * Observe the combined GitHub query, scoped to the current local + remote
+ * fleet branches. Both consumers (list-row aggregator + details pane) share
+ * one observer and one fetch. Dedupe handles the same branch appearing in
+ * both locations; sort stabilizes the query key against inventory ordering.
  */
 export function useGithub(): UseQueryResult<GithubData, Error> {
   const wtList = useQuery(worktreesQuery());
+  const remoteList = useQuery(remoteWorktreesQuery());
   const branches = useMemo(() => {
-    return (wtList.data ?? [])
+    const local = (wtList.data ?? [])
       .filter((w) => !w.isMain && !!w.branch)
-      .map((w) => w.branch as string)
-      .sort();
-  }, [wtList.data]);
+      .map((w) => w.branch as string);
+    const remote = (remoteList.data ?? [])
+      .filter((w) => !!w.branch)
+      .map((w) => w.branch);
+    return [...new Set([...local, ...remote])].sort();
+  }, [wtList.data, remoteList.data]);
   return useQuery(githubQuery(branches));
 }
 

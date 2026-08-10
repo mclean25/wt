@@ -17,7 +17,12 @@ import {
   recentlyRemovedWorktrees,
   recentRemovalsSummary,
 } from "../../core/wtstate.ts";
-import { BadgeCluster, badgeClusterCells } from "../badge-cluster.tsx";
+import {
+  BadgeCluster,
+  RemoteBadgeCluster,
+  badgeClusterCells,
+  remoteBadgeClusterCells,
+} from "../badge-cluster.tsx";
 import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
 import { useScrollToEdge } from "../hooks/useScrollToEdge.ts";
 import { NF } from "../icons.ts";
@@ -30,6 +35,7 @@ import type { ReviewRequestPr } from "../../core/github.ts";
 import { capitalizeFirst, slugLabel } from "../../core/stage.ts";
 import { STACK_CONNECTOR, stackOrdinalLabel } from "../../core/stack-layout.ts";
 import { StatusKind, type Status } from "../../core/types.ts";
+import type { GithubData } from "../../state/queries/github.ts";
 import type { ActiveSessionGlyph } from "../hooks/useHarnessSessions.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import type { ArchivedItem } from "../hooks/useVisualItems.ts";
@@ -119,6 +125,8 @@ type Props = {
   isLoading: boolean;
   /** The SSH inventory refetch failed; last-known remote rows stay visible. */
   remoteUnavailable: boolean;
+  /** One repo-wide GitHub snapshot covering local and remote branches. */
+  githubData?: GithubData;
 };
 
 /**
@@ -417,11 +425,13 @@ const RemoteRowView = memo(function RemoteRowView({
   entry,
   selected,
   panelWidth,
+  githubData,
   archived = false,
 }: {
   entry: RemoteListEntry;
   selected: boolean;
   panelWidth: number;
+  githubData?: GithubData;
   archived?: boolean;
 }) {
   const status: Status = isRemoteSummary(entry)
@@ -452,6 +462,11 @@ const RemoteRowView = memo(function RemoteRowView({
   const numId = id ? id.replace(/^[A-Z]+-/, "") : null;
   const baseLabel = numId ? `${numId}: ${rest || rawLabel}` : rest || rawLabel;
   const label = archived ? `${entry.hostLabel} · ${baseLabel}` : baseLabel;
+  const pr = isRemoteSummary(entry) ? githubData?.prs[entry.branch] : undefined;
+  const mq = isRemoteSummary(entry)
+    ? githubData?.mergeQueue?.[entry.branch]
+    : undefined;
+  const badgeCells = remoteBadgeClusterCells(pr, mq);
   return (
     <box
       id={`remote:${remoteEntryKey(entry)}`}
@@ -472,9 +487,10 @@ const RemoteRowView = memo(function RemoteRowView({
           attributes={selected ? TextAttributes.BOLD : 0}
           wrapMode="none"
         >
-          {truncateEnd(label, Math.max(0, panelWidth - 7))}
+          {truncateEnd(label, Math.max(0, panelWidth - 7 - badgeCells))}
         </text>
       </box>
+      <RemoteBadgeCluster pr={pr} mq={mq} archived={archived} />
     </box>
   );
 });
@@ -485,7 +501,7 @@ function remoteSectionKey(entry: RemoteListEntry): string {
   return `${REMOTE_SECTION_PREFIX}${entry.hostKey}`;
 }
 
-export function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, stackSectionLabels, isLoading, remoteUnavailable, scrollHandle }: Props) {
+export function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, stackSectionLabels, isLoading, remoteUnavailable, githubData, scrollHandle }: Props) {
   const hasArchived = archivedItems.length > 0;
   const hasReviewRequests = reviewRequests.length > 0;
   const hasActive = items.length > 0;
@@ -637,6 +653,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                     entry={item.entry}
                     selected={i === selectedIndex}
                     panelWidth={width}
+                    githubData={githubData}
                   />
                 </Fragment>
               );
@@ -744,6 +761,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                       entry={item.entry}
                       selected={globalIndex === selectedIndex}
                       panelWidth={width}
+                      githubData={githubData}
                       archived
                     />
                   );

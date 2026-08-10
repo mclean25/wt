@@ -87,7 +87,7 @@ type Props = {
 export function App({ onExit }: Props) {
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
-  const { rows, archivedKeys, isLoading } = useWorktreeRows();
+  const { rows, githubData, archivedKeys, isLoading } = useWorktreeRows();
   const remoteWorktreeList = useQuery(remoteWorktreesQuery());
   const remoteUnavailable = remoteWorktreeList.isError;
   const remoteError = remoteWorktreeList.error?.message ?? null;
@@ -908,6 +908,7 @@ export function App({ onExit }: Props) {
             stackSectionLabels={stackSectionLabels}
             isLoading={isLoading}
             remoteUnavailable={remoteUnavailable}
+            githubData={githubData}
             scrollHandle={listScrollHandleRef}
           />
         )}

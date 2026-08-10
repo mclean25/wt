@@ -28,7 +28,12 @@ import { getHarness } from "../core/harness/index.ts";
 import type { HarnessId } from "../core/harness/index.ts";
 import type { DerivedState } from "../core/harness/status.ts";
 import { stateColor } from "./claude-state.ts";
-import { REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
+import {
+  REVIEW_BOT_NONE,
+  StatusKind,
+  type MergeQueueEntry,
+  type PullRequest,
+} from "../core/types.ts";
 import { type BadgeSlot, config } from "../core/config.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
 
@@ -335,6 +340,67 @@ export function BadgeCluster({
         <box width={2} flexShrink={0}>
           <text fg={checkFg}>{c.glyph}</text>
         </box>
+      ) : null}
+    </box>
+  );
+}
+
+/** Width of the GitHub-only cluster used by SSH-hosted worktree rows. */
+export function remoteBadgeClusterCells(
+  pr: PullRequest | undefined,
+  mq: MergeQueueEntry | undefined,
+): number {
+  if (!pr) return 0;
+  const bot = shows("review_bot") && showReviewBot(pr)
+    ? reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE)
+    : null;
+  const review = shows("review") && pr.state === "OPEN" && !pr.isDraft
+    ? reviewBadge(pr.review)
+    : null;
+  const prSlot = shows("pr");
+  const checks = shows("checks") && pr.state === "OPEN" && pr.checks !== "none";
+  if (!bot && !review && !prSlot && !checks) return 0;
+  return 2 + (bot ? 2 : 0) + (review ? 2 : 0) +
+    (prSlot ? (mq ? 4 : 2) : 0) + (checks ? 2 : 0);
+}
+
+/** PR/check/review badges for a remote row; checkout-local signals stay remote. */
+export function RemoteBadgeCluster({
+  pr,
+  mq,
+  archived,
+}: {
+  pr: PullRequest | undefined;
+  mq: MergeQueueEntry | undefined;
+  archived: boolean;
+}) {
+  if (remoteBadgeClusterCells(pr, mq) === 0 || !pr) return null;
+  const bot = shows("review_bot") && showReviewBot(pr)
+    ? reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE)
+    : null;
+  const review = shows("review") && pr.state === "OPEN" && !pr.isDraft
+    ? reviewBadge(pr.review)
+    : null;
+  const showPr = shows("pr");
+  const showChecks = shows("checks") && pr.state === "OPEN" && pr.checks !== "none";
+  const prBadge = prStateBadge(pr);
+  const checks = checkBadge(pr.checks);
+  const dim = archived ? theme.fgDim : undefined;
+  const mqText = mq
+    ? `${NF.mergeQueue} ${mq.position >= 10 ? "+" : String(mq.position)}`
+    : "";
+  return (
+    <box flexShrink={0} flexDirection="row">
+      <text>  </text>
+      {bot ? <box width={2} flexShrink={0}><text fg={dim ?? bot.fg}>{bot.glyph}</text></box> : null}
+      {review ? <box width={2} flexShrink={0}><text fg={dim ?? review.fg}>{review.glyph}</text></box> : null}
+      {showPr && mq ? (
+        <box width={4} flexShrink={0}><text fg={dim ?? mqStateBadge(mq.state).fg}>{mqText}</text></box>
+      ) : showPr ? (
+        <box width={2} flexShrink={0}><text fg={dim ?? prBadge.fg}>{prBadge.glyph}</text></box>
+      ) : null}
+      {showChecks && checks ? (
+        <box width={2} flexShrink={0}><text fg={dim ?? checks.fg}>{checks.glyph}</text></box>
       ) : null}
     </box>
   );
