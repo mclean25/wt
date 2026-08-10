@@ -12,7 +12,7 @@ wt checkout and offer themselves on the next launch.
 
 | unit | what it is |
 |---|---|
-| `instructions` | a managed block spliced into each harness's **global instructions file** (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`): the always-on status/testing-ownership rules for agents working in wt worktrees |
+| `instructions` | a managed block spliced into each harness's **global instructions file** (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`): the always-on ownership rules for agents working in wt worktrees (work status, manual testing, the dev server) |
 | `wt` skill | orientation: subcommands, conventions, the stacked-PR model, gotchas |
 | `restack` skill | the conflict-resolution playbook behind `/restack` |
 | `manager` skill | the fleet-coordinator playbook for the [manager session](manager.md) |
@@ -22,6 +22,15 @@ wt checkout and offer themselves on the next launch.
 The instructions block exists because skills only load when invoked — the
 ownership rules ("you own testing", "never end without a status") have to be
 in the always-loaded instructions layer to actually govern behavior.
+
+It's also the only layer that can *correct* a repo. A shared repo's own
+`CLAUDE.md`/`AGENTS.md` is written for the contributors who don't use wt, so it
+says things like "run `pnpm dev`" — always loaded, and wrong inside a worktree.
+Adding a wt caveat there isn't an option (it would be noise for everyone else),
+and a skill loses the race because it isn't loaded when the agent reads the
+repo's table. The managed block is per-machine, always on, and therefore the
+one surface that wins that argument — which is why the dev-server rule lives
+there and not in the `wt` skill alone.
 
 ## The startup check
 

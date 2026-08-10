@@ -68,6 +68,12 @@ in each one.
   or attach/detach its secondary GitHub issue. The primary id stays parsed
   from the slug; the attached GH issue becomes the `i`-key / `y i` target
   (most specific wins), while `I` / `y I` always hit the primary.
+- `wt dev <start|stop|status|logs> [slug]` — the worktree's dev server, when
+  the project configures one. Use it instead of running the project's dev
+  command yourself: wt pins the server to a port it allocates per worktree
+  (so the port the repo documents is the wrong one here), supervises and
+  restarts it, surfaces it in the TUI, and kills it with the worktree.
+  `start` is also restart. Only ever your own worktree's server.
 - `wt rm [slug]` — remove a worktree; it deletes the branch too and takes no
   flags to control that.
 - `wt clean` — bulk-remove merged/gone worktrees.

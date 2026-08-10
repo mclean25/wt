@@ -16,6 +16,17 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   while you wait. **The same blocker twice is a setup defect, not a human
   dependency** — a credential that re-prompts every run should be reported
   (below), not escalated again.
+- **Long-running processes belong to wt.** The worktree's dev server is
+  `wt dev start`, never a bare `npm run dev` / `pnpm dev` — a repo's own
+  docs are written for people not using wt. Check `wt dev status` first
+  and reuse what's already running; it prints the URL, whose port wt
+  allocates per worktree, so the port the repo documents is the wrong
+  one here. `wt dev logs` is the output, and another slug's server is
+  never yours to stop or restart. A server you start by hand is
+  invisible to wt and to the human (no row, no status, no logs), dies
+  with your session, and holds its port long after the worktree is
+  archived. `[dev_server] is not configured` means the project has none
+  — then start it however the project documents.
 - **Never end a session without a clear status.** Finished means
   `wt status ready --risk low|medium|high [-m ...]`, risk judged broadly (end
   users, coworker workflows, costs, migrations, reversibility). The note
