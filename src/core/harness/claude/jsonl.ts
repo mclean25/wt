@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { sanitizeLine } from "../../proc.ts";
 import { readFileSlice } from "../../tail-util.ts";
-import { asArr, asObj, briefToolInput } from "./events.ts";
+import { asArr, asObj, AWAY_RECAP_HINT_RE, briefToolInput } from "./events.ts";
 import { listClaudeNames } from "./names.ts";
 
 /**
@@ -249,20 +249,33 @@ function assistantStopReason(raw: Record<string, unknown>): string | null {
  * to `end_turn` since the row only cares about mid-turn vs. not.
  */
 /**
- * The tail's CURRENT session summary: scan backward; a `summary` entry
- * found before any user/assistant message is the wrap-up line for the
+ * The tail's CURRENT session summary: scan backward; a wrap-up entry
+ * found before any user/assistant message is the recap for the
  * conversation as it stands. Hitting a message first means whatever
  * summary exists describes an older state — return null rather than a
- * stale line. Agent-influenced text headed for the TUI, so it gets the
- * same `sanitizeLine` scrub as every other jsonl-derived string.
- * Exported for unit tests (like `describePendingToolUse`).
+ * stale line. Two wrap-up shapes, matching how claude has written them
+ * over time: the legacy `summary` entry, and the current
+ * `system`/`away_summary` recap (the "※ recap: …" line claude shows
+ * when the user returns to a finished session; its trailing
+ * "(disable recaps in /config)" hint is stripped). Agent-influenced
+ * text headed for the TUI, so it gets the same `sanitizeLine` scrub as
+ * every other jsonl-derived string. Exported for unit tests (like
+ * `describePendingToolUse`).
  */
 export function currentSessionSummary(entries: readonly Entry[]): string | null {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
     if (e.type === "user" || e.type === "assistant") return null;
-    if (e.type !== "summary") continue;
-    const text = e.raw.summary;
+    let text: unknown = null;
+    if (e.type === "summary") {
+      text = e.raw.summary;
+    } else if (e.type === "system" && e.raw.subtype === "away_summary") {
+      text = typeof e.raw.content === "string"
+        ? e.raw.content.replace(AWAY_RECAP_HINT_RE, "")
+        : null;
+    } else {
+      continue;
+    }
     if (typeof text !== "string") return null;
     const line = firstNonEmptyLine(text);
     return line ? sanitizeLine(line) : null;

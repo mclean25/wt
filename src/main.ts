@@ -43,7 +43,11 @@ async function main(): Promise<number> {
   // Skills/instructions freshness check BEFORE the TUI takes the
   // terminal, so accepted updates are live for every agent session
   // spawned from this run. Silent when nothing is pending.
-  if (config.skills.startupCheck) {
+  // WT_SKILLS=off is the per-run kill switch (probe harness arms it —
+  // a probe stuck on this y/n has no safe answer: both are remembered
+  // in machine-global skills memory and would consume the human's own
+  // prompt for that version).
+  if (config.skills.startupCheck && process.env.WT_SKILLS !== "off") {
     const { startupSkillsPrompt } = await import("./cli/skills-sync.ts");
     await startupSkillsPrompt();
   }

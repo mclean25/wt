@@ -30,7 +30,10 @@
 #     (probes render PR badges from the persisted cache instead of
 #     burning API quota — N probes once ate a day's rate limit), and
 #     WT_UPDATE=off (the startup self-update prompt would block the
-#     first-paint wait and could pull new code mid-probe).
+#     first-paint wait and could pull new code mid-probe), and
+#     WT_SKILLS=off (the skills y/n has no probe-safe answer: yes
+#     writes the human's dotfiles, no is remembered and consumes
+#     their prompt for that version).
 #     All can be overridden by exporting them before `start`, but ONLY
 #     for a sealed second instance (own WT_CONFIG + WT_TMUX_SOCKET,
 #     cache_db relocated) — never against the live config. WT_CONFIG
@@ -50,7 +53,7 @@ case "$cmd" in
     T kill-session -t "$name" 2>/dev/null || true
     T new-session -d -s "$name" -x "$w" -y "$h" \
       -e WT_AUTOMATIONS="${WT_AUTOMATIONS:-off}" -e WT_GITHUB="${WT_GITHUB:-off}" \
-      -e WT_UPDATE="${WT_UPDATE:-off}" \
+      -e WT_UPDATE="${WT_UPDATE:-off}" -e WT_SKILLS="${WT_SKILLS:-off}" \
       ${WT_CONFIG:+-e WT_CONFIG="$WT_CONFIG"} \
       ${WT_TMUX_SOCKET:+-e WT_TMUX_SOCKET="$WT_TMUX_SOCKET"} \
       ${GH_TOKEN:+-e GH_TOKEN="$GH_TOKEN"} \

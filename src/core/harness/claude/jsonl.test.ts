@@ -38,4 +38,33 @@ describe("currentSessionSummary", () => {
       currentSessionSummary([summary("\n  [31mFixed the bug[0m  \nmore")]),
     ).toBe("Fixed the bug");
   });
+
+  // The current wrap-up shape: system/away_summary (the "※ recap" line).
+  const recap = (content: string): Entry => ({
+    type: "system",
+    raw: { type: "system", subtype: "away_summary", content },
+  });
+
+  test("an away_summary recap at the tail end is current, hint stripped", () => {
+    expect(
+      currentSessionSummary([
+        user,
+        assistant,
+        recap("Goal was X; done. Next action is yours. (disable recaps in /config)"),
+      ]),
+    ).toBe("Goal was X; done. Next action is yours.");
+  });
+
+  test("other system subtypes neither surface nor stale a recap", () => {
+    const turnDuration: Entry = {
+      type: "system",
+      raw: { type: "system", subtype: "turn_duration", durationMs: 5 },
+    };
+    expect(currentSessionSummary([assistant, recap("done"), turnDuration])).toBe("done");
+    expect(currentSessionSummary([assistant, turnDuration])).toBeNull();
+  });
+
+  test("a message after the recap makes it stale", () => {
+    expect(currentSessionSummary([recap("old news"), user])).toBeNull();
+  });
 });
