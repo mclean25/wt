@@ -26,7 +26,11 @@ Full mechanics are documented in those files' header comments; the shape:
   (this bit us once when `typecheck` became `ci`).
 - Debounce: the run sleeps 30 minutes inside a `concurrency` group with
   `cancel-in-progress: true`, so every newer green push cancels the sleeping
-  run and restarts the countdown — one digest per burst. The idle runner is
+  run and restarts the countdown — one digest per burst. The group sits at
+  the JOB level, not the workflow level: a workflow-level group is claimed
+  even by runs whose job the green-only `if:` skips, so a red push was
+  cancelling the previous green push's pending digest (its commits then
+  silently waited for the next green burst). The idle runner is
   free on public repos; if this repo ever goes private, switch to a cron
   check instead.
 - "Since when" state is the head SHA of the digest workflow's own last

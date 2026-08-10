@@ -17,10 +17,6 @@ on:
     types: [completed]
     branches: [main]
 
-concurrency:
-  group: discord-digest
-  cancel-in-progress: true
-
 permissions:
   contents: read
   actions: read
@@ -29,6 +25,16 @@ jobs:
   digest:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    # Concurrency at JOB level, deliberately: a workflow-level group is
+    # claimed by every run, including ones whose only job the `if:`
+    # above skips — so a RED push's skipped run was cancelling the
+    # debouncing digest of the previous green push, and the post
+    # silently slipped to the next green burst (observed 2026-08-10).
+    # A job-level group is only entered when the job actually starts,
+    # i.e. only green runs cancel/reset the countdown.
+    concurrency:
+      group: discord-digest
+      cancel-in-progress: true
     steps:
       - name: Debounce (a newer green push cancels this and restarts the countdown)
         run: sleep 1800
