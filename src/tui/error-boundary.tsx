@@ -17,6 +17,7 @@ import {
   captureError,
   formatCapturedError,
   latestCapturedError,
+  useCapturedErrors,
 } from "./error-store.ts";
 import { theme } from "./theme.ts";
 import type { TuiExit } from "./app.tsx";
@@ -28,6 +29,12 @@ function CrashScreen({
   onRetry: () => void;
   onExit: (e: TuiExit) => void;
 }) {
+  // Subscribe, don't snapshot: React renders this fallback BEFORE
+  // componentDidCatch records the crash into the ring (reconciler
+  // ordering), so a bare latestCapturedError() here would paint
+  // empty/stale on the exact crash it exists to show. The subscription
+  // re-renders when the ring catches up.
+  useCapturedErrors();
   const captured = latestCapturedError();
   useKeyboard((k) => {
     if (k.name === "q" || (k.ctrl && k.name === "c")) {
@@ -85,8 +92,14 @@ export class TuiErrorBoundary extends Component<Props, State> {
 
   override componentDidCatch(error: unknown): void {
     // Ring + daily log; never stdout/stderr — the renderer still owns
-    // the terminal even though the app tree just died.
-    captureError("render", error);
+    // the terminal even though the app tree just died. Guarded: a
+    // poisoned error object throwing here would crash the boundary
+    // that exists to contain it.
+    try {
+      captureError("render", error);
+    } catch {
+      // Nothing safe left to do with it.
+    }
   }
 
   override render(): ReactNode {

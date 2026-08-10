@@ -43,6 +43,7 @@ export {
   isMergedRemoval,
   recentlyRemovedWorktrees,
   recentRemovalsSummary,
+  removedJsonEntry,
   recordRemovedWorktrees,
 } from "./wtstate/removed.ts";
 

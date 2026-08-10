@@ -34,7 +34,7 @@ import {
   setSlugWorkStatus,
 } from "../../core/wtstate.ts";
 import { bold, cyan, dim, green, magenta, red, yellow } from "../colors.ts";
-import { removedJsonEntry } from "./ls.ts";
+import { removedJsonEntry } from "../../core/wtstate.ts";
 
 const VOCAB = `states (unique prefixes + nh/nt work):
   ${bold("todo")}           created, not started
@@ -352,7 +352,7 @@ export async function run(argv: string[]): Promise<number> {
     );
     if (args.json) {
       // Recently-destroyed rows (≤48h) ride along in the same shape
-      // `wt ls --json` appends (`state: "merged"|"removed"`), so the
+      // `wt ls --json` appends (`kind: "merged"|"removed"`), so the
       // manager can tell "everything landed" from "nothing exists".
       const removed = recentlyRemovedWorktrees(new Set(wts.map((w) => w.slug)));
       console.log(

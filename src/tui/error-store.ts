@@ -210,11 +210,24 @@ export function buildErrorInvestigationPrompt(e: CapturedError): string {
  * default; the handlers themselves only record. Nothing here rethrows.
  */
 export function installProcessErrorCapture(): () => void {
+  // A throw INSIDE an uncaughtException handler is unrecoverable and
+  // would exit the very process this module exists to keep alive — a
+  // poisoned Error subclass (throwing .message/.stack getter) must not
+  // be able to do that. The catch deliberately does nothing: there is
+  // no safe reporting channel left at that point.
   const onUncaught = (err: unknown): void => {
-    captureError("uncaughtException", err);
+    try {
+      captureError("uncaughtException", err);
+    } catch {
+      // Swallow — see above.
+    }
   };
   const onRejection = (reason: unknown): void => {
-    captureError("unhandledRejection", reason);
+    try {
+      captureError("unhandledRejection", reason);
+    } catch {
+      // Swallow — see above.
+    }
   };
   process.on("uncaughtException", onUncaught);
   process.on("unhandledRejection", onRejection);

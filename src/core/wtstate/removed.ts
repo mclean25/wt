@@ -119,3 +119,30 @@ export function clearRemovedWorktree(slug: string): void {
     });
   });
 }
+
+/**
+ * The recently-removed JSON shape shared by `wt ls --json` and
+ * `wt status --all --json`. `kind` (not `state`) discriminates these
+ * from live rows: status --all's live rows already use `state` for the
+ * WORK-state vocabulary, and overloading one key with two value
+ * domains silently broke consumers filtering on it.
+ */
+export function removedJsonEntry(e: RemovedWorktree): {
+  slug: string;
+  branch: string;
+  kind: "merged" | "removed";
+  pr: number | null;
+  pr_url: string | null;
+  title: string | null;
+  archived_at: string;
+} {
+  return {
+    slug: e.slug,
+    branch: e.branch,
+    kind: isMergedRemoval(e) ? "merged" : "removed",
+    pr: e.prNumber ?? null,
+    pr_url: e.prUrl ?? null,
+    title: e.title ?? null,
+    archived_at: e.removedAt,
+  };
+}

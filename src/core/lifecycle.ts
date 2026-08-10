@@ -15,6 +15,7 @@ import {
 } from "./wtstate.ts";
 import { getBackend, getBackendForPath } from "./backend.ts";
 import { config } from "./config.ts";
+import { createLogger } from "./logger.ts";
 import { clearDevServerFiles } from "./dev-server.ts";
 import { resolveInstallCommand } from "./install.ts";
 import { branchExists, git, gitQuiet, originBranchExists, revParse } from "./git.ts";
@@ -36,6 +37,8 @@ import { fetchOrigin } from "./worktree.ts";
  * operation lock, which still fails so the destroy doesn't hang.
  */
 const LOCK_ACQUIRE_WAIT_MS = 8000;
+
+const log = createLogger("[lifecycle]");
 
 export type CreateResult =
   | { ok: true; path: string; branch: string; stage: string; slug: string }
@@ -388,6 +391,9 @@ export async function createWorktree(
     // every caller's existing failure path (CLI stderr, TUI toast +
     // attention line) surfaces the reason — an escaped rejection here
     // used to leave the flashed-and-vanished row with no explanation.
+    // The reason string carries only the message; keep the stack in the
+    // daily log or an unexpected TypeError here is unroot-causeable.
+    log.error(err instanceof Error ? err : String(err), { slug });
     return {
       ok: false,
       reason: err instanceof Error ? err.message : String(err),

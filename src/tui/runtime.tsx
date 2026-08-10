@@ -503,15 +503,24 @@ export async function runTui(): Promise<TuiExit> {
   // `renderer.destroy()`, so late-teardown errors fall through to plain
   // stderr and main.ts's catch (the crash-rollback path) as before.
   const detachErrorCapture = installProcessErrorCapture();
-  const renderer = await createCliRenderer({
-    exitOnCtrlC: false,
-    targetFps: 60,
-    // OpenTUI installs its own uncaughtException/unhandledRejection
-    // hook that console.errors the stack and (by default) pops its
-    // debug console overlay over the panes — the error overlay above
-    // owns that surface now, so keep OpenTUI's from fighting it.
-    openConsoleOnError: false,
-  });
+  let renderer;
+  try {
+    renderer = await createCliRenderer({
+      exitOnCtrlC: false,
+      targetFps: 60,
+      // OpenTUI installs its own uncaughtException/unhandledRejection
+      // hook that console.errors the stack and (by default) pops its
+      // debug console overlay over the panes — the error overlay above
+      // owns that surface now, so keep OpenTUI's from fighting it.
+      openConsoleOnError: false,
+    });
+  } catch (err) {
+    // Renderer setup failed before the teardown .finally exists — the
+    // capture MUST detach here or the listeners outlive the TUI and
+    // silently eat errors during main.ts's crash handling.
+    detachErrorCapture();
+    throw err;
+  }
   const root = createRoot(renderer);
   // A dying terminal (tmux kill-session/-server, window close, SSH drop)
   // delivers SIGHUP — without an explicit handler this process SURVIVES

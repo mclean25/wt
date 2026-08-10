@@ -264,8 +264,17 @@ export const riftBackend: WorktreeBackend = {
       await materializeBranch({ path, branch, baseRef, baseSourcePath, onLog });
     } catch (err) {
       onLog?.(`rolling back partial rift checkout ${basename(path)}`);
-      await run([rift, "remove", path], { cwd: mainClone }).catch(() => {});
-      await run([rift, "gc"], { cwd: mainClone }).catch(() => {});
+      // A failed rollback leaves an orphaned checkout + rift registry
+      // entry; the next create for this slug then hits a bare "path
+      // already exists". Log it so the daily log names the orphan.
+      const rb1 = await run([rift, "remove", path], { cwd: mainClone });
+      if (rb1.exitCode !== 0) {
+        log.warn(`rollback rift remove failed for ${path}: ${rb1.stderr.trim() || rb1.exitCode}`);
+      }
+      const rb2 = await run([rift, "gc"], { cwd: mainClone });
+      if (rb2.exitCode !== 0) {
+        log.warn(`rollback rift gc failed: ${rb2.stderr.trim() || rb2.exitCode}`);
+      }
       throw err;
     }
   },

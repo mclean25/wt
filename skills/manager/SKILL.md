@@ -50,7 +50,7 @@ the human asks.
 ## Your senses
 
 - `wt status --all --json` — the fleet: asserted state, risk, note, staleness.
-  Rows destroyed in the last 48h are appended with `state: "merged"` (or
+  Rows destroyed in the last 48h are appended with `kind: "merged"` (or
   `"removed"`), `pr`, and `archived_at` — so an empty active fleet with merged
   rows means "everything landed", while a truly empty array means nothing
   exists (worth checking that creates aren't silently failing).
