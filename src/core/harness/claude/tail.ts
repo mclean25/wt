@@ -204,17 +204,15 @@ export type SessionContextUsage = {
 /**
  * Context-window size for a claude model id. Deliberately NOT a
  * per-model registry (checked: the session jsonl carries no window
- * size, and scraping the pane is worse): every claude model to date
- * ships a 200k window, with the `[1m]` id suffix as the only opt-in
- * exception. If that convention ever breaks, this one function is the
- * place to teach — resist growing a model table here.
+ * size, and scraping the pane is worse). The Claude 5 era made 1M the
+ * standard window (Opus 5 included — a 200k default here read the
+ * footer's manager context % ~5x too high), so 1M is the default;
+ * haiku is the one current family still on 200k. If that breaks, this
+ * one function is the place to teach — resist growing a model table.
  */
 export function contextWindowTokens(model: string | null): number {
-  if (!model) return 200_000;
-  // Mythos-class ids (fable/mythos) carry a 1M window without any
-  // suffix — the jsonl's api model id never contains "[1m]", only the
-  // settings string does.
-  return model.includes("[1m]") || /fable|mythos/i.test(model) ? 1_000_000 : 200_000;
+  if (!model) return 1_000_000;
+  return /haiku/i.test(model) ? 200_000 : 1_000_000;
 }
 
 export type SessionRun = {
