@@ -45,21 +45,33 @@ export async function originGithubRepo(): Promise<{ owner: string; repo: string 
 export function classifyCheckRuns(payload: unknown): CheckStatus {
   const runs = (payload as { check_runs?: unknown })?.check_runs;
   if (!Array.isArray(runs)) return "unknown";
-  let sawMatch = false;
-  let pending = false;
+  // Aggregate per gate name: one sha can carry several runs of the same
+  // name (push + pull_request contexts, manual re-runs). A success in
+  // ANY context means the code passed that check — only a name whose
+  // every run completed without passing reds the commit. First-match
+  // logic here once meant a flaky PR-context failure could permanently
+  // strand a commit whose push-context run was green.
+  const byName = new Map<string, { success: boolean; pending: boolean }>();
   for (const raw of runs) {
     const run = raw as { name?: unknown; status?: unknown; conclusion?: unknown };
     if (typeof run?.name !== "string" || !GATE_CHECK_NAMES.has(run.name)) continue;
-    sawMatch = true;
-    if (run.status !== "completed") {
+    const agg = byName.get(run.name) ?? { success: false, pending: false };
+    if (run.status !== "completed") agg.pending = true;
+    else if (run.conclusion === "success" || run.conclusion === "neutral" || run.conclusion === "skipped") {
+      agg.success = true;
+    }
+    byName.set(run.name, agg);
+  }
+  if (byName.size === 0) return "unknown";
+  let pending = false;
+  for (const agg of byName.values()) {
+    if (agg.success) continue;
+    if (agg.pending) {
       pending = true;
       continue;
     }
-    if (run.conclusion !== "success" && run.conclusion !== "neutral" && run.conclusion !== "skipped") {
-      return "red";
-    }
+    return "red";
   }
-  if (!sawMatch) return "unknown";
   return pending ? "pending" : "green";
 }
 

@@ -17,9 +17,16 @@ for people (and agents) changing wt live in `CLAUDE.md`.
   **journal**, the **boot sentinel**, and the **last good boot** sha.
 - Everything under `src/core/update/` (and the `wt rollback` command
   path) is deliberately **config-free** — no imports of `core/config.ts`,
-  `proc`, `locks`, or `logger` at module load. The crash-rollback offer
-  must work when the config loader is exactly what the broken update
-  can't run.
+  `proc`, `locks`, or `logger` at module load (its logging goes to a
+  fixed `~/.cache/wt/logs/update.log` instead). The crash-rollback
+  offer must work when the config loader is exactly what the broken
+  update can't run — and so must the commands: main.ts dispatches
+  `update` / `rollback` / `version` AROUND `cli/index.ts`, whose static
+  command imports would otherwise pull the fail-fast loader in first.
+- Update/rollback git mutations on the shared clone are serialized by a
+  config-free mkdir lock (`~/.cache/wt/update-git.lock`, stale-holder
+  detection by pid); a second concurrent update/rollback gets "another
+  update is in progress" instead of interleaved resets.
 
 ## Prevent: the CI gate and the boot probe
 
@@ -32,8 +39,10 @@ are held back; commits with *no* matching check runs (pre-CI history),
 API failures, rate limits, and non-GitHub origins all **fail open** —
 the gate exists to skip known-bad pushes, never to strand anyone.
 Unrelated workflows (e.g. the Discord digest) can't veto an update
-because matching is by check-run name. `wt update --head` bypasses the
-gate explicitly.
+because matching is by check-run name. When the pick rests on an
+"unknown" verdict the CLI says so ("CI status couldn't be verified —
+the gate fails open") rather than letting a network problem impersonate
+a green check. `wt update --head` bypasses the gate explicitly.
 
 **Boot probe.** After the fast-forward (and a `bun install` when the
 dependency manifest changed), the updater boot-probes the checkout in a
@@ -49,7 +58,14 @@ costs its author a red X, not a user a broken install.
 
 Starting the TUI writes `booting: {sha, at}` to the memory; the sha is
 promoted to `lastGoodSha` (and the sentinel cleared) after 15 s alive
-or a clean quit, whichever comes first. Two detectors hang off this:
+or a clean quit, whichever comes first. The crash handler cancels the
+pending promotion first, so a crashed sha can't be stamped good while
+the rollback prompt waits for an answer. An update additionally writes
+an `applying: {fromSha, toSha}` marker before its merge moves HEAD —
+if the process dies mid-update (the deps/probe window runs seconds to
+minutes), the offers treat the marker like a journal entry, so even an
+interrupted update leaves a rollback target. Two detectors hang off
+the sentinel:
 
 - **Crash offer** — the top-level catch in `main.ts`: if the process
   dies while HEAD is a journaled update that never booted good, offer
@@ -100,8 +116,12 @@ Three stores, three policies:
 Known limitation: rolling back *across* a state migration runs old
 code against newer-shaped state. Parsing is lenient so it degrades
 rather than breaks, but a subsequent write by old code can drop fields
-it doesn't know; the pre-migration backup exists for exactly that
-repair (`cp` it back by hand).
+it doesn't know. The pre-migration backup helps with that repair, with
+an honest caveat: it snapshots the file at migration time, so edits
+made after the migration aren't in it — restoring is a revert to that
+snapshot, not a surgical recovery. Backups are one small file per
+version bump (`state.json.bak-v<N>`, overwritten on repeat), so they
+don't meaningfully accumulate.
 
 ## Escape hatches
 

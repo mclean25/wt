@@ -210,7 +210,11 @@ export type SessionContextUsage = {
  * place to teach — resist growing a model table here.
  */
 export function contextWindowTokens(model: string | null): number {
-  return model && model.includes("[1m]") ? 1_000_000 : 200_000;
+  if (!model) return 200_000;
+  // Mythos-class ids (fable/mythos) carry a 1M window without any
+  // suffix — the jsonl's api model id never contains "[1m]", only the
+  // settings string does.
+  return model.includes("[1m]") || /fable|mythos/i.test(model) ? 1_000_000 : 200_000;
 }
 
 export type SessionRun = {

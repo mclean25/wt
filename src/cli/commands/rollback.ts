@@ -8,12 +8,14 @@
  * precisely when the new code can't even load the config.
  */
 import {
+  cancelBootPromotion,
   gitSync,
   listRunningWtInstances,
   performRollback,
   readUpdateMemory,
   repoUpdateState,
   shortSha,
+  spawnFreshWt,
   wtVersion,
   WT_REPO_ROOT,
 } from "../../core/update.ts";
@@ -30,12 +32,16 @@ commits land on origin; \`wt update\` can always re-apply it explicitly.
 
 Refuses to touch a clone with local changes or unpushed commits.`;
 
-/** The default rollback target: last good boot, else the last update's from-sha. */
+/**
+ * The default rollback target: last good boot, else the last update's
+ * from-sha, else the from-sha of an update that died mid-apply (the
+ * `applying` marker — no journal entry ever landed for it).
+ */
 function defaultTarget(): string | null {
   const mem = readUpdateMemory();
   if (mem.lastGoodSha) return mem.lastGoodSha;
   const lastUpdate = [...mem.journal].reverse().find((e) => e.kind === "update");
-  return lastUpdate?.fromSha ?? null;
+  return lastUpdate?.fromSha ?? mem.applying?.fromSha ?? null;
 }
 
 /** Guards shared by the command and the offers. Null = fine to roll back. */
@@ -95,7 +101,12 @@ export async function run(argv: string[]): Promise<number> {
     console.log(dim(`already on ${shortSha(target)} — nothing to roll back`));
     return 0;
   }
-  return rollBackTo(target);
+  const code = await rollBackTo(target);
+  if (code === 0 && refArg) {
+    // Default targets earned trust by booting; an arbitrary ref hasn't.
+    console.log(dim("(explicit target — it was never boot-probed; if it misbehaves, `wt update` re-applies forward)"));
+  }
+  return code;
 }
 
 // ── Automatic offers (main.ts) ─────────────────────────────────────────
@@ -117,7 +128,12 @@ async function offerContext(): Promise<{ head: string; target: string } | null> 
   if (!head) return null;
   const mem = readUpdateMemory();
   if (mem.lastGoodSha === head) return null;
-  if (![...mem.journal].reverse().some((e) => e.kind === "update" && e.toSha === head)) return null;
+  // "A fresh update landed here": a journal entry, or an `applying`
+  // marker from an update that was killed before it could journal.
+  const freshUpdate =
+    mem.journal.some((e) => e.kind === "update" && e.toSha === head) ||
+    mem.applying?.toSha === head;
+  if (!freshUpdate) return null;
   if (await rollbackBlocker()) return null;
   const target = defaultTarget();
   if (!target || target === head) return null;
@@ -130,13 +146,7 @@ async function offerContext(): Promise<{ head: string; target: string } | null> 
 /** Re-exec a fresh TUI after a successful offered rollback; never returns. */
 function reexecTui(): never {
   console.log(dim("restarting wt …"));
-  const child = Bun.spawnSync({
-    cmd: [process.execPath, `${WT_REPO_ROOT}/src/main.ts`],
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  process.exit(child.exitCode ?? 1);
+  process.exit(spawnFreshWt());
 }
 
 /**
@@ -149,6 +159,9 @@ function reexecTui(): never {
  */
 export async function maybeOfferCrashRollback(): Promise<void> {
   try {
+    // FIRST, synchronously: the 15s boot-health timer must not fire
+    // while we await the prompt below and stamp the crashed sha good.
+    cancelBootPromotion();
     const ctx = await offerContext();
     if (!ctx) return;
     console.error("");
@@ -179,7 +192,8 @@ export async function maybeOfferCrashRollback(): Promise<void> {
 export async function maybeOfferStaleBootRollback(): Promise<void> {
   try {
     const mem = readUpdateMemory();
-    if (!mem.booting) return;
+    // Root must match: another clone's sentinel is not our evidence.
+    if (!mem.booting || mem.booting.root !== WT_REPO_ROOT) return;
     const ctx = await offerContext();
     if (!ctx || mem.booting.sha !== ctx.head) return;
     console.log(

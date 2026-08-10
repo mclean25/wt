@@ -11,6 +11,7 @@ import { nextAutoName } from "../core/harness/claude/names.ts";
 import { HARNESSES, type HarnessId } from "../core/harness/index.ts";
 import type { PerfSnapshot } from "../core/perf.ts";
 import { actionSkillPrefix, buildActionVars } from "./app-helpers.ts";
+import { workStateColor, workStateGlyph } from "./badges.ts";
 import type { Modal } from "./modal-state.ts";
 import {
   ActionEditModal,
@@ -176,6 +177,13 @@ export function PostFooterModals({
           toggleKey="u"
           itemKeys={modal.items.map((it) =>
             it.state === null ? "x" : WORK_STATE_CHORDS[it.state],
+          )}
+          // The same dot + color the list pane renders, so the picker
+          // doubles as the legend for the status glyphs.
+          itemGlyphs={modal.items.map((it) =>
+            it.state === null
+              ? null
+              : { glyph: workStateGlyph(it.state), color: workStateColor(it.state) },
           )}
           extraHints={[["m", "pick + note"]]}
         />

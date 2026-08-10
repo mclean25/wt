@@ -51,6 +51,13 @@ export async function fetchWtOrigin(): Promise<boolean> {
 
 export type PendingCommit = { sha: string; subject: string };
 
+// Commit subjects are remote-authored free text that gets echoed to the
+// user's real terminal (the startup check prints them unprompted) —
+// strip control bytes so an embedded ESC/OSC sequence can't retitle or
+// spoof the terminal. Same posture as sanitizeWorkNote for work notes.
+// eslint-disable-next-line no-control-regex
+const CONTROL_RE = /[\x00-\x1f\x7f]/g;
+
 /** Commits an update would bring in (`HEAD..<ref>`, default @{u}), newest first. */
 export async function pendingCommits(ref = "@{u}"): Promise<PendingCommit[]> {
   const out = await gitOk(["log", "--format=%H %s", `HEAD..${ref}`]);
@@ -62,7 +69,7 @@ export async function pendingCommits(ref = "@{u}"): Promise<PendingCommit[]> {
       const sp = line.indexOf(" ");
       return sp === -1
         ? { sha: line, subject: "" }
-        : { sha: line.slice(0, sp), subject: line.slice(sp + 1) };
+        : { sha: line.slice(0, sp), subject: line.slice(sp + 1).replace(CONTROL_RE, " ") };
     });
 }
 

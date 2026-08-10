@@ -706,7 +706,7 @@ const GENERIC_DEFAULTS = {
     // `panels/details/rebase-block.tsx`). Old configs listing it are
     // harmless — unknown ids drop silently at resolve time. "linear" is
     // accepted as a legacy alias for "issue" at resolve time.
-    rows: ["branch", "base", "issue", "status", "stage", "dev", "pr", "claude", "git"] as const,
+    rows: ["branch", "base", "issue", "stage", "dev", "pr", "claude", "git"] as const,
   },
   actions: [
     {

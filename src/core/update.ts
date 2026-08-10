@@ -10,22 +10,21 @@
 export {
   gitSync,
   logSafe,
-  resetWtVersionCache,
   shortSha,
+  spawnFreshWt,
   WT_REPO_ROOT,
   wtVersion,
 } from "./update/exec.ts";
 export {
+  armBootSentinel,
+  cancelBootPromotion,
+  completeBootSentinel,
   emptyUpdateMemory,
-  markBooting,
-  markBootGood,
   parseUpdateMemory,
   readUpdateMemory,
-  recordRollback,
   recordUpdateApplied,
   rememberUpdateCheck,
   rememberUpdateDecline,
-  UPDATE_MEMORY_FILE,
 } from "./update/memory.ts";
 export type { UpdateJournalEntry, UpdateMemory } from "./update/memory.ts";
 export {
@@ -38,7 +37,7 @@ export {
   UPDATE_CHECK_INTERVAL_MS,
 } from "./update/state.ts";
 export type { OfferDecision, PendingCommit, RepoUpdateState, StartupGate } from "./update/state.ts";
-export { classifyCheckRuns, findNewestEligible, GATE_CHECK_NAMES, originGithubRepo } from "./update/green.ts";
+export { classifyCheckRuns, findNewestEligible } from "./update/green.ts";
 export type { CheckStatus, GateResult } from "./update/green.ts";
-export { applyWtUpdate, performRollback, smokeCheckout } from "./update/apply.ts";
+export { applyWtUpdate, performRollback } from "./update/apply.ts";
 export type { ApplyResult } from "./update/apply.ts";

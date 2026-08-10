@@ -19,6 +19,13 @@ type Props = {
    * chordless rows). Same length as `items` when provided.
    */
   itemKeys?: readonly (string | null)[];
+  /**
+   * Per-item glyph column (e.g. the work-status dot in the exact color
+   * the list pane uses), rendered between the chord and the label so
+   * the picker doubles as the legend for those glyphs. `null` rows keep
+   * the column width blank.
+   */
+  itemGlyphs?: readonly ({ glyph: string; color: string } | null)[];
   /** Picker-specific hints, slotted between "pick" and "cancel". */
   extraHints?: readonly KeyHintPair[];
 };
@@ -29,6 +36,7 @@ export function PickerModal({
   selectedIndex,
   toggleKey,
   itemKeys,
+  itemGlyphs,
   extraHints,
 }: Props) {
   const pickKeys = toggleKey ? `${toggleKey} / ⏎` : "⏎";
@@ -78,6 +86,13 @@ export function PickerModal({
                 <text fg={selected ? theme.accent : theme.fgDim}>
                   {chord ? `${chord} ` : "  "}
                 </text>
+              ) : null}
+              {itemGlyphs ? (
+                itemGlyphs[i] ? (
+                  <text fg={itemGlyphs[i]!.color}>{`${itemGlyphs[i]!.glyph} `}</text>
+                ) : (
+                  <text>{"   "}</text>
+                )
               ) : null}
               <text fg={fg} wrapMode="none" truncate>
                 {item}

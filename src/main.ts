@@ -14,8 +14,18 @@ Bun.stringWidth = ((s: string, opts?: Bun.StringWidthOptions) =>
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
 
-  // Args given → dispatch to CLI.
+  // Args given → dispatch to CLI. The self-update family routes AROUND
+  // cli/index.ts: that module statically imports every command, which
+  // pulls the fail-fast config loader in before dispatch — and these
+  // commands must work when the config is exactly what a broken update
+  // can't load (`wt rollback` is the documented recovery path then).
   if (argv.length > 0) {
+    const [cmd, ...rest] = argv;
+    if (cmd === "update") return (await import("./cli/commands/update.ts")).run(rest);
+    if (cmd === "rollback") return (await import("./cli/commands/rollback.ts")).run(rest);
+    if (cmd === "version" || cmd === "--version" || cmd === "-v") {
+      return (await import("./cli/commands/version.ts")).run(rest);
+    }
     const { dispatch } = await import("./cli/index.ts");
     return dispatch(argv);
   }
@@ -45,43 +55,29 @@ async function main(): Promise<number> {
   if (config.update.startupCheck && process.env.WT_UPDATE !== "off") {
     const { startupUpdatePrompt } = await import("./cli/commands/update.ts");
     if ((await startupUpdatePrompt()) === "updated") {
-      const { WT_REPO_ROOT } = await import("./core/update.ts");
-      const { join } = await import("node:path");
-      const child = Bun.spawnSync({
-        cmd: [process.execPath, join(WT_REPO_ROOT, "src", "main.ts")],
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-      });
-      return child.exitCode ?? 1;
+      const { spawnFreshWt } = await import("./core/update.ts");
+      return spawnFreshWt();
     }
   }
-  // Boot sentinel: record that this version is starting; promote it to
-  // "known good" once it survives BOOT_HEALTHY_MS (or exits cleanly
-  // before that). A leftover sentinel on the next launch is evidence
+  // Boot sentinel: record that this version is starting; core/update
+  // promotes it to "known good" once it survives the health window (or
+  // exits cleanly). A leftover sentinel on the next launch is evidence
   // the previous start died without tripping the catch below (native
   // crash, kill) — offer a rollback before trying again. Runs after
   // the update prompt so a just-landed fix wins over rolling back.
   if (process.env.WT_UPDATE !== "off") {
     const { maybeOfferStaleBootRollback } = await import("./cli/commands/rollback.ts");
     await maybeOfferStaleBootRollback();
-    const { gitSync, markBooting, markBootGood } = await import("./core/update.ts");
-    const head = gitSync(["rev-parse", "HEAD"]);
-    if (head) {
-      const BOOT_HEALTHY_MS = 15_000;
-      markBooting(head, Date.now());
-      setTimeout(() => markBootGood(head), BOOT_HEALTHY_MS);
-    }
+    const { armBootSentinel } = await import("./core/update.ts");
+    armBootSentinel();
   }
   const { setWezTermTabTitle } = await import("./core/wezterm.ts");
   await setWezTermTabTitle("wt", config.paths.weztermCli);
   const { runTui } = await import("./tui/runtime.tsx");
   await runTui();
-  // A clean quit before the health timer counts as a healthy boot too.
   if (process.env.WT_UPDATE !== "off") {
-    const { gitSync, markBootGood } = await import("./core/update.ts");
-    const head = gitSync(["rev-parse", "HEAD"]);
-    if (head) markBootGood(head);
+    const { completeBootSentinel } = await import("./core/update.ts");
+    completeBootSentinel();
   }
   return 0;
 }

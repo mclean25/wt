@@ -55,6 +55,7 @@ import {
 import { NF } from "../icons.ts";
 import { Row } from "./details/row-cell.tsx";
 import { RebaseBlock } from "./details/rebase-block.tsx";
+import { WorkStatusBlock } from "./details/work-status-block.tsx";
 import { RemovedBody } from "./details/removed-body.tsx";
 import { ReviewRequestBody } from "./details/review-request-body.tsx";
 import {
@@ -497,6 +498,9 @@ const DetailsBody = memo(function DetailsBody({
         // character whenever the pane grows a scrollbar.
         contentOptions={{ flexDirection: "column", paddingRight: 1 }}
       >
+        {/* Asserted work status, full width — the note is the payload
+            (merge impacts, needs-human asks) and must never truncate. */}
+        <WorkStatusBlock row={row} />
         <TitleLine title={row.title} source={row.titleSource} width={width} />
         {RESOLVED_ROWS.map((m) => (
           <RenderedRow key={m.id} module={m} ctx={ctx} />

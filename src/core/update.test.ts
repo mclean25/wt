@@ -3,10 +3,12 @@ import { describe, expect, test } from "bun:test";
 import {
   classifyCheckRuns,
   emptyUpdateMemory,
+  findNewestEligible,
   parseUpdateMemory,
   selectOffer,
   startupCheckGate,
   UPDATE_CHECK_INTERVAL_MS,
+  type UpdateJournalEntry,
 } from "./update.ts";
 
 const NOW = 1_800_000_000_000;
@@ -28,6 +30,14 @@ describe("startupCheckGate", () => {
     expect(
       startupCheckGate(CLEAN, { ...emptyUpdateMemory(), lastCheckAt: NOW - 60_000 }, NOW),
     ).toBe("rate-limited");
+    // Exactly the interval is NOT rate-limited (strict <) — pins the boundary.
+    expect(
+      startupCheckGate(
+        CLEAN,
+        { ...emptyUpdateMemory(), lastCheckAt: NOW - UPDATE_CHECK_INTERVAL_MS },
+        NOW,
+      ),
+    ).toBe("run");
     expect(
       startupCheckGate(
         CLEAN,
@@ -54,10 +64,16 @@ describe("selectOffer", () => {
   });
 
   test("a decline silences exactly that target, not the next one", () => {
-    expect(selectOffer({ behind: 3, target: "aaa", declinedSha: "aaa" }).action).toBe("declined");
+    expect(selectOffer({ behind: 3, target: "aaa", declinedSha: "aaa" })).toEqual({
+      action: "declined",
+      target: "aaa",
+    });
     const next = selectOffer({ behind: 4, target: "bbb", declinedSha: "aaa" });
     expect(next).toEqual({ action: "offer", target: "bbb" });
-    expect(selectOffer({ behind: 3, target: "aaa", declinedSha: null }).action).toBe("offer");
+    expect(selectOffer({ behind: 3, target: "aaa", declinedSha: null })).toEqual({
+      action: "offer",
+      target: "aaa",
+    });
   });
 });
 
@@ -76,6 +92,22 @@ describe("classifyCheckRuns", () => {
     expect(classifyCheckRuns({ check_runs: [run("typecheck", "completed", "success")] })).toBe("green");
     expect(classifyCheckRuns({ check_runs: [run("ci", "completed", "failure")] })).toBe("red");
     expect(classifyCheckRuns({ check_runs: [run("ci", "in_progress", null)] })).toBe("pending");
+    // Neutral / skipped conclusions count as green, not red.
+    expect(classifyCheckRuns({ check_runs: [run("ci", "completed", "neutral")] })).toBe("green");
+    expect(classifyCheckRuns({ check_runs: [run("ci", "completed", "skipped")] })).toBe("green");
+    // One gate run still running + one green → the commit is pending, not green.
+    expect(
+      classifyCheckRuns({
+        check_runs: [run("typecheck", "completed", "success"), run("ci", "queued", null)],
+      }),
+    ).toBe("pending");
+    // Same name across contexts (push + pull_request, re-runs): a
+    // success in any context wins for that name.
+    expect(
+      classifyCheckRuns({
+        check_runs: [run("ci", "completed", "failure"), run("ci", "completed", "success")],
+      }),
+    ).toBe("green");
     // A failing unrelated run can't veto a green gate run.
     expect(
       classifyCheckRuns({
@@ -91,6 +123,49 @@ describe("classifyCheckRuns", () => {
   });
 });
 
+describe("findNewestEligible", () => {
+  // The wt checkout's own origin is a GitHub remote, so the gate is
+  // active; the fake fetch controls each sha's verdict without network.
+  const fakeFetch = (bySha: Record<string, { name: string; status: string; conclusion: string | null }[]>) =>
+    (async (input: unknown) => {
+      const url = String(input);
+      const sha = Object.keys(bySha).find((s) => url.includes(s));
+      return new Response(JSON.stringify({ check_runs: sha ? bySha[sha] : [] }));
+    }) as typeof fetch;
+  const green = [{ name: "ci", status: "completed", conclusion: "success" }];
+  const red = [{ name: "ci", status: "completed", conclusion: "failure" }];
+  const pending = [{ name: "ci", status: "in_progress", conclusion: null }];
+
+  test("skips red and pending heads, lands on the newest green", async () => {
+    const r = await findNewestEligible(
+      ["aaa1111", "bbb2222", "ccc3333"],
+      fakeFetch({ aaa1111: red, bbb2222: pending, ccc3333: green }),
+    );
+    expect(r.target).toBe("ccc3333");
+    expect(r.gated).toBe(true);
+    expect(r.checked.map((c) => c.status)).toEqual(["red", "pending", "green"]);
+  });
+
+  test("no matching runs = unknown = eligible (fail open), first hit wins", async () => {
+    const r = await findNewestEligible(["aaa1111", "bbb2222"], fakeFetch({}));
+    expect(r.target).toBe("aaa1111");
+    expect(r.checked).toHaveLength(1);
+  });
+
+  test("every interrogated candidate red → no target, capped lookups", async () => {
+    const shas = Array.from({ length: 12 }, (_, i) => `sha${i}xxxxxx`);
+    const bySha = Object.fromEntries(shas.map((s) => [s, red]));
+    const r = await findNewestEligible(shas, fakeFetch(bySha));
+    expect(r.target).toBeNull();
+    expect(r.checked).toHaveLength(10);
+  });
+
+  test("empty candidate list is a no-op", async () => {
+    const r = await findNewestEligible([], fakeFetch({}));
+    expect(r).toEqual({ target: null, checked: [], gated: false });
+  });
+});
+
 describe("parseUpdateMemory", () => {
   test("tolerates garbage and partial records", () => {
     expect(parseUpdateMemory(null)).toEqual(emptyUpdateMemory());
@@ -100,14 +175,25 @@ describe("parseUpdateMemory", () => {
   });
 
   test("journal entries survive round-trips; malformed ones drop", () => {
-    const entry = { at: NOW, kind: "update", fromSha: "aaa", toSha: "bbb" };
+    const entry: UpdateJournalEntry = { at: NOW, kind: "update", fromSha: "aaa", toSha: "bbb" };
     const parsed = parseUpdateMemory({
       journal: [entry, { at: "x" }, null, { at: NOW, kind: "sideways", fromSha: "a", toSha: "b" }],
-      booting: { sha: "ccc", at: NOW },
+      booting: { sha: "ccc", at: NOW, root: "/some/clone" },
+      applying: { fromSha: "aaa", toSha: "ddd", at: NOW },
       lastGoodSha: "aaa",
     });
-    expect(parsed.journal).toEqual([entry as never]);
-    expect(parsed.booting).toEqual({ sha: "ccc", at: NOW });
+    expect(parsed.journal).toEqual([entry]);
+    expect(parsed.booting).toEqual({ sha: "ccc", at: NOW, root: "/some/clone" });
+    expect(parsed.applying).toEqual({ fromSha: "aaa", toSha: "ddd", at: NOW });
     expect(parsed.lastGoodSha).toBe("aaa");
+  });
+
+  test("malformed booting/applying records drop cleanly", () => {
+    const parsed = parseUpdateMemory({
+      booting: { sha: 42, at: NOW },
+      applying: { fromSha: "aaa", at: NOW },
+    });
+    expect(parsed.booting).toBeNull();
+    expect(parsed.applying).toBeNull();
   });
 });

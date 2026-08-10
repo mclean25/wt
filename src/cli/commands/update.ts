@@ -76,6 +76,20 @@ function describeGateHoldback(gate: GateResult): string {
 }
 
 /**
+ * Honesty line for a fail-open pick: "unknown" can mean pre-CI history
+ * OR an unreachable/rate-limited API, and silently presenting either
+ * as if CI vetted it would let a network problem defeat the gate
+ * unnoticed.
+ */
+function gateCaveat(gate: GateResult, target: string): string | null {
+  if (!gate.gated) return null;
+  const status = gate.checked.find((c) => c.sha === target)?.status;
+  return status === "unknown"
+    ? `(CI status for ${shortSha(target)} couldn't be verified — the gate fails open)`
+    : null;
+}
+
+/**
  * Fetch + gate + decide, shared by the command and the startup prompt.
  * Stamps the daily check BEFORE fetching (one attempt per day even
  * when offline). Null = fetch failed.
@@ -120,7 +134,8 @@ async function runLog(): Promise<number> {
     return 0;
   }
   for (const e of [...mem.journal].reverse()) {
-    const when = new Date(e.at).toISOString().slice(0, 16).replace("T", " ");
+    // Local wall-clock time, matching the app's other history displays.
+    const when = new Date(e.at).toLocaleString();
     const kind = e.kind === "rollback" ? yellow("rollback") : "update  ";
     console.log(`  ${dim(when)}  ${kind}  ${shortSha(e.fromSha)} → ${shortSha(e.toSha)}`);
   }
@@ -183,6 +198,9 @@ export async function run(argv: string[]): Promise<number> {
     console.log(
       yellow(`${fresh.behind} commit(s) available but held back: ${describeGateHoldback(gate)}`),
     );
+    if (commits.length > gate.checked.length) {
+      console.log(dim(`(only the newest ${gate.checked.length} of ${commits.length} were checked)`));
+    }
     console.log(dim("retry once CI is green, or take the tip anyway with `wt update --head`"));
     return 0;
   }
@@ -195,6 +213,8 @@ export async function run(argv: string[]): Promise<number> {
     bold(`update available: ${applying.length} commit(s) (${shortSha(fresh.headSha)} → ${shortSha(target)})`),
   );
   printCommits(applying);
+  const caveat = gateCaveat(gate, target);
+  if (caveat) console.log(dim(caveat));
   if (skipped > 0) {
     console.log(dim(`(holding back ${skipped} newer: ${describeGateHoldback(gate)})`));
   }
@@ -210,10 +230,11 @@ export async function run(argv: string[]): Promise<number> {
       rememberUpdateDecline(target);
       console.error(red(`✗ ${shortSha(target)} failed its boot probe${result.reverted ? " — reverted, staying on the current version" : ""}`));
       console.error(dim(result.detail));
+      if (result.depsRestoreWarning) console.error(yellow(`⚠ ${result.depsRestoreWarning}`));
       console.error(dim("the version is skipped; new origin commits will be offered normally"));
       return 1;
     }
-    console.error(red(`fast-forward failed: ${result.detail}`));
+    console.error(red(result.stage === "lock" ? result.detail : `fast-forward failed: ${result.detail}`));
     return 1;
   }
   recordUpdateApplied({ now: Date.now(), fromSha: fresh.headSha, toSha: target });
@@ -254,6 +275,8 @@ export async function startupUpdatePrompt(): Promise<"updated" | null> {
       bold(`wt update available: ${applying.length} new commit(s) (${shortSha(sel.fresh.headSha)} → ${shortSha(target)})`),
     );
     printCommits(applying);
+    const caveat = gateCaveat(sel.gate, target);
+    if (caveat) console.log(dim(caveat));
     console.log(
       dim('(a "no" is remembered for this version; [update] startup_check = false disables this check)'),
     );
@@ -270,8 +293,9 @@ export async function startupUpdatePrompt(): Promise<"updated" | null> {
           red(`✗ ${shortSha(target)} failed its boot probe${result.reverted ? " — reverted" : ""}; starting on the current version`),
         );
         console.error(dim(result.detail));
+        if (result.depsRestoreWarning) console.error(yellow(`⚠ ${result.depsRestoreWarning}`));
       } else {
-        console.error(red(`fast-forward failed: ${result.detail} — starting on the current version`));
+        console.error(red(`${result.stage === "lock" ? result.detail : `fast-forward failed: ${result.detail}`} — starting on the current version`));
       }
       return null;
     }

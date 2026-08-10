@@ -80,7 +80,11 @@ function migrateAndPersist(fallback: Record<string, unknown>): Record<string, un
     try {
       text = readFileSync(STATE_FILE, "utf8");
       current = JSON.parse(text) as Record<string, unknown>;
-    } catch {
+    } catch (err) {
+      // Falling back to the caller's parsed value also SKIPS the backup
+      // (no bytes to copy) — worth a trace, since the on-disk file is
+      // about to be replaced by this in-memory state.
+      log.error(err instanceof Error ? err : String(err), { file: STATE_FILE, phase: "migrate-reread" });
       text = null;
       current = fallback;
     }
