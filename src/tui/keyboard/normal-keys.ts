@@ -401,30 +401,39 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       })();
       return;
     }
-    // Ctrl+J / Ctrl+K page the details pane (worktree or review request)
-    // by ~85% of a viewport — for panes too tall to fit, which otherwise
-    // clip. No-op when the content fits. List navigation stays on bare
-    // j/k; these require Ctrl and only move the right pane. Ctrl+J
-    // arrives as "linefeed" in legacy terminals (it's the LF byte,
-    // special-cased ahead of ctrl-letter mapping) and as ctrl+"j" under
-    // the kitty keyboard protocol — accept both.
-    if (k.name === "linefeed" || (k.ctrl && k.name === "j")) {
-      detailsScrollRef.current?.scrollBy(0.85, "viewport");
+    // Ctrl+Shift+J / Ctrl+Shift+K page the details pane (worktree or
+    // review request) by ~85% of a viewport — for panes too tall to
+    // fit, which otherwise clip. No-op when the content fits. Checked
+    // BEFORE the plain-Ctrl feed scroll below, which would otherwise
+    // swallow the chord. Kitty csi-u delivers the base letter plus a
+    // shift flag (never the uppercase literal); legacy encodings can't
+    // express Ctrl+Shift+letter at all — there the chord collapses to
+    // plain Ctrl+J/K and scrolls the feed instead. Known degradation,
+    // accepted: every kitty-protocol terminal gets it right.
+    if (k.ctrl && k.shift && (k.name === "j" || k.name === "k")) {
+      detailsScrollRef.current?.scrollBy(
+        k.name === "j" ? 0.85 : -0.85,
+        "viewport",
+      );
       return;
     }
-    if (k.ctrl && k.name === "k") {
-      detailsScrollRef.current?.scrollBy(-0.85, "viewport");
-      return;
-    }
-    // Ctrl+E / Ctrl+Y (vim scroll) move the BOTTOM pane's event feed —
-    // sticky-bottom releases while scrolled back and re-engages at the
-    // bottom edge. Alt+J / Alt+K are aliases for terminals where the
-    // option key sends meta. Mouse wheel over the pane works natively.
+    // Ctrl+J / Ctrl+K scroll the BOTTOM pane's event feed — the pane
+    // that gets triaged constantly earns the prime j/k chord (details
+    // paging moved to Ctrl+Shift above). Ctrl+E / Ctrl+Y (vim scroll)
+    // and Alt+J / Alt+K stay as aliases. List navigation stays on bare
+    // j/k. Ctrl+J arrives as "linefeed" in legacy terminals (it's the
+    // LF byte, special-cased ahead of ctrl-letter mapping) and as
+    // ctrl+"j" under the kitty keyboard protocol — accept both.
+    // Sticky-bottom releases while scrolled back and re-engages at the
+    // bottom edge. Mouse wheel over the pane works natively.
     if (
-      (k.ctrl && (k.name === "e" || k.name === "y")) ||
+      k.name === "linefeed" ||
+      (k.ctrl &&
+        (k.name === "j" || k.name === "k" || k.name === "e" || k.name === "y")) ||
       (k.meta && (k.name === "j" || k.name === "k"))
     ) {
-      const down = k.name === "e" || k.name === "j";
+      const down =
+        k.name === "linefeed" || k.name === "j" || k.name === "e";
       activityScroll.current?.scrollBy(down ? 3 : -3);
       return;
     }
