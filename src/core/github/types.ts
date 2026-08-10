@@ -1,7 +1,9 @@
 import type {
   AutoMergeMethod,
+  MergeableState,
   MergeQueueEntry,
   MergeQueueState,
+  MergeStateStatus,
   PrChecks,
   PullRequest,
 } from "../types.ts";
@@ -23,6 +25,8 @@ export type GqlPrNode = {
   baseRefName: string;
   isDraft: boolean;
   state: PullRequest["state"];
+  mergeable: MergeableState | null;
+  mergeStateStatus: MergeStateStatus | null;
   mergedAt: string | null;
   closedAt: string | null;
   reviewDecision: GqlReviewDecision;

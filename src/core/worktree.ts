@@ -355,6 +355,61 @@ export async function unpushedCommits(wtPath: string): Promise<number | null> {
   }
 }
 
+export type PushCounts = {
+  /**
+   * Commits on HEAD that origin doesn't have for THIS branch. When the
+   * branch has no origin counterpart, nothing is pushed, so this falls
+   * back to the ahead-of-base count (and `pushed` goes false).
+   */
+  unpushed: number | null;
+  /**
+   * Commits ahead of the branch's upstream/base — the restack-pressure
+   * signal. This is what `unpushedCommits` measures.
+   */
+  aheadOfBase: number | null;
+  /** Whether `origin/<branch>` exists at all. */
+  pushed: boolean | null;
+};
+
+/**
+ * Push/divergence counts for `wt ls --json`. Null = couldn't determine;
+ * consumers must not read it as 0.
+ *
+ * wt sets a worktree branch's upstream to its BASE (e.g.
+ * `origin/staging`), so the @{u}-based `unpushedCommits` count really
+ * measures "ahead of base" — the fleet manager misread that as "worker
+ * never pushed". This keeps both numbers apart: `unpushed` counts
+ * against `origin/<branch>` when that ref exists (true unpushed), and
+ * `aheadOfBase` carries the old measurement.
+ */
+export async function pushCounts(wtPath: string): Promise<PushCounts> {
+  const aheadOfBase = await unpushedCommits(wtPath);
+  try {
+    const branch = (
+      await runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
+    ).trim();
+    // Detached HEAD reports the literal "HEAD" — no branch, no counterpart.
+    if (branch && branch !== "HEAD") {
+      const originRef = `origin/${branch}`;
+      const originExists = await runQuiet(
+        ["git", "rev-parse", "--verify", "--quiet", originRef],
+        { cwd: wtPath },
+      );
+      if (originExists) {
+        const count = await runOk(
+          ["git", "rev-list", "--count", `${originRef}..HEAD`],
+          { cwd: wtPath },
+        );
+        return { unpushed: parseInt(count, 10) || 0, aheadOfBase, pushed: true };
+      }
+    }
+    return { unpushed: aheadOfBase, aheadOfBase, pushed: false };
+  } catch (err) {
+    log.error(err instanceof Error ? err : String(err), { wtPath });
+    return { unpushed: null, aheadOfBase, pushed: null };
+  }
+}
+
 export async function worktreeStatus(wt: Worktree): Promise<Status> {
   const lock = lockStatus(wt.slug);
   if (lock) {

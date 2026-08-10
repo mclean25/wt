@@ -19,6 +19,7 @@ and an independently configured `wt` on that host.
 List all non-main worktrees (slug, stage when `[deploy.sst]` is configured, PR, status). Worktrees destroyed in the last 48h stay visible — a dim `recently merged:` footer under the table, and an empty list says why it's empty (`No active worktrees (2 archived today: x, y).`) — so "everything landed" never reads identically to "nothing exists". Derived from the existing removed-worktrees history; the TUI's `h` view keeps the full 14-day record.
 
 - `--json` — machine-readable array (slug, branch, path, stage, status, dirty, issue_id, issue_url, work_state, …). Recently-removed rows are appended with `kind: "merged"` (PR landed) or `"removed"`, plus `pr`, `pr_url`, `title`, and `archived_at`; live rows never carry a `kind` field, so consumers discriminate on it (the remote section's parser skips these rows).
+- Push fields: `unpushed` counts commits `origin/<branch>` doesn't have — true unpushed work, not divergence from the base (wt sets the branch upstream to its BASE, so an upstream-relative count would misread as "never pushed"). `pushed` says whether `origin/<branch>` exists at all; when it's `false`, `unpushed` falls back to the ahead-of-base count. `ahead_of_base` is commits ahead of the upstream/base — the restack-pressure signal. All three are `null` when git couldn't answer; never read `null` as 0.
 
 ### `wt new <id [title…]|url|branch|slug>`
 
@@ -109,6 +110,14 @@ The rules that make statuses trustworthy are enforced here (the TUI's `u` picker
 - `ready` requires `--risk low|medium|high` (judged broadly: end users, coworker workflows, costs, migrations), and medium/high additionally require `-m` naming the notable impacts. High-value notes only — nothing notable is `--risk low` with no note.
 
 States accept unique prefixes plus `nh`/`nt` aliases. `--clear` drops the record, `--all [--json]` prints the fleet overview (the manager session's eyes) — the JSON form appends the same recently-removed rows as `wt ls --json` (`kind: "merged"|"removed"`, `pr`, `archived_at`), so an all-merged fleet is distinguishable from an empty one. `--note-only "..."` amends just the note of an existing record, keeping the state, risk, and `at` timestamp (it errors when no status is asserted) — for sharpening a needs-human note or adding late-learned merge impacts without faking a fresh assertion. Each record stamps the assert time and HEAD sha, so both the CLI and the details-pane `status` row can flag a status that predates newer commits. Re-asserting an identical status (same state, note, risk, and HEAD) is a no-op that keeps the original timestamp — agents and hooks can assert freely without re-narrating (and re-toasting) the same news in every watching TUI. Statuses also ride `wt ls --json` (`work_state`/`work_note`/`work_risk`/`work_at`), which carries them across SSH for remote worktrees.
+
+### `wt fleet`
+
+The [manager session](manager.md)'s single audit surface: one row per live worktree joining the **asserted** work status (state, note, risk, `at`, staleness vs HEAD) with observable **reality** — the primary Claude session's liveness (`alive`/`busy`/`last_activity`, the same signals as `wt claude ls --json`) and the PR (number, title, draft, merge state, mergeability, CI rollup), all from the same single batched GraphQL round trip the TUI uses (never per-row `gh` calls). Rows sort needs-human-first (the TUI's urgency ranking), and the recently-removed rows ride along like on every fleet surface.
+
+- `--json` — the contract. Live rows carry nested `work`, `session`, and `pr` objects; when GitHub is unreachable (no `gh`, not authenticated, fetch failure) rows still emit with `pr: null` plus a `pr_note` saying why — so "no PR" (`pr` and `pr_note` both null) stays distinguishable from "couldn't ask". Removed rows are the same `kind: "merged"|"removed"` entries as `wt ls --json`; live rows never carry `kind`.
+
+Merge fields (`merge_state` from GitHub's `mergeStateStatus`, `mergeable`) are lowercased GitHub enums with one twist: GitHub computes mergeability **lazily**, so its `UNKNOWN` is reported as `"computing"` and wt never polls — re-run after a few seconds if you need the answer (the query itself is what triggers the computation). On terminal (merged/closed) PRs the merge fields are null rather than eternally "computing".
 
 ### `wt manager` / `wt manager send <text…>` / `wt manager report [--ok|--warn|--err] <text…>`
 

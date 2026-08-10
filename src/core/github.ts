@@ -1,4 +1,4 @@
-export { repoSlug, fetchAuthenticatedLogin } from "./github/gh-cli.ts";
+export { hasGh, repoSlug, fetchAuthenticatedLogin } from "./github/gh-cli.ts";
 export { pullRequestOpenUrl, pullRequestOpenUrlForTarget } from "./github/urls.ts";
 export type {
   GithubData,

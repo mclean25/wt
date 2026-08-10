@@ -41,7 +41,7 @@ None of that was visible without opening each session and reading scrollback. Ag
 | agent config drifts per machine/teammate | wt **distributes its own skills + instructions** ([skills.md](skills.md)): startup y/n updates, rulesync/symlink-aware installs, so nobody hand-maintains agent setup |
 | agents punt testing to the human | agents **own manual testing** — dev env + browser themselves; `needs-testing` means "I still have to verify", never "please test this for me" |
 | needing-me moments get lost | the **escalation ladder**: dot → attention feed (the bottom pane's default) → macOS banner (`builtin:notify` on `needs_human`/`ready`) → manager triage briefing |
-| fleet-level judgment lands on me | the **manager session** (`m`): digests, merge-order calls, unblocking workers, triaging needs-human before the human sees it |
+| fleet-level judgment lands on me | the **manager session** (`m`): digests, merge-order calls, unblocking workers, triaging needs-human before the human sees it — its primary sense is `wt fleet --json`, the one audit joining asserted statuses with session + PR reality |
 | merged rows vanish, so "all landed" reads like "nothing exists" | **recently-merged visibility**: destroyed rows stay on the fleet surfaces for 48h (`wt ls` / `wt status --all --json` append them as `kind: "merged"`; empty states count them: "No active worktrees (2 archived today: …)"), and the merge-cleanup itself lands on the attention feed ("slug merged (#N) — worktree archived"). Derived from the existing removed history — no new store |
 
 Two structural principles underneath:

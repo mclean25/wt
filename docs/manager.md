@@ -60,7 +60,8 @@ The report lands on the TUI's **attention feed** (source `manager`, with a toast
 
 Everything is ordinary CLI surface, so any harness can drive it:
 
-- `wt status --all --json` — the fleet overview (state, risk, note, staleness per worktree), plus recently-removed rows (`kind: "merged"|"removed"`, ≤48h) so an all-merged fleet doesn't read as an empty one.
+- `wt fleet --json` — **the primary sense**: one audit command joining each worktree's asserted status with reality — session liveness (`busy`/`last_activity`) and PR truth (number, draft, merge state, mergeability, CI rollup) — from a single batched GitHub query, recently-removed rows appended ([cli.md](cli.md#wt-fleet)). Merge fields read `"computing"` while GitHub lazily calculates; re-run, never poll.
+- `wt status --all --json` — the status-only view (state, risk, note, staleness per worktree), plus recently-removed rows (`kind: "merged"|"removed"`, ≤48h) so an all-merged fleet doesn't read as an empty one.
 - `wt status <slug> <state> …` — assert on a worktree's behalf after acting on it (`--note-only` sharpens a note without touching state or timestamp).
 - `wt claude send <slug> "<text>"` — nudge a worktree's live session (also accepts the `wt`/`main`/`dotfiles`/`manager` repo-level slugs; an archived slug answers with why it's gone).
 - `wt claude ls --json` — live sessions with `busy` / `last_activity` per session.

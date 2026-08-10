@@ -38,6 +38,8 @@ fragment PrFields on PullRequest {
   baseRefName
   isDraft
   state
+  mergeable
+  mergeStateStatus
   mergedAt
   closedAt
   reviewDecision

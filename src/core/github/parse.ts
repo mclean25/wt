@@ -441,6 +441,8 @@ export function nodeToPr(pr: GqlPrNode): PullRequest {
     baseRefName: pr.baseRefName,
     isDraft: pr.isDraft,
     state: pr.state,
+    mergeable: pr.mergeable ?? null,
+    mergeStateStatus: pr.mergeStateStatus ?? null,
     checks: openPrChecks(pr.state, rollupChecks(contexts)),
     failedChecks: pr.state === "OPEN" ? failingCheckNames(contexts) : [],
     review: rollupReview(

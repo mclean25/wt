@@ -23,6 +23,18 @@ export type RemoteWorktreeSummary = {
   statusOp: string | null;
   dirty: boolean;
   unpushed: number;
+  /**
+   * Whether `origin/<branch>` exists on the remote host's repo — rides
+   * `wt ls --json`'s `pushed`. Null when the remote wt predates the
+   * field (older binaries), so consumers can't mistake "unknown" for
+   * "never pushed".
+   */
+  pushed: boolean | null;
+  /**
+   * Commits ahead of the branch's upstream/base (`ahead_of_base`) — the
+   * restack-pressure signal. Null when the remote wt predates it.
+   */
+  aheadOfBase: number | null;
   issueUrl: string | null;
   /**
    * Work status asserted on the remote host (`work_*` in its
@@ -127,6 +139,13 @@ export function parseRemoteWorktrees(
         row.unpushed >= 0
           ? row.unpushed
           : 0,
+      pushed: typeof row.pushed === "boolean" ? row.pushed : null,
+      aheadOfBase:
+        typeof row.ahead_of_base === "number" &&
+        Number.isInteger(row.ahead_of_base) &&
+        row.ahead_of_base >= 0
+          ? row.ahead_of_base
+          : null,
       issueUrl: typeof row.issue_url === "string" ? row.issue_url : null,
       workState:
         typeof row.work_state === "string" &&

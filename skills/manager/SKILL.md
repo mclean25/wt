@@ -49,11 +49,20 @@ the human asks.
 
 ## Your senses
 
-- `wt status --all --json` — the fleet: asserted state, risk, note, staleness.
-  Rows destroyed in the last 48h are appended with `kind: "merged"` (or
-  `"removed"`), `pr`, and `archived_at` — so an empty active fleet with merged
-  rows means "everything landed", while a truly empty array means nothing
-  exists (worth checking that creates aren't silently failing).
+- `wt fleet --json` — your PRIMARY sense: one row per worktree joining the
+  asserted status (`work`: state/note/risk/at, `stale` when commits landed
+  after the assertion) with reality — `session` (alive/busy/last_activity)
+  and `pr` (number, draft, `merge_state`, `mergeable`, CI rollup `checks`).
+  `pr: null` with a `pr_note` means GitHub was unreachable, NOT "no PR".
+  Merge fields read `"computing"` while GitHub lazily calculates
+  mergeability — re-run after a few seconds, never loop. Rows destroyed in
+  the last 48h are appended with `kind: "merged"` (or `"removed"`), `pr`,
+  and `archived_at` — so an empty active fleet with merged rows means
+  "everything landed", while a truly empty array means nothing exists
+  (worth checking that creates aren't silently failing). Start every
+  triage/digest/audit pass here; the commands below are the finer probes.
+- `wt status --all --json` — the status-only view: asserted state, risk,
+  note, staleness (appends the same recently-removed rows).
 - `wt ls --json` — worktree health (dirty, unpushed, PRs); appends the same
   recently-removed rows (live rows never carry a `state` field).
 - `wt claude ls [--json]` — live agent sessions (worktrees + the repo-level

@@ -16,6 +16,8 @@ describe("parseRemoteWorktrees", () => {
       status_op: "init",
       dirty: false,
       unpushed: 2,
+      pushed: true,
+      ahead_of_base: 5,
       issue_url: null,
     }]), "cachy");
     expect(rows[0]).toEqual({
@@ -31,6 +33,8 @@ describe("parseRemoteWorktrees", () => {
       statusOp: "init",
       dirty: false,
       unpushed: 2,
+      pushed: true,
+      aheadOfBase: 5,
       issueUrl: null,
       workState: null,
       workNote: null,
@@ -44,7 +48,24 @@ describe("parseRemoteWorktrees", () => {
       slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
       status: "clean", status_label: "clean", dirty: false,
     }]), "cachy");
-    expect(row).toMatchObject({ unpushed: 0, statusOp: null, workState: null });
+    // pushed/ahead_of_base absent on old remotes ⇒ null, never a
+    // fabricated "never pushed" / 0.
+    expect(row).toMatchObject({
+      unpushed: 0,
+      pushed: null,
+      aheadOfBase: null,
+      statusOp: null,
+      workState: null,
+    });
+  });
+
+  test("drops malformed pushed/ahead_of_base values to null", () => {
+    const [row] = parseRemoteWorktrees(JSON.stringify([{
+      slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
+      status: "clean", status_label: "clean", dirty: false,
+      unpushed: 1, pushed: "yes", ahead_of_base: -3,
+    }]), "cachy");
+    expect(row).toMatchObject({ unpushed: 1, pushed: null, aheadOfBase: null });
   });
 
   test("parses a work state and drops unknown vocabulary", () => {

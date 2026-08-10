@@ -14,7 +14,7 @@ import { StatusKind } from "../../core/types.ts";
 import {
   fetchOrigin,
   listWorktrees,
-  unpushedCommits,
+  pushCounts,
   worktreeStatus,
 } from "../../core/worktree.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
@@ -65,6 +65,7 @@ export async function run(argv: string[]): Promise<number> {
       rows.map(async (w) => {
         const st = await worktreeStatus(w);
         const dirty = st.kind === StatusKind.Dirty;
+        const push = await pushCounts(w.path);
         return {
           slug: w.slug,
           branch: w.branch,
@@ -76,9 +77,16 @@ export async function run(argv: string[]): Promise<number> {
           status_age: st.age ?? null,
           status_op: st.op ?? null,
           dirty,
-          // null = couldn't determine (see unpushedCommits) — surfaced
-          // as-is so JSON consumers can distinguish it from 0.
-          unpushed: dirty ? 0 : await unpushedCommits(w.path),
+          // True unpushed: commits `origin/<branch>` doesn't have. When
+          // the branch has no origin counterpart this is the
+          // ahead-of-base count and `pushed` is false, so consumers
+          // needn't infer. null = couldn't determine (see pushCounts) —
+          // surfaced as-is so JSON consumers can distinguish it from 0.
+          unpushed: push.unpushed,
+          pushed: push.pushed,
+          // Commits ahead of the branch's upstream/base — restack
+          // pressure, the old meaning of `unpushed`.
+          ahead_of_base: push.aheadOfBase,
           issue_id: issueIdForSlug(w.slug),
           issue_url: issueUrlForSlug(w.slug),
           gh_issue: slugStates[w.slug]?.githubIssue ?? null,

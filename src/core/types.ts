@@ -89,6 +89,29 @@ export type PrComment = {
 export type AutoMergeMethod = "SQUASH" | "MERGE" | "REBASE";
 
 /**
+ * GitHub's `PullRequest.mergeable`. `UNKNOWN` means GitHub hasn't
+ * computed mergeability yet — it does so lazily, triggered by the
+ * query itself — so consumers surface it as "computing" and re-ask
+ * later rather than polling in a loop.
+ */
+export type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+
+/**
+ * GitHub's `PullRequest.mergeStateStatus` — the merge-box verdict
+ * (branch-protection blocks, behind-base, dirty = conflicts, ...).
+ * Same lazy-`UNKNOWN` caveat as `MergeableState`.
+ */
+export type MergeStateStatus =
+  | "BEHIND"
+  | "BLOCKED"
+  | "CLEAN"
+  | "DIRTY"
+  | "DRAFT"
+  | "HAS_HOOKS"
+  | "UNKNOWN"
+  | "UNSTABLE";
+
+/**
  * "Merge when ready" state. Populated when someone has enabled
  * auto-merge on the PR and it's waiting on preconditions (CI, review,
  * base-behind). Clears automatically once the PR enters the merge
@@ -143,6 +166,14 @@ export type PullRequest = {
   title: string;
   isDraft: boolean;
   state: "OPEN" | "CLOSED" | "MERGED";
+  /**
+   * GitHub-computed mergeability (`UNKNOWN` while it's still being
+   * computed — see `MergeableState`). Optional: entries restored from a
+   * persisted cache written before the field existed lack it.
+   */
+  mergeable?: MergeableState | null;
+  /** Merge-box verdict; same optionality/caveats as `mergeable`. */
+  mergeStateStatus?: MergeStateStatus | null;
   checks: PrChecks;
   /**
    * Names of the checks currently failing on this PR. Empty unless

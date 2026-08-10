@@ -1,6 +1,7 @@
 // Static imports so the TS project includes all command modules in
 // type-checking. Runtime dispatch is still keyed by command name below.
 import * as lsCmd from "./commands/ls.ts";
+import * as fleetCmd from "./commands/fleet.ts";
 import * as newCmd from "./commands/new.ts";
 import * as rmCmd from "./commands/rm.ts";
 import * as cleanCmd from "./commands/clean.ts";
@@ -30,6 +31,7 @@ const HELP = `usage: wt <command> [options]
 
 commands:
   ls           list all worktrees
+  fleet       audit the fleet: asserted status vs session + PR reality
   new         create a new worktree
   rm          remove a worktree
   clean       remove merged/gone worktrees
@@ -58,6 +60,7 @@ type Runner = (argv: string[]) => Promise<number>;
 
 const RUNNERS: Record<string, Runner> = {
   ls: lsCmd.run,
+  fleet: fleetCmd.run,
   new: newCmd.run,
   rm: rmCmd.run,
   clean: cleanCmd.run,
