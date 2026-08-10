@@ -53,6 +53,8 @@ Remove a worktree (with dirty/unpushed guards, optional SST stage destroy, optio
 - `--delete-branch` / `--keep-branch` — default deletes the branch.
 - `--background` / `-b` — dispatch as a background job (watch with `wt logs <slug>`).
 
+Removal also closes the browser tabs the worktree's agents opened, by deleting its `browser-control` session (`wt-<slug>`, the `BROWSER_CONTROL_SESSION` every harness session inherits — see [fleet.md](fleet.md#the-design-responses)). Best-effort and silent: no `browser-control`, no relay running, or no browsing done means nothing happens. Tabs the human attached by hand are released, never closed.
+
 ### `wt clean`
 
 Remove every worktree that is merged or whose remote branch is gone. "Gone" is only auto-cleaned when a merged PR confirms the content actually landed; anything riskier is left for an explicit `wt rm`.

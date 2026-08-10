@@ -14,6 +14,7 @@ import {
   setSlugBase,
 } from "./wtstate.ts";
 import { getBackend, getBackendForPath } from "./backend.ts";
+import { closeWorktreeBrowserSessions } from "./browser.ts";
 import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { clearDevServerFiles } from "./dev-server.ts";
@@ -517,6 +518,15 @@ export async function removeWorktree(
         destroyedStage,
         deletedBranch,
       };
+    }
+
+    // Only now that the checkout is definitely gone — a destroy that
+    // bailed above leaves a worktree the user is still working in, and
+    // closing its tabs would be pure loss. Best-effort and silent when
+    // there was nothing to close, which is the common case.
+    const closedTabs = await closeWorktreeBrowserSessions(wt.slug);
+    if (closedTabs.length > 0) {
+      opts.onLog?.(`closed browser session ${closedTabs.join(", ")}`);
     }
 
     if (wt.branch && backend.id === "rift") {

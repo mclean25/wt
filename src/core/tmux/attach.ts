@@ -354,7 +354,7 @@ export async function attachOrCreate(opts: {
           name,
           "-c",
           cwd,
-          ...wrapInnerArgs(kind, stderrPath, innerArgs),
+          ...wrapInnerArgs(kind, stderrPath, innerArgs, slug),
           ";",
           ...pipePaneArgs,
         ];
@@ -422,7 +422,7 @@ export async function attachOrCreate(opts: {
         // and diff redirect stderr to `stderrPath`; shell inherits it
         // through the PTY. `new-session -A` only runs this command on
         // creation, so subsequent re-attaches keep the original routing.
-        ...wrapInnerArgs(kind, stderrPath, innerArgs),
+        ...wrapInnerArgs(kind, stderrPath, innerArgs, slug),
         ";",
         "set-option",
         "-t",

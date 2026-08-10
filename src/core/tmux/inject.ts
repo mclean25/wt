@@ -122,7 +122,7 @@ async function startHarnessSessionDetached(
         // See attachOrCreate header: claude downgrades to 256-color when
         // $TMUX is set, so strip it before exec'ing. The bash wrapper
         // redirects stderr to a file so a spawn-and-die surfaces a reason.
-        ...wrapInnerArgs(harnessId, stderrPath, innerArgs),
+        ...wrapInnerArgs(harnessId, stderrPath, innerArgs, slug),
       ],
       {
         // NOT the worktree — the pane cwd comes from `-c`; the client
