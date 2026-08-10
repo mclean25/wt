@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 1;
+export const WT_STATE_VERSION = 2;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -33,11 +33,21 @@ export type WtStateMigration = {
 };
 
 /**
- * Empty today: version 0 (no `version` field — every state.json written
- * before this system existed) to version 1 is pure stamping, no shape
- * change. The first real entry lands here the day `WtState` next changes.
+ * Version 0 (no `version` field — every state.json written before this
+ * system existed) to 1 was pure stamping, no shape change, so it has no
+ * entry.
  */
-export const WT_STATE_MIGRATIONS: WtStateMigration[] = [];
+export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
+  {
+    // v2: additive — the attention-feed "seen" watermark. parseWtState
+    // would default a missing field anyway; the entry exists so the
+    // additive change has a version boundary (downgrade-then-upgrade
+    // detection), per the contract above.
+    to: 2,
+    up: (raw) =>
+      "attentionSeenTs" in raw ? raw : { ...raw, attentionSeenTs: 0 },
+  },
+];
 
 /**
  * Read the schema version off a raw parsed state object. Missing or

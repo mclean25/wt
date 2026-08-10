@@ -152,6 +152,16 @@ export type WtState = {
   /** Global automations pause (Shift+A). Persisted across restarts. */
   automationsPaused: boolean;
   /**
+   * Attention-feed "seen" watermark (`x` while the attention feed is
+   * displayed): events at or before this epoch-ms render dim below a
+   * `── seen` rule, so the feed reads "only new stuff" at a glance.
+   * Persisted here (not in-memory) so the boot backfill re-seeds
+   * already-handled events dimmed instead of resurrecting them bright.
+   * `0` = never marked. Display-only: the firehose and the daily log
+   * are untouched.
+   */
+  attentionSeenTs: number;
+  /**
    * Recently destroyed worktrees, newest first. Capped + age-pruned at
    * write time (`recordRemovedWorktrees`); an entry whose slug is live
    * again is display-filtered by the TUI and cleared by `createWorktree`.

@@ -27,7 +27,7 @@ import { eventsOutputId, firehoseOutputId, indexOfOutput } from "../../core/outp
 import { stageUrl } from "../../core/stage.ts";
 import { closeHarnessSessionGracefully } from "../../core/tmux.ts";
 import { StatusKind } from "../../core/types.ts";
-import { stackIdFromSectionKey } from "../../core/wtstate.ts";
+import { setAttentionSeen, stackIdFromSectionKey } from "../../core/wtstate.ts";
 import {
   isBareKey,
   isBareShiftedKey,
@@ -36,6 +36,7 @@ import {
   resolveDiffBase,
   sessionLaunchBlockedReason,
 } from "../app-helpers.ts";
+import { events as activityEvents } from "../activity-log.ts";
 import { activityScroll } from "../panels/activity.tsx";
 import { firstYankIndex, yankItemsFor } from "../panels/yank.tsx";
 import { enterDiffSession } from "../sessions/diff.ts";
@@ -286,6 +287,29 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           ? firehoseOutputId()
           : eventsOutputId();
       setFocus(currentSlug ?? null, { focused: next });
+      return;
+    }
+    // `x` — mark the attention feed seen, only while it's the displayed
+    // pane (a blind global key would invite accidental marks). Records
+    // a watermark: everything at or before it renders dim below a
+    // `── seen` rule, so the feed shows only new stuff after you've
+    // worked through it. Persisted (wtstate) so the boot backfill
+    // re-seeds handled lines dimmed. Display-only — nothing is
+    // deleted, and the firehose/daily log are untouched.
+    if (k.sequence === "x" && displayedOutput.id === eventsOutputId()) {
+      if (activityEvents.getAttentionSnapshot().length === 0) {
+        toast("attention feed is empty", theme.fgDim, 1500);
+        return;
+      }
+      const ts = Date.now();
+      activityEvents.markSeen(ts);
+      try {
+        setAttentionSeen(ts);
+      } catch (err) {
+        reportActionError("mark seen", err);
+        return;
+      }
+      toast("attention marked seen", theme.fgDim, 1500);
       return;
     }
     // Unified Shift+J/K — moves the smallest movable thing under the

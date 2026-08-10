@@ -30,9 +30,15 @@ describe("migrateRawWtState (constant-bound wrapper)", () => {
     expect(from).toBe(0);
     expect(to).toBe(WT_STATE_VERSION);
     expect(value.version).toBe(WT_STATE_VERSION);
-    // Non-version fields survive untouched (today's only migration is
-    // pure stamping — no shape change yet).
+    // Non-version fields survive untouched.
     expect(value.slugs).toEqual({});
+  });
+
+  test("v2 seeds the attention watermark on pre-v2 files, preserving an existing one", () => {
+    const { value } = migrateRawWtState({ version: 1, slugs: {} });
+    expect(value.attentionSeenTs).toBe(0);
+    const kept = migrateRawWtState({ version: 1, attentionSeenTs: 123 });
+    expect(kept.value.attentionSeenTs).toBe(123);
   });
 
   test("invalid version values are treated as 0 and migrated", () => {

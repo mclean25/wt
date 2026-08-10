@@ -223,6 +223,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "' '", label: "confirm highlighted output (chord)" },
       { key: "[ / ]", label: "cycle prev / next output for this worktree" },
       { key: '"', label: "attention feed · press again for the full events firehose" },
+      { key: "x", label: "mark attention feed seen — handled rows dim below a ── seen rule (persisted; only while the feed is showing)" },
       { key: "ctrl+e / ctrl+y", label: "scroll the event feed (alt+j/k and mouse wheel too); it re-follows at the bottom" },
       { key: "esc", label: "clear focus (return to follow-row auto)" },
     ],

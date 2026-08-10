@@ -253,6 +253,12 @@ export function parseWtState(raw: unknown): WtState {
     foldedSections,
     pausedStacks,
     automationsPaused: data?.automationsPaused === true,
+    attentionSeenTs:
+      typeof data?.attentionSeenTs === "number" &&
+      Number.isFinite(data.attentionSeenTs) &&
+      data.attentionSeenTs > 0
+        ? data.attentionSeenTs
+        : 0,
     removed,
   };
 }
@@ -265,6 +271,7 @@ export function emptyWtState(): WtState {
     foldedSections: [],
     pausedStacks: [],
     automationsPaused: false,
+    attentionSeenTs: 0,
     removed: [],
   };
 }

@@ -52,3 +52,5 @@ export {
   toggleSlugAutomationsPaused,
   toggleStackAutomationsPaused,
 } from "./wtstate/automations-pause.ts";
+
+export { setAttentionSeen } from "./wtstate/attention.ts";

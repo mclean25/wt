@@ -31,6 +31,14 @@ class EventLog {
   private listeners = new Set<Listener>();
   private nextId = 1;
   private notifyTimer: Timer | null = null;
+  /**
+   * Attention "seen" watermark (epoch ms; 0 = never marked). Events at
+   * or before it render dim below a `── seen` rule in the attention
+   * feed — display state only, nothing is evicted. Seeded at boot from
+   * wtstate (`runtime.tsx`), advanced by the `x` key; the persisted
+   * copy is `WtState.attentionSeenTs`.
+   */
+  private seenTs = 0;
 
   append(partial: Omit<WtEvent, "id" | "ts">): WtEvent {
     const full: WtEvent = { id: this.nextId++, ts: Date.now(), ...partial };
@@ -59,9 +67,17 @@ class EventLog {
     this.scheduleNotify();
   }
 
+  /** Advance the seen watermark (never regresses — see setAttentionSeen). */
+  markSeen(ts: number): void {
+    if (ts <= this.seenTs) return;
+    this.seenTs = ts;
+    this.scheduleNotify();
+  }
+
   // Arrow-bound so React's useSyncExternalStore gets stable refs.
   getSnapshot = (): readonly WtEvent[] => this.events;
   getAttentionSnapshot = (): readonly WtEvent[] => this.attention;
+  getSeenTs = (): number => this.seenTs;
 
   subscribe = (fn: Listener): (() => void) => {
     this.listeners.add(fn);
@@ -95,4 +111,8 @@ export function useAttentionEvents(): readonly WtEvent[] {
     events.getAttentionSnapshot,
     events.getAttentionSnapshot,
   );
+}
+
+export function useAttentionSeenTs(): number {
+  return useSyncExternalStore(events.subscribe, events.getSeenTs, events.getSeenTs);
 }

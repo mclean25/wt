@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useRef } from "react";
+import { Fragment, useEffect, useMemo, useRef } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
-import { useAttentionEvents, useEvents, type WtEvent } from "../activity-log.ts";
+import {
+  useAttentionEvents,
+  useAttentionSeenTs,
+  useEvents,
+  type WtEvent,
+} from "../activity-log.ts";
 import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
 import { theme } from "../theme.ts";
 
@@ -54,9 +59,18 @@ function sourceFg(source: string): string {
 function EventsList({
   events,
   emptyText,
+  seenTs,
 }: {
   events: readonly WtEvent[];
   emptyText: string;
+  /**
+   * Attention "seen" watermark (`x`): rows at or before it render
+   * entirely dim, with a `── seen HH:MM:SS` rule after the last one —
+   * the feed reads "only new stuff" while the handled history stays
+   * scrollable. Undefined (firehose, destroy view, never marked) =
+   * no dimming, no rule.
+   */
+  seenTs?: number;
 }) {
   // Scrollbox with sticky-bottom: follows the live tail like before,
   // releases when the user scrolls up (wheel, or ctrl+e/ctrl+y via
@@ -74,6 +88,18 @@ function EventsList({
   if (events.length === 0) {
     return <text fg={theme.fgDim}>{emptyText}</text>;
   }
+  // Events are appended in arrival order, so "last seen row" is a
+  // single reverse scan; per-row dimming still compares each row's own
+  // ts (backfill seeding keeps order too, so the two always agree).
+  let lastSeenIdx = -1;
+  if (seenTs !== undefined) {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i]!.ts <= seenTs) {
+        lastSeenIdx = i;
+        break;
+      }
+    }
+  }
   return (
     <scrollbox
       ref={scrollRef}
@@ -84,30 +110,51 @@ function EventsList({
       minHeight={0}
       contentOptions={{ flexDirection: "column" }}
     >
-      {events.map((e) => (
-        // Each event has to stay exactly one row. The prefix
-        // (time + source) is grouped into a flexShrink=0 container
-        // so flex pressure from a long message can only shrink the
-        // message column — without this wrapping, the bare
-        // `<text> </text>` spacers get zero-width-collapsed under
-        // pressure, jamming the time+source columns together.
-        // `overflow="hidden"` on the row clips any residual overrun.
-        <box key={e.id} flexDirection="row" flexShrink={0} overflow="hidden">
-          <box flexShrink={0} flexDirection="row">
-            <text fg={theme.fgDim}>{fmtTime(e.ts)}</text>
-            <text> </text>
-            <text fg={sourceFg(e.source)}>
-              {e.source.slice(0, 16).padStart(16)}
-            </text>
-            <text> </text>
-          </box>
-          <box flexGrow={1} flexShrink={1} overflow="hidden">
-            <text fg={levelFg(e.level)} wrapMode="none" truncate>
-              {e.text}
-            </text>
-          </box>
-        </box>
-      ))}
+      {events.map((e, i) => {
+        const seen = seenTs !== undefined && e.ts <= seenTs;
+        return (
+          <Fragment key={e.id}>
+            {/* Each event has to stay exactly one row. The prefix
+                (time + source) is grouped into a flexShrink=0 container
+                so flex pressure from a long message can only shrink the
+                message column — without this wrapping, the bare
+                `<text> </text>` spacers get zero-width-collapsed under
+                pressure, jamming the time+source columns together.
+                `overflow="hidden"` on the row clips any residual
+                overrun. Seen rows drop every color to fgDim — handled
+                history recedes, new rows keep their level colors. */}
+            <box flexDirection="row" flexShrink={0} overflow="hidden">
+              <box flexShrink={0} flexDirection="row">
+                <text fg={theme.fgDim}>{fmtTime(e.ts)}</text>
+                <text> </text>
+                <text fg={seen ? theme.fgDim : sourceFg(e.source)}>
+                  {e.source.slice(0, 16).padStart(16)}
+                </text>
+                <text> </text>
+              </box>
+              <box flexGrow={1} flexShrink={1} overflow="hidden">
+                <text fg={seen ? theme.fgDim : levelFg(e.level)} wrapMode="none" truncate>
+                  {e.text}
+                </text>
+              </box>
+            </box>
+            {i === lastSeenIdx ? (
+              // The seen rule: everything above is handled. A blank
+              // row above gives it air; when it's the last line the
+              // sticky-bottom tail itself reads as "caught up".
+              <box flexDirection="row" flexShrink={0} overflow="hidden" marginTop={1}>
+                {/* Over-long on purpose; the row box's overflow="hidden"
+                    hard-clips it to the pane, so the rule spans full
+                    width at any size (no `truncate` — its middle
+                    ellipsis would punch a "..." into the rule). */}
+                <text fg={theme.fgDim} wrapMode="none">
+                  {`── seen ${fmtTime(seenTs!)} ${"─".repeat(400)}`}
+                </text>
+              </box>
+            ) : null}
+          </Fragment>
+        );
+      })}
     </scrollbox>
   );
 }
@@ -131,10 +178,14 @@ export function ActivityContent({
 }) {
   const all = useEvents();
   const attention = useAttentionEvents();
+  const seenTs = useAttentionSeenTs();
   return (
     <EventsList
       events={feed === "attention" ? attention : all}
       emptyText={feed === "attention" ? "(nothing needs you)" : "(no events yet)"}
+      // 0 = never marked. Attention-only: the firehose is the record
+      // and stays fully bright.
+      seenTs={feed === "attention" && seenTs > 0 ? seenTs : undefined}
     />
   );
 }

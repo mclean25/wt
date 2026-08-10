@@ -39,7 +39,7 @@ import { startLoopLagProbe } from "../core/perf.ts";
 import { reapShellLogs, shellTailRegistry } from "../core/shell-tail.ts";
 import { reapOrphanedSessions } from "../core/tmux.ts";
 import { listWorktrees } from "../core/worktree.ts";
-import { reapWtState } from "../core/wtstate.ts";
+import { readWtState, reapWtState } from "../core/wtstate.ts";
 import { createWtQueryClient } from "../state/index.ts";
 import { qk } from "../state/keys.ts";
 import { fetchOriginNow, fetchOriginQuery, type TmuxSessionsData } from "../state/queries.ts";
@@ -189,6 +189,10 @@ export async function runTui(): Promise<TuiExit> {
   // into the store. CLI runs leave the sink unset, so event-style log
   // calls there go to the file only.
   backfillActivityLog();
+  // Seed the attention "seen" watermark alongside the backfill: the
+  // events come back from the daily logs, the watermark from wtstate,
+  // so already-handled lines re-appear dim instead of bright.
+  events.markSeen(readWtState().attentionSeenTs);
   setEventSink((e) => {
     events.append(e);
   });
