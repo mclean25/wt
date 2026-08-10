@@ -326,7 +326,12 @@ export const MANAGER_BUILTIN_ACTIONS: readonly ActionDef[] = [
     kind: "claude",
     id: "manager-compact",
     name: "Compact manager context",
-    prompt: "/compact",
+    // /compact takes focus instructions: preserve the fleet coordination
+    // state, and make the FIRST post-compact action re-running /manager
+    // so the playbook (and its opt-in briefs) survives every compaction
+    // explicitly instead of decaying into the summary.
+    prompt:
+      "/compact Preserve: current fleet state (per-slug statuses, in-flight nudges, pending merge order, unresolved escalations) and any standing briefs from the config. You are the wt manager session; immediately after this compaction, re-run /manager to reload your playbook before doing anything else.",
     target: "manager",
     affects: [],
     requires: [],
