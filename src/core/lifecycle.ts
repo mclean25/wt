@@ -23,6 +23,7 @@ import { branchExists, git, gitQuiet, originBranchExists, revParse } from "./git
 import { ISSUE_ID_RE, ISSUE_URL_RE } from "./issue-tracker.ts";
 import { lockLabel, lockStatus, tryAcquireLock } from "./locks.ts";
 import { runStreaming } from "./proc.ts";
+import { reapWorktreeListeners } from "./reaper.ts";
 import { RESERVED_SESSION_SLUGS } from "./tmux/naming.ts";
 import { computeStage, dirSlug, slugify } from "./stage.ts";
 import { adjectives, animals, uniqueNamesGenerator } from "unique-names-generator";
@@ -495,6 +496,20 @@ export async function removeWorktree(
           opts.onLog?.(`sst remove failed (exit ${sstExit})`);
         }
       }
+    }
+
+    // Reap hand-started servers (an agent's `pnpm preview`, a stray
+    // vite) BEFORE the checkout goes away: lsof resolves each process's
+    // cwd against the still-existing directory, and a freed port can't
+    // outlive the worktree. This deliberately differs from the browser
+    // cleanup below (which waits for the remove to succeed): a killed
+    // preview server on a destroy that then bails is one command to
+    // restart, while a closed tab's state is gone for good. wt-managed
+    // sessions are already dead by now (callers run killAllSessionsFor
+    // first), so this only ever sees processes wt doesn't manage.
+    const reaped = await reapWorktreeListeners(wt.path);
+    for (const p of reaped) {
+      opts.onLog?.(`reaped ${p.command} (pid ${p.pid}, port ${p.ports.join(", ") || "?"})`);
     }
 
     // Dispatch on the checkout's ACTUAL backend (derived from disk), not

@@ -22,11 +22,14 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   and reuse what's already running; it prints the URL, whose port wt
   allocates per worktree, so the port the repo documents is the wrong
   one here. `wt dev logs` is the output, and another slug's server is
-  never yours to stop or restart. A server you start by hand is
-  invisible to wt and to the human (no row, no status, no logs), dies
-  with your session, and holds its port long after the worktree is
-  archived. `[dev_server] is not configured` means the project has none
-  — then start it however the project documents.
+  never yours to stop or restart. A dev server you start by hand is
+  invisible to wt and to the human (no row, no status, no logs) and
+  unsupervised. Short-lived servers for your own checks (`pnpm preview`,
+  a watch runner) are different: run those bare, no wt involvement —
+  they're tools of your task, and wt reaps anything still listening
+  when the worktree is destroyed, so they can't leak. `[dev_server] is
+  not configured` means the project has none — then start the dev
+  server however the project documents.
 - **Never end a session without a clear status.** Finished means
   `wt status ready --risk low|medium|high [-m ...]`, risk judged broadly (end
   users, coworker workflows, costs, migrations, reversibility). The note

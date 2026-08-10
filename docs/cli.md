@@ -55,6 +55,8 @@ Remove a worktree (with dirty/unpushed guards, optional SST stage destroy, optio
 
 Removal also closes the browser tabs the worktree's agents opened, by deleting its `browser-control` session (`wt-<slug>`, the `BROWSER_CONTROL_SESSION` every harness session inherits — see [fleet.md](fleet.md#the-design-responses)). Best-effort and silent: no `browser-control`, no relay running, or no browsing done means nothing happens. Tabs the human attached by hand are released, never closed.
 
+And it reaps hand-started servers: any process holding a **listening TCP socket** whose cwd is inside the worktree (an agent's backgrounded `pnpm preview`, a stray vite) is SIGTERM'd — SIGKILL'd if it lingers — before the checkout is removed, with a `reaped …` line in the destroy log per kill. The listening-socket filter is the safety boundary: an editor or shell sitting in the directory holds no socket and is never touched. This is the cleanup half of the process contract — the managed half (`wt dev`) covers the one process meant to *outlive* an agent's session; everything else may run unmanaged precisely because destroy guarantees it can't outlive the worktree. Best-effort and silent when nothing is listening, which is the common case.
+
 ### `wt clean`
 
 Remove every worktree that is merged or whose remote branch is gone. "Gone" is only auto-cleaned when a merged PR confirms the content actually landed; anything riskier is left for an explicit `wt rm`.
