@@ -1,6 +1,7 @@
 import type { HistoryEntry } from "../../core/actions.ts";
 import type { KeyHintPair } from "../key-hint.tsx";
 import { Modal } from "../modal.tsx";
+import { editSpans, type TextEdit } from "../text-edit.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
 
@@ -199,7 +200,7 @@ type ArgProps = {
    * When non-null, the picker is in input mode (typing a fresh value).
    * The text field replaces the list footer.
    */
-  input: string | null;
+  input: TextEdit | null;
 };
 
 /**
@@ -235,8 +236,7 @@ export function ArgPickerModal({
         <box flexDirection="row" paddingLeft={1} paddingRight={1}>
           <text fg={theme.accent} attributes={1}>{prompt}</text>
           <text fg={theme.fg}> </text>
-          <text fg={theme.fgBright}>{input}</text>
-          <text fg={theme.accent}>█</text>
+          <text>{editSpans(input, theme.fgBright)}</text>
         </box>
       </Modal>
     );

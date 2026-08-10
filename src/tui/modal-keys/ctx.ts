@@ -20,6 +20,8 @@ export type SimpleModalContext = {
   refreshPerf: () => Promise<unknown>;
   /** Send the current perf snapshot to the wt session, then enter it. */
   doPerfInvestigate: () => void;
+  /** Send the newest captured error to the wt session, then enter it. */
+  doErrorInvestigate: () => void;
   commitBasePick: (
     item: { label: string; branch: string | null },
     slug: string,

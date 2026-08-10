@@ -152,6 +152,37 @@ lag probe that logs whenever wt's own render thread blocks. That's the
 tool for "j/k feels laggy"; this overlay is the tool for "the whole
 machine feels slow".
 
+### Error overlay
+
+Unhandled errors in the TUI process (uncaught exceptions, unhandled
+promise rejections, React render errors) are **captured instead of
+printed** — a raw stack trace on stdout/stderr while the renderer owns
+the terminal garbles the panes. Captured errors go to a small in-memory
+ring (last 5) plus the daily log (full stack), a footer toast flashes,
+and this overlay pops automatically. It has no opening key: if another
+modal is open it waits its turn and pops when that modal closes;
+dismissing acknowledges everything shown, so only a *new* error re-pops
+it.
+
+| key | action |
+|---|---|
+| `j` / `k` | scroll the stack |
+| `i` | send the error to the wt-source session (`,`) as an investigate-and-fix prompt, then enter that session |
+| `y` | copy the error (origin, timestamp, full stack) to the clipboard |
+| `Esc` / `q` | dismiss (acknowledge) |
+
+An **uncaught exception does not kill wt** — the process keeps running
+(the state sources are re-derived queries that self-heal), but the
+overlay shows a "state may be inconsistent; restart when convenient"
+banner for the rest of the run. Identical back-to-back errors collapse
+into one entry with a `×N` counter rather than flooding the ring. A
+crash *while rendering* can't use a modal (the app tree is gone), so it
+gets a minimal full-screen crash view instead: `r` retries the render,
+`y` copies, `q` quits cleanly.
+
+Test hook: `WT_DEBUG_THROW=1` (or `=rejection`) fires a synthetic
+error ~1.5s after startup — that's how the capture path is probed.
+
 ### Removed-worktrees view (`h`)
 
 `j`/`k` navigate, `g`/`G` jump to top/bottom, `p` opens the snapshotted PR, `i` the issue, `y` copies the branch, `Enter` restores the worktree (from the branch if it still exists, else fresh), `h`/`Esc` returns.
@@ -161,6 +192,8 @@ machine feels slow".
 Every list picker follows the same shape: the key that opened it confirms the highlight when pressed again (`l l`, `; ;`, `' '`, `! !`, `M M`, `b b`, `v v`, `u u`, `y y`, and `Shift+F12` again in the harness picker), `Enter` always confirms, `Esc`/`q`/`Ctrl+C` always cancel, `j`/`k` move, and digits `1`–`9` quick-pick when the list is short — except the action picker and manager palette (assigned letters instead) and the reviewer picker (`Space` toggles; digits would be ambiguous in a multi-select). Rows with a natural name carry a direct letter chord, shown dim in the row (`u t` → todo, `u y` → ready, `; c` new claude session); special rows get their own letter too (`l n` new section, `! c` custom prompt).
 
 Confirm modals follow the same muscle-memory rule in reverse: the key that opened one also **cancels** it (`d`, `c`, `e`, `E`, `w`, `!`'s kill confirm), alongside the universal `n`/`Esc`/`q`/`Ctrl+C`.
+
+Every text input (the `n`/`N`/`Ctrl+N` new-worktree prompt, `L` section rename, `u m` status notes, `! c` custom prompts and action args, `; c` session names, help search) shares one line editor: `←`/`→` move the cursor, `Home`/`End` (or `Ctrl+A`/`Ctrl+E`) jump to the ends, `Opt/Alt+←`/`→` (or `Esc B`/`Esc F`, or `Ctrl+←`/`→`) jump by word, `Backspace`/`Delete` edit at the cursor, and `Opt/Alt+Backspace` deletes the word left. Word boundaries are slug- and sentence-aware: `-`, `_`, and spaces all separate words. Backspace on an already-empty input still backs out of the prompt.
 
 The title bar's `auto ⏸` chip (inverse, warn-colored) means all automations are paused — a fleet-tier fact deliberately louder than the CPU/usage telemetry next to it.
 

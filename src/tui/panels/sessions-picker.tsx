@@ -37,6 +37,7 @@ import { HARNESSES, type HarnessId } from "../../core/harness/index.ts";
 import { STATE_DOT, stateColor } from "../claude-state.ts";
 import type { HarnessSessionEntry } from "../hooks/useHarnessSessions.ts";
 import { Modal } from "../modal.tsx";
+import { editSpans, type TextEdit } from "../text-edit.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { ageMsToText } from "../text.ts";
 import { theme } from "../theme.ts";
@@ -268,7 +269,7 @@ export function SessionsPickerList({
 
 type NewProps = {
   slug: string;
-  input: string;
+  input: TextEdit;
   /**
    * Auto-name surfaced as the placeholder when input is empty —
    * what'll be used if the user just hits Enter. Computed by the
@@ -293,9 +294,9 @@ export function SessionsPickerNew({ slug, input, autoName, error }: NewProps) {
     >
       <box flexDirection="row" paddingLeft={1} paddingRight={1}>
         <text fg={theme.fgDim}>name </text>
-        <text fg={theme.accent}>{input || ""}</text>
+        <text>{editSpans(input, theme.accent)}</text>
         <text fg={theme.fgDim}>
-          {input ? "" : `(blank → ${autoName})`}
+          {input.value ? "" : `(blank → ${autoName})`}
         </text>
       </box>
       {error ? (

@@ -8,6 +8,7 @@ import {
 import type { ActionDef } from "../../core/config.ts";
 import { getHarness } from "../../core/harness/index.ts";
 import { Modal } from "../modal.tsx";
+import type { TextEdit } from "../text-edit.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
 
@@ -138,7 +139,7 @@ export type ActionPickerState =
       slug: string;
       rowSlug: string | null;
       def: ClaudeActionDef | null;
-      extras: string;
+      extras: TextEdit;
     };
 
 type Props = {
@@ -283,7 +284,7 @@ type EditProps = {
   surface: ActionPickerSurface;
   /** `null` = custom prompt (extras IS the entire prompt). */
   def: ClaudeActionDef | null;
-  extras: string;
+  extras: TextEdit;
   /**
    * Substitutions for `{{name}}` in `def.prompt`. Mirrors what gets
    * applied at launch, so the preview matches what claude actually
@@ -313,9 +314,12 @@ export function ActionEditModal({ slug, surface, def, extras, vars }: EditProps)
       ]}
     >
       {/* A long rendered prompt plus freeform extras can outgrow the
-          modal; scroll the region and keep the input (always at the end
-          of `extras`) in view as the user types. */}
-      <ScrollableList selectedId="edit:input" revision={extras}>
+          modal; scroll the region and keep the input in view as the
+          user types or moves the cursor. */}
+      <ScrollableList
+        selectedId="edit:input"
+        revision={`${extras.cursor}:${extras.value}`}
+      >
         {def ? (
           <box flexDirection="column" marginBottom={1}>
             <text fg={theme.fgDim} attributes={1}>
@@ -335,7 +339,7 @@ export function ActionEditModal({ slug, surface, def, extras, vars }: EditProps)
             {def ? "additional instructions" : "prompt"}
           </text>
           <box flexDirection="column" marginTop={0}>
-            {extras.length === 0 ? (
+            {extras.value.length === 0 ? (
               <text fg={theme.fgDim}>
                 <span fg={theme.accent}>█</span>
                 {def
@@ -343,7 +347,7 @@ export function ActionEditModal({ slug, surface, def, extras, vars }: EditProps)
                   : " (type your prompt, ⏎ to launch)"}
               </text>
             ) : (
-              <ExtrasView text={extras} />
+              <ExtrasView edit={extras} />
             )}
           </box>
         </box>
@@ -352,19 +356,33 @@ export function ActionEditModal({ slug, surface, def, extras, vars }: EditProps)
   );
 }
 
-function ExtrasView({ text }: { text: string }) {
-  const lines = text.split("\n");
+/**
+ * Extras with the block cursor at its position. Multiline-capable
+ * (pastes can carry newlines): the value splits at the cursor, the
+ * cursor line renders before-part + block + after-part, and the other
+ * lines render plain.
+ */
+function ExtrasView({ edit }: { edit: TextEdit }) {
+  const beforeLines = edit.value.slice(0, edit.cursor).split("\n");
+  const afterLines = edit.value.slice(edit.cursor).split("\n");
+  const cursorLine = beforeLines.length - 1;
   return (
     <>
-      {lines.map((line, i) => {
-        const isLast = i === lines.length - 1;
-        return (
-          <text key={i} fg={theme.fgBright} wrapMode="word">
-            {line}
-            {isLast ? <span fg={theme.accent}>█</span> : null}
-          </text>
-        );
-      })}
+      {beforeLines.slice(0, -1).map((line, i) => (
+        <text key={`b${i}`} fg={theme.fgBright} wrapMode="word">
+          {line || " "}
+        </text>
+      ))}
+      <text key="cursor" fg={theme.fgBright} wrapMode="word">
+        {beforeLines[cursorLine]}
+        <span fg={theme.accent}>█</span>
+        {afterLines[0]}
+      </text>
+      {afterLines.slice(1).map((line, i) => (
+        <text key={`a${i}`} fg={theme.fgBright} wrapMode="word">
+          {line || " "}
+        </text>
+      ))}
     </>
   );
 }

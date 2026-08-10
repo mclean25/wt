@@ -28,8 +28,13 @@ import {
   type WorkStatusRecord,
 } from "../../core/work-status.ts";
 import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
-import { readWtState, setSlugWorkStatus } from "../../core/wtstate.ts";
+import {
+  readWtState,
+  recentlyRemovedWorktrees,
+  setSlugWorkStatus,
+} from "../../core/wtstate.ts";
 import { bold, cyan, dim, green, magenta, red, yellow } from "../colors.ts";
+import { removedJsonEntry } from "./ls.ts";
 
 const VOCAB = `states (unique prefixes + nh/nt work):
   ${bold("todo")}           created, not started
@@ -43,7 +48,8 @@ const VOCAB = `states (unique prefixes + nh/nt work):
                  users, coworker workflows, costs). High-value only — no noise.
 
 set:   wt status [<slug>] <state> [-m "note"] [--risk low|medium|high]
-show:  wt status [<slug>] [--all [--json]]     clear: wt status --clear [<slug>]`;
+show:  wt status [<slug>] [--all [--json]]     clear: wt status --clear [<slug>]
+note:  wt status [<slug>] --note-only "..."    amend the note; state + timestamp kept`;
 
 const HINTS_OFF = process.env.WT_NO_HINTS === "1";
 
@@ -74,8 +80,9 @@ function guidance(state: WorkState): string[] {
       ];
     case "needs-human":
       return [
-        `The human will see this. Keep making progress on anything not blocked,`,
-        `and assert the next status the moment you're unblocked.`,
+        `The human will see this — the note should name the blocker AND what you`,
+        `already tried ("blocked on X; tried Y, Z"). Keep making progress on anything`,
+        `not blocked, and assert the next status the moment you're unblocked.`,
       ];
     case "ready":
       return [
@@ -115,6 +122,7 @@ export type StatusArgs =
   | { kind: "all"; json: boolean }
   | { kind: "show"; slugArg: string | null }
   | { kind: "clear"; slugArg: string | null }
+  | { kind: "note"; slugArg: string | null; note: string }
   | {
       kind: "set";
       slugArg: string | null;
@@ -139,19 +147,21 @@ function err(message: string, hints?: string[], showVocab = false): StatusArgs {
 export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   const positionals: string[] = [];
   let note: string | null = null;
+  let noteOnly: string | null = null;
   let riskRaw: string | null = null;
   let clear = false;
   let all = false;
   let json = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "-m" || a === "--note" || a === "--risk") {
+    if (a === "-m" || a === "--note" || a === "--risk" || a === "--note-only") {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("-")) {
         return err(`${a} requires a value${value !== undefined ? ` (got "${value}")` : ""}`);
       }
       i++;
       if (a === "--risk") riskRaw = value;
+      else if (a === "--note-only") noteOnly = value;
       else note = value;
     } else if (a === "--clear") clear = true;
     else if (a === "--all") all = true;
@@ -170,6 +180,27 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   if (riskRaw !== null) {
     risk = resolveRisk(riskRaw);
     if (!risk) return err(`--risk must be one of ${WORK_RISKS.join("|")}, got "${riskRaw}"`);
+  }
+
+  // `--note-only` amends the note of an EXISTING record without
+  // resetting the state or the `at` timestamp — for sharpening a
+  // needs-human note (or adding late-learned merge impacts) without
+  // faking a fresh assertion. Everything else about the record is
+  // untouched, so it conflicts with every state-changing flag.
+  if (noteOnly !== null) {
+    if (clear || all) return err("--note-only doesn't combine with --all/--clear");
+    if (note !== null || riskRaw !== null) {
+      return err("--note-only amends only the note — drop -m/--risk");
+    }
+    if (positionals.length > 1) return err("too many arguments for --note-only");
+    if (positionals[0] && resolveWorkState(positionals[0])) {
+      return err(
+        "--note-only keeps the current state — drop the state argument (use -m alongside a state to set both)",
+      );
+    }
+    const sanitized = sanitizeWorkNote(noteOnly);
+    if (sanitized === "") return err("--note-only requires a non-empty note");
+    return { kind: "note", slugArg: positionals[0] ?? null, note: sanitized };
   }
 
   if (all) {
@@ -253,9 +284,13 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     ]);
   }
   if (state === "needs-human" && !note) {
-    return err("needs-human requires -m: what exactly do you need from the human?", [
-      `e.g. -m "dev-env Google login expired — log me back in via the open browser"`,
-    ]);
+    return err(
+      "needs-human requires -m: what exactly do you need, and what did you already try?",
+      [
+        `the note carries both — e.g. -m "blocked on dev-env Google login; tried`,
+        `re-auth in the open browser and restarting the dev server"`,
+      ],
+    );
   }
 
   return { kind: "set", slugArg, state, note, risk };
@@ -316,17 +351,24 @@ export async function run(argv: string[]): Promise<number> {
       })),
     );
     if (args.json) {
+      // Recently-destroyed rows (≤48h) ride along in the same shape
+      // `wt ls --json` appends (`state: "merged"|"removed"`), so the
+      // manager can tell "everything landed" from "nothing exists".
+      const removed = recentlyRemovedWorktrees(new Set(wts.map((w) => w.slug)));
       console.log(
         JSON.stringify(
-          entries.map(({ w, record, headSha }) => ({
-            slug: w.slug,
-            branch: w.branch,
-            state: record?.state ?? null,
-            note: record?.note ?? null,
-            risk: record?.risk ?? null,
-            at: record?.at ?? null,
-            stale: !!(record?.sha && headSha && record.sha !== headSha),
-          })),
+          [
+            ...entries.map(({ w, record, headSha }) => ({
+              slug: w.slug,
+              branch: w.branch,
+              state: record?.state ?? null,
+              note: record?.note ?? null,
+              risk: record?.risk ?? null,
+              at: record?.at ?? null,
+              stale: !!(record?.sha && headSha && record.sha !== headSha),
+            })),
+            ...removed.map(removedJsonEntry),
+          ],
           null,
           2,
         ),
@@ -346,15 +388,51 @@ export async function run(argv: string[]): Promise<number> {
     if (args.slugArg) {
       console.error(red(`no worktree (and no such status): ${args.slugArg}`));
       console.log(VOCAB);
-    } else {
-      console.error(red("not inside a worktree — pass a slug, or cd into one"));
+      return 1;
     }
+    if (args.kind === "show") {
+      // Bare `wt status` outside any worktree isn't an error — it's how
+      // agents (and the skills' promises) discover the vocabulary. Teach,
+      // then say how to address a worktree.
+      console.log(VOCAB);
+      hint([
+        `not inside a worktree — pass a slug (${bold("wt status <slug> [<state>]")}),`,
+        `or ${bold("wt status --all")} for the fleet overview`,
+      ]);
+      return 0;
+    }
+    console.error(red("not inside a worktree — pass a slug, or cd into one"));
     return 1;
   }
 
   if (args.kind === "clear") {
     setSlugWorkStatus(target.slug, null);
     console.log(green(`✓ ${target.slug} status cleared`));
+    return 0;
+  }
+
+  if (args.kind === "note") {
+    const prev = state.slugs[target.slug]?.work;
+    if (!prev) {
+      console.error(
+        red(
+          `${target.slug} has no status asserted — --note-only amends an existing record; set a state first`,
+        ),
+      );
+      return 2;
+    }
+    // Spread keeps state/risk/at/sha byte-identical: the record still
+    // describes the same assertion, just with a better note — so no
+    // timestamp bump, no re-narration of an unchanged state.
+    setSlugWorkStatus(target.slug, { ...prev, note: args.note });
+    createLogger(target.slug).info(
+      `work status note amended${workStatusSuffix({ note: args.note })}`,
+    );
+    const color = stateColor(prev.state);
+    console.log(
+      `${green("✓")} ${cyan(target.slug)} ${color(prev.state)}  ${dim("note amended (state + timestamp kept)")}`,
+    );
+    console.log(`  ${dim("note:")} ${args.note}`);
     return 0;
   }
 

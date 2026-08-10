@@ -2,6 +2,7 @@ import type { KeyEvent } from "@opentui/core";
 
 import { printableText } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
+import { applyEditKey, emptyEdit, insertText } from "../text-edit.tsx";
 import type { SimpleModalContext } from "./ctx.ts";
 
 export function handleHelpKey(
@@ -15,31 +16,34 @@ export function handleHelpKey(
       return true;
     }
     if (k.name === "escape") {
-      setModal({ ...modal, searching: false, query: "" });
+      setModal({ ...modal, searching: false, query: emptyEdit });
       return true;
     }
     if (k.name === "return") {
       setModal({ ...modal, searching: false });
       return true;
     }
-    if (k.name === "backspace") {
-      if (modal.query.length === 0) {
-        setModal({ ...modal, searching: false });
-        return true;
-      }
-      setModal({ ...modal, query: modal.query.slice(0, -1) });
+    // Backspace on empty query leaves search mode.
+    if (k.name === "backspace" && modal.query.value.length === 0) {
+      setModal({ ...modal, searching: false });
+      return true;
+    }
+    // Cursor movement / deletion — shared editor logic.
+    const edited = applyEditKey(k, modal.query);
+    if (edited) {
+      setModal({ ...modal, query: edited });
       return true;
     }
     const text = printableText(k.sequence);
-    if (text) setModal({ ...modal, query: modal.query + text });
+    if (text) setModal({ ...modal, query: insertText(modal.query, text) });
     return true;
   }
   if (k.sequence === "/") {
     setModal({ ...modal, searching: true });
     return true;
   }
-  if (k.name === "escape" && modal.query) {
-    setModal({ ...modal, query: "" });
+  if (k.name === "escape" && modal.query.value) {
+    setModal({ ...modal, query: emptyEdit });
     return true;
   }
   if (

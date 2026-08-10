@@ -9,6 +9,7 @@ import { STATE_DOT, STATE_FG } from "../claude-state.ts";
 import { NF } from "../icons.ts";
 import { Modal } from "../modal.tsx";
 import type { KeyHintPair } from "../key-hint.tsx";
+import { editSpans, type TextEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
 
 type LegendGlyph = ReactNode;
@@ -535,10 +536,10 @@ export function HelpOverlay({
   query,
   searching,
 }: {
-  query: string;
+  query: TextEdit;
   searching: boolean;
 }) {
-  const q = query.trim().toLowerCase();
+  const q = query.value.trim().toLowerCase();
   const blocks = filterBlocks(ALL_BLOCKS, q);
   const matches = countRows(blocks);
   const empty = q.length > 0 && matches === 0;
@@ -549,7 +550,7 @@ export function HelpOverlay({
         ["⏎", "apply"],
         ["esc", "cancel"],
       ]
-    : query
+    : query.value
       ? [
           // Nothing to scroll when the filter matches nothing.
           ...(empty ? [] : ([["j k", "scroll"]] as KeyHintPair[])),
@@ -570,7 +571,7 @@ export function HelpOverlay({
       hints={hints}
       fill
     >
-      {searching || query ? (
+      {searching || query.value ? (
         <box flexShrink={0} flexDirection="row" marginBottom={1}>
           {/* One text node so the `/`, query, and cursor sit flush — separate
               siblings leave a spacer cell when the query is empty. */}
@@ -578,8 +579,11 @@ export function HelpOverlay({
             <span fg={searching ? theme.accent : theme.fgDim} attributes={1}>
               /
             </span>
-            <span fg={theme.fg}>{query}</span>
-            {searching ? <span fg={theme.accent}>▌</span> : null}
+            {searching ? (
+              editSpans(query, theme.fg, "▌")
+            ) : (
+              <span fg={theme.fg}>{query.value}</span>
+            )}
           </text>
           {!empty ? (
             <text fg={theme.fgDim}>
@@ -591,7 +595,7 @@ export function HelpOverlay({
       ) : null}
       {empty ? (
         <box flexGrow={1} alignItems="center" justifyContent="center">
-          <text fg={theme.fgDim}>no matches for "{query.trim()}"</text>
+          <text fg={theme.fgDim}>no matches for "{query.value.trim()}"</text>
         </box>
       ) : (
         <scrollbox focused={!searching} scrollY flexGrow={1}>

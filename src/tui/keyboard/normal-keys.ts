@@ -15,6 +15,7 @@ import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 import type { RefObject } from "react";
 
 import { actionRegistry } from "../../core/actions.ts";
+import { emptyEdit } from "../text-edit.tsx";
 import type { WorkState } from "../../core/work-status.ts";
 import { config, type PullRequestTarget } from "../../core/config.ts";
 import { effectiveBaseOrTrunk } from "../../core/git.ts";
@@ -479,7 +480,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       setFooter({
         kind: "input",
         prompt: "new:",
-        value: "",
+        edit: emptyEdit,
         purpose: "new",
         base: current.wt.branch,
       });

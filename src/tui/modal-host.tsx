@@ -20,6 +20,7 @@ import {
 } from "./panels/action-picker.tsx";
 import { CleanConfirmModal } from "./panels/clean-confirm.tsx";
 import { ConfirmModal } from "./panels/confirm-modal.tsx";
+import { ErrorOverlay } from "./panels/error-overlay.tsx";
 import { HarnessPickerModal } from "./panels/harness-picker.tsx";
 import { HelpOverlay } from "./panels/help.tsx";
 import { KillActionConfirmModal } from "./panels/kill-action-confirm.tsx";
@@ -148,6 +149,7 @@ export function PostFooterModals({
           inject={modal.inject}
         />
       ) : null}
+      {modal?.kind === "errors" ? <ErrorOverlay inject={modal.inject} /> : null}
       {modal?.kind === "cleanConfirm" ? (
         <CleanConfirmModal candidates={cleanCandidates} />
       ) : null}

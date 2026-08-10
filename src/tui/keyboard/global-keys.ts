@@ -14,6 +14,7 @@ import { isPlainLetter, isShiftedLetter } from "../app-helpers.ts";
 import { openInZed } from "../../core/zed.ts";
 import type { Modal } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
+import { emptyEdit } from "../text-edit.tsx";
 import {
   DOTFILES_SLOT,
   MAIN_CLONE_SLOT,
@@ -59,7 +60,7 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
     openManagerPalette,
   } = ctx;
     if (k.sequence === "?") {
-      setModal({ kind: "help", query: "", searching: false });
+      setModal({ kind: "help", query: emptyEdit, searching: false });
       return true;
     }
     // Shift+P — the perf overlay. Sampling is gated on this modal being
@@ -113,14 +114,14 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       setFooter({
         kind: "input",
         prompt: `new@${remote.label}:`,
-        value: "",
+        edit: emptyEdit,
         purpose: "new-remote",
       });
       return true;
     }
     if (k.sequence === "n") {
       newLog.event.dim("tip: --any to match any author, --base <ref> to branch off");
-      setFooter({ kind: "input", prompt: "new:", value: "", purpose: "new" });
+      setFooter({ kind: "input", prompt: "new:", edit: emptyEdit, purpose: "new" });
       return true;
     }
     if (isPlainLetter(k, "c")) {

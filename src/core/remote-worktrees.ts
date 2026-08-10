@@ -76,7 +76,14 @@ export function parseRemoteWorktrees(
 ): RemoteWorktreeSummary[] {
   const value: unknown = parseWorktreeJson(raw);
   if (!Array.isArray(value)) throw new Error("remote wt ls returned non-array JSON");
-  return value.map((entry, index) => {
+  // `wt ls --json` appends recently-removed rows (discriminated by a
+  // `state` field live rows never carry — see cli/commands/ls.ts). The
+  // remote section renders live worktrees only, so drop them here;
+  // older remotes simply don't emit them.
+  const live = value.filter(
+    (entry) => !(entry && typeof entry === "object" && "state" in entry),
+  );
+  return live.map((entry, index) => {
     if (!entry || typeof entry !== "object") {
       throw new Error(`remote worktree ${index} is not an object`);
     }

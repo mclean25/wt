@@ -3,6 +3,7 @@ import type { KeyEvent } from "@opentui/core";
 import { recentValues } from "../../core/actions.ts";
 import { printableMultiline } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
+import { applyEditKey, emptyEdit, insertText } from "../text-edit.tsx";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleListPickerKey } from "./list-picker.ts";
 
@@ -70,7 +71,7 @@ export function handleActionPickerKey(
           def: item.def,
           history,
           index: 0,
-          input: history.length === 0 ? "" : null,
+          input: history.length === 0 ? emptyEdit : null,
         });
         return;
       }
@@ -88,7 +89,7 @@ export function handleActionPickerKey(
           slug: ap.slug,
           rowSlug: ap.rowSlug,
           def: def && def.kind === "claude" ? def : null,
-          extras: "",
+          extras: emptyEdit,
         },
       });
     };
@@ -105,7 +106,7 @@ export function handleActionPickerKey(
           slug: ap.slug,
           rowSlug: ap.rowSlug,
           def: null,
-          extras: "",
+          extras: emptyEdit,
         },
       });
       return true;
@@ -173,27 +174,26 @@ export function handleActionPickerKey(
       // row-scoped entries (ask-about-row, user `target = "manager"`
       // actions) ride the normal launch path against the captured row
       // so they get template vars and the `[re: <slug>]` prefix.
-      if (def === null || def.fleet) void launchManagerCommand(def, extras);
-      else if (rowSlug) void launchAction(rowSlug, def, extras);
+      if (def === null || def.fleet) void launchManagerCommand(def, extras.value);
+      else if (rowSlug) void launchAction(rowSlug, def, extras.value);
       else toast("no row selected", warnColor, 2000);
     } else {
-      void launchAction(slug, def, extras);
+      void launchAction(slug, def, extras.value);
     }
     return true;
   }
-  if (k.name === "backspace") {
-    if (ap.extras.length === 0) return true;
-    setModal({
-      kind: "actionPicker",
-      state: { ...ap, extras: ap.extras.slice(0, -1) },
-    });
+  // Cursor movement / deletion — shared editor logic (backspace
+  // included; on an empty value it's a no-op, not a close).
+  const edited = applyEditKey(k, ap.extras);
+  if (edited) {
+    setModal({ kind: "actionPicker", state: { ...ap, extras: edited } });
     return true;
   }
   const text = printableMultiline(k.sequence);
   if (text) {
     setModal({
       kind: "actionPicker",
-      state: { ...ap, extras: ap.extras + text },
+      state: { ...ap, extras: insertText(ap.extras, text) },
     });
   }
   return true;
@@ -223,15 +223,16 @@ export function handleArgPickerKey(
       return true;
     }
     if (k.name === "return") {
-      launch(modal.input ?? "");
+      launch(modal.input?.value ?? "");
       return true;
     }
-    if (k.name === "backspace") {
-      setModal({ ...modal, input: (modal.input ?? "").slice(0, -1) });
+    const edited = applyEditKey(k, modal.input ?? emptyEdit);
+    if (edited) {
+      setModal({ ...modal, input: edited });
       return true;
     }
     const text = printableMultiline(k.sequence);
-    if (text) setModal({ ...modal, input: (modal.input ?? "") + text });
+    if (text) setModal({ ...modal, input: insertText(modal.input ?? emptyEdit, text) });
     return true;
   }
   return handleListPickerKey(k, {
@@ -240,7 +241,7 @@ export function handleArgPickerKey(
     onMove: (next) => setModal({ ...modal, index: next }),
     onCommit: (i) => {
       if (i >= modal.history.length) {
-        setModal({ ...modal, input: "" });
+        setModal({ ...modal, input: emptyEdit });
         return;
       }
       const entry = modal.history[i];

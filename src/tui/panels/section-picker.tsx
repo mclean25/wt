@@ -1,4 +1,5 @@
 import { Modal } from "../modal.tsx";
+import { editSpans, type TextEdit } from "../text-edit.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
 
@@ -16,7 +17,7 @@ type Props = {
    * shows the input prompt instead of the list. Enter commits the
    * typed name, esc returns to the picker.
    */
-  newName: string | null;
+  newName: TextEdit | null;
 };
 
 function itemLabel(item: SectionPickerItem): string {
@@ -38,8 +39,7 @@ export function SectionPickerModal({ title, items, selectedIndex, newName }: Pro
       >
         <box flexDirection="row" paddingLeft={1}>
           <text fg={theme.fgDim}>name: </text>
-          <text fg={theme.fgBright}>{newName}</text>
-          <text fg={theme.accent}>▎</text>
+          <text>{editSpans(newName, theme.fgBright, "▎")}</text>
         </box>
       </Modal>
     );

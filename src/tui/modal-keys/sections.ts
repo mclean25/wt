@@ -2,6 +2,7 @@ import type { KeyEvent } from "@opentui/core";
 
 import { printableText } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
+import { applyEditKey, insertText } from "../text-edit.tsx";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleListPickerKey } from "./list-picker.ts";
 
@@ -34,7 +35,7 @@ export function handleSectionPickerKey(
       return true;
     }
     if (k.name === "return") {
-      const name = modal.newName.trim();
+      const name = modal.newName.value.trim();
       if (!name) {
         setModal({ ...modal, newName: null });
         return true;
@@ -48,16 +49,19 @@ export function handleSectionPickerKey(
       setModal(null);
       return true;
     }
-    if (k.name === "backspace") {
-      if (modal.newName.length === 0) {
-        setModal({ ...modal, newName: null });
-        return true;
-      }
-      setModal({ ...modal, newName: modal.newName.slice(0, -1) });
+    // Backspace on empty input backs out to the picker list.
+    if (k.name === "backspace" && modal.newName.value.length === 0) {
+      setModal({ ...modal, newName: null });
+      return true;
+    }
+    // Cursor movement / deletion — shared editor logic.
+    const edited = applyEditKey(k, modal.newName);
+    if (edited) {
+      setModal({ ...modal, newName: edited });
       return true;
     }
     const text = printableText(k.sequence);
-    if (text) setModal({ ...modal, newName: modal.newName + text });
+    if (text) setModal({ ...modal, newName: insertText(modal.newName, text) });
     return true;
   }
   return handleListPickerKey(k, {

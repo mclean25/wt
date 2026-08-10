@@ -2,6 +2,7 @@ import type { KeyEvent } from "@opentui/core";
 
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
+import { handleErrorsKey } from "./errors.ts";
 import { handleHelpKey } from "./help.ts";
 import { handlePerfKey } from "./perf.ts";
 import {
@@ -36,6 +37,8 @@ export function handleSimpleModalKey(
       return handleHelpKey(k, modal, ctx);
     case "perf":
       return handlePerfKey(k, modal, ctx);
+    case "errors":
+      return handleErrorsKey(k, modal, ctx);
     case "reviewerPicker":
       return handleReviewerPickerKey(k, modal, ctx);
     case "sectionPicker":

@@ -38,7 +38,13 @@ export {
   toggleSectionFolded,
 } from "./wtstate/sections.ts";
 
-export { clearRemovedWorktree, recordRemovedWorktrees } from "./wtstate/removed.ts";
+export {
+  clearRemovedWorktree,
+  isMergedRemoval,
+  recentlyRemovedWorktrees,
+  recentRemovalsSummary,
+  recordRemovedWorktrees,
+} from "./wtstate/removed.ts";
 
 export {
   toggleGlobalAutomationsPaused,

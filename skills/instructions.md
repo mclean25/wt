@@ -10,8 +10,9 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   tooling); `needs-testing` means YOU still need to verify — it is never a
   request for the human. Escalate `wt status needs-human -m "..."` only when
   genuinely blocked on the human: logins/credentials, a judgment call, or a
-  check only a human can do — and keep working on whatever isn't blocked
-  while you wait.
+  check only a human can do. The note must say what you need AND what you
+  already tried ("blocked on X; tried Y, Z") — and keep working on whatever
+  isn't blocked while you wait.
 - **Never end a session without a clear status.** Finished means
   `wt status ready --risk low|medium|high [-m ...]`, risk judged broadly (end
   users, coworker workflows, costs, migrations, reversibility). The note

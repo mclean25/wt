@@ -20,6 +20,7 @@ import {
   WT_SOURCE_SLOT,
   type SessionSlot,
 } from "../sessions/slots.ts";
+import { editSpans, type TextEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
 import { useToast } from "../toast.ts";
 
@@ -28,7 +29,7 @@ export type FooterMode =
   | {
       kind: "input";
       prompt: string;
-      value: string;
+      edit: TextEdit;
       purpose: "new" | "new-remote" | "rename-section" | "status-note";
       /**
        * Optional default `--base` ref for the new-worktree input (set
@@ -152,8 +153,7 @@ export function Footer({ mode, hint }: Props) {
                 {mode.prompt}
               </span>
               <span> </span>
-              <span fg={theme.fgBright}>{mode.value}</span>
-              <span fg={theme.accent}>█</span>
+              {editSpans(mode.edit, theme.fgBright)}
             </text>
             <text fg={theme.fgDim}> (⏎ submit, esc cancel)</text>
           </>

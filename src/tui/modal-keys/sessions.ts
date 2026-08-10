@@ -6,6 +6,7 @@ import { sessionOutputId } from "../../core/outputs.ts";
 import { closeHarnessSessionGracefully, killHarnessSession } from "../../core/tmux.ts";
 import { isBareShiftedKey } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
+import { applyEditKey, emptyEdit, insertText } from "../text-edit.tsx";
 import { previewFocusPatch } from "../picker-preview.ts";
 import { isSyntheticLiveSessionId } from "../hooks/useHarnessSessions.ts";
 import type { SimpleModalContext } from "./ctx.ts";
@@ -49,7 +50,7 @@ export function handleClaudeSessionsPickerKey(
     if (patch) setFocus(slug, patch);
   };
   const openNewClaude = (): void => {
-    setModal({ kind: "claudeSessionsNew", slug, input: "", error: null });
+    setModal({ kind: "claudeSessionsNew", slug, input: emptyEdit, error: null });
   };
   const commitRow = (i: number): void => {
     const r = rowsLocal[i];
@@ -194,7 +195,7 @@ export function handleClaudeSessionsNewKey(
     return true;
   }
   if (k.name === "return") {
-    const trimmed = modal.input.trim();
+    const trimmed = modal.input.value.trim();
     const name = trimmed === "" ? nextAutoName(modal.slug) : trimmed;
     const err = validateSessionName(name);
     if (err) {
@@ -205,16 +206,19 @@ export function handleClaudeSessionsNewKey(
     doSpawnNamedClaudeSession(modal.slug, name);
     return true;
   }
-  if (k.name === "backspace") {
-    if (modal.input.length === 0) {
-      setModal({ kind: "claudeSessionsPicker", slug: modal.slug, index: 0 });
-      return true;
-    }
-    setModal({ ...modal, input: modal.input.slice(0, -1), error: null });
+  // Backspace on empty input backs out to the picker.
+  if (k.name === "backspace" && modal.input.value.length === 0) {
+    setModal({ kind: "claudeSessionsPicker", slug: modal.slug, index: 0 });
+    return true;
+  }
+  // Cursor movement / deletion — shared editor logic.
+  const edited = applyEditKey(k, modal.input);
+  if (edited) {
+    setModal({ ...modal, input: edited, error: null });
     return true;
   }
   if (k.sequence && /^[a-zA-Z0-9_-]$/.test(k.sequence)) {
-    setModal({ ...modal, input: modal.input + k.sequence, error: null });
+    setModal({ ...modal, input: insertText(modal.input, k.sequence), error: null });
   }
   return true;
 }

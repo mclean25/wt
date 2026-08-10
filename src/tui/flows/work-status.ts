@@ -15,6 +15,7 @@ import type { Modal } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { markSelfStatusWrite } from "../hooks/useWorkStatusEvents.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import { emptyEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
 
 export type StatusPickerItem = { label: string; state: WorkState | null };
@@ -125,7 +126,7 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     setFooter({
       kind: "input",
       prompt: `${slug} → ${item.state} · note: `,
-      value: "",
+      edit: emptyEdit,
       purpose: "status-note",
     });
   }

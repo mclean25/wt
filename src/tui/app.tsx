@@ -49,6 +49,7 @@ import {
   printableMultiline,
   printableText,
 } from "./app-helpers.ts";
+import { insertText } from "./text-edit.tsx";
 import { handleFooterInputKey } from "./keyboard/footer-input-keys.ts";
 import { handleGlobalKey } from "./keyboard/global-keys.ts";
 import { handleNormalKey, type NormalKeysCtx } from "./keyboard/normal-keys.ts";
@@ -57,12 +58,14 @@ import { makeActionPickerFlows } from "./flows/action-picker.ts";
 import { makeBaseFlows } from "./flows/base.ts";
 import { makeWorkStatusFlows, type PendingStatusNote } from "./flows/work-status.ts";
 import { makeDestroyFlows } from "./flows/destroy.ts";
+import { makeErrorFlows } from "./flows/error-report.ts";
 import { makeGithubPrFlows } from "./flows/github-pr.ts";
 import { makeWorktreeCreateFlows } from "./flows/new-worktree.ts";
 import { makePerfFlows } from "./flows/perf-report.ts";
 import { makeReviewerFlows } from "./flows/reviewers.ts";
 import { makeSectionFlows } from "./flows/sections.ts";
 import { makeSessionFlows } from "./flows/sessions.ts";
+import { useErrorOverlayAutoPop } from "./hooks/useErrorOverlay.ts";
 import { usePrTargetChord } from "./hooks/usePrTargetChord.ts";
 import { useRemovedView } from "./hooks/useRemovedView.ts";
 import { useSessionsPickerData } from "./hooks/useSessionsPickerData.ts";
@@ -220,7 +223,7 @@ export function App({ onExit }: Props) {
       if (!clean) return;
       setModal({
         ...modal,
-        state: { ...modal.state, extras: modal.state.extras + clean },
+        state: { ...modal.state, extras: insertText(modal.state.extras, clean) },
       });
       return;
     }
@@ -230,13 +233,13 @@ export function App({ onExit }: Props) {
       // a trailing newline in the substituted `{{arg}}`.
       const clean = printableText(text);
       if (!clean) return;
-      setModal({ ...modal, input: (modal.input ?? "") + clean });
+      setModal({ ...modal, input: insertText(modal.input, clean) });
       return;
     }
     const clean = printableText(text);
     if (!clean) return;
     if (footer.kind === "input") {
-      setFooter({ ...footer, value: footer.value + clean });
+      setFooter({ ...footer, edit: insertText(footer.edit, clean) });
     }
   });
 
@@ -544,6 +547,19 @@ export function App({ onExit }: Props) {
     toast,
   });
 
+  // `i` inside the error overlay — same shape as perf's investigate
+  // flow, sending the newest captured error instead of a snapshot.
+  const { doErrorInvestigate } = makeErrorFlows({
+    primaryHarness,
+    setModal,
+    doEnterSlotSession,
+    toast,
+  });
+
+  // Pop the error overlay when the capture ring has unacknowledged
+  // errors; queues behind whatever modal is already open.
+  useErrorOverlayAutoPop({ modal, setModal });
+
   /**
    * Copy `value` to the clipboard, log + toast appropriately. Used by
    * the yank chord (branch / stage / path); each item picks its own
@@ -652,6 +668,7 @@ export function App({ onExit }: Props) {
           refreshTmuxSessions,
           refreshPerf: () => perf.refetch(),
           doPerfInvestigate,
+          doErrorInvestigate,
           commitBasePick,
           commitStatusPick,
           beginStatusNote,

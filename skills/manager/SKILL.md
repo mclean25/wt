@@ -50,10 +50,22 @@ the human asks.
 ## Your senses
 
 - `wt status --all --json` — the fleet: asserted state, risk, note, staleness.
-- `wt ls --json` — worktree health (dirty, unpushed, PRs).
+  Rows destroyed in the last 48h are appended with `state: "merged"` (or
+  `"removed"`), `pr`, and `archived_at` — so an empty active fleet with merged
+  rows means "everything landed", while a truly empty array means nothing
+  exists (worth checking that creates aren't silently failing).
+- `wt ls --json` — worktree health (dirty, unpushed, PRs); appends the same
+  recently-removed rows (live rows never carry a `state` field).
+- `wt claude ls [--json]` — live agent sessions (worktrees + the repo-level
+  wt/main/dotfiles/manager slots). `--json` adds per-session `busy` and
+  `last_activity` from Claude's process registry (null when the tmux session
+  has no registered claude process).
 - `gh pr list` / `gh pr view` / `gh pr checks` — PR and CI truth.
 - `wt logs <slug>` and `~/.cache/wt/logs/app/wt-YYYY-MM-DD.log` (grep
   `' ATTN '`) — recent history when context is missing.
+- wt's sessions live on a PRIVATE tmux server: inspect with `tmux -L wt
+  list-sessions`. A bare `tmux ls` claiming "no server running" is looking at
+  the default socket and says nothing about the fleet — don't trust it.
 
 ## Standard plays
 

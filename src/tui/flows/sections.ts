@@ -17,6 +17,7 @@ import {
   rowWorkRank,
   type WorktreeRow,
 } from "../hooks/useWorktreeRows.ts";
+import { emptyEdit, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
 
 type SectionFlowsCtx = {
@@ -298,7 +299,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     // "+ new section" — switch to input mode. Submission lives in the
     // keyboard handler.
     setModal((m) =>
-      m?.kind === "sectionPicker" ? { ...m, newName: "" } : m,
+      m?.kind === "sectionPicker" ? { ...m, newName: emptyEdit } : m,
     );
   }
 
@@ -321,7 +322,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     setFooter({
       kind: "input",
       prompt: `rename "${current.section}":`,
-      value: current.section,
+      edit: makeEdit(current.section),
       purpose: "rename-section",
     });
   }

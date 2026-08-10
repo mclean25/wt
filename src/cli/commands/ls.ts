@@ -1,7 +1,14 @@
 import { config } from "../../core/config.ts";
 import { fetchPrs } from "../../core/github.ts";
 import { githubIssueUrl, issueIdForSlug, issueUrlForSlug } from "../../core/issue-tracker.ts";
-import { readWtState } from "../../core/wtstate.ts";
+import { workAge } from "../../core/work-status.ts";
+import {
+  isMergedRemoval,
+  readWtState,
+  recentlyRemovedWorktrees,
+  recentRemovalsSummary,
+  type RemovedWorktree,
+} from "../../core/wtstate.ts";
 import type { Worktree } from "../../core/types.ts";
 import { StatusKind } from "../../core/types.ts";
 import {
@@ -24,10 +31,39 @@ import { existsSync } from "node:fs";
 const USAGE = `usage: wt ls [options]
 
 List all non-main worktrees (slug, stage when [deploy.sst] is
-configured, PR, status).
+configured, PR, status). Worktrees destroyed in the last 48h stay
+visible as a dim "recently merged" footer, so an empty fleet says why.
 
   --json    machine-readable array (slug, branch, path, stage, status,
-            dirty, issue_id, issue_url, …)`;
+            dirty, issue_id, issue_url, …). Recently-removed rows are
+            appended with state: "merged"|"removed", pr, archived_at;
+            live rows never carry a "state" field.`;
+
+/**
+ * The recently-removed JSON shape shared by `wt ls --json` and
+ * `wt status --all --json` (`state` discriminates these from live
+ * rows, which never carry the field). Exported for status.ts so the
+ * two fleet surfaces can't drift.
+ */
+export function removedJsonEntry(e: RemovedWorktree): {
+  slug: string;
+  branch: string;
+  state: "merged" | "removed";
+  pr: number | null;
+  pr_url: string | null;
+  title: string | null;
+  archived_at: string;
+} {
+  return {
+    slug: e.slug,
+    branch: e.branch,
+    state: isMergedRemoval(e) ? "merged" : "removed",
+    pr: e.prNumber ?? null,
+    pr_url: e.prUrl ?? null,
+    title: e.title ?? null,
+    archived_at: e.removedAt,
+  };
+}
 
 const KNOWN_FLAGS = new Set(["--json", "--help", "-h"]);
 
@@ -44,6 +80,10 @@ export async function run(argv: string[]): Promise<number> {
   const jsonOut = argv.includes("--json");
   const all = await listWorktrees();
   const rows = all.filter((w) => !w.isMain);
+  // Recently-destroyed rows (≤48h, from the existing removed history)
+  // ride every output shape so "everything merged" is distinguishable
+  // from "no worktrees exist" — the manager's core empty-fleet question.
+  const recentRemoved = recentlyRemovedWorktrees(new Set(rows.map((w) => w.slug)));
 
   if (jsonOut) {
     const slugStates = readWtState().slugs;
@@ -81,12 +121,15 @@ export async function run(argv: string[]): Promise<number> {
         };
       }),
     );
-    console.log(JSON.stringify(payload, null, 2));
+    console.log(
+      JSON.stringify([...payload, ...recentRemoved.map(removedJsonEntry)], null, 2),
+    );
     return 0;
   }
 
   if (rows.length === 0) {
-    console.log(dim("No worktrees."));
+    const summary = recentRemovalsSummary(recentRemoved);
+    console.log(dim(summary ? `No active worktrees (${summary}).` : "No worktrees."));
     return 0;
   }
 
@@ -108,5 +151,18 @@ export async function run(argv: string[]): Promise<number> {
     { header: "", getter: (r) => renderStatusCell(statuses[(r as Row).idx]!) },
   ]);
   console.log(table);
+  // Dim footer of what just landed — merged removals only (non-merged
+  // removals aren't fleet news; they still appear in --json and the
+  // TUI's `h` view).
+  const recentMerged = recentRemoved.filter(isMergedRemoval);
+  if (recentMerged.length > 0) {
+    console.log("");
+    console.log(dim("recently merged:"));
+    for (const e of recentMerged) {
+      const pr = e.prNumber !== undefined ? `#${e.prNumber} ` : "";
+      const age = workAge(e.removedAt);
+      console.log(dim(`  ${e.slug}  ${pr}merged${age ? `, archived ${age} ago` : ""}`));
+    }
+  }
   return 0;
 }

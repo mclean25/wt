@@ -10,6 +10,7 @@ import { createLogger } from "../../core/logger.ts";
 import { printableText } from "../app-helpers.ts";
 import type { PendingStatusNote } from "../flows/work-status.ts";
 import type { FooterMode } from "../panels/footer.tsx";
+import { applyEditKey, insertText, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
 
 const appLog = createLogger("[app]");
@@ -62,7 +63,7 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
         return;
       }
       if (k.name === "return") {
-        const raw = footer.value.trim();
+        const raw = footer.edit.value.trim();
         const base = footer.base;
         const purpose = footer.purpose;
         setFooter({ kind: "legend" });
@@ -101,7 +102,7 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
           const restore = () =>
             setFooter((prev) =>
               prev.kind === "legend"
-                ? { kind: "input", prompt: footer.prompt, value: raw, purpose, base }
+                ? { kind: "input", prompt: footer.prompt, edit: makeEdit(raw), purpose, base }
                 : prev,
             );
           if (purpose === "new-remote") {
@@ -116,20 +117,23 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
         }
         return;
       }
-      if (k.name === "backspace") {
-        // Backspace on empty input exits, matching the filter convention.
-        if (footer.value.length === 0) {
-          setFooter({ kind: "legend" });
-          setPendingStatusNote(null);
-          return;
-        }
-        setFooter({ ...footer, value: footer.value.slice(0, -1) });
+      // Backspace on empty input exits, matching the filter convention.
+      if (k.name === "backspace" && footer.edit.value.length === 0) {
+        setFooter({ kind: "legend" });
+        setPendingStatusNote(null);
+        return;
+      }
+      // Cursor movement / deletion (arrows, word jumps, home/end,
+      // backspace/delete) — shared editor logic.
+      const edited = applyEditKey(k, footer.edit);
+      if (edited) {
+        setFooter({ ...footer, edit: edited });
         return;
       }
       // `k.sequence` is the literal bytes the terminal delivered — a
       // single key for typing, or a paste blob. Filter to printable
       // ASCII so control chars in the middle of a paste don't corrupt.
       const text = printableText(k.sequence);
-      if (text) setFooter({ ...footer, value: footer.value + text });
+      if (text) setFooter({ ...footer, edit: insertText(footer.edit, text) });
       return;
 }

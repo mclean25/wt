@@ -16,9 +16,9 @@ and an independently configured `wt` on that host.
 
 ### `wt ls`
 
-List all non-main worktrees (slug, stage when `[deploy.sst]` is configured, PR, status).
+List all non-main worktrees (slug, stage when `[deploy.sst]` is configured, PR, status). Worktrees destroyed in the last 48h stay visible — a dim `recently merged:` footer under the table, and an empty list says why it's empty (`No active worktrees (2 archived today: x, y).`) — so "everything landed" never reads identically to "nothing exists". Derived from the existing removed-worktrees history; the TUI's `h` view keeps the full 14-day record.
 
-- `--json` — machine-readable array (slug, branch, path, stage, status, dirty, issue_id, issue_url, …).
+- `--json` — machine-readable array (slug, branch, path, stage, status, dirty, issue_id, issue_url, work_state, …). Recently-removed rows are appended with `state: "merged"` (PR landed) or `"removed"`, plus `pr`, `pr_url`, `title`, and `archived_at`; live rows never carry a `state` field, so consumers discriminate on it (the remote section's parser skips these rows).
 
 ### `wt new <id [title…]|url|branch|slug>`
 
@@ -101,14 +101,14 @@ Show / record / forget a worktree's fork base — the branch it's based on when 
 
 ### `wt status [<slug>] [<state>] [-m <note>] [--risk <r>]`
 
-Show or assert a worktree's **work status** — the agent-declared lifecycle state (`todo`, `working`, `review`, `needs-testing`, `needs-human`, `ready`), rendered as the list pane's leftmost colored dot and used for the section-internal auto-sort (`[ui] sort`). The primary caller is a coding agent inside the worktree (cwd resolves the target; a slug/branch arg overrides), and the output deliberately teaches: every transition prints a short guidance footer with the expected next step, bare `wt status` prints the vocabulary, and errors restate the rules. `WT_NO_HINTS=1` silences the footers.
+Show or assert a worktree's **work status** — the agent-declared lifecycle state (`todo`, `working`, `review`, `needs-testing`, `needs-human`, `ready`), rendered as the list pane's leftmost colored dot and used for the section-internal auto-sort (`[ui] sort`). The primary caller is a coding agent inside the worktree (cwd resolves the target; a slug/branch arg overrides), and the output deliberately teaches: every transition prints a short guidance footer with the expected next step, bare `wt status` prints the vocabulary (inside a worktree *and* outside one — outside, it adds a "pass a slug" hint instead of erroring), and errors restate the rules. `WT_NO_HINTS=1` silences the footers.
 
 The rules that make statuses trustworthy are enforced here (the TUI's `u` picker is deliberately lenient for the human):
 
-- `needs-human` requires `-m` naming exactly what's needed — it's the only state that means "the human must act".
+- `needs-human` requires `-m` naming exactly what's needed AND what was already tried ("blocked on X; tried Y, Z") — it's the only state that means "the human must act".
 - `ready` requires `--risk low|medium|high` (judged broadly: end users, coworker workflows, costs, migrations), and medium/high additionally require `-m` naming the notable impacts. High-value notes only — nothing notable is `--risk low` with no note.
 
-States accept unique prefixes plus `nh`/`nt` aliases. `--clear` drops the record, `--all [--json]` prints the fleet overview (the manager session's eyes). Each record stamps the assert time and HEAD sha, so both the CLI and the details-pane `status` row can flag a status that predates newer commits. Re-asserting an identical status (same state, note, risk, and HEAD) is a no-op that keeps the original timestamp — agents and hooks can assert freely without re-narrating (and re-toasting) the same news in every watching TUI. Statuses also ride `wt ls --json` (`work_state`/`work_note`/`work_risk`/`work_at`), which carries them across SSH for remote worktrees.
+States accept unique prefixes plus `nh`/`nt` aliases. `--clear` drops the record, `--all [--json]` prints the fleet overview (the manager session's eyes) — the JSON form appends the same recently-removed rows as `wt ls --json` (`state: "merged"|"removed"`, `pr`, `archived_at`), so an all-merged fleet is distinguishable from an empty one. `--note-only "..."` amends just the note of an existing record, keeping the state, risk, and `at` timestamp (it errors when no status is asserted) — for sharpening a needs-human note or adding late-learned merge impacts without faking a fresh assertion. Each record stamps the assert time and HEAD sha, so both the CLI and the details-pane `status` row can flag a status that predates newer commits. Re-asserting an identical status (same state, note, risk, and HEAD) is a no-op that keeps the original timestamp — agents and hooks can assert freely without re-narrating (and re-toasting) the same news in every watching TUI. Statuses also ride `wt ls --json` (`work_state`/`work_note`/`work_risk`/`work_at`), which carries them across SSH for remote worktrees.
 
 ### `wt manager` / `wt manager send <text…>` / `wt manager report [--ok|--warn|--err] <text…>`
 
@@ -180,8 +180,8 @@ Drive a worktree's Claude Code tmux session from scripts or other sessions.
 
 | sub | what it does |
 |---|---|
-| `send <slug> [text...]` | upsert the worktree's primary Claude session (cold-starts it if absent) and paste + submit the text; reads stdin when no text args (heredoc-friendly). Accepts a branch name in place of the slug. Fire-and-forget |
-| `ls` | list slugs with a live Claude session |
+| `send <slug> [text...]` | upsert the target's primary Claude session (cold-starts it if absent) and paste + submit the text; reads stdin when no text args (heredoc-friendly). Accepts a branch name in place of the slug, plus the repo-level session slugs `wt` / `main` / `dotfiles` / `manager` (the same targets `ls` lists; `manager` is the same session as `wt manager send`). A slug in the recent removed history answers with why it's gone ("archived on merge (#N, 2h ago)") instead of a bare "no worktree"; anything else errors naming the addressable set. Fire-and-forget |
+| `ls [--json]` | list slugs with a live Claude session. `--json` adds per-session `name`, `alive`, `busy`, and `last_activity` (the latter two from Claude's live process registry, matched by cwd + session name; `null` when the tmux session has no registered claude process) |
 | `kill <slug>` | kill the worktree's primary Claude session |
 
 ---

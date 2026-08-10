@@ -7,12 +7,16 @@
  * Anything new that should read consistently across both panels
  * belongs in `badges.ts` first, not here.
  */
-import { Fragment, memo, useEffect, useRef, type RefObject } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, type RefObject } from "react";
 import { TextAttributes } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
 import { type Badge, checkBadge, statusBadge, workStatusBadge } from "../badges.ts";
 import { isWorkStatusStale } from "../../core/work-status.ts";
+import {
+  recentlyRemovedWorktrees,
+  recentRemovalsSummary,
+} from "../../core/wtstate.ts";
 import { BadgeCluster, badgeClusterCells } from "../badge-cluster.tsx";
 import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
 import { useScrollToEdge } from "../hooks/useScrollToEdge.ts";
@@ -477,6 +481,19 @@ export function WorktreeList({ items, archivedRows, reviewRequests, selectedInde
   const hasArchived = archivedRows.length > 0;
   const hasReviewRequests = reviewRequests.length > 0;
   const hasActive = items.length > 0;
+  // An empty list says WHY it's empty when the removed history shows
+  // recent archives — "everything just merged" must not render
+  // identically to "nothing was ever created". Gated + memoized so the
+  // sync state-file read only happens when the empty state is actually
+  // on screen (and once per emptiness transition, not per render).
+  const emptyFleet = !hasActive && !hasArchived && !hasReviewRequests && !isLoading;
+  const emptySummary = useMemo(
+    () =>
+      emptyFleet
+        ? recentRemovalsSummary(recentlyRemovedWorktrees(new Set()))
+        : null,
+    [emptyFleet],
+  );
   // Index offsets into the combined cursor space owned by the parent
   // (`items + reviewRequests + archivedRows`).
   const reviewOffset = items.length;
@@ -524,16 +541,27 @@ export function WorktreeList({ items, archivedRows, reviewRequests, selectedInde
       paddingTop={0}
     >
       {!hasActive && !hasArchived && !hasReviewRequests ? (
-        <box padding={1} flexDirection="row">
+        <box padding={1} flexDirection="column">
           {isLoading ? (
             <text fg={theme.fgDim}>Loading worktrees...</text>
           ) : (
             <>
-              <text fg={theme.fgDim}>No worktrees. Press </text>
-              <text fg={theme.accent} attributes={1}>
-                n
-              </text>
-              <text fg={theme.fgDim}> to create one.</text>
+              {/* The summary wraps over several lines on narrow panes, so
+                  it gets its own text node — inlining it before the
+                  accent `n` sibling makes the flex row render the
+                  columns side by side, garbling the message. */}
+              {emptySummary ? (
+                <text fg={theme.fgDim}>No active worktrees ({emptySummary}).</text>
+              ) : null}
+              <box flexDirection="row">
+                <text fg={theme.fgDim}>
+                  {emptySummary ? "Press " : "No worktrees. Press "}
+                </text>
+                <text fg={theme.accent} attributes={1}>
+                  n
+                </text>
+                <text fg={theme.fgDim}> to create one.</text>
+              </box>
             </>
           )}
         </box>

@@ -3,9 +3,11 @@ import type { HistoryEntry } from "../core/actions.ts";
 import type { WorkState } from "../core/work-status.ts";
 import type { RemovedWorktree } from "../core/wtstate.ts";
 import type { ActionPickerState } from "./panels/action-picker.tsx";
+import type { ErrorInjectState } from "./panels/error-overlay.tsx";
 import type { PerfInjectState } from "./panels/perf.tsx";
 import type { MultiPickerItem } from "./panels/picker.tsx";
 import type { SectionPickerItem } from "./panels/section-picker.tsx";
+import type { TextEdit } from "./text-edit.tsx";
 
 /**
  * Every overlay/modal the TUI can display. Exactly one is active at a
@@ -13,13 +15,20 @@ import type { SectionPickerItem } from "./panels/section-picker.tsx";
  * `kind`.
  */
 export type Modal =
-  | { kind: "help"; query: string; searching: boolean }
+  | { kind: "help"; query: TextEdit; searching: boolean }
   /**
    * Live perf overlay (`P`). `inject` tracks the `i` send-to-wt-session
    * flow, which takes seconds (the harness has to settle before the
    * paste lands) and so needs visible in-progress / failed states.
    */
   | { kind: "perf"; inject: PerfInjectState }
+  /**
+   * Auto-popping unhandled-error overlay. No opening key — it pops when
+   * the capture ring (`tui/error-store.ts`) records an error and no
+   * other modal is up (`useErrorOverlayAutoPop` queues it otherwise).
+   * `inject` tracks the `i` send-to-wt-session flow, same as perf's.
+   */
+  | { kind: "errors"; inject: ErrorInjectState }
   | { kind: "cleanConfirm" }
   | {
       kind: "confirm";
@@ -81,7 +90,7 @@ export type Modal =
       slug: string;
       items: SectionPickerItem[];
       index: number;
-      newName: string | null;
+      newName: TextEdit | null;
     }
   | { kind: "actionPicker"; state: ActionPickerState }
   | {
@@ -90,14 +99,14 @@ export type Modal =
       def: ActionDef;
       history: readonly HistoryEntry[];
       index: number;
-      input: string | null;
+      input: TextEdit | null;
     }
   | { kind: "outputsPicker"; index: number }
   | { kind: "claudeSessionsPicker"; slug: string; index: number }
   | {
       kind: "claudeSessionsNew";
       slug: string;
-      input: string;
+      input: TextEdit;
       error: string | null;
     }
   | { kind: "harnessSelect"; slug: string; index: number }

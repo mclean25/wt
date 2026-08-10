@@ -47,6 +47,8 @@ import type { Worktree } from "../core/types.ts";
 import type { QueryClient } from "@tanstack/react-query";
 
 import { App, type TuiExit } from "./app.tsx";
+import { TuiErrorBoundary } from "./error-boundary.tsx";
+import { installProcessErrorCapture } from "./error-store.ts";
 import { backfillActivityLog } from "./activity-backfill.ts";
 import { events } from "./activity-log.ts";
 import { attachFetchLogs } from "./fetch-log.ts";
@@ -493,9 +495,22 @@ export async function runTui(): Promise<TuiExit> {
   // confirm the diff-pool offload actually unblocked the render thread.
   const stopLoopLagProbe = startLoopLagProbe();
 
+  // From the moment the renderer owns the terminal, Bun's default
+  // uncaughtException/unhandledRejection reporters would print raw
+  // stack traces over the panes. Install the capture (ring + file log +
+  // error overlay; keep-alive semantics documented in error-store.ts)
+  // for exactly the renderer's lifetime — detached in the finally after
+  // `renderer.destroy()`, so late-teardown errors fall through to plain
+  // stderr and main.ts's catch (the crash-rollback path) as before.
+  const detachErrorCapture = installProcessErrorCapture();
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     targetFps: 60,
+    // OpenTUI installs its own uncaughtException/unhandledRejection
+    // hook that console.errors the stack and (by default) pops its
+    // debug console overlay over the panes — the error overlay above
+    // owns that surface now, so keep OpenTUI's from fighting it.
+    openConsoleOnError: false,
   });
   const root = createRoot(renderer);
   // A dying terminal (tmux kill-session/-server, window close, SSH drop)
@@ -524,7 +539,13 @@ export async function runTui(): Promise<TuiExit> {
     process.on("SIGTERM", onHangup);
     root.render(
       <QueryClientProvider client={wtClient.client}>
-        <App onExit={resolve} />
+        {/* Render-error capture: a crash in the app tree lands in the
+            same error ring (never stdout/stderr) and renders a minimal
+            crash screen with retry/quit instead of unmounting to a
+            garbled terminal. */}
+        <TuiErrorBoundary onExit={resolve}>
+          <App onExit={resolve} />
+        </TuiErrorBoundary>
       </QueryClientProvider>,
     );
   }).finally(async () => {
@@ -545,6 +566,8 @@ export async function runTui(): Promise<TuiExit> {
     } catch (err) {
       void err;
     }
+    // Renderer is gone — raw stderr is safe (and wanted) again.
+    detachErrorCapture();
     detachFetchLogs();
     invalidations.dispose();
     clearInterval(fetchOriginTimer);
