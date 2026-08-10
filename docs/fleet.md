@@ -6,8 +6,8 @@ wt's intent doc. The mechanics live in [cli.md](cli.md#wt-status-slug-state--m-n
 
 **The human does only the work only a human can do.** Everything else — anything agents are good at, anything deterministic code can express — belongs to agents or to wt itself. Concretely:
 
-- Merges, logins/credentials, judgment calls, and risk acceptance stay human. Almost nothing else should.
-- If a workflow contains a recurring human step, that's a backlog item, not a fact of life: move it to an agent (a skill, a convention, a manager play) or into wt (a watcher, an automation, a status rule).
+- Merges, genuinely interactive auth (a 2FA challenge, an OAuth consent screen), judgment calls, and risk acceptance stay human. Almost nothing else should.
+- If a workflow contains a recurring human step, that's a backlog item, not a fact of life: move it to an agent (a skill, a convention, a manager play) or into wt (a watcher, an automation, a status rule). "Credentials" is the tempting exception and mostly isn't one: a secret an agent needs on every run wants to be readable without a prompt, not escalated once per run.
 - This applies to **every changeset**, not just fleet features. Building anything in wt, ask: what human step does this create or leave behind, and what would it take for an agent or automation to absorb it? Designs that reduce human involvement win ties; designs that add a manual step need to justify it.
 
 The rest of this doc is that principle applied to wt's founding pain: coordinating a fleet of agent-driven worktrees.
@@ -29,7 +29,7 @@ None of that was visible without opening each session and reading scrollback. Ag
 - **The human's queue only ever shrinks.** Agents and automations pull work OFF it (testing, triage, nudging, restacks); nothing wt adds should put new recurring work on it.
 - **Interruptions only when a human is genuinely required** — and then loudly (banner), not buried in a log.
 - **Zero noise.** A signal that fires when nothing changed, or a note that restates the diff, trains the reader to ignore the channel. Every surface here would rather stay silent than say something low-value.
-- **The human does only the human parts**: logins, judgment calls, final say on merges. Everything else is owned end-to-end by an agent.
+- **The human does only the human parts**: interactive auth, judgment calls, final say on merges. Everything else is owned end-to-end by an agent.
 
 ## The design responses
 
@@ -57,7 +57,7 @@ The current contract. These are deliberate, not accidental — expanding one (sa
 
 - Implement, self-review, and **run the manual/browser testing themselves** (dev env, browser-control). Asking the human to test is a failure mode, not a hand-off.
 - Assert every lifecycle transition (`wt status`), and never end a session without a clear one. Finishing means `ready --risk <r>` with only *notable* impacts in the note (end users, coworker workflows, cost, irreversibility) — or an honest `needs-testing`/`needs-human`.
-- Escalate `needs-human` **only** for genuine blockers: expired logins/creds, judgment calls, human-only checks. Keep working on whatever isn't blocked while waiting.
+- Escalate `needs-human` **only** for genuine blockers: auth that needs a person present, judgment calls, human-only checks. Keep working on whatever isn't blocked while waiting. The *same* blocker a second time is a setup defect, not a human dependency — papercut it (below) rather than parking the branch again.
 - Ask fleet-level questions of the manager (`wt manager send`), not the human — and send papercuts the same way (`"papercut: ..."`, fire and forget). A rough edge in the shared tooling is an observation worth capturing, not a reason to stall the branch in `needs-human`; the manager batches them to whoever can fix the tool.
 - **Never merge a PR.** Never update the external issue tracker's status.
 
@@ -72,7 +72,7 @@ The current contract. These are deliberate, not accidental — expanding one (sa
 
 **Manual delegation triggers** (the pinned `! u` / `! g` builtins, and the `M` [manager palette](manager.md#the-command-palette-m)) sit deliberately between the levels: the HUMAN pulls the trigger, the AGENT does the work. `! u` has the row's agent re-assess and re-assert its own status (the backstop for a record that drifted or was never asserted); `! g` has it continue the task from whatever the status implies. The palette is the same move at fleet scope — digest, triage, merge-order, nudge, audit, start-next-todo are all plays the manager already owns by the contract above; `M` just dispatches them on demand, and `wt manager report` closes the loop on the attention feed so the outcome costs the human a glance, not an attach. `start next todo` is the most agency-forward palette entry (it starts worker sessions), but it stays human-triggered — an automation that starts todos on its own would be a real expansion to decide here first. If any of these fire constantly, something upstream (the always-on status contract, the automations) is failing — treat frequency as a signal, not a workflow.
 
-**The human** keeps: merges, logins/credentials, final QA whenever they want it, risk acceptance on medium/high `ready`s, external-tracker status, and any expansion of the levels above. One deliberate carve-out from "external-tracker status": the post-merge close of a worktree's **attached GitHub issue** is deterministic bookkeeping (the merge already happened — the human's decision is spent), so it belongs to wt via the opt-in `builtin:close-issue` automation, not to the human. The primary tracker's status stays human; agents still never close issues themselves.
+**The human** keeps: merges, auth that can only be interactive, final QA whenever they want it, risk acceptance on medium/high `ready`s, external-tracker status, and any expansion of the levels above. One deliberate carve-out from "external-tracker status": the post-merge close of a worktree's **attached GitHub issue** is deterministic bookkeeping (the merge already happened — the human's decision is spent), so it belongs to wt via the opt-in `builtin:close-issue` automation, not to the human. The primary tracker's status stays human; agents still never close issues themselves.
 
 ## Known deliberate omissions
 

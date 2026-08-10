@@ -75,7 +75,8 @@ function guidance(state: WorkState): string[] {
     case "needs-testing":
       return [
         `you own this testing — drive the dev env/browser yourself; escalate with`,
-        `${bold('needs-human -m "..."')} ONLY if blocked on login/creds or a human-only check.`,
+        `${bold('needs-human -m "..."')} ONLY if blocked on auth needing a person (2FA,`,
+        `an OAuth consent) or a human-only check — a re-prompting credential is a papercut.`,
         `when it passes: ${bold("wt status ready --risk <r> [-m <notable impacts>]")}`,
       ];
     case "needs-human":
@@ -83,7 +84,9 @@ function guidance(state: WorkState): string[] {
         `The human will see this — the note should name the blocker AND what you`,
         `already tried ("blocked on X; tried Y, Z"). Keep making progress on anything`,
         `not blocked, and assert the next status the moment you're unblocked.`,
-        `Not blocked, just a rough edge worth reporting? ${bold('wt manager send "papercut: ..."')} — fire and forget, then carry on.`,
+        `A rough edge — or the SAME blocker twice (a credential that re-prompts every`,
+        `run is a setup defect, not a human dependency) — is a papercut, not an`,
+        `escalation: ${bold('wt manager send "papercut: ..."')}, fire and forget, then carry on.`,
       ];
     case "ready":
       return [

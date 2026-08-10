@@ -9,10 +9,13 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
 - **You own manual testing.** Drive it yourself (dev environment, browser
   tooling); `needs-testing` means YOU still need to verify — it is never a
   request for the human. Escalate `wt status needs-human -m "..."` only when
-  genuinely blocked on the human: logins/credentials, a judgment call, or a
-  check only a human can do. The note must say what you need AND what you
-  already tried ("blocked on X; tried Y, Z") — and keep working on whatever
-  isn't blocked while you wait.
+  genuinely blocked on the human: auth that needs a person present (a 2FA
+  challenge, an OAuth consent screen), a judgment call, or a check only a
+  human can do. The note must say what you need AND what you already tried
+  ("blocked on X; tried Y, Z") — and keep working on whatever isn't blocked
+  while you wait. **The same blocker twice is a setup defect, not a human
+  dependency** — a credential that re-prompts every run should be reported
+  (below), not escalated again.
 - **Never end a session without a clear status.** Finished means
   `wt status ready --risk low|medium|high [-m ...]`, risk judged broadly (end
   users, coworker workflows, costs, migrations, reversibility). The note
