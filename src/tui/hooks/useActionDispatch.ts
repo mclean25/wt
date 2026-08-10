@@ -28,8 +28,8 @@ import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { createLogger } from "../../core/logger.ts";
 import { injectIntoSession } from "../../core/tmux.ts";
 import { StatusKind } from "../../core/types.ts";
-import { ensureManagerClaudeName } from "../../core/manager.ts";
-import { MANAGER_SLOT } from "../sessions/slots.ts";
+import { ensureManagerClaudeName, MANAGER_SLUG } from "../../core/manager.ts";
+import { MANAGER_SLOT, SESSION_SLOTS } from "../sessions/slots.ts";
 
 import {
   actionSkillPrefix,
@@ -81,7 +81,8 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     arg?: string,
     launchOpts?: LaunchActionOpts,
   ) => Promise<LaunchOutcome>;
-  launchManagerCommand: (
+  launchSlotCommand: (
+    slotSlug: string,
     def: ActionDef | null,
     extras: string,
   ) => Promise<LaunchOutcome>;
@@ -383,18 +384,26 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
   }
 
   /**
-   * Fleet-scoped manager delivery — the `M` palette's launch path for
-   * `fleet: true` builtins and free-text messages. Unlike the row path
-   * above there is no subject worktree: no row gates, no template vars
-   * (fleet prompts are static; rendering free text through `applyVars`
-   * could eat literal `{{…}}` the user typed), and no `[re: <slug>]`
-   * prefix. Same fire-and-forget inject + logging contract otherwise.
+   * Slot-scoped delivery — the launch path for the palettes' `fleet:
+   * true` builtins and free-text messages, addressed to a session slot
+   * (the `M` manager palette and the `<` / `>` / `\` slot palettes).
+   * Unlike the row path above there is no subject worktree: no row
+   * gates, no template vars (palette prompts are static; rendering
+   * free text through `applyVars` could eat literal `{{…}}` the user
+   * typed), and no `[re: <slug>]` prefix. Same fire-and-forget inject
+   * + logging contract otherwise.
    */
-  async function launchManagerCommand(
+  async function launchSlotCommand(
+    slotSlug: string,
     def: ActionDef | null,
     extras: string,
   ): Promise<LaunchOutcome> {
     const { primaryHarness, toast } = opts;
+    const slot = SESSION_SLOTS.find((s) => s.slug === slotSlug);
+    if (!slot) {
+      toast(`unknown slot ${slotSlug}`, theme.warn, 2000);
+      return { launched: false, reason: `unknown slot ${slotSlug}` };
+    }
     const trimmedExtras = extras.trim();
     const prompt = def && def.kind === "claude" ? def.prompt : "";
     const body = trimmedExtras
@@ -406,41 +415,41 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       toast("prompt is empty", theme.warn, 1500);
       return { launched: false, reason: "prompt is empty" };
     }
-    ensureManagerClaudeName();
+    if (slot.slug === MANAGER_SLUG) ensureManagerClaudeName();
     const label = def?.name ?? "custom message";
-    const managerLog = createLogger("manager");
-    managerLog.event.info(`${label} → manager`);
-    toast(`sending ${label} to manager…`, theme.info, 2000);
+    const slotLog = createLogger(slot.slug);
+    slotLog.event.info(`${label} → ${slot.label}`);
+    toast(`sending ${label} to ${slot.label}…`, theme.info, 2000);
     void injectIntoSession({
-      slug: MANAGER_SLOT.slug,
-      cwd: MANAGER_SLOT.path,
+      slug: slot.slug,
+      cwd: slot.path,
       harnessId: primaryHarness,
-      managedName: MANAGER_SLOT.claudeName,
+      managedName: slot.claudeName,
       text: body,
     }).then(
       (res) => {
         if (res.ok) {
           // Toast: the "sending…" ack above has long expired by the time
           // a cold start finishes.
-          managerLog.event.ok(
+          slotLog.event.ok(
             res.coldStarted
-              ? `started manager and sent ${label}`
-              : `sent ${label} to manager`,
+              ? `started ${slot.label} and sent ${label}`
+              : `sent ${label} to ${slot.label}`,
             { toast: true },
           );
         } else {
-          managerLog.event.err(`inject failed: ${res.reason}`, { toast: true });
+          slotLog.event.err(`inject failed: ${res.reason}`, { toast: true });
         }
       },
-      // Same rejection leg as the row path above: the manager slot is a
+      // Same rejection leg as the row path above: a slot session is a
       // multi-writer singleton, so the inject lock CAN time out.
       (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        managerLog.event.err(`inject failed: ${msg}`, { toast: true });
+        slotLog.event.err(`inject failed: ${msg}`, { toast: true });
       },
     );
     return { launched: true };
   }
 
-  return { launchAction, launchManagerCommand };
+  return { launchAction, launchSlotCommand };
 }

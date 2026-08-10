@@ -76,11 +76,12 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 | `;` | sessions picker — attach (`; ;`), new named claude (`; c`), new codex/opencode (`; x` / `; o`), graceful close (`; d`), kill (`; x` on a live session row — fires directly, no confirm; getting there already took two deliberate steps) |
 | `!` | action picker — run a configured `[[actions]]` entry, `! c` for a custom prompt; `!` on a running action offers to kill it. Two agent-delegation builtins are pinned at the top: `! u` has the row's agent re-assess and assert `wt status`, `! g` has it continue the work per the current status (both inject into the primary harness session, cold-starting it if needed); with `[dev_server]` configured the start/stop pair is pinned below them. `! m` toggles auto-merge (group "github") |
 | `,` / `.` / `/` | attach the persistent harness session for the wt repo / main clone / dotfiles |
+| `<` / `>` / `\` | slot command palette for the wt repo / main clone / dotfiles session — the shift analog of the attach key (dotfiles rides `\` because shift+`/` is `?`, help). Entries: continue current work (`g`), `/compact` (`m`, fires directly), open the slot in Zed (`z`), custom free-text message (`c`). Prompt entries inject into the slot's session, cold-starting it detached if needed — fire work at a slot without attaching |
 | `m` | attach the [manager session](manager.md) — the singleton fleet coordinator |
 | `M` | [manager command palette](manager.md#the-command-palette-m) — digest (`d`), triage needs-human (`t`), merge order (`o`), nudge stalled (`n`), audit statuses (`a`), start next todo (`s`), ask about the selected row (`r`), `/compact` (`m`), custom message (`c`); user `[[actions]]` with `target = "manager"` appear too. Fleet commands report back via `wt manager report`, which lands on the attention feed |
 
 Inside these four special sessions, `F10`/`F11`/`F12` all return to wt — slots aren't worktrees, so there's no shell or diff sibling to switch to.
-| `>` / `O` | open the wt repo / main clone in Zed |
+| `O` | open the main clone in Zed (the wt repo's Zed open lives in its palette: `< z`) |
 | mouse drag | select text in a wt-managed tmux session and copy it automatically to the macOS clipboard on release |
 
 ### Organize
@@ -189,7 +190,7 @@ error ~1.5s after startup — that's how the capture path is probed.
 
 ## Picker conventions
 
-Every list picker follows the same shape: the key that opened it confirms the highlight when pressed again (`l l`, `; ;`, `' '`, `! !`, `M M`, `b b`, `v v`, `u u`, `y y`, and `Shift+F12` again in the harness picker), `Enter` always confirms, `Esc`/`q`/`Ctrl+C` always cancel, `j`/`k` move, and digits `1`–`9` quick-pick when the list is short — except the action picker and manager palette (assigned letters instead) and the reviewer picker (`Space` toggles; digits would be ambiguous in a multi-select). Rows with a natural name carry a direct letter chord, shown dim in the row (`u t` → todo, `u y` → ready, `; c` new claude session); special rows get their own letter too (`l n` new section, `! c` custom prompt).
+Every list picker follows the same shape: the key that opened it confirms the highlight when pressed again (`l l`, `; ;`, `' '`, `! !`, `M M`, `< <` / `> >` / `\ \` in the slot palettes, `b b`, `v v`, `u u`, `y y`, and `Shift+F12` again in the harness picker), `Enter` always confirms, `Esc`/`q`/`Ctrl+C` always cancel, `j`/`k` move, and digits `1`–`9` quick-pick when the list is short — except the action picker and the manager/slot palettes (assigned letters instead) and the reviewer picker (`Space` toggles; digits would be ambiguous in a multi-select). Rows with a natural name carry a direct letter chord, shown dim in the row (`u t` → todo, `u y` → ready, `; c` new claude session); special rows get their own letter too (`l n` new section, `! c` custom prompt).
 
 Confirm modals follow the same muscle-memory rule in reverse: the key that opened one also **cancels** it (`d`, `c`, `e`, `E`, `w`, `!`'s kill confirm), alongside the universal `n`/`Esc`/`q`/`Ctrl+C`.
 

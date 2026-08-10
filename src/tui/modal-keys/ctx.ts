@@ -61,6 +61,8 @@ export type SimpleModalContext = {
   buildActionPickerItems: (slug: string) => PickerItem[];
   /** `M` palette items — fleet builtins + row-scoped manager entries. */
   buildManagerPickerItems: (rowSlug: string | null) => PickerItem[];
+  /** Slot-palette items (`<` / `>` / `\`) — uniform across slots. */
+  buildSlotPickerItems: () => PickerItem[];
   canPickAction: (item: PickerItem) => boolean;
   // Return is deliberately loose: callers here fire-and-forget, and the
   // real impl returns a `LaunchOutcome` the automations engine consumes.
@@ -70,8 +72,9 @@ export type SimpleModalContext = {
     extras: string,
     arg?: string,
   ) => void | Promise<unknown>;
-  /** Fleet-scoped manager delivery (no row context, no [re:] prefix). */
-  launchManagerCommand: (
+  /** Slot-scoped palette delivery (no row context, no [re:] prefix). */
+  launchSlotCommand: (
+    slotSlug: string,
     def: ActionDef | null,
     extras: string,
   ) => void | Promise<unknown>;

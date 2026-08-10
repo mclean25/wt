@@ -1,13 +1,14 @@
 /**
- * Action-picker helpers (`!`) and the manager command palette (`M`):
- * build the grouped picker item lists, availability gating, and the
- * open helpers. Extracted from `app.tsx`; rebuilt per render so the
- * closures see fresh rows.
+ * Action-picker helpers (`!`), the manager command palette (`M`), and
+ * the slot palettes (`<` / `>` / `\`): build the grouped picker item
+ * lists, availability gating, and the open helpers. Extracted from
+ * `app.tsx`; rebuilt per render so the closures see fresh rows.
  */
 import {
   BUILTIN_ACTIONS,
   MANAGER_BUILTIN_ACTIONS,
   PINNED_BUILTIN_ACTIONS,
+  SLOT_BUILTIN_ACTIONS,
   evaluateActionRequirements,
 } from "../../core/actions.ts";
 import { config } from "../../core/config.ts";
@@ -19,6 +20,8 @@ import { theme } from "../theme.ts";
 
 /** Quick-pick letter for the `!` picker's auto-merge toggle row. */
 const AUTO_MERGE_KEY = "m";
+/** Quick-pick letter for the slot palettes' open-in-Zed row. */
+const OPEN_ZED_KEY = "z";
 
 type ActionPickerFlowsCtx = {
   rows: WorktreeRow[];
@@ -118,6 +121,26 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
   }
 
   /**
+   * A slot palette (`<` / `>` / `\`): the shared slot builtins
+   * (continue, compact), the local open-in-Zed row, and the custom
+   * free-text entry. Uniform across slots — nothing here is row- or
+   * slot-specific, so no availability gating.
+   */
+  function buildSlotPickerItems(): PickerItem[] {
+    const keyById = assignActionKeys(SLOT_BUILTIN_ACTIONS, [OPEN_ZED_KEY]);
+    return [
+      ...SLOT_BUILTIN_ACTIONS.map((def) => ({
+        kind: "action" as const,
+        def,
+        key: keyById.get(def.id) ?? "",
+        availability: { ok: true as const },
+      })),
+      { kind: "openZed" as const, key: OPEN_ZED_KEY, availability: { ok: true as const } },
+      { kind: "custom" as const },
+    ];
+  }
+
+  /**
    * Returns true if the item is launchable. For unavailable actions
    * toasts the reason so the user understands the no-op without
    * having to scan the dim subtitle in the picker. Used at both the
@@ -127,7 +150,12 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
   function canPickAction(item: PickerItem): boolean {
     if (item.kind === "custom") return true;
     if (item.availability.ok) return true;
-    const name = item.kind === "autoMerge" ? "auto-merge" : item.def.name;
+    const name =
+      item.kind === "action"
+        ? item.def.name
+        : item.kind === "autoMerge"
+          ? "auto-merge"
+          : "open in zed";
     toast(`${name}: ${item.availability.reason}`, theme.warn, 2500);
     return false;
   }
@@ -153,11 +181,27 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
     });
   }
 
+  /** `<` / `>` / `\` — a slot session's command palette. */
+  function openSlotPalette(slotSlug: string): void {
+    setModal({
+      kind: "actionPicker",
+      state: {
+        mode: "list",
+        surface: "slot",
+        slug: slotSlug,
+        rowSlug: null,
+        index: 0,
+      },
+    });
+  }
+
   return {
     buildActionPickerItems,
     buildManagerPickerItems,
+    buildSlotPickerItems,
     canPickAction,
     openActionPicker,
     openManagerPalette,
+    openSlotPalette,
   };
 }

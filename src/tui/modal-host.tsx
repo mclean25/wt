@@ -122,6 +122,7 @@ export function PostFooterModals({
   primaryHarness,
   buildActionPickerItems,
   buildManagerPickerItems,
+  buildSlotPickerItems,
   perfSnapshot,
   perfError,
 }: {
@@ -132,6 +133,7 @@ export function PostFooterModals({
   primaryHarness: HarnessId;
   buildActionPickerItems: (slug: string) => PickerItem[];
   buildManagerPickerItems: (rowSlug: string | null) => PickerItem[];
+  buildSlotPickerItems: () => PickerItem[];
   /** Undefined until the first sample lands (the overlay shows "sampling…"). */
   perfSnapshot: PerfSnapshot | undefined;
   /** Sampler failure, so a broken `ps` doesn't render as an idle machine. */
@@ -214,7 +216,9 @@ export function PostFooterModals({
           items={
             modal.state.surface === "manager"
               ? buildManagerPickerItems(modal.state.rowSlug)
-              : buildActionPickerItems(modal.state.slug)
+              : modal.state.surface === "slot"
+                ? buildSlotPickerItems()
+                : buildActionPickerItems(modal.state.slug)
           }
           selectedIndex={modal.state.index}
         />
@@ -226,12 +230,17 @@ export function PostFooterModals({
           def={modal.state.def}
           extras={modal.state.extras}
           vars={(() => {
-            // Manager surface: fleet builtins and custom text render
-            // verbatim (no templates); the row-scoped entries preview
-            // against the row captured at open time — the same row
-            // launchAction will render against.
+            // Palette surfaces: fleet/slot builtins and custom text
+            // render verbatim (no templates); the manager's row-scoped
+            // entries preview against the row captured at open time —
+            // the same row launchAction will render against.
             const st = modal.state;
-            const subject = st.surface === "manager" ? st.rowSlug : st.slug;
+            const subject =
+              st.surface === "manager"
+                ? st.rowSlug
+                : st.surface === "slot"
+                  ? null
+                  : st.slug;
             const row = subject
               ? rows.find((r) => r.wt.slug === subject)
               : undefined;

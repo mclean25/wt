@@ -344,7 +344,60 @@ export const MANAGER_BUILTIN_ACTIONS: readonly ActionDef[] = [
   },
 ];
 
-/** Every code-defined action, for id-resolution sites (dispatch, automations). */
+/**
+ * The slot palettes' builtins (`<` / `>` / `\` — wt repo, main clone,
+ * dotfiles). One shared set: unlike the manager, the ordinary slots
+ * carry no fleet role, so their palette is just the basics you'd
+ * otherwise attach for — nudge the session onward, compact its
+ * context, or fire a free-text instruction (the picker's built-in
+ * custom entry). All `fleet: true` (slot-scoped, no row context) and
+ * `target: "slot"` (delivered by `launchSlotCommand`, never
+ * `launchAction`). The "Open in Zed" row is not an ActionDef — it's a
+ * local `PickerItem` the flows layer appends (`z`).
+ */
+export const SLOT_BUILTIN_ACTIONS: readonly ActionDef[] = [
+  {
+    kind: "claude",
+    id: "slot-continue",
+    name: "Continue current work",
+    prompt: [
+      "Pick your current work back up and continue. Recheck actual state first",
+      "(tree, git status, your own conversation context) rather than assuming;",
+      "then do the next real unit of work. If nothing is pending, reply with",
+      "one line saying so and stop.",
+    ].join(" "),
+    target: "slot",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "g",
+    fleet: true,
+  },
+  {
+    kind: "claude",
+    id: "slot-compact",
+    name: "Compact context",
+    prompt: "/compact",
+    target: "slot",
+    affects: [],
+    requires: [],
+    argPrompt: null,
+    labelExtract: null,
+    key: "m",
+    fleet: true,
+    direct: true,
+  },
+];
+
+/**
+ * Every code-defined action, for id-resolution sites (dispatch,
+ * automations). Deliberately excludes SLOT_BUILTIN_ACTIONS: those only
+ * make sense addressed to a slot session via `launchSlotCommand`, and
+ * resolving them here would let an automation route one through
+ * `launchAction`, which would misdeliver a `target: "slot"` def as a
+ * headless run.
+ */
 export const ALL_BUILTIN_ACTIONS: readonly ActionDef[] = [
   ...PINNED_BUILTIN_ACTIONS,
   ...BUILTIN_ACTIONS,

@@ -1,8 +1,11 @@
 import type { KeyEvent } from "@opentui/core";
 
 import { recentValues } from "../../core/actions.ts";
+import { createLogger } from "../../core/logger.ts";
+import { openInZed } from "../../core/zed.ts";
 import { printableMultiline } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
+import { SESSION_SLOTS } from "../sessions/slots.ts";
 import { applyEditKey, emptyEdit, insertText } from "../text-edit.tsx";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleListPickerKey } from "./list-picker.ts";
@@ -17,17 +20,26 @@ export function handleActionPickerKey(
     rows,
     buildActionPickerItems,
     buildManagerPickerItems,
+    buildSlotPickerItems,
     canPickAction,
     launchAction,
-    launchManagerCommand,
+    launchSlotCommand,
     doAutoMerge,
     toast,
     warnColor,
   } = ctx;
   const ap = modal.state;
   const manager = ap.surface === "manager";
+  // Manager + slot palettes share the slot-delivery launch path
+  // (`launchSlotCommand` — ap.slug is the slot slug on both surfaces);
+  // only the manager also carries row-scoped entries.
+  const palette = manager || ap.surface === "slot";
   const buildItems = () =>
-    manager ? buildManagerPickerItems(ap.rowSlug) : buildActionPickerItems(ap.slug);
+    manager
+      ? buildManagerPickerItems(ap.rowSlug)
+      : ap.surface === "slot"
+        ? buildSlotPickerItems()
+        : buildActionPickerItems(ap.slug);
   if (ap.mode === "list") {
     const items = buildItems();
     const commitIndex = (i: number): void => {
@@ -41,14 +53,31 @@ export function handleActionPickerKey(
         void doAutoMerge(ap.slug, item.armed ? "disable" : "enable");
         return;
       }
-      if (manager && item.kind === "action" && item.def.direct) {
-        // Direct-launch builtins (the palette's raw `/compact`): the
-        // prompt IS the message; an extras screen would be noise. The
-        // `manager` gate is load-bearing: this launch path is fleet-
-        // only, so a hypothetical future row-surface `direct` builtin
-        // must NOT route here (it'd silently address the manager).
+      if (item.kind === "openZed") {
+        // Local flow like autoMerge — nothing injected. ap.slug is the
+        // slot slug (the row only exists on the slot surface).
         setModal(null);
-        void launchManagerCommand(item.def, "");
+        const slot = SESSION_SLOTS.find((s) => s.slug === ap.slug);
+        if (!slot) return;
+        const zedLog = createLogger(slot.label);
+        void openInZed(slot.path)
+          .then(() => zedLog.event.info(`opened ${slot.path}`))
+          .catch((err: unknown) =>
+            zedLog.event.err(
+              `zed open failed: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          );
+        return;
+      }
+      if (palette && item.kind === "action" && item.def.direct) {
+        // Direct-launch builtins (the palettes' raw `/compact`): the
+        // prompt IS the message; an extras screen would be noise. The
+        // `palette` gate is load-bearing: this launch path is slot-
+        // only, so a hypothetical future row-surface `direct` builtin
+        // must NOT route here (it'd silently address the palette's
+        // slot session).
+        setModal(null);
+        void launchSlotCommand(ap.slug, item.def, "");
         return;
       }
       // Fleet defs never take the argPicker: its launch path is
@@ -59,7 +88,7 @@ export function handleActionPickerKey(
       if (
         item.kind === "action" &&
         item.def.argPrompt &&
-        !(manager && item.def.fleet)
+        !(palette && item.def.fleet)
       ) {
         const history = recentValues(item.def.id);
         setModal({
@@ -120,6 +149,16 @@ export function handleActionPickerKey(
         return true;
       }
     }
+    // Chord-confirm: re-pressing the key that opened the surface
+    // commits (modal UX rules). Slot palettes carry theirs on the slot
+    // record; `<`/`>`/`\` arrive as plain sequences, so the shared
+    // handler's sequence match covers them like `M` and `!`.
+    const confirmKey =
+      ap.surface === "slot"
+        ? SESSION_SLOTS.find((s) => s.slug === ap.slug)?.paletteKey ?? null
+        : manager
+          ? "M"
+          : "!";
     return handleListPickerKey(k, {
       count: items.length,
       index: ap.index,
@@ -127,7 +166,7 @@ export function handleActionPickerKey(
         setModal({ kind: "actionPicker", state: { ...ap, index: next } }),
       onCommit: commitIndex,
       onCancel: () => setModal(null),
-      confirm: [manager ? "M" : "!"],
+      confirm: confirmKey ? [confirmKey] : [],
       // Actions are picked by their assigned letters, not positions.
       digits: false,
     });
@@ -140,9 +179,10 @@ export function handleActionPickerKey(
   if (k.name === "escape") {
     const def = ap.def;
     if (def) {
-      // Manager surface always has a list to return to; the row surface
-      // guards against the worktree vanishing while the editor was up.
-      if (!manager && !rows.find((r) => r.wt.slug === ap.slug)) {
+      // Palette surfaces always have a list to return to; the row
+      // surface guards against the worktree vanishing while the editor
+      // was up.
+      if (!palette && !rows.find((r) => r.wt.slug === ap.slug)) {
         setModal(null);
         toast("worktree gone", warnColor, 2000);
         return true;
@@ -169,12 +209,13 @@ export function handleActionPickerKey(
   if (k.name === "return") {
     const { slug, rowSlug, def, extras } = ap;
     setModal(null);
-    if (manager) {
-      // Fleet builtins and free-text go straight to the manager; the
-      // row-scoped entries (ask-about-row, user `target = "manager"`
-      // actions) ride the normal launch path against the captured row
-      // so they get template vars and the `[re: <slug>]` prefix.
-      if (def === null || def.fleet) void launchManagerCommand(def, extras.value);
+    if (palette) {
+      // Fleet/slot builtins and free-text go straight to the palette's
+      // slot session; the manager's row-scoped entries (ask-about-row,
+      // user `target = "manager"` actions) ride the normal launch path
+      // against the captured row so they get template vars and the
+      // `[re: <slug>]` prefix.
+      if (def === null || def.fleet) void launchSlotCommand(slug, def, extras.value);
       else if (rowSlug) void launchAction(rowSlug, def, extras.value);
       else toast("no row selected", warnColor, 2000);
     } else {

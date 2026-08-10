@@ -59,6 +59,14 @@ export type SessionSlot = {
    *  `[key]` button, colored by the slot's live-session state. */
   key: string;
   /**
+   * The keybinding that opens this slot's command palette — the shift
+   * analog of `key` where one exists (`<` for `,`, `>` for `.`, `M`
+   * for `m`; dotfiles uses `\` because shift+`/` is `?`, the help
+   * key). Rendered in the palette's confirm hint and used as its
+   * chord-confirm key.
+   */
+  paletteKey: string;
+  /**
    * Claude named-session identity, for slots that share a cwd with
    * another slot (the manager, whose directory is the main clone's).
    * Claude's primary-conversation UUID keys on the cwd alone, so two
@@ -78,6 +86,7 @@ export const WT_SOURCE_SLOT: SessionSlot = {
   path: WT_REPO_PATH,
   label: "wt",
   key: ",",
+  paletteKey: "<",
   claudeName: null,
 };
 
@@ -93,6 +102,7 @@ export const MAIN_CLONE_SLOT: SessionSlot = {
   path: config.paths.mainClone,
   label: "main",
   key: ".",
+  paletteKey: ">",
   claudeName: null,
 };
 
@@ -107,6 +117,7 @@ export const DOTFILES_SLOT: SessionSlot = {
   path: join(homedir(), ".dotfiles"),
   label: "dotfiles",
   key: "/",
+  paletteKey: "\\",
   claudeName: null,
 };
 
@@ -127,6 +138,7 @@ export const MANAGER_SLOT: SessionSlot = {
   path: config.paths.mainClone,
   label: "manager",
   key: "m",
+  paletteKey: "M",
   claudeName: MANAGER_CLAUDE_NAME,
 };
 

@@ -183,7 +183,7 @@ const KEY_BLOCKS: Block[] = [
       { key: ",", label: "enter wt source session · F12 to detach" },
       { key: ".", label: "enter main repo session · F12 to detach" },
       { key: "/", label: "enter dotfiles session · F12 to detach" },
-      { key: ">", label: "open wt source in zed" },
+      { key: "< / > / \\", label: "slot palette for wt / main / dotfiles — continue (g), compact (m), open in zed (z), custom message (c)" },
       { key: "O", label: "open main repo in zed" },
       { key: "P", label: "perf overlay — CPU/memory for everything downstream of wt" },
       { key: "?", label: "toggle this help" },

@@ -392,7 +392,7 @@ export function App({ onExit }: Props) {
   // `hooks/useActionDispatch.ts`. Subscribes once to the action
   // registry (affects-tag invalidations, arg-history refinement) and
   // returns `launchAction`.
-  const { launchAction, launchManagerCommand } = useActionDispatch({
+  const { launchAction, launchSlotCommand } = useActionDispatch({
     rows,
     primaryHarness,
     toast,
@@ -602,14 +602,16 @@ export function App({ onExit }: Props) {
     mutate,
   });
 
-  // Action-picker (`!`) + manager palette (`M`) helpers — extracted to
-  // `flows/action-picker.ts`.
+  // Action-picker (`!`) + manager palette (`M`) + slot palette
+  // (`<`/`>`/`\`) helpers — extracted to `flows/action-picker.ts`.
   const {
     buildActionPickerItems,
     buildManagerPickerItems,
+    buildSlotPickerItems,
     canPickAction,
     openActionPicker,
     openManagerPalette,
+    openSlotPalette,
   } = makeActionPickerFlows({ rows, setModal, toast });
 
   // Worktree-creation flows (`n`/`N`, review checkout, removed-history
@@ -643,6 +645,7 @@ export function App({ onExit }: Props) {
       cyclePrimaryHarness,
       doEnterSlotSession,
       openManagerPalette: () => openManagerPalette(current?.wt.slug ?? null),
+      openSlotPalette,
     });
 
   // Keyboard dispatch. Layer order is load-bearing: modal swallows
@@ -695,9 +698,10 @@ export function App({ onExit }: Props) {
           rows,
           buildActionPickerItems,
           buildManagerPickerItems,
+          buildSlotPickerItems,
           canPickAction,
           launchAction,
-          launchManagerCommand,
+          launchSlotCommand,
           doSpawnNamedClaudeSession,
           doEnterHarnessSession,
           pickerRows,
@@ -932,6 +936,7 @@ export function App({ onExit }: Props) {
         primaryHarness={primaryHarness}
         buildActionPickerItems={buildActionPickerItems}
         buildManagerPickerItems={buildManagerPickerItems}
+        buildSlotPickerItems={buildSlotPickerItems}
         perfSnapshot={perf.data}
         perfError={perf.error}
       />

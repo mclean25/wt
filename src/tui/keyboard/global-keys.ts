@@ -28,7 +28,6 @@ import { config } from "../../core/config.ts";
 
 const appLog = createLogger("[app]");
 const newLog = createLogger("[new]");
-const wtSourceLog = createLogger(WT_SOURCE_SLOT.label);
 
 export type GlobalKeysCtx = {
   setModal: (m: Modal | null) => void;
@@ -43,6 +42,8 @@ export type GlobalKeysCtx = {
   doEnterSlotSession: (slot: SessionSlot) => void;
   /** `M` — the manager command palette (works with or without a row). */
   openManagerPalette: () => void;
+  /** `<` / `>` / `\` — a slot session's command palette. */
+  openSlotPalette: (slotSlug: string) => void;
 };
 
 export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
@@ -58,6 +59,7 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
     cyclePrimaryHarness,
     doEnterSlotSession,
     openManagerPalette,
+    openSlotPalette,
   } = ctx;
     if (k.sequence === "?") {
       setModal({ kind: "help", query: emptyEdit, searching: false });
@@ -201,14 +203,21 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       openManagerPalette();
       return true;
     }
+    // Slot command palettes — the shift analog of each slot's attach
+    // key (`<` for `,`, `>` for `.`), except dotfiles: shift+`/` is
+    // `?` (help), so it rides `\` — the other slash, same key family.
+    // `>` used to open the wt source in zed; that moved into the wt
+    // palette's `z` row (`O` still opens the main clone directly).
+    if (k.sequence === "<") {
+      openSlotPalette(WT_SOURCE_SLOT.slug);
+      return true;
+    }
     if (k.sequence === ">") {
-      void openInZed(WT_SOURCE_SLOT.path)
-        .then(() => wtSourceLog.event.info(`opened ${WT_SOURCE_SLOT.path}`))
-        .catch((err: unknown) =>
-          wtSourceLog.event.err(
-            `zed open failed: ${err instanceof Error ? err.message : String(err)}`,
-          ),
-        );
+      openSlotPalette(MAIN_CLONE_SLOT.slug);
+      return true;
+    }
+    if (k.sequence === "\\") {
+      openSlotPalette(DOTFILES_SLOT.slug);
       return true;
     }
     if (k.sequence === "O") {

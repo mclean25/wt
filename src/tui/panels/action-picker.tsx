@@ -7,6 +7,7 @@ import {
 } from "../../core/actions.ts";
 import type { ActionDef } from "../../core/config.ts";
 import { getHarness } from "../../core/harness/index.ts";
+import { SESSION_SLOTS } from "../sessions/slots.ts";
 import { Modal } from "../modal.tsx";
 import type { TextEdit } from "../text-edit.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
@@ -37,6 +38,15 @@ export type PickerItem =
       key: string;
       /** Current PR auto-merge state; drives the toggle label. */
       armed: boolean;
+      availability: ActionAvailability;
+    }
+  | {
+      /**
+       * Slot-palette row: open the slot's directory in Zed. A local TS
+       * flow like `autoMerge`, not an ActionDef — nothing is injected.
+       */
+      kind: "openZed";
+      key: string;
       availability: ActionAvailability;
     }
   | { kind: "custom" };
@@ -100,10 +110,12 @@ export function assignActionKeys(
 
 /**
  * Which surface the picker fronts: the row-scoped `!` action picker,
- * or the `M` manager command palette. Same two-screen machinery, item
- * builder and dispatch differ (see `handleActionPickerKey`).
+ * the `M` manager command palette, or a slot palette (`<` / `>` / `\`
+ * — the wt repo, main clone, and dotfiles sessions). Same two-screen
+ * machinery, item builder and dispatch differ (see
+ * `handleActionPickerKey`).
  */
-export type ActionPickerSurface = "row" | "manager";
+export type ActionPickerSurface = "row" | "manager" | "slot";
 
 /**
  * Two-screen state machine. Esc in `edit` pops back to `list` when a
@@ -113,9 +125,10 @@ export type ActionPickerSurface = "row" | "manager";
  * `list`.
  *
  * `slug` is the launch subject: the worktree for the `row` surface,
- * the fixed manager slug for `manager`. `rowSlug` is only meaningful
- * on the manager surface — the list-pane selection captured at open
- * time, which the palette's row-scoped entries (ask-about-row, user
+ * the fixed manager slug for `manager`, the slot's slug (`wt` / `main`
+ * / `dotfiles`) for `slot`. `rowSlug` is only meaningful on the
+ * manager surface — the list-pane selection captured at open time,
+ * which the palette's row-scoped entries (ask-about-row, user
  * `target = "manager"` actions) launch against.
  *
  * `items` is deliberately not in the state — it's recomputed at each
@@ -151,7 +164,7 @@ type Props = {
 
 /** Group label for header clustering; autoMerge sits in "github". */
 function itemGroup(item: PickerItem): string | null {
-  if (item.kind === "custom") return null;
+  if (item.kind === "custom" || item.kind === "openZed") return null;
   if (item.kind === "autoMerge") return "github";
   return item.def.group ?? null;
 }
@@ -165,20 +178,37 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
       ? "action:__custom__"
       : item.kind === "autoMerge"
         ? "action:__auto-merge__"
-        : `action:${item.def.id}`;
+        : item.kind === "openZed"
+          ? "action:__open-zed__"
+          : `action:${item.def.id}`;
   const selectedId = items[selectedIndex]
     ? rowId(items[selectedIndex]!)
     : undefined;
   const manager = surface === "manager";
+  const palette = manager || surface === "slot";
+  // Chord-confirm key shown in the hint: the key that opened this
+  // surface. Slot palettes carry it on their slot record.
+  const confirmKey =
+    surface === "slot"
+      ? SESSION_SLOTS.find((s) => s.slug === slug)?.paletteKey ?? ""
+      : manager
+        ? "M"
+        : "!";
   return (
     <Modal
-      title={manager ? "manager palette" : `action · ${slug}`}
+      title={
+        manager
+          ? "manager palette"
+          : surface === "slot"
+            ? `${slug} palette`
+            : `action · ${slug}`
+      }
       inset={{ top: "12%", right: "18%", bottom: "12%", left: "18%" }}
       hints={[
         ["j/k", "move"],
         ["a-z", "quick pick"],
-        ["c", manager ? "custom message" : "custom prompt"],
-        [manager ? "M / ⏎" : "! / ⏎", "select"],
+        ["c", palette ? "custom message" : "custom prompt"],
+        [confirmKey ? `${confirmKey} / ⏎` : "⏎", "select"],
         ["esc / q", "cancel"],
       ]}
     >
@@ -214,14 +244,16 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
             : theme.fg;
         const labelFg = isCustom ? theme.accent : fg;
         const label = isCustom
-          ? manager
+          ? palette
             ? "Custom message…"
             : "Custom prompt…"
           : item.kind === "autoMerge"
             ? item.armed
               ? "Disarm auto-merge"
               : "Arm auto-merge (merge when ready)"
-            : item.def.name;
+            : item.kind === "openZed"
+              ? "Open in Zed"
+              : item.def.name;
         // Trailing hint: a kind/target marker plus the action id. `$` for
         // shell commands; the Claude robot glyph for claude prompts (two
         // spaces: the nerd-font glyph renders wide and reads cramped with
@@ -235,11 +267,13 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
             ? `(${(item.availability as { reason: string }).reason})`
             : item.kind === "autoMerge"
               ? "gh · merge queue aware"
-              : item.def.kind === "shell"
-                ? `$ ${item.def.id}`
-                : item.def.target === "session"
-                  ? `${claudeGlyph}  ↪ ${item.def.id}`
-                  : `${claudeGlyph}  ${item.def.id}`;
+              : item.kind === "openZed"
+                ? "local"
+                : item.def.kind === "shell"
+                  ? `$ ${item.def.id}`
+                  : item.def.target === "session"
+                    ? `${claudeGlyph}  ↪ ${item.def.id}`
+                    : `${claudeGlyph}  ${item.def.id}`;
         return (
           <Fragment key={rowId(item)}>
             {showHeader ? (
@@ -295,10 +329,10 @@ type EditProps = {
 
 export function ActionEditModal({ slug, surface, def, extras, vars }: EditProps) {
   const title =
-    surface === "manager"
+    surface === "manager" || surface === "slot"
       ? def
-        ? `manager · ${def.name}`
-        : "manager · custom message"
+        ? `${slug} · ${def.name}`
+        : `${slug} · custom message`
       : def
         ? `action · ${def.name} · ${slug}`
         : `action · custom · ${slug}`;

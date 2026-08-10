@@ -338,17 +338,19 @@ type ActionUi = {
   /** Section label; actions with the same group cluster together. */
   group?: string;
   /**
-   * Builtin-only (never parsed from config), manager-palette-only:
-   * launch straight from the picker list, skipping the edit/extras
-   * screen — for commands whose text is the whole point (the palette's
-   * raw `/compact`). The dispatch gate in modal-keys/actions.ts only
-   * honors it on the manager surface; pair it with `fleet`.
+   * Builtin-only (never parsed from config), palette-only (manager `M`
+   * and the slot palettes): launch straight from the picker list,
+   * skipping the edit/extras screen — for commands whose text is the
+   * whole point (the palettes' raw `/compact`). The dispatch gate in
+   * modal-keys/actions.ts only honors it on those surfaces; pair it
+   * with `fleet`.
    */
   direct?: boolean;
   /**
-   * Builtin-only: a manager-palette command addressed to the FLEET, not
-   * a worktree. Launched without row context — no template vars, no
-   * `[re: <slug>]` prefix (see `launchManagerCommand`).
+   * Builtin-only: a palette command addressed to the palette's session
+   * as a whole (the fleet for the manager, the slot session for `<` /
+   * `>` / `\`), not a worktree row. Launched without row context — no
+   * template vars, no `[re: <slug>]` prefix (see `launchSlotCommand`).
    */
   fleet?: boolean;
 };
@@ -363,8 +365,12 @@ type ActionUi = {
  * `manager` injects into the singleton manager session instead (the fleet
  * coordinator; see docs/manager.md), prefixed with the originating slug so
  * the manager knows which worktree the prompt is about.
+ *
+ * `slot` is builtin-only (the parser rejects it in user config): the slot
+ * palettes' entries, delivered by `launchSlotCommand` into the palette's
+ * own slot session. Never routed through `launchAction`.
  */
-export type ClaudeActionTarget = "headless" | "session" | "manager";
+export type ClaudeActionTarget = "headless" | "session" | "manager" | "slot";
 
 /**
  * Per-launch user-supplied value collected by the picker before the
