@@ -129,6 +129,14 @@ export type RemovedWorktree = {
  * them) — this array is just a sort hint, not user-managed metadata.
  */
 export type WtState = {
+  /**
+   * Schema version, stamped by every write path (`writeWtState`) and by
+   * the migration system on read (`migrateRawWtState` in
+   * migrations.ts). Not hand-edited; a shape change bumps
+   * `WT_STATE_VERSION` and adds a migration rather than this field
+   * moving on its own.
+   */
+  version: number;
   slugs: Record<string, WtSlugState>;
   sectionsOrder: string[];
   /** Section keys the user has folded in the list (persisted across restarts). */

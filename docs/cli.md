@@ -141,13 +141,19 @@ Keep wt's bundled agent skills (`wt`, `restack`, `manager`, `start`, `triage`) a
 - `diff <name>` — what a sync would change, as a unified diff.
 - `reset [--answers|--declines]` — forget remembered template answers and/or declined updates.
 
-### `wt update [--check]`
+### `wt update [log] [--check] [--head]`
 
-Update wt itself. The install is a git clone (see the README), so updating is a fast-forward: `git fetch`, `git merge --ff-only`, and a `bun install` when the dependency manifest changed across the jump. Prints the incoming commits before applying and names any still-running wt instances afterwards — they keep the old code until restarted. Refuses to touch a clone with local changes or unpushed commits; update those by hand with git.
+Update wt itself. The install is a git clone (see the README), so updating is a fast-forward: `git fetch`, `git merge --ff-only`, and a `bun install` when the dependency manifest changed across the jump. Two safety layers ride along (semantics: [updates.md](updates.md)): the target is the newest incoming commit whose **CI is green** (red/still-running commits are held back; missing checks and API failures fail open), and the result is **boot-probed** in a child process — a version that fails the probe is reverted and skipped until origin moves again. Prints the incoming commits before applying and names any still-running wt instances afterwards; they keep the old code until restarted. Refuses to touch a clone with local changes or unpushed commits; update those by hand with git.
 
+- `log` — print the update/rollback journal plus current / last-good / skipped shas.
 - `--check` — only report whether an update is available; don't apply.
+- `--head` — ignore the CI gate and target origin's tip.
 
-The TUI runs the same check at startup, before the terminal is taken over: at most once a day, prompting y/n, with a "no" remembered per origin head — it never re-asks until new commits land. Skipped silently when the clone is dirty/ahead (a wt being developed updates itself by hand). An accepted update re-execs wt so the fresh code is what actually runs. `[update] startup_check = false` ([configuration.md](configuration.md#update)) disables the startup check; `WT_UPDATE=off` disables it for a single run (the probe harness arms this). The check's daily stamp and remembered declines live in `~/.cache/wt/update.json`, shared machine-wide like the skills memory.
+The TUI runs the same check at startup, before the terminal is taken over: at most once a day, prompting y/n, with a "no" remembered per offered version — it never re-asks until the offer changes. Skipped silently when the clone is dirty/ahead (a wt being developed updates itself by hand). An accepted update re-execs wt so the fresh code is what actually runs. `[update] startup_check = false` ([configuration.md](configuration.md#update)) disables the startup check; `WT_UPDATE=off` disables the whole update system for a single run (the probe harness arms this). The check's daily stamp, journal, and remembered declines live in `~/.cache/wt/update.json`, shared machine-wide like the skills memory.
+
+### `wt rollback [<ref>]`
+
+Reset the wt source clone to a previous version — by default the last one that completed a healthy boot (see [updates.md](updates.md)). Syncs dependencies across the jump, journals the move, and skips the abandoned version in future startup offers until new commits land on origin (`wt update` can always re-apply it explicitly). Refuses dirty/ahead clones. wt also *offers* this automatically: when a freshly-updated version crashes (default yes) or when a previous start of it never finished booting (default no).
 
 ### `wt version`
 

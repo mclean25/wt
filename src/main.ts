@@ -56,10 +56,33 @@ async function main(): Promise<number> {
       return child.exitCode ?? 1;
     }
   }
+  // Boot sentinel: record that this version is starting; promote it to
+  // "known good" once it survives BOOT_HEALTHY_MS (or exits cleanly
+  // before that). A leftover sentinel on the next launch is evidence
+  // the previous start died without tripping the catch below (native
+  // crash, kill) — offer a rollback before trying again. Runs after
+  // the update prompt so a just-landed fix wins over rolling back.
+  if (process.env.WT_UPDATE !== "off") {
+    const { maybeOfferStaleBootRollback } = await import("./cli/commands/rollback.ts");
+    await maybeOfferStaleBootRollback();
+    const { gitSync, markBooting, markBootGood } = await import("./core/update.ts");
+    const head = gitSync(["rev-parse", "HEAD"]);
+    if (head) {
+      const BOOT_HEALTHY_MS = 15_000;
+      markBooting(head, Date.now());
+      setTimeout(() => markBootGood(head), BOOT_HEALTHY_MS);
+    }
+  }
   const { setWezTermTabTitle } = await import("./core/wezterm.ts");
   await setWezTermTabTitle("wt", config.paths.weztermCli);
   const { runTui } = await import("./tui/runtime.tsx");
   await runTui();
+  // A clean quit before the health timer counts as a healthy boot too.
+  if (process.env.WT_UPDATE !== "off") {
+    const { gitSync, markBootGood } = await import("./core/update.ts");
+    const head = gitSync(["rev-parse", "HEAD"]);
+    if (head) markBootGood(head);
+  }
   return 0;
 }
 
@@ -72,5 +95,16 @@ try {
   process.exit(code);
 } catch (err) {
   console.error(err instanceof Error ? err.stack ?? err.message : String(err));
+  // If this version is a fresh update that never booted healthy, offer
+  // to roll back to the one that did. The offer path is config-free
+  // (core/update.ts) so it works even when the crash IS the config
+  // loader rejecting the user's config; it re-execs on acceptance and
+  // must never mask the original error otherwise.
+  try {
+    const { maybeOfferCrashRollback } = await import("./cli/commands/rollback.ts");
+    await maybeOfferCrashRollback();
+  } catch {
+    // Nothing — the crash above is the story.
+  }
   process.exit(1);
 }

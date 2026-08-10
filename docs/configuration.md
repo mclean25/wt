@@ -319,7 +319,7 @@ Omit for classic poll-only behavior. When present, the `wt events` daemon accept
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `startup_check` | no | `true` | Check the wt source clone for upstream commits when the TUI starts — at most once a day — and prompt y/n to fast-forward ([`wt update`](cli.md#wt-update---check) semantics: skipped silently when the clone is dirty or ahead, a "no" is remembered until origin moves again, and an accepted update re-execs wt on the new code). `false` disables the startup check — `wt update` keeps working on demand; `WT_UPDATE=off` disables it for a single run. |
+| `startup_check` | no | `true` | Check the wt source clone for upstream commits when the TUI starts — at most once a day — and prompt y/n to fast-forward ([`wt update`](cli.md#wt-update-log---check---head) semantics: CI-green target selection, post-pull boot probe with auto-revert, skipped silently when the clone is dirty or ahead, a "no" remembered until the offer changes, re-exec on accept — see [updates.md](updates.md)). `false` disables the startup check — `wt update` keeps working on demand; `WT_UPDATE=off` disables the whole update system (check, boot sentinel, rollback offers) for a single run. |
 
 ## `[[actions]]` — the `!` menu
 

@@ -45,7 +45,7 @@ Add to your shell rc:
 alias wt='~/.wt/bin/wt'
 ```
 
-Updating is a fast-forward of that clone: `wt update` does it on demand, and the TUI offers it at startup when new commits have landed (once a day at most, declines remembered). `wt version` prints the running git hash.
+Updating is a fast-forward of that clone: `wt update` does it on demand, and the TUI offers it at startup when new commits have landed (once a day at most, declines remembered). Updates target the newest CI-green commit, boot-probe the result before keeping it, and `wt rollback` (offered automatically after a crash) steps back to the last version that worked — see [docs/updates.md](docs/updates.md). `wt version` prints the running git hash.
 
 ## Configure
 
@@ -93,6 +93,7 @@ State is push-based: filesystem watchers on git refs, worktree dirs, and wt's ow
 | [docs/automations.md](docs/automations.md) | the `[[automations]]` engine: triggers, settle windows, breaker |
 | [docs/fleet.md](docs/fleet.md) | the philosophy: minimal human work, work statuses, and the agency levels |
 | [docs/skills.md](docs/skills.md) | agent skills & instructions distribution: startup updates, rulesync/symlink awareness |
+| [docs/updates.md](docs/updates.md) | self-updates: CI-green targeting, boot probe, crash rollback, data migrations |
 | [docs/manager.md](docs/manager.md) | the manager session: the singleton fleet coordinator (`m` / `wt manager`) |
 | [docs/github-events.md](docs/github-events.md) | push-based PR/CI updates via a repo webhook |
 | [docs/stacked-prs.md](docs/stacked-prs.md) | stacked PRs: fork-base records, inferred stacks, `wt restack` |

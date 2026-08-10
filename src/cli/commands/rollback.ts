@@ -1,0 +1,196 @@
+/**
+ * `wt rollback` — reset the wt source clone to a previously-run
+ * version — plus the two automatic offers wired into main.ts: the
+ * crash offer (the process just died on a version that never booted
+ * healthy) and the stale-sentinel offer (a previous boot of this
+ * version started but never finished). Everything on this path is
+ * config-free (see core/update.ts): a rollback offer is most valuable
+ * precisely when the new code can't even load the config.
+ */
+import {
+  gitSync,
+  listRunningWtInstances,
+  performRollback,
+  readUpdateMemory,
+  repoUpdateState,
+  shortSha,
+  wtVersion,
+  WT_REPO_ROOT,
+} from "../../core/update.ts";
+import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
+import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
+import { confirm as askYesNo, isInteractive } from "../prompt.ts";
+
+const USAGE = `usage: wt rollback [<ref>]
+
+Reset the wt source clone to a previous version. With no <ref>, targets
+the last version that completed a healthy boot (see \`wt update log\`).
+The version rolled away from is skipped by the startup check until new
+commits land on origin; \`wt update\` can always re-apply it explicitly.
+
+Refuses to touch a clone with local changes or unpushed commits.`;
+
+/** The default rollback target: last good boot, else the last update's from-sha. */
+function defaultTarget(): string | null {
+  const mem = readUpdateMemory();
+  if (mem.lastGoodSha) return mem.lastGoodSha;
+  const lastUpdate = [...mem.journal].reverse().find((e) => e.kind === "update");
+  return lastUpdate?.fromSha ?? null;
+}
+
+/** Guards shared by the command and the offers. Null = fine to roll back. */
+async function rollbackBlocker(): Promise<string | null> {
+  const state = await repoUpdateState();
+  if (!state) return `${WT_REPO_ROOT} is not a git checkout (or git is missing)`;
+  if (state.dirty) return "the wt clone has local changes — roll back by hand with git";
+  if (state.ahead > 0) return `the wt clone is ${state.ahead} commit(s) ahead of ${state.upstream} — roll back by hand with git`;
+  return null;
+}
+
+async function rollBackTo(target: string): Promise<number> {
+  const result = await performRollback(target, Date.now());
+  if (!result.ok) {
+    console.error(red(`rollback failed: ${result.detail}`));
+    return 1;
+  }
+  if (result.depsWarning) console.error(yellow(`⚠ ${result.depsWarning}`));
+  console.log(green(`✓ rolled back ${shortSha(result.fromSha)} → ${wtVersion()}`));
+  console.log(dim(`${shortSha(result.fromSha)} is skipped until new commits land on origin (wt update can still re-apply it)`));
+  const pids = await listRunningWtInstances();
+  if (pids.length > 0) {
+    console.log(yellow(`${pids.length} running wt instance(s) (pid ${pids.join(", ")}) still on the rolled-back-from code — restart them`));
+  }
+  return 0;
+}
+
+export async function run(argv: string[]): Promise<number> {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
+  const unknown = firstUnknownFlag(argv, new Set());
+  if (unknown) {
+    console.error(red(`unknown flag: ${unknown}\n`));
+    console.error(USAGE);
+    return 2;
+  }
+  const refArg = argv.find((a) => !a.startsWith("-")) ?? null;
+
+  const blocker = await rollbackBlocker();
+  if (blocker) {
+    console.error(yellow(blocker));
+    return 1;
+  }
+  const target = refArg ? gitSync(["rev-parse", "--verify", `${refArg}^{commit}`]) : defaultTarget();
+  if (!target) {
+    console.error(
+      refArg
+        ? red(`cannot resolve ${refArg} to a commit in the wt clone`)
+        : red("no rollback target on record (no healthy boot or update in the journal) — pass a <ref>"),
+    );
+    return 1;
+  }
+  const head = gitSync(["rev-parse", "HEAD"]);
+  if (head === target) {
+    console.log(dim(`already on ${shortSha(target)} — nothing to roll back`));
+    return 0;
+  }
+  return rollBackTo(target);
+}
+
+// ── Automatic offers (main.ts) ─────────────────────────────────────────
+
+/** Is the update system active for this process? Mirrors main.ts's gating. */
+function offersEnabled(): boolean {
+  return isInteractive() && process.env.WT_UPDATE !== "off";
+}
+
+/**
+ * Conditions under which an automatic rollback offer makes sense:
+ * HEAD is the target of a journaled update, it has never completed a
+ * healthy boot, the clone isn't being driven by hand, and there is a
+ * target to go back to. Returns null when any of that fails.
+ */
+async function offerContext(): Promise<{ head: string; target: string } | null> {
+  if (!offersEnabled()) return null;
+  const head = gitSync(["rev-parse", "HEAD"]);
+  if (!head) return null;
+  const mem = readUpdateMemory();
+  if (mem.lastGoodSha === head) return null;
+  if (![...mem.journal].reverse().some((e) => e.kind === "update" && e.toSha === head)) return null;
+  if (await rollbackBlocker()) return null;
+  const target = defaultTarget();
+  if (!target || target === head) return null;
+  // rev-parse prints the sha on success, so gitSync's null-on-failure
+  // maps cleanly to "no safe target".
+  if (!gitSync(["rev-parse", "--verify", `${target}^{commit}`])) return null;
+  return { head, target };
+}
+
+/** Re-exec a fresh TUI after a successful offered rollback; never returns. */
+function reexecTui(): never {
+  console.log(dim("restarting wt …"));
+  const child = Bun.spawnSync({
+    cmd: [process.execPath, `${WT_REPO_ROOT}/src/main.ts`],
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  process.exit(child.exitCode ?? 1);
+}
+
+/**
+ * Called from main.ts's top-level catch: the process just crashed. If
+ * the running version is a fresh update that never booted healthy,
+ * offer to roll back to the one that did (default yes — we KNOW it
+ * crashed). On acceptance this re-execs and never returns; in every
+ * other case it returns so the caller can exit with the original
+ * failure. Must never throw: it runs inside a crash handler.
+ */
+export async function maybeOfferCrashRollback(): Promise<void> {
+  try {
+    const ctx = await offerContext();
+    if (!ctx) return;
+    console.error("");
+    console.error(
+      bold(`wt crashed on ${shortSha(ctx.head)}, a fresh update that has not booted successfully before.`),
+    );
+    const yes = await askYesNo(
+      `${cyan("•")} Roll back to ${shortSha(ctx.target)} — the last version that worked?`,
+      true,
+    );
+    if (!yes) {
+      console.error(dim(`  staying on ${shortSha(ctx.head)} (roll back later with \`wt rollback\`)`));
+      return;
+    }
+    if ((await rollBackTo(ctx.target)) === 0) reexecTui();
+  } catch {
+    // The offer must never mask the original crash.
+  }
+}
+
+/**
+ * Called pre-TUI: a leftover boot sentinel means the last start of
+ * this exact version began but never proved healthy — usually a crash
+ * the top-level catch couldn't see (native crash, kill). Weaker
+ * evidence than a live crash, so the offer defaults to NO; declining
+ * just boots normally (and a healthy boot clears the suspicion).
+ */
+export async function maybeOfferStaleBootRollback(): Promise<void> {
+  try {
+    const mem = readUpdateMemory();
+    if (!mem.booting) return;
+    const ctx = await offerContext();
+    if (!ctx || mem.booting.sha !== ctx.head) return;
+    console.log(
+      yellow(`the last start of wt ${shortSha(ctx.head)} (a fresh update) never finished booting — it may have crashed.`),
+    );
+    const yes = await askYesNo(
+      `${cyan("•")} Roll back to ${shortSha(ctx.target)} before starting?`,
+      false,
+    );
+    if (yes && (await rollBackTo(ctx.target)) === 0) reexecTui();
+  } catch {
+    // Never block a boot on the safety net itself.
+  }
+}

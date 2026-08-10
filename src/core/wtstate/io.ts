@@ -5,6 +5,7 @@ import { config } from "../config.ts";
 import { withFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
 import { parseWorkStatus } from "../work-status.ts";
+import { migrateRawWtState, rawWtStateVersion, WT_STATE_VERSION } from "./migrations.ts";
 import { GROUP_INBOX, STACK_SECTION_PREFIX } from "./types.ts";
 import type { RemovedWorktree, WtSlugState, WtState } from "./types.ts";
 
@@ -24,10 +25,100 @@ export function readWtState(): WtState {
   if (!existsSync(STATE_FILE)) return emptyWtState();
   try {
     const raw = readFileSync(STATE_FILE, "utf8");
-    return parseWtState(JSON.parse(raw));
+    return parseWtState(maybeMigrateRaw(JSON.parse(raw)));
   } catch (err) {
     log.error(err instanceof Error ? err : String(err), { file: STATE_FILE });
     return emptyWtState();
+  }
+}
+
+/**
+ * The hot-path gate for every read: a single integer comparison once
+ * the file is at the current version (the common case after the first
+ * migrated write). Only version < WT_STATE_VERSION or > WT_STATE_VERSION
+ * take a slower path; both are rare (one bump, or a rolled-back binary).
+ */
+function maybeMigrateRaw(parsed: unknown): Record<string, unknown> {
+  const raw = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
+  const from = rawWtStateVersion(raw);
+  if (from === WT_STATE_VERSION) return raw;
+  if (from > WT_STATE_VERSION) {
+    // Newer-code state (rollback scenario): read leniently, never
+    // rewrite or stamp — this build doesn't know the newer shape, and
+    // `parseWtState` already drops fields it doesn't recognize.
+    log.warn("state.json version is newer than this build supports; reading leniently", {
+      file: STATE_FILE,
+      fileVersion: from,
+      buildVersion: WT_STATE_VERSION,
+    });
+    return raw;
+  }
+  // from < WT_STATE_VERSION: migrate and persist so this cost is paid
+  // once. `readWtState` can itself be called from inside a mutator's
+  // `withWtStateLock` critical section (every mutator in sections.ts /
+  // removed.ts / automations-pause.ts does `readWtState()` while
+  // holding the lock) — flock is per-open-file-description, not
+  // reentrant within a process, so re-acquiring here would deadlock.
+  // `wtStateLockDepth` tracks whether we're already inside one.
+  const persist = (): Record<string, unknown> => migrateAndPersist(raw);
+  return wtStateLockDepth > 0 ? persist() : withWtStateLock(persist);
+}
+
+/**
+ * Runs INSIDE the wtstate lock (held by the caller either way — see
+ * `maybeMigrateRaw`). Re-reads the file fresh: another process may have
+ * already migrated it while this one waited for the lock, in which case
+ * this is a cheap no-op. Backs the pre-migration bytes up, runs the
+ * migration chain, and persists the result with the same atomic-rename
+ * discipline every writer uses, so a code rollback can restore the
+ * backup and keep running against the shape it understands.
+ */
+function migrateAndPersist(fallback: Record<string, unknown>): Record<string, unknown> {
+  let text: string | null = null;
+  let current = fallback;
+  if (existsSync(STATE_FILE)) {
+    try {
+      text = readFileSync(STATE_FILE, "utf8");
+      current = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      text = null;
+      current = fallback;
+    }
+  }
+  const from = rawWtStateVersion(current);
+  if (from >= WT_STATE_VERSION) return current;
+  if (text !== null) backupStateFile(text, from);
+  const { value } = migrateRawWtState(current);
+  try {
+    atomicWriteJson(value);
+  } catch (err) {
+    // Non-fatal: the migrated value is still used in-memory for this
+    // read. A failed persist just means the next read repeats this
+    // (cheap, idempotent) migration instead of hitting the fast path.
+    log.error(err instanceof Error ? err : String(err), { file: STATE_FILE, phase: "migrate-persist" });
+  }
+  log.info("migrated state.json", { file: STATE_FILE, from, to: WT_STATE_VERSION });
+  return value;
+}
+
+function backupPath(from: number): string {
+  return `${STATE_FILE}.bak-v${from}`;
+}
+
+/**
+ * Plain byte-for-byte copy of the pre-migration file (not a
+ * re-serialization of the parsed value, so it round-trips through a
+ * code rollback exactly as it was), overwriting any prior backup for
+ * the same `from` — one backup per version bump is enough.
+ */
+function backupStateFile(text: string, from: number): void {
+  try {
+    writeFileSync(backupPath(from), text);
+  } catch (err) {
+    // Best-effort: a failed backup shouldn't brick the app over a
+    // migration that (today) is pure version-stamping. Logged so it's
+    // not silent.
+    log.error(err instanceof Error ? err : String(err), { file: backupPath(from), phase: "migrate-backup" });
   }
 }
 
@@ -152,6 +243,7 @@ export function parseWtState(raw: unknown): WtState {
     }
   }
   return {
+    version: WT_STATE_VERSION,
     slugs,
     sectionsOrder,
     foldedSections,
@@ -163,6 +255,7 @@ export function parseWtState(raw: unknown): WtState {
 
 export function emptyWtState(): WtState {
   return {
+    version: WT_STATE_VERSION,
     slugs: {},
     sectionsOrder: [],
     foldedSections: [],
@@ -172,18 +265,32 @@ export function emptyWtState(): WtState {
   };
 }
 
+/**
+ * Write-then-rename so a concurrent reader (the live TUI polls this
+ * file) never observes a half-written file and silently falls back to
+ * empty defaults. rename(2) is atomic within a filesystem. This closes
+ * the torn-read window; lost updates between two WRITERS are closed
+ * separately by `withWtStateLock` spanning each mutator's
+ * read-modify-write. Shared by `writeWtState` and the migration
+ * write-back in `migrateAndPersist` above, which persists raw JSON
+ * (mid-chain shapes aren't necessarily valid `WtState` yet) rather than
+ * a typed state.
+ */
+function atomicWriteJson(value: unknown): void {
+  mkdirSync(dirname(STATE_FILE), { recursive: true });
+  const tmp = `${STATE_FILE}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+  renameSync(tmp, STATE_FILE);
+}
+
 export function writeWtState(state: WtState): void {
   try {
-    mkdirSync(dirname(STATE_FILE), { recursive: true });
-    // Write-then-rename so a concurrent reader (the live TUI polls this
-    // file) never observes a half-written file and silently falls back
-    // to empty defaults. rename(2) is atomic within a filesystem. This
-    // closes the torn-read window; lost updates between two WRITERS are
-    // closed separately by `withWtStateLock` spanning each mutator's
-    // read-modify-write.
-    const tmp = `${STATE_FILE}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
-    renameSync(tmp, STATE_FILE);
+    // Every write path stamps the CURRENT version, matching
+    // `parseWtState`'s tolerate-unknown-fields contract: a value read
+    // leniently from a newer-code file already had its not-yet-known
+    // fields dropped at parse time, so there's no newer shape left to
+    // preserve by keeping a higher version number here.
+    atomicWriteJson({ ...state, version: WT_STATE_VERSION });
   } catch (err) {
     log.error(err instanceof Error ? err : String(err), { file: STATE_FILE });
     // Re-raise so the action layer can surface the failure to the
@@ -192,6 +299,19 @@ export function writeWtState(state: WtState): void {
     throw err;
   }
 }
+
+/**
+ * Reentrancy depth for the wtstate flock. `flock` locks an open file
+ * description, not a process — a second `open()` + `flock()` against
+ * the same path from the SAME process still blocks (there's no thread
+ * to unblock it), so a naive nested `withWtStateLock` call would
+ * deadlock. Every mutator in sections.ts/removed.ts/automations-pause.ts
+ * calls `readWtState()` while already holding this lock; the migration
+ * path in `readWtState` needs to write too, so it checks this depth to
+ * decide whether to acquire the lock itself or just run inline under
+ * the caller's held lock.
+ */
+let wtStateLockDepth = 0;
 
 /**
  * Serialize a state-file read-modify-write across processes. The atomic
@@ -203,5 +323,12 @@ export function writeWtState(state: WtState): void {
  * the kernel wait is sub-millisecond and crash-safe (fd close releases).
  */
 export function withWtStateLock<T>(fn: () => T): T {
-  return withFileLock("__wtstate__", fn);
+  return withFileLock("__wtstate__", () => {
+    wtStateLockDepth++;
+    try {
+      return fn();
+    } finally {
+      wtStateLockDepth--;
+    }
+  });
 }

@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      # core/config.ts fail-fasts (process.exit(1)) if no config file is
+      # present, which would otherwise kill `bun test` before any test
+      # runs — dozens of modules import the `config` singleton at load
+      # time. Point WT_CONFIG at a minimal synthetic config so the loader
+      # succeeds; the paths themselves are never touched by the suite.
+      - run: |
+          cat > "$RUNNER_TEMP/wt-ci-config.toml" <<'EOF'
+          [paths]
+          main_clone = "/tmp/wt-ci-fake-main"
+          worktree_root = "/tmp/wt-ci-fake-worktrees"
+
+          [branch]
+          prefix = "ci"
+          EOF
+          echo "WT_CONFIG=$RUNNER_TEMP/wt-ci-config.toml" >> "$GITHUB_ENV"
+      - run: bun test
