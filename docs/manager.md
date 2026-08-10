@@ -67,6 +67,10 @@ Everything is ordinary CLI surface, so any harness can drive it:
 - `gh` — PR state, merges (only when the human asked), CI.
 - Cross-session messaging, when the harness supports it — worktree sessions and the manager are plain sessions on one machine.
 
+## Feedback channel (opt-in)
+
+With `[manager] wt_feedback = true` ([configuration.md](configuration.md#manager)), the manager's playbook includes a standing brief to proactively send workflow papercuts and missing-sense observations from fleet work to the session working on the wt source repo, which reviews and applies what's warranted. Off by default — it presumes you run such a session.
+
 ## Lifecycle
 
 The session survives wt restarts by construction (it lives on the wt tmux server) and is whitelisted from the orphan reaper like the other slots. It is not auto-spawned at boot: the first `m` / `wt manager` / injection creates it. Keep its context lean — the playbook should mandate terse replies and periodic `/compact`; the durable fleet state lives in wt (statuses, PRs), never in the manager's conversation.

@@ -603,6 +603,17 @@ export type Config = {
      */
     startupCheck: boolean;
   };
+  manager: {
+    /**
+     * Standing brief for the manager session to proactively send
+     * workflow papercuts/nits it observes during fleet work to the
+     * wt-source session, which reviews and applies them. Opt-in
+     * (`[manager] wt_feedback = true`): the manager skill reads this
+     * flag from the config TOML at session time — most users don't
+     * run a session on the wt repo itself.
+     */
+    wtFeedback: boolean;
+  };
   update: {
     /**
      * Check the wt source clone for upstream commits when the TUI
@@ -1093,6 +1104,13 @@ function build(raw: Raw, errs: Errors): Config {
   }
   const skills = { startupCheck: startupCheckRaw !== false };
 
+  const managerRaw = obj(raw.manager);
+  const wtFeedbackRaw = managerRaw?.wt_feedback;
+  if (wtFeedbackRaw !== undefined && typeof wtFeedbackRaw !== "boolean") {
+    errs.add("manager.wt_feedback must be a boolean");
+  }
+  const manager = { wtFeedback: wtFeedbackRaw === true };
+
   const updateRaw = obj(raw.update);
   const updateStartupRaw = updateRaw?.startup_check;
   if (updateStartupRaw !== undefined && typeof updateStartupRaw !== "boolean") {
@@ -1173,6 +1191,7 @@ function build(raw: Raw, errs: Errors): Config {
     automations,
     ui: { rows, hiddenBadges, sort: uiSort },
     skills,
+    manager,
     update,
   };
 }

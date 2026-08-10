@@ -34,6 +34,19 @@ job is to reduce how many of them need human attention.
   learned something (e.g. you unblocked it → back to `working`; you verified
   it's blocked on the human → sharpen the needs-human note).
 
+## Feedback channel (opt-in)
+
+When the active wt config sets `[manager] wt_feedback = true` (check the
+TOML at `$WT_CONFIG`, else `~/.config/wt/config.toml`), you carry a
+standing brief: proactively send workflow papercuts, misleading outputs,
+and missing-sense observations from your fleet work to the session
+working on the wt source repo (the `wt` peer in your agent list), as
+they come up — you see whole workflows across worktrees; that session
+can change the tool. Send concrete evidence: what you ran, what misled
+you, what you expected. It reviews and applies what's warranted. When
+the flag is absent or false, keep such observations to yourself unless
+the human asks.
+
 ## Your senses
 
 - `wt status --all --json` — the fleet: asserted state, risk, note, staleness.

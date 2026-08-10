@@ -315,6 +315,12 @@ Omit for classic poll-only behavior. When present, the `wt events` daemon accept
 |---|---|---|---|
 | `startup_check` | no | `true` | Check wt's bundled agent skills + managed instructions block for pending updates when the TUI starts, prompting y/n once per update before the terminal is taken over (so agent sessions spawned from that run see the updates). A "no" is remembered per content version and never re-asked; copies wt didn't install are never overwritten without an explicit yes. `false` disables the startup prompt — `wt skills` keeps working on demand. See [skills.md](skills.md). |
 
+## `[manager]`
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `wt_feedback` | no | `false` | Standing brief for the [manager session](manager.md): proactively send workflow papercuts/nits observed during fleet work to the session working on the wt source repo, which reviews and applies them. Opt-in because it presumes you run such a session; the manager skill reads this flag from the config TOML at session time. |
+
 ## `[update]`
 
 | key | required | default | meaning |
