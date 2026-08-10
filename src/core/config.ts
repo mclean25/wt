@@ -260,10 +260,36 @@ type BaseAiConfig = {
   timeoutMs: number;
 };
 
+/**
+ * Wire protocol for the openai provider. `"chat"` is
+ * `/v1/chat/completions` — every local OpenAI-compatible server
+ * (LM Studio, Ollama, llama.cpp) and older hosted models. `"responses"`
+ * is `/v1/responses` — required by hosted OpenAI models that reject
+ * chat completions outright (the gpt-5.6 family returns "not
+ * accessible via the /chat/completions endpoint"). Explicit config
+ * rather than endpoint/model sniffing: local servers are free to serve
+ * any model id, so the name proves nothing about the protocol.
+ */
+export type OpenAiProtocol = "chat" | "responses";
+
 export type OpenAiAiConfig = BaseAiConfig & {
   provider: "openai";
   /** OpenAI-compatible endpoint (no trailing slash). */
   endpoint: string;
+  protocol: OpenAiProtocol;
+  /**
+   * Environment variable holding a bearer API key; sent as
+   * `Authorization: Bearer <key>` on both protocols. Null preserves the
+   * original unauthenticated local-endpoint behavior (no header at all).
+   */
+  apiKeyEnv: string | null;
+  /**
+   * `reasoning.effort` for the responses protocol (chat ignores it).
+   * Defaults to "none": the summary task wants fast plain completion,
+   * and reasoning tokens would eat the small max_output_tokens budget
+   * before any text is emitted.
+   */
+  reasoningEffort: "none" | "minimal" | "low" | "medium" | "high";
 };
 
 export type GeminiAiConfig = BaseAiConfig & {
@@ -1076,6 +1102,21 @@ function build(raw: Raw, errs: Errors): Config {
       : {
         provider: "openai",
         endpoint: errs.reqStr(aiRaw, "ai", "endpoint").replace(/\/+$/, ""),
+        protocol: errs.optEnum(
+          aiRaw,
+          "ai",
+          "protocol",
+          ["chat", "responses"] as const satisfies readonly OpenAiProtocol[],
+          "chat",
+        ),
+        apiKeyEnv: errs.optStrOrNull(aiRaw, "api_key_env"),
+        reasoningEffort: errs.optEnum(
+          aiRaw,
+          "ai",
+          "reasoning_effort",
+          ["none", "minimal", "low", "medium", "high"] as const,
+          "none",
+        ),
         ...aiBase,
       };
 

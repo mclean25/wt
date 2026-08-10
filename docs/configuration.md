@@ -228,6 +228,14 @@ Omit to disable the AI-generated title/brief/description in the details pane. Tw
 endpoint = "http://127.0.0.1:1234"   # required for provider = "openai"
 model    = "gemma-3-e4b-it-mlx"
 
+# hosted OpenAI (authenticated; gpt-5.6-era models reject chat completions,
+# so they also need protocol = "responses")
+[ai]
+endpoint    = "https://api.openai.com"
+model       = "gpt-5.6-luna"
+protocol    = "responses"
+api_key_env = "OPENAI_API_KEY"
+
 # or Gemini
 [ai]
 provider    = "gemini"
@@ -240,7 +248,9 @@ api_key_env = "GEMINI_API_KEY"       # required for provider = "gemini"
 | `provider` | no | `"openai"` | `"openai"` or `"gemini"`. |
 | `model` | **yes** | — | Model id as the provider names it. |
 | `endpoint` | openai: **yes** | gemini: `https://generativelanguage.googleapis.com/v1beta` | Base URL, no trailing slash. |
-| `api_key_env` | gemini: **yes** | — | Name of the environment variable holding the Gemini API key. |
+| `protocol` | no | `"chat"` | openai only. `"chat"` = `/v1/chat/completions` (every local OpenAI-compatible server); `"responses"` = `/v1/responses`, required by hosted OpenAI models that reject chat completions (the gpt-5.6 family). Explicit because a local server can serve any model id — the name proves nothing. |
+| `api_key_env` | gemini: **yes** | openai: *(unset)* | Name of the environment variable holding the API key. For openai it's optional: set → `Authorization: Bearer` on every request; unset → unauthenticated local-endpoint behavior. The key value itself never appears in config, logs, or errors. |
+| `reasoning_effort` | no | `"none"` | openai `protocol = "responses"` only: `none`/`minimal`/`low`/`medium`/`high`. Default `none` because reasoning tokens count against the small per-summary output cap — higher efforts can spend the whole budget before emitting text. |
 | `max_input_tokens` | no | `8000` | Soft prompt budget; diff hunks are dropped largest-first to stay under it. |
 | `timeout_ms` | no | `120000` | Per-request timeout. Generous by default because local LLMs cold-start slowly. |
 

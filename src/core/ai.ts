@@ -1,7 +1,9 @@
 /**
  * AI client for worktree summaries.
  *
- * Supports OpenAI-compatible `/v1/chat/completions` endpoints and Google's Gemini
+ * Supports OpenAI-compatible `/v1/chat/completions` endpoints (optionally
+ * authenticated), OpenAI's `/v1/responses` protocol (hosted gpt-5.6-era
+ * models reject chat completions), and Google's Gemini
  * `models.generateContent` endpoint. No streaming — the TUI just waits for
  * the full response.
  *
@@ -44,6 +46,16 @@ Return only the TITLE line.`;
 
 type ChatResponse = {
   choices?: Array<{ message?: { content?: string } }>;
+  error?: { message?: string };
+};
+
+type ResponsesResponse = {
+  output?: Array<{
+    type?: string;
+    content?: Array<{ type?: string; text?: string }>;
+  }>;
+  status?: string;
+  incomplete_details?: { reason?: string };
   error?: { message?: string };
 };
 
@@ -213,7 +225,9 @@ async function callChat(
       try {
         return ai.provider === "gemini"
           ? await requestGeminiChat(ai, systemPrompt, userPrompt, maxTokens, external)
-          : await requestOpenAiChat(ai, systemPrompt, userPrompt, maxTokens, external);
+          : ai.protocol === "responses"
+            ? await requestOpenAiResponses(ai, systemPrompt, userPrompt, maxTokens, external)
+            : await requestOpenAiChat(ai, systemPrompt, userPrompt, maxTokens, external);
       } catch (err) {
         if (external?.aborted) throw err;
         lastErr = err;
@@ -221,6 +235,27 @@ async function callChat(
     }
     throw lastErr;
   });
+}
+
+/**
+ * Request headers for the openai provider. With `api_key_env` set the
+ * key is read fresh per request and sent as a bearer token; without it
+ * the request stays header-bare like the original local-endpoint
+ * behavior. The key VALUE never leaves this function except inside the
+ * header itself — error messages only ever name the env var.
+ */
+function openAiHeaders(
+  ai: Extract<AiConfig, { provider: "openai" }>,
+): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (ai.apiKeyEnv) {
+    const key = process.env[ai.apiKeyEnv];
+    if (!key) {
+      throw new Error(`OpenAI API key env var ${ai.apiKeyEnv} is not set`);
+    }
+    headers.authorization = `Bearer ${key}`;
+  }
+  return headers;
 }
 
 /** One HTTP attempt against the chat endpoint. Timeout + abort scoped
@@ -232,6 +267,9 @@ async function requestOpenAiChat(
   maxTokens: number,
   external?: AbortSignal,
 ): Promise<string> {
+  // Resolve headers (and the missing-key error) before any transport
+  // setup so a bad api_key_env doesn't masquerade as "unreachable".
+  const headers = openAiHeaders(ai);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ai.timeoutMs);
   // Forward an external abort (queryFn cancellation) into the same
@@ -243,7 +281,7 @@ async function requestOpenAiChat(
   try {
     res = await fetch(`${ai.endpoint}/v1/chat/completions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       signal: ctrl.signal,
       body: JSON.stringify({
         model: ai.model,
@@ -291,6 +329,101 @@ async function requestOpenAiChat(
   }
   const content = parsed.choices?.[0]?.message?.content?.trim();
   if (!content) {
+    throw new Error("AI endpoint returned no content");
+  }
+  return content;
+}
+
+/**
+ * One HTTP attempt against `/v1/responses` — the protocol hosted OpenAI
+ * models like the gpt-5.6 family require (they hard-reject
+ * `/v1/chat/completions`). Same timeout/abort/retry contract as the
+ * chat path. Deliberate parameter differences from chat: the system
+ * prompt rides `instructions`, the cap is `max_output_tokens`, and
+ * `temperature` is omitted — gpt-5-era reasoning models reject
+ * non-default sampling params.
+ */
+async function requestOpenAiResponses(
+  ai: Extract<AiConfig, { provider: "openai" }>,
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number,
+  external?: AbortSignal,
+): Promise<string> {
+  const headers = openAiHeaders(ai);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ai.timeoutMs);
+  const cleanupAbort = external
+    ? chainSignal(external, () => ctrl.abort())
+    : noop;
+  let res: Response;
+  try {
+    res = await fetch(`${ai.endpoint}/v1/responses`, {
+      method: "POST",
+      headers,
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        model: ai.model,
+        instructions: systemPrompt,
+        input: userPrompt,
+        max_output_tokens: maxTokens,
+        reasoning: { effort: ai.reasoningEffort },
+        stream: false,
+      }),
+    });
+  } catch (err) {
+    throw new Error(
+      `AI endpoint unreachable at ${ai.endpoint}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  } finally {
+    clearTimeout(timer);
+    cleanupAbort();
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    const oneLine = body.replace(/\s+/g, " ").trim().slice(0, 160);
+    throw new Error(`AI endpoint HTTP ${res.status}: ${oneLine || res.statusText}`);
+  }
+
+  let parsed: ResponsesResponse;
+  try {
+    parsed = (await res.json()) as ResponsesResponse;
+  } catch (err) {
+    throw new Error(
+      `AI endpoint returned non-JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return extractResponsesText(parsed);
+}
+
+/**
+ * Pull the assistant text out of a `/v1/responses` payload: concatenate
+ * `output_text` parts across `message` items (reasoning items are
+ * skipped). Exported for tests. The empty-but-incomplete case gets its
+ * own message because it has its own remedy — with a reasoning effort
+ * above "none", thinking tokens can exhaust `max_output_tokens` before
+ * any text is emitted, and "no content" alone would point away from
+ * the fix.
+ */
+export function extractResponsesText(parsed: ResponsesResponse): string {
+  if (parsed.error?.message) {
+    throw new Error(`AI endpoint: ${parsed.error.message}`);
+  }
+  const content = (parsed.output ?? [])
+    .filter((item) => item.type === "message")
+    .flatMap((item) => item.content ?? [])
+    .filter((part) => part.type === "output_text")
+    .map((part) => part.text ?? "")
+    .join("")
+    .trim();
+  if (!content) {
+    if (parsed.status === "incomplete") {
+      const reason = parsed.incomplete_details?.reason ?? "unknown reason";
+      throw new Error(
+        `AI endpoint response incomplete (${reason}) with no text — if the reason is max_output_tokens, lower [ai].reasoning_effort or raise the cap`,
+      );
+    }
     throw new Error("AI endpoint returned no content");
   }
   return content;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { isStackTitleMetaOnly } from "./ai.ts";
+import { extractResponsesText, isStackTitleMetaOnly } from "./ai.ts";
 
 describe("isStackTitleMetaOnly", () => {
   test("rejects a bare leaked meta word", () => {
@@ -28,5 +28,46 @@ describe("isStackTitleMetaOnly", () => {
   test("is punctuation- and case-insensitive", () => {
     expect(isStackTitleMetaOnly("stack.")).toBe(true);
     expect(isStackTitleMetaOnly("BRANCHES")).toBe(true);
+  });
+});
+
+describe("extractResponsesText", () => {
+  test("concatenates output_text parts and skips reasoning items", () => {
+    expect(
+      extractResponsesText({
+        output: [
+          { type: "reasoning" },
+          {
+            type: "message",
+            content: [
+              { type: "output_text", text: "TITLE: Fix the thing\n" },
+              { type: "output_text", text: "DESCRIPTION: Done." },
+            ],
+          },
+        ],
+      }),
+    ).toBe("TITLE: Fix the thing\nDESCRIPTION: Done.");
+  });
+
+  test("surfaces the API error message", () => {
+    expect(() =>
+      extractResponsesText({ error: { message: "invalid model" } }),
+    ).toThrow("AI endpoint: invalid model");
+  });
+
+  test("empty incomplete response points at the reasoning budget", () => {
+    expect(() =>
+      extractResponsesText({
+        output: [{ type: "reasoning" }],
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+      }),
+    ).toThrow(/incomplete \(max_output_tokens\)/);
+  });
+
+  test("empty complete response is a plain no-content error", () => {
+    expect(() => extractResponsesText({ output: [] })).toThrow(
+      "AI endpoint returned no content",
+    );
   });
 });
