@@ -255,7 +255,7 @@ export async function run(argv: string[]): Promise<number> {
     };
   });
   // Urgency order, derived at render time (same ranking the TUI sorts
-  // by): needs-human first, todo last, statusless in between.
+  // by): ready first, then needs-human, todo last.
   rows.sort(
     (a, b) =>
       workStateRank(a.work?.state) - workStateRank(b.work?.state) ||

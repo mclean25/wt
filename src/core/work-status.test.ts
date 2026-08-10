@@ -42,9 +42,9 @@ describe("resolveWorkState", () => {
 describe("workStateRank", () => {
   test("orders by urgency with statusless neutral and landed last", () => {
     const ranks = [
+      workStateRank("ready"),
       workStateRank("needs-human"),
       workStateRank("needs-testing"),
-      workStateRank("ready"),
       workStateRank("review"),
       workStateRank("working"),
       NO_STATUS_RANK,

@@ -93,17 +93,19 @@ export function resolveWorkState(input: string): WorkState | null {
 
 /**
  * Sort rank within a section, most-urgent first. The ordering is
- * "what needs the human, then what's closest to landing": blocked on
- * the human, then pending verification, then merge-ready (one glance
- * + `m` away), then the in-flight states. Statusless rows sit between
- * the in-flight states and `todo` — no news is neutral, and rows that
- * never opt into the system keep congregating where they always were
- * rather than being punished to the bottom.
+ * "what the human can finish right now, then what's blocked on them,
+ * then what's still moving": `ready` leads because merging is the one
+ * job only the human does and it's a glance + `m` away, then blocked
+ * on the human, then pending verification, then the in-flight states.
+ * Statusless rows sit between the in-flight states and `todo` — no
+ * news is neutral, and rows that never opt into the system keep
+ * congregating where they always were rather than being punished to
+ * the bottom.
  */
 const RANK: Record<WorkState, number> = {
-  "needs-human": 0,
-  "needs-testing": 1,
-  ready: 2,
+  ready: 0,
+  "needs-human": 1,
+  "needs-testing": 2,
   review: 3,
   working: 4,
   todo: 6,

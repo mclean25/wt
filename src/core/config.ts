@@ -619,7 +619,7 @@ export type Config = {
     hiddenBadges: ReadonlySet<BadgeSlot>;
     /**
      * List-pane row ordering inside each section. `status` (default)
-     * ranks rows by work-status urgency (needs-human first, landed
+     * ranks rows by work-status urgency (ready first, landed
      * last; see core/work-status.ts), with the manual order as the
      * stable tie-break — a no-op until statuses exist. `manual` is the
      * pure hand order. Stack sections always keep spine order.
