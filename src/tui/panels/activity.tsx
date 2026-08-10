@@ -60,6 +60,7 @@ function EventsList({
   events,
   emptyText,
   seenTs,
+  wrap = false,
 }: {
   events: readonly WtEvent[];
   emptyText: string;
@@ -71,6 +72,17 @@ function EventsList({
    * no dimming, no rule.
    */
   seenTs?: number;
+  /**
+   * Word-wrap long messages instead of truncating. On for the
+   * attention feed — its lines (ready notes, needs-human asks) are the
+   * payload and losing their tails made them unreadable — off for the
+   * firehose and destroy views, where one-line-per-event scannability
+   * wins and the full text is recoverable from the log file.
+   * Continuation lines align under the message column for free: the
+   * time+source prefix is a fixed-width sibling box, so the wrapped
+   * text block starts (and stays) at the message column.
+   */
+  wrap?: boolean;
 }) {
   // Scrollbox with sticky-bottom: follows the live tail like before,
   // releases when the user scrolls up (wheel, or ctrl+e/ctrl+y via
@@ -114,15 +126,17 @@ function EventsList({
         const seen = seenTs !== undefined && e.ts <= seenTs;
         return (
           <Fragment key={e.id}>
-            {/* Each event has to stay exactly one row. The prefix
-                (time + source) is grouped into a flexShrink=0 container
-                so flex pressure from a long message can only shrink the
-                message column — without this wrapping, the bare
-                `<text> </text>` spacers get zero-width-collapsed under
-                pressure, jamming the time+source columns together.
-                `overflow="hidden"` on the row clips any residual
-                overrun. Seen rows drop every color to fgDim — handled
-                history recedes, new rows keep their level colors. */}
+            {/* The prefix (time + source) is grouped into a
+                flexShrink=0 container so flex pressure from a long
+                message can only shrink the message column — without
+                this wrapping, the bare `<text> </text>` spacers get
+                zero-width-collapsed under pressure, jamming the
+                time+source columns together. `overflow="hidden"` on
+                the row clips any residual horizontal overrun; in wrap
+                mode the row grows vertically instead and the prefix
+                box stays on the first line. Seen rows drop every color
+                to fgDim — handled history recedes, new rows keep their
+                level colors. */}
             <box flexDirection="row" flexShrink={0} overflow="hidden">
               <box flexShrink={0} flexDirection="row">
                 <text fg={theme.fgDim}>{fmtTime(e.ts)}</text>
@@ -133,7 +147,11 @@ function EventsList({
                 <text> </text>
               </box>
               <box flexGrow={1} flexShrink={1} overflow="hidden">
-                <text fg={seen ? theme.fgDim : levelFg(e.level)} wrapMode="none" truncate>
+                <text
+                  fg={seen ? theme.fgDim : levelFg(e.level)}
+                  wrapMode={wrap ? "word" : "none"}
+                  truncate={!wrap}
+                >
                   {e.text}
                 </text>
               </box>
@@ -186,6 +204,7 @@ export function ActivityContent({
       // 0 = never marked. Attention-only: the firehose is the record
       // and stays fully bright.
       seenTs={feed === "attention" && seenTs > 0 ? seenTs : undefined}
+      wrap={feed === "attention"}
     />
   );
 }
