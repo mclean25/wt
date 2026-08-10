@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 
 import { config } from "../../core/config.ts";
 import { readRegistry } from "../../core/harness/claude/registry.ts";
+import { claudeAgentAddress } from "../../core/harness/index.ts";
 import {
   ensureManagerClaudeName,
   MANAGER_CLAUDE_NAME,
@@ -176,9 +177,22 @@ async function ls(json: boolean): Promise<number> {
           : registry
               .filter((r) => r.cwd === cwd && nameMatches(r))
               .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      // Slots register under their label (== slug); worktree sessions
+      // under the tmux name. Mismatch → a pre-slug-naming session, and
+      // `claudeAgentAddress` returns null rather than a label that
+      // could belong to any worktree.
+      const expected =
+        SLOT_TARGETS[e.slug] !== undefined
+          ? e.slug
+          : e.name === null
+            ? e.slug
+            : `${e.slug}~${e.name}`;
       return {
         slug: e.slug,
         name: e.name,
+        // The address a peer Claude instance can message this session
+        // by directly; null = not addressable, use `wt claude send`.
+        agent_name: claudeAgentAddress(match?.name, expected),
         // Listed = a live tmux session (that's what listSessions sees).
         alive: true,
         // "busy"/"shell" mean the agent is mid-turn or running a task;

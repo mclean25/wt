@@ -189,6 +189,29 @@ export const claudeHarness: Harness = {
 };
 
 /**
+ * The name a live Claude session answers to when a PEER Claude instance
+ * addresses it directly (its agent listing / cross-session messaging) —
+ * i.e. the `--name` it actually registered, but only when that matches
+ * the wt-derived name `buildArgs` would have given it.
+ *
+ * Null means "not addressable by name": no live registered process, or
+ * a session whose label predates slug-derived naming (`primary`, a bare
+ * managed name) or that was started outside wt with no `--name` at all.
+ * Those are indistinguishable from other sessions' labels, so handing
+ * one out as an address would be worse than admitting there isn't one.
+ * Callers surface null as "reach it with `wt claude send`", which works
+ * regardless — and that's what makes the naming transition self-healing
+ * rather than a caveat every agent has to carry: the answer comes from
+ * the fleet, not from remembering which sessions predate the change.
+ */
+export function claudeAgentAddress(
+  registryName: string | null | undefined,
+  expected: string,
+): string | null {
+  return registryName != null && registryName === expected ? registryName : null;
+}
+
+/**
  * Parse a tmux session name and decide whether it represents a Claude
  * session for `slug`. Claude uses `<slug>` for primary and
  * `<slug>~<name>` for named. The `startsWith(`${slug}~`)` guard

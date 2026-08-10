@@ -113,7 +113,7 @@ States accept unique prefixes plus `nh`/`nt` aliases. `--clear` drops the record
 
 ### `wt fleet`
 
-The [manager session](manager.md)'s single audit surface: one row per live worktree joining the **asserted** work status (state, note, risk, `at`, staleness vs HEAD) with observable **reality** — the primary Claude session's liveness (`alive`/`busy`/`last_activity`, the same signals as `wt claude ls --json`) and the PR (number, title, draft, merge state, mergeability, CI rollup), all from the same single batched GraphQL round trip the TUI uses (never per-row `gh` calls). Rows sort ready-first, then needs-human (the TUI's urgency ranking), and the recently-removed rows ride along like on every fleet surface.
+The [manager session](manager.md)'s single audit surface: one row per live worktree joining the **asserted** work status (state, note, risk, `at`, staleness vs HEAD) with observable **reality** — the primary Claude session's liveness (`alive`/`busy`/`last_activity`/`agent_name`, the same signals as `wt claude ls --json`) and the PR (number, title, draft, merge state, mergeability, CI rollup), all from the same single batched GraphQL round trip the TUI uses (never per-row `gh` calls). Rows sort ready-first, then needs-human (the TUI's urgency ranking), and the recently-removed rows ride along like on every fleet surface.
 
 - `--json` — the contract. Live rows carry nested `work`, `session`, and `pr` objects; when GitHub is unreachable (no `gh`, not authenticated, fetch failure) rows still emit with `pr: null` plus a `pr_note` saying why — so "no PR" (`pr` and `pr_note` both null) stays distinguishable from "couldn't ask". Removed rows are the same `kind: "merged"|"removed"` entries as `wt ls --json`; live rows never carry `kind`.
 
@@ -190,7 +190,7 @@ Drive a worktree's Claude Code tmux session from scripts or other sessions.
 | sub | what it does |
 |---|---|
 | `send <slug> [text...]` | upsert the target's primary Claude session (cold-starts it if absent) and paste + submit the text; reads stdin when no text args (heredoc-friendly). Accepts a branch name in place of the slug, plus the repo-level session slugs `wt` / `main` / `dotfiles` / `manager` (the same targets `ls` lists; `manager` is the same session as `wt manager send`). A slug in the recent removed history answers with why it's gone ("archived on merge (#N, 2h ago)") instead of a bare "no worktree"; anything else errors naming the addressable set. Fire-and-forget |
-| `ls [--json]` | list slugs with a live Claude session. `--json` adds per-session `name`, `alive`, `busy`, and `last_activity` (the latter two from Claude's live process registry, matched by cwd + session name; `null` when the tmux session has no registered claude process) |
+| `ls [--json]` | list slugs with a live Claude session. `--json` adds per-session `name`, `agent_name`, `alive`, `busy`, and `last_activity` (the last two from Claude's live process registry, matched by cwd + session name; `null` when the tmux session has no registered claude process). `agent_name` is the label the session registered under **when it matches the name wt would have given it** — the address a peer Claude instance can message it by directly; `null` means there's no usable address (no registered process, or a session labelled before names became slug-derived) and `send` is the way to reach it |
 | `kill <slug>` | kill the worktree's primary Claude session |
 
 ---

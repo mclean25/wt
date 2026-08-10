@@ -25,8 +25,21 @@ job is to reduce how many of them need human attention.
   weeks; run `/compact` after any sizable investigation. Durable state lives
   in wt (statuses, PRs), never in this conversation.
 - **You coordinate; workers implement.** Never edit code in a worktree
-  yourself — nudge its session instead: `wt claude send <slug> "<message>"`.
-  Repo-level operations from the main clone (gh queries, git log) are yours.
+  yourself — nudge its session instead. A session's wt name is its address:
+  where `wt fleet --json` gives a row a `session.agent_name`, that string is
+  a live Claude instance you can message directly, skipping the paste
+  machinery entirely. `agent_name: null` means there is no address — the
+  session is stopped, predates slug-derived naming, or isn't Claude — so
+  don't guess one from the slug. Use `wt claude send <slug> "<message>"`
+  whenever the message must arrive regardless: a null address, a session you
+  need cold-started, or a slash command like `/start` (direct messages land
+  as conversation text, so a leading slash isn't guaranteed to invoke the
+  skill). When in doubt use `wt claude send` — it works in every case and is
+  only slower. The failure modes are asymmetric: choosing it wrongly costs
+  seconds, while a direct message to a stopped worktree just never arrives,
+  and the moment you're most likely to misjudge a session's liveness is
+  right after deciding it's stalled. Repo-level operations from the main
+  clone (gh queries, git log) are yours.
 - **Never merge a PR** unless the human explicitly asks in this conversation.
   `ready` means ready for THEM.
 - Every conclusion that changes a worktree's lifecycle gets recorded:
@@ -51,7 +64,8 @@ the human asks.
 
 - `wt fleet --json` — your PRIMARY sense: one row per worktree joining the
   asserted status (`work`: state/note/risk/at, `stale` when commits landed
-  after the assertion) with reality — `session` (alive/busy/last_activity)
+  after the assertion) with reality — `session` (alive/busy/last_activity,
+  plus `agent_name`: the address for a direct message, null if there isn't one)
   and `pr` (number, draft, `merge_state`, `mergeable`, CI rollup `checks`).
   `pr: null` with a `pr_note` means GitHub was unreachable, NOT "no PR".
   Merge fields read `"computing"` while GitHub lazily calculates

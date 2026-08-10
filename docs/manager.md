@@ -64,7 +64,7 @@ Everything is ordinary CLI surface, so any harness can drive it:
 - `wt status --all --json` — the status-only view (state, risk, note, staleness per worktree), plus recently-removed rows (`kind: "merged"|"removed"`, ≤48h) so an all-merged fleet doesn't read as an empty one.
 - `wt status <slug> <state> …` — assert on a worktree's behalf after acting on it (`--note-only` sharpens a note without touching state or timestamp).
 - `wt claude send <slug> "<text>"` — nudge a worktree's live session (also accepts the `wt`/`main`/`dotfiles`/`manager` repo-level slugs; an archived slug answers with why it's gone).
-- `wt claude ls --json` — live sessions with `busy` / `last_activity` per session.
+- `wt claude ls --json` — live sessions with `busy` / `last_activity` / `agent_name` per session.
 - `wt manager report [--ok|--warn|--err] "<text>"` — surface a terse result on the TUI's attention feed (the palette's report-back channel).
 - `gh` — PR state, merges (only when the human asked), CI.
 - Cross-session messaging, when the harness supports it — see below.
@@ -72,6 +72,8 @@ Everything is ordinary CLI surface, so any harness can drive it:
 ### Session names are addresses
 
 Every Claude session wt spawns is named after its wt identity: `<slug>` for a worktree's primary session, `<slug>~<name>` for a named one, the slot label for the `wt` / `main` / `dotfiles` / `manager` slots. That name is the `/resume` label, the process registry's `name`, and — the reason it's slug-derived rather than a generic `primary` — **the address peer Claude instances reach the session by**. An agent that can list its peers can therefore map a row straight back to a worktree, and message it without going through tmux at all.
+
+Don't derive that address from the slug, though: read it off `session.agent_name` in `wt fleet --json` (or `wt claude ls --json`). A session keeps whatever `--name` it was spawned with until it restarts, so a long-lived one can predate the naming convention and answer to `primary` — an address that belongs to no worktree in particular. wt is the only thing that can join those rows back to a slug, so it reports the address it can actually vouch for and `null` otherwise, and the reader needs no rule beyond "null means use `wt claude send`". That's the general shape to reach for: an agent asking the fleet beats an agent remembering a caveat.
 
 wt does not implement that transport, and shouldn't: it guarantees the names, nothing more. Direct messaging only reaches a session that is **already live**, only works for Claude, and delivers text into a conversation rather than typed input — so it cannot cold-start a stopped worktree, cannot invoke a slash command, and cannot carry wt's own traffic (automations, briefings, `[[actions]]`) since wt is a Bun process, not a Claude instance. Those all stay on tmux injection, which boots what it needs to and pastes as though the human typed it:
 
