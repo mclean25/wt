@@ -69,6 +69,24 @@ The query's successful inventory is persisted for offline startup and retained
 across refetch failures. SSH failure changes host health only: the host header
 renders a warning and session keys are disabled until a later poll succeeds.
 
+Fleet identity is separate from checkout access. `core/worktree-ref.ts` gives
+every row a location-aware ledger key: local rows retain their bare slug for
+on-disk compatibility, while remote rows use the stable SSH destination plus
+slug. `core/worktree-target.ts` is the shared row-facing target shape: common
+slug/branch/path/stage metadata plus a `local` or endpoint-carrying `remote`
+location. The list/cursor model builds one of these for every selectable
+worktree; feature code should branch only at its I/O boundary.
+
+Presentation/coordination state owned by this TUI (currently the archive
+ledger) uses the location-aware key, so remote rows participate like local rows
+without ever making their paths look local. Operations that need the checkout
+itself dispatch by target: direct calls for local rows, the target's captured
+endpoint for SSH rows. Remote query caches are likewise keyed by SSH host, not
+by the singleton config slot or display label. These are deliberate
+multiple-remote invariants even though the config currently accepts one
+`[remote]`: adding a second host should mean producing more targets/queries,
+not migrating identities or teaching features about a second remote-only model.
+
 `core/remote.ts` drives SSH, while `core/remote-protocol.ts` base64url-encodes
 the complete argv into a single shell-safe token. The remote `_remote` CLI
 entrypoint decodes that token and re-enters normal dispatch, avoiding any
@@ -78,7 +96,9 @@ dependency on remote login-shell quoting.
 finishes. F10/F11/F12 on a remote row use the hidden `_session` entrypoint;
 Cachy runs that one worktree's tmux session while `renderer-handoff.ts`
 suspends the Mac renderer. Detaching returns to the same Mac Inbox.
-`d` forwards the normal `wt rm` command after confirmation, preserving the
+`a` writes the location-aware key to the Mac's archive ledger; it is a view of
+this fleet, not a mutation of the remote checkout. `d` forwards the normal
+`wt rm` command after confirmation, preserving the
 remote installation's lock and dirty-work safeguards while explicitly leaving
 any SST stage intact.
 

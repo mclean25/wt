@@ -27,6 +27,8 @@ import { eventsOutputId, firehoseOutputId, indexOfOutput } from "../../core/outp
 import { stageUrl } from "../../core/stage.ts";
 import { closeHarnessSessionGracefully } from "../../core/tmux.ts";
 import { StatusKind } from "../../core/types.ts";
+import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
+import { worktreeTargetKey } from "../../core/worktree-target.ts";
 import { setAttentionSeen, stackIdFromSectionKey } from "../../core/wtstate.ts";
 import {
   isBareKey,
@@ -80,6 +82,7 @@ export type NormalKeysCtx = {
   currentItem: VisualItems["currentItem"];
   selectedPr: VisualItems["selectedPr"];
   selectedRemote: VisualItems["selectedRemote"];
+  currentTarget: VisualItems["currentTarget"];
   /** True when the selected remote's host is known-unreachable. */
   remoteUnavailable: boolean;
   selectedSection: VisualItems["selectedSection"];
@@ -125,7 +128,7 @@ export type NormalKeysCtx = {
   toggleAutomationsPaused: (slug: string) => Promise<boolean>;
   toggleStackAutomationsPaused: (stackId: string, memberSlugs: readonly string[]) => Promise<boolean>;
   // Actions on the row
-  toggleArchived: (slug: string) => Promise<{ archived: boolean }>;
+  toggleArchived: (key: string) => Promise<{ archived: boolean }>;
   toggleSectionFold: (key: string) => Promise<boolean>;
   refreshAiSummary: (slug: string) => Promise<boolean>;
   refreshTmuxSessions: () => Promise<void>;
@@ -144,6 +147,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     currentItem,
     selectedPr,
     selectedRemote,
+    currentTarget,
     remoteUnavailable,
     selectedSection,
     visualItems,
@@ -801,6 +805,29 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // `wt rm` command so its lock, dirty, and unpushed-work checks stay
     // authoritative.
     if (selectedRemote) {
+      if (isPlainLetter(k, "a")) {
+        if (!isRemoteSummary(selectedRemote)) {
+          toast("remote worktree is still being created", theme.warn, 1800);
+          return;
+        }
+        const slug = selectedRemote.slug;
+        const key = currentTarget
+          ? worktreeTargetKey(currentTarget)
+          : remoteWorktreeLedgerKey(selectedRemote.hostKey, slug);
+        toggleArchived(key).then(
+          ({ archived }) => {
+            const log = createLogger(`[remote:${selectedRemote.hostLabel}]`);
+            log.event.info(`${archived ? "archived" : "restored from archive"} ${slug}`);
+            toast(
+              archived ? `archived ${slug}` : `restored ${slug}`,
+              theme.info,
+              2000,
+            );
+          },
+          (err) => reportActionError("archive", err),
+        );
+        return;
+      }
       if (isPlainLetter(k, "d")) {
         if (!isRemoteSummary(selectedRemote)) {
           toast("remote worktree is still being created", theme.warn, 1800);
@@ -828,6 +855,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           kind: "confirm",
           pendingKey: force ? "remote-d!" : "remote-d",
           remoteSlug: selectedRemote.slug,
+          remoteEndpoint: selectedRemote.remote,
           title: force ? "force remove remote worktree" : "remove remote worktree",
           message: `Remove ${selectedRemote.slug} from ${selectedRemote.hostLabel}?`,
           detail: force
@@ -1090,7 +1118,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         );
         return;
       }
-      toggleArchived(slug).then(
+      toggleArchived(currentTarget ? worktreeTargetKey(currentTarget) : slug).then(
         ({ archived }) => {
           rowLog.event.info(archived ? "archived" : "restored from archive");
           toast(archived ? `archived ${slug}` : `restored ${slug}`, theme.info, 2000);

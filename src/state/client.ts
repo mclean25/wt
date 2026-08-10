@@ -37,7 +37,10 @@ export const CACHE_DB = config.paths.cacheDb;
 // also added required work-status fields (`workState` et al.) to the
 // persisted RemoteWorktreeSummary shape — independently bust-worthy,
 // covered by this same bump.
-const CACHE_BUSTER = "v10";
+// v11: remote inventories are keyed per SSH host and each summary captures
+// its complete endpoint. The old singleton-key rows cannot safely route an
+// operation once more than one remote exists.
+const CACHE_BUSTER = "v11";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

@@ -15,9 +15,8 @@ export async function enterRemoteWorktreeSession(opts: {
   target: "shell" | "diff" | "harness";
   harnessId: HarnessId;
 }): Promise<number> {
-  const remote = config.remote;
-  if (!remote) throw new Error("[remote] is not configured in config.toml");
   const { renderer, worktree, target, harnessId } = opts;
+  const remote = worktree.remote;
   await setWezTermTabTitle(
     `${NF.remote} ${worktree.slug} · ${remote.label}`,
     config.paths.weztermCli,

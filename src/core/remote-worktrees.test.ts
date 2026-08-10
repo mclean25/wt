@@ -19,9 +19,15 @@ describe("parseRemoteWorktrees", () => {
       pushed: true,
       ahead_of_base: 5,
       issue_url: null,
-    }]), "cachy");
+    }]), "Cachy", "cachy.internal");
     expect(rows[0]).toEqual({
-      hostLabel: "cachy",
+      remote: {
+        host: "cachy.internal",
+        label: "Cachy",
+        wtPath: "~/.wt/bin/wt",
+      },
+      hostKey: "cachy.internal",
+      hostLabel: "Cachy",
       slug: "remote-test",
       branch: "alex/remote-test",
       path: "/home/alex/dev/client-app-worktrees/remote-test",

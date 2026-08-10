@@ -7,6 +7,7 @@ import { createLogger } from "../core/logger.ts";
 import { config } from "../core/config.ts";
 import { perfSnapshotQuery, qk, remoteWorktreesQuery, useWtActions } from "../state/index.ts";
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
+import { remoteWorktreeLedgerKey } from "../core/worktree-ref.ts";
 
 import { Details } from "./panels/details.tsx";
 import { Footer, type FooterMode } from "./panels/footer.tsx";
@@ -86,7 +87,7 @@ type Props = {
 export function App({ onExit }: Props) {
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
-  const { rows, isLoading } = useWorktreeRows();
+  const { rows, archivedKeys, isLoading } = useWorktreeRows();
   const remoteWorktreeList = useQuery(remoteWorktreesQuery());
   const remoteUnavailable = remoteWorktreeList.isError;
   const remoteError = remoteWorktreeList.error?.message ?? null;
@@ -269,7 +270,7 @@ export function App({ onExit }: Props) {
 
   const {
     activeItems,
-    archivedRows,
+    archivedItems,
     reviewRequestRows,
     visualItems,
     cursorIndex,
@@ -278,6 +279,7 @@ export function App({ onExit }: Props) {
     selectedPr,
     selectedRemote,
     selectedSection,
+    currentTarget,
   } = useVisualItems({
     rows,
     foldedSections,
@@ -285,6 +287,7 @@ export function App({ onExit }: Props) {
     selectedKey: sel,
     remoteCreation,
     remoteWorktrees: remoteWorktreeList.data ?? [],
+    archivedKeys,
   });
 
   // Set of slugs whose action is in flight RIGHT NOW (no recent-window
@@ -490,9 +493,9 @@ export function App({ onExit }: Props) {
     invalidateWorktree,
     refreshAll,
     refreshGithub,
-    optimisticRemoveRemoteWorktree: (slug, run) =>
+    optimisticRemoveRemoteWorktree: (remote, slug, run) =>
       mutate<RemoteWorktreeSummary[]>({
-        filter: { queryKey: qk.remoteWorktrees() },
+        filter: { queryKey: qk.remoteWorktrees(remote.host) },
         patch: (prev) => prev?.filter((row) => row.slug !== slug),
         run,
       }),
@@ -771,6 +774,7 @@ export function App({ onExit }: Props) {
       currentItem,
       selectedPr,
       selectedRemote,
+      currentTarget,
       remoteUnavailable,
       selectedSection,
       visualItems,
@@ -826,9 +830,14 @@ export function App({ onExit }: Props) {
     remoteCreation && !remoteRows.some((row) => row.slug === remoteCreation.input)
       ? 1
       : 0;
+  const remoteArchivedCount = remoteRows.filter((row) =>
+    archivedKeys.has(remoteWorktreeLedgerKey(row.hostKey, row.slug)),
+  ).length;
   const activeCount =
-    rows.filter((r) => !r.archived).length + remoteRows.length + pendingRemoteCount;
-  const archivedCount = rows.filter((r) => r.archived).length;
+    rows.filter((r) => !r.archived).length +
+    (remoteRows.length - remoteArchivedCount) +
+    pendingRemoteCount;
+  const archivedCount = rows.filter((r) => r.archived).length + remoteArchivedCount;
   // The "refreshing" signal is the animated `RefreshWave` rendered after
   // this string (width = in-flight count); the title itself stays static
   // so it doesn't re-render on every count tick. `loading...` still wins
@@ -889,7 +898,7 @@ export function App({ onExit }: Props) {
         ) : (
           <WorktreeList
             items={activeItems}
-            archivedRows={archivedRows}
+            archivedItems={archivedItems}
             reviewRequests={reviewRequestRows}
             selectedIndex={cursorIndex}
             width={listWidth}

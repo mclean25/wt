@@ -11,6 +11,10 @@ import {
 } from "./work-status.ts";
 
 export type RemoteWorktreeSummary = {
+  /** Complete endpoint captured with the row; never resolve via a singleton. */
+  remote: RemoteConfig;
+  /** Stable SSH destination used for local fleet-ledger identity. */
+  hostKey: string;
   hostLabel: string;
   slug: string;
   branch: string;
@@ -85,6 +89,12 @@ function parseWorktreeJson(raw: string): unknown {
 export function parseRemoteWorktrees(
   raw: string,
   hostLabel: string,
+  hostKey: string = hostLabel,
+  remote: RemoteConfig = {
+    host: hostKey,
+    label: hostLabel,
+    wtPath: "~/.wt/bin/wt",
+  },
 ): RemoteWorktreeSummary[] {
   const value: unknown = parseWorktreeJson(raw);
   if (!Array.isArray(value)) throw new Error("remote wt ls returned non-array JSON");
@@ -122,6 +132,8 @@ export function parseRemoteWorktrees(
         ? "init"
         : null;
     return {
+      remote,
+      hostKey,
       hostLabel,
       slug: str("slug"),
       branch: str("branch"),
@@ -186,5 +198,5 @@ export async function fetchRemoteWorktrees(
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.trim() || result.stdout.trim() || `SSH exited ${result.exitCode}`);
   }
-  return parseRemoteWorktrees(result.stdout, remote.label);
+  return parseRemoteWorktrees(result.stdout, remote.label, remote.host, remote);
 }

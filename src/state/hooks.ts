@@ -573,21 +573,21 @@ export function useWtActions() {
      * new state before the caller's next render — cursor-follow logic
      * relies on this.
      */
-    async toggleArchived(slug: string): Promise<{ archived: boolean }> {
+    async toggleArchived(key: string): Promise<{ archived: boolean }> {
       let result: { archived: boolean } | null = null;
       await mutate<readonly string[]>({
         filter: { queryKey: qk.archive() },
         patch: (prev) => {
           const set = new Set(prev ?? []);
-          if (set.has(slug)) set.delete(slug);
-          else set.add(slug);
+          if (set.has(key)) set.delete(key);
+          else set.add(key);
           return [...set];
         },
         run: async () => {
           // Disk write is synchronous; wrapped in async so it slots
           // into the mutate pipeline. Errors propagate as throws and
           // trigger the rollback path.
-          result = toggleArchivedOnDisk(slug);
+          result = toggleArchivedOnDisk(key);
         },
       });
       // `result` is set inside `run` which always runs before mutate

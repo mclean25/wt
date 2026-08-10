@@ -89,6 +89,14 @@ cache. If the host sleeps or becomes unreachable, those rows remain visible as
 last-known state and are marked `host unavailable`; they are not interpreted as
 deleted worktrees.
 
+Fleet presentation state remains local to the controlling TUI. In particular,
+archiving a remote row records a location-aware (`host` + `slug`) key in the
+local `archive.json`; it does not move or mutate the checkout on the SSH host.
+Filesystem, Git, tmux, and destructive operations continue to execute remotely.
+The schema currently accepts one `[remote]`, but stored identity and query
+caches are host-qualified; future multiple-remote support will not conflate
+same-named worktrees or depend on display labels being unique.
+
 ```toml
 [remote]
 host = "cachy"                 # SSH host or ~/.ssh/config alias

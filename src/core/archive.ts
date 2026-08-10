@@ -4,10 +4,17 @@ import { dirname, join } from "node:path";
 import { config } from "./config.ts";
 import { withFileLock } from "./locks.ts";
 import { createLogger } from "./logger.ts";
+import {
+  isRemoteWorktreeLedgerKey,
+  remoteWorktreeLedgerKey,
+  remoteWorktreeLedgerPrefix,
+} from "./worktree-ref.ts";
 
 const ARCHIVE_FILE = join(config.paths.cacheRoot, "archive.json");
 const log = createLogger("[archive]");
 
+// `slugs` is retained as the on-disk field name for compatibility; entries
+// are location-aware ledger keys now, with local slugs remaining unchanged.
 type ArchiveFile = { slugs: string[] };
 
 /**
@@ -45,13 +52,13 @@ function withArchiveLock<T>(fn: () => T): T {
   return withFileLock("__archive__", fn);
 }
 
-/** Flip the archived flag for a slug; returns the new state. */
-export function toggleArchived(slug: string): { archived: boolean } {
+/** Flip the archived flag for a location-aware ledger key. */
+export function toggleArchived(key: string): { archived: boolean } {
   return withArchiveLock(() => {
     const set = readArchived();
-    const wasArchived = set.has(slug);
-    if (wasArchived) set.delete(slug);
-    else set.add(slug);
+    const wasArchived = set.has(key);
+    if (wasArchived) set.delete(key);
+    else set.add(key);
     writeArchived(set);
     return { archived: !wasArchived };
   });
@@ -96,6 +103,10 @@ export function reapArchived(liveSlugs: ReadonlySet<string>): void {
     const set = readArchived();
     let changed = false;
     for (const slug of set) {
+      // Remote entries are local fleet preferences whose checkouts are not
+      // visible to `git worktree list` on this host. They are reconciled by
+      // the remote inventory layer, never by the local startup sweep.
+      if (isRemoteWorktreeLedgerKey(slug)) continue;
       if (!liveSlugs.has(slug)) {
         set.delete(slug);
         changed = true;
@@ -103,5 +114,30 @@ export function reapArchived(liveSlugs: ReadonlySet<string>): void {
     }
     if (!changed) return;
     writeArchived(set);
+  });
+}
+
+/**
+ * Reap archive keys for one reachable remote host against its authoritative
+ * inventory. This is intentionally separate from the local startup sweep:
+ * an offline host must retain its last-known fleet preferences.
+ */
+export function reapRemoteArchived(
+  host: string,
+  liveSlugs: ReadonlySet<string>,
+): void {
+  withArchiveLock(() => {
+    const set = readArchived();
+    const prefix = remoteWorktreeLedgerPrefix(host);
+    const liveKeys = new Set(
+      [...liveSlugs].map((slug) => remoteWorktreeLedgerKey(host, slug)),
+    );
+    let changed = false;
+    for (const key of set) {
+      if (!key.startsWith(prefix) || liveKeys.has(key)) continue;
+      set.delete(key);
+      changed = true;
+    }
+    if (changed) writeArchived(set);
   });
 }

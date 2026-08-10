@@ -8,7 +8,7 @@
 import { existsSync } from "node:fs";
 
 import { actionRegistry } from "../../core/actions.ts";
-import { config } from "../../core/config.ts";
+import type { RemoteConfig } from "../../core/config.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { spawnBackgroundRemove } from "../../core/lifecycle.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
@@ -72,6 +72,7 @@ export type DestroyFlowsCtx = {
   refreshAll: () => Promise<void>;
   refreshGithub: () => Promise<void>;
   optimisticRemoveRemoteWorktree: (
+    remote: RemoteConfig,
     slug: string,
     run: () => Promise<void>,
   ) => Promise<void>;
@@ -103,15 +104,11 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
   } = ctx;
 
   async function doRemoteRemove(
+    remote: RemoteConfig,
     slug: string,
     opts: { force?: boolean } = {},
   ): Promise<void> {
-    const remote = config.remote;
-    const log = createLogger(`[remote:${remote?.label ?? "remote"}]`);
-    if (!remote) {
-      toast("[remote] is not configured", theme.warn, 2200);
-      return;
-    }
+    const log = createLogger(`[remote:${remote.label}]`);
 
     const force = opts.force ?? false;
     const args = [
@@ -124,7 +121,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     ];
     log.event.info(`removing ${slug}${force ? " (force)" : ""}`);
     try {
-      await optimisticRemoveRemoteWorktree(slug, async () => {
+      await optimisticRemoveRemoteWorktree(remote, slug, async () => {
         const code = await runRemoteWt(remote, args, {
           onLine: (line) => log.event.dim(line),
         });

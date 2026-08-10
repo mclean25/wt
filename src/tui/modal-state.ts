@@ -2,6 +2,7 @@ import type { ActionDef } from "../core/actions.ts";
 import type { HistoryEntry } from "../core/actions.ts";
 import type { WorkState } from "../core/work-status.ts";
 import type { RemovedWorktree } from "../core/wtstate.ts";
+import type { RemoteConfig } from "../core/config.ts";
 import type { ActionPickerState } from "./panels/action-picker.tsx";
 import type { ErrorInjectState } from "./panels/error-overlay.tsx";
 import type { PerfInjectState } from "./panels/perf.tsx";
@@ -51,6 +52,7 @@ export type Modal =
       reviewBranch?: string;
       /** Remote target for the `remote-d` / `remote-d!` pending keys. */
       remoteSlug?: string;
+      remoteEndpoint?: RemoteConfig;
       /** Payload for the `restore` pendingKey (removed-worktrees view). */
       restoreEntry?: RemovedWorktree;
     }

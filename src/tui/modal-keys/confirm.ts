@@ -122,10 +122,18 @@ export function handleConfirmKey(
         void doRemove(slug);
       } else if (pending === "d!" && slug) {
         void doRemove(slug, { force: true });
-      } else if (pending === "remote-d" && modal.remoteSlug) {
-        void doRemoteRemove(modal.remoteSlug);
-      } else if (pending === "remote-d!" && modal.remoteSlug) {
-        void doRemoteRemove(modal.remoteSlug, { force: true });
+      } else if (
+        pending === "remote-d" &&
+        modal.remoteSlug &&
+        modal.remoteEndpoint
+      ) {
+        void doRemoteRemove(modal.remoteEndpoint, modal.remoteSlug);
+      } else if (
+        pending === "remote-d!" &&
+        modal.remoteSlug &&
+        modal.remoteEndpoint
+      ) {
+        void doRemoteRemove(modal.remoteEndpoint, modal.remoteSlug, { force: true });
       } else if (pending === "e" && slug) {
         void doMarkReady(slug);
       } else if (pending === "E" && slug) {

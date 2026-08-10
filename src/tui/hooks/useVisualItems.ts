@@ -3,9 +3,15 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { ReviewRequestPr } from "../../core/github.ts";
 import { reviewRequestsQuery } from "../../state/index.ts";
-import type { ListActiveItem } from "../panels/list.tsx";
+import type { FleetWorktreeItem, ListActiveItem } from "../panels/list.tsx";
 import type { RemoteCreation } from "../remote-creation.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
+import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
+import {
+  localWorktreeTarget,
+  remoteWorktreeTarget,
+  type WorktreeTarget,
+} from "../../core/worktree-target.ts";
 import { remoteEntryKey } from "../remote-creation.ts";
 import {
   GROUP_INBOX,
@@ -13,6 +19,9 @@ import {
 } from "./useWorktreeRows.ts";
 
 export type VisualItem = ListActiveItem | { kind: "pr"; pr: ReviewRequestPr };
+export type ArchivedItem =
+  | { kind: "wt"; row: WorktreeRow; target: WorktreeTarget }
+  | { kind: "remote"; entry: RemoteWorktreeSummary; target: WorktreeTarget };
 export type SelectedSection = Extract<ListActiveItem, { kind: "section" }>;
 
 export function visualKey(item: VisualItem): string {
@@ -32,6 +41,7 @@ type UseVisualItemsArgs = {
   selectedKey: string | null;
   remoteCreation: RemoteCreation | null;
   remoteWorktrees: readonly RemoteWorktreeSummary[];
+  archivedKeys: ReadonlySet<string>;
 };
 
 export function useVisualItems({
@@ -41,6 +51,7 @@ export function useVisualItems({
   selectedKey,
   remoteCreation,
   remoteWorktrees,
+  archivedKeys,
 }: UseVisualItemsArgs) {
   // When the selected slug disappears, this ref snaps the cursor to the
   // row that took its place rather than jumping to the top of the list.
@@ -53,18 +64,29 @@ export function useVisualItems({
   );
 
   const archivedRows = useMemo(() => rows.filter((r) => r.archived), [rows]);
+  const archivedRemoteRows = useMemo(
+    () =>
+      remoteWorktrees.filter((row) =>
+        archivedKeys.has(remoteWorktreeLedgerKey(row.hostKey, row.slug)),
+      ),
+    [remoteWorktrees, archivedKeys],
+  );
 
   // Active portion, with folded sections collapsed to one `section` item each.
   // This is the single source of truth shared by the cursor model and the list.
   const activeItems = useMemo<ListActiveItem[]>(() => {
     const activeRows = rows.filter((r) => !r.archived);
     const out: ListActiveItem[] = [];
-    for (const entry of remoteWorktrees) out.push({ kind: "remote", entry });
+    for (const entry of remoteWorktrees) {
+      if (!archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug))) {
+        out.push({ kind: "remote", entry, target: remoteWorktreeTarget(entry) });
+      }
+    }
     if (
       remoteCreation &&
       !remoteWorktrees.some((row) => row.slug === remoteCreation.input)
     ) {
-      out.push({ kind: "remote", entry: remoteCreation });
+      out.push({ kind: "remote", entry: remoteCreation, target: null });
     }
     const emitted = new Set<string>();
     for (const r of activeRows) {
@@ -85,17 +107,39 @@ export function useVisualItems({
           rows: activeRows.filter((x) => (x.section ?? GROUP_INBOX) === sec),
         });
       } else {
-        out.push({ kind: "wt", row: r });
+        out.push({ kind: "wt", row: r, target: localWorktreeTarget(r.wt) });
       }
     }
     return out;
-  }, [rows, foldedSections, stackSectionLabels, remoteCreation, remoteWorktrees]);
+  }, [
+    rows,
+    foldedSections,
+    stackSectionLabels,
+    remoteCreation,
+    remoteWorktrees,
+    archivedKeys,
+  ]);
+
+  const archivedItems = useMemo<ArchivedItem[]>(
+    () => [
+      ...archivedRows.map((row) => ({
+        kind: "wt" as const,
+        row,
+        target: localWorktreeTarget(row.wt),
+      })),
+      ...archivedRemoteRows.map((entry) => ({
+        kind: "remote" as const,
+        entry,
+        target: remoteWorktreeTarget(entry),
+      })),
+    ],
+    [archivedRows, archivedRemoteRows],
+  );
 
   const visualItems = useMemo<VisualItem[]>(() => {
     const prs: VisualItem[] = reviewRequestRows.map((pr) => ({ kind: "pr", pr }));
-    const archived: VisualItem[] = archivedRows.map((r) => ({ kind: "wt", row: r }));
-    return [...activeItems, ...prs, ...archived];
-  }, [activeItems, reviewRequestRows, archivedRows]);
+    return [...activeItems, ...prs, ...archivedItems];
+  }, [activeItems, reviewRequestRows, archivedItems]);
 
   // Resolve the selected key to a visual index. When the key isn't in
   // the current visible set, fall back to the last known visual index,
@@ -128,6 +172,14 @@ export function useVisualItems({
     currentItem?.kind === "remote" ? currentItem.entry : undefined;
   const selectedSection =
     currentItem?.kind === "section" ? currentItem : undefined;
+  const currentTarget =
+    currentItem?.kind === "wt" || currentItem?.kind === "remote"
+      ? currentItem.target ?? undefined
+      : undefined;
+  const currentFleetRow: FleetWorktreeItem | undefined =
+    currentItem?.kind === "wt" || currentItem?.kind === "remote"
+      ? currentItem
+      : undefined;
 
   // Render-time write is derived from this render's inputs and mirrors the
   // previous in-app cursor model.
@@ -137,7 +189,7 @@ export function useVisualItems({
 
   return {
     activeItems,
-    archivedRows,
+    archivedItems,
     reviewRequestRows,
     visualItems,
     cursorIndex,
@@ -146,5 +198,7 @@ export function useVisualItems({
     selectedPr,
     selectedRemote,
     selectedSection,
+    currentTarget,
+    currentFleetRow,
   };
 }

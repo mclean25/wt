@@ -7,8 +7,9 @@
 export const qk = {
   /** All worktrees (from `git worktree list`). */
   worktrees: () => ["worktrees"] as const,
-  /** Worktrees owned by the configured SSH host. */
-  remoteWorktrees: () => ["remoteWorktrees"] as const,
+  /** Worktrees owned by one SSH host; no arg is the all-hosts prefix. */
+  remoteWorktrees: (host?: string) =>
+    host ? (["remoteWorktrees", host] as const) : (["remoteWorktrees"] as const),
   /**
    * Set of slug names with a live interactive tmux session on the
    * wt-private server. One CLI call per refresh regardless of worktree

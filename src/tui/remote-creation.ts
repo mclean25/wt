@@ -1,7 +1,10 @@
+import type { RemoteConfig } from "../core/config.ts";
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
 
 /** Transient row shown until remote `wt ls` discovers the real checkout. */
 export type RemoteCreation = {
+  remote: RemoteConfig;
+  hostKey: string;
   hostLabel: string;
   input: string;
   status: "creating" | "ready";
@@ -16,7 +19,7 @@ export function isRemoteSummary(
 }
 
 export function remoteEntryKey(entry: RemoteListEntry): string {
-  return `${entry.hostLabel}:${isRemoteSummary(entry) ? entry.slug : entry.input}`;
+  return `${entry.hostKey}:${isRemoteSummary(entry) ? entry.slug : entry.input}`;
 }
 
 export function remoteEntryLabel(entry: RemoteListEntry): string {

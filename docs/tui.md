@@ -34,7 +34,7 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `o` | open the worktree in Zed |
 | `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning when dirty/unpushed) |
 | `c` | clean all merged/gone worktrees (confirm) |
-| `a` | archive / restore the row |
+| `a` | archive / restore the row, local or remote; archive placement belongs to this TUI's local fleet ledger, while a remote checkout remains untouched on its host |
 | `i` | open the most specific issue — the attached GitHub issue (`wt issue --gh`) when present, else the primary tracker issue |
 | `I` | open the primary tracker issue (needs `[issue_tracker]` with a URL template, or a `gh-`prefixed slug id) |
 | `s` | open the deployed stage URL, or the running `[dev_server]` URL when no stage is deployed |
@@ -197,4 +197,3 @@ Confirm modals follow the same muscle-memory rule in reverse: the key that opene
 Every text input (the `n`/`N`/`Ctrl+N` new-worktree prompt, `L` section rename, `u m` status notes, `! c` custom prompts and action args, `; c` session names, help search) shares one line editor: `←`/`→` move the cursor, `Home`/`End` (or `Ctrl+A`/`Ctrl+E`) jump to the ends, `Opt/Alt+←`/`→` (or `Esc B`/`Esc F`, or `Ctrl+←`/`→`) jump by word, `Backspace`/`Delete` edit at the cursor, and `Opt/Alt+Backspace` deletes the word left. Word boundaries are slug- and sentence-aware: `-`, `_`, and spaces all separate words. Backspace on an already-empty input still backs out of the prompt.
 
 The title bar's `auto ⏸` chip (inverse, warn-colored) means all automations are paused — a fleet-tier fact deliberately louder than the CPU/usage telemetry next to it.
-

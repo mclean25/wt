@@ -130,6 +130,8 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
 
     const remoteLog = createLogger(`[remote:${remote.label}]`);
     setRemoteCreation({
+      remote,
+      hostKey: remote.host,
       hostLabel: remote.label,
       input: parsed.input,
       status: "creating",

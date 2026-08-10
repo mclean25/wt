@@ -206,6 +206,7 @@ const EMPTY_STATE_SLUGS: WtState["slugs"] = {};
 
 export type WorktreeRowsResult = {
   rows: WorktreeRow[];
+  archivedKeys: ReadonlySet<string>;
   isLoading: boolean;
 };
 
@@ -846,6 +847,8 @@ export function useWorktreeRows(): WorktreeRowsResult {
 
   return {
     rows,
+    /** Location-aware keys from the local fleet archive ledger. */
+    archivedKeys: archivedSet,
     isLoading: wtList.isLoading,
   };
 }

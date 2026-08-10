@@ -32,6 +32,8 @@ import { STACK_CONNECTOR, stackOrdinalLabel } from "../../core/stack-layout.ts";
 import { StatusKind, type Status } from "../../core/types.ts";
 import type { ActiveSessionGlyph } from "../hooks/useHarnessSessions.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import type { ArchivedItem } from "../hooks/useVisualItems.ts";
+import type { WorktreeTarget } from "../../core/worktree-target.ts";
 import {
   isRemoteSummary,
   remoteEntryKey,
@@ -44,9 +46,12 @@ import {
  * folded section collapsed to a single selectable header line. The parent * (via `tui/hooks/useVisualItems.ts`) builds this so the cursor model and the render share one source
  * of truth — a folded section is one cursor stop, not N hidden rows.
  */
+export type FleetWorktreeItem =
+  | { kind: "wt"; row: WorktreeRow; target: WorktreeTarget }
+  | { kind: "remote"; entry: RemoteListEntry; target: WorktreeTarget | null };
+
 export type ListActiveItem =
-  | { kind: "wt"; row: WorktreeRow }
-  | { kind: "remote"; entry: RemoteListEntry }
+  | FleetWorktreeItem
   | {
       kind: "section";
       /** Synthetic section key (`stackSectionKey(stackId)` or a manual name). */
@@ -74,8 +79,8 @@ type Props = {
   items: readonly ListActiveItem[];
   /** Populated with the pane's scroll-to-edge control (see `ListScrollHandle`). */
   scrollHandle?: RefObject<ListScrollHandle | null>;
-  /** The archived block (never folded). */
-  archivedRows: readonly WorktreeRow[];
+  /** Local and remote fleet members in the archived block (never folded). */
+  archivedItems: readonly ArchivedItem[];
   /**
    * PRs the user has been asked to review. Pinned in their own section
    * between the active worktrees and the archived block. Not worktrees
@@ -84,7 +89,7 @@ type Props = {
    */
   reviewRequests: readonly ReviewRequestPr[];
   /**
-   * Combined cursor index across `items + reviewRequests + archivedRows` in
+   * Combined cursor index across `items + reviewRequests + archivedItems` in
    * render order. Parent owns the unification so navigation handlers can pick
    * the right item type by index without the list panel re-implementing it.
    */
@@ -412,10 +417,12 @@ const RemoteRowView = memo(function RemoteRowView({
   entry,
   selected,
   panelWidth,
+  archived = false,
 }: {
   entry: RemoteListEntry;
   selected: boolean;
   panelWidth: number;
+  archived?: boolean;
 }) {
   const status: Status = isRemoteSummary(entry)
     ? {
@@ -443,7 +450,8 @@ const RemoteRowView = memo(function RemoteRowView({
   const rawLabel = remoteEntryLabel(entry);
   const { id, rest } = slugLabel(rawLabel);
   const numId = id ? id.replace(/^[A-Z]+-/, "") : null;
-  const label = numId ? `${numId}: ${rest || rawLabel}` : rest || rawLabel;
+  const baseLabel = numId ? `${numId}: ${rest || rawLabel}` : rest || rawLabel;
+  const label = archived ? `${entry.hostLabel} · ${baseLabel}` : baseLabel;
   return (
     <box
       id={`remote:${remoteEntryKey(entry)}`}
@@ -453,14 +461,14 @@ const RemoteRowView = memo(function RemoteRowView({
       backgroundColor={selected ? theme.rowSelectedBg : undefined}
     >
       <box width={2} flexShrink={0}>
-        <text fg={marker.fg}>{marker.glyph}</text>
+        <text fg={archived ? theme.fgDim : marker.fg}>{marker.glyph}</text>
       </box>
       <box width={1} flexShrink={0}>
         <text> </text>
       </box>
       <box flexGrow={1} flexShrink={1} overflow="hidden">
         <text
-          fg={selected ? theme.fgBright : theme.fg}
+          fg={selected ? theme.fgBright : archived ? theme.fgDim : theme.fg}
           attributes={selected ? TextAttributes.BOLD : 0}
           wrapMode="none"
         >
@@ -474,11 +482,11 @@ const RemoteRowView = memo(function RemoteRowView({
 const REMOTE_SECTION_PREFIX = "\0remote:";
 
 function remoteSectionKey(entry: RemoteListEntry): string {
-  return `${REMOTE_SECTION_PREFIX}${entry.hostLabel}`;
+  return `${REMOTE_SECTION_PREFIX}${entry.hostKey}`;
 }
 
-export function WorktreeList({ items, archivedRows, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, stackSectionLabels, isLoading, remoteUnavailable, scrollHandle }: Props) {
-  const hasArchived = archivedRows.length > 0;
+export function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, stackSectionLabels, isLoading, remoteUnavailable, scrollHandle }: Props) {
+  const hasArchived = archivedItems.length > 0;
   const hasReviewRequests = reviewRequests.length > 0;
   const hasActive = items.length > 0;
   // An empty list says WHY it's empty when the removed history shows
@@ -495,7 +503,7 @@ export function WorktreeList({ items, archivedRows, reviewRequests, selectedInde
     [emptyFleet],
   );
   // Index offsets into the combined cursor space owned by the parent
-  // (`items + reviewRequests + archivedRows`).
+  // (`items + reviewRequests + archivedItems`).
   const reviewOffset = items.length;
   const archivedOffset = reviewOffset + reviewRequests.length;
   // Keep the selected entry scrolled into view. The whole list (active +
@@ -519,15 +527,22 @@ export function WorktreeList({ items, archivedRows, reviewRequests, selectedInde
           : `section:${selItem.sectionKey}`
       : selectedIndex < archivedOffset
         ? reviewRequests[selectedIndex - reviewOffset]?.url
-        : archivedRows[selectedIndex - archivedOffset]?.wt.slug;
-  // Depend on `items`/`reviewRequests`/`archivedRows` (identity-stable per
+        : (() => {
+            const archived = archivedItems[selectedIndex - archivedOffset];
+            return archived?.kind === "wt"
+              ? archived.row.wt.slug
+              : archived
+                ? `remote:${remoteEntryKey(archived.entry)}`
+                : undefined;
+          })();
+  // Depend on `items`/`reviewRequests`/`archivedItems` (identity-stable per
   // render of the parent) as well as the selected id, so a reflow under a
   // stationary selection — a row inserted above, a section folding/unfolding,
   // an active↔archived split shift — re-runs the follow instead of leaving
   // the cursor drifted off-screen.
   useEffect(() => {
     if (selectedChildId) listRef.current?.scrollChildIntoView(selectedChildId);
-  }, [selectedChildId, items, reviewRequests, archivedRows]);
+  }, [selectedChildId, items, reviewRequests, archivedItems]);
   return (
     <box
       flexDirection="column"
@@ -720,8 +735,20 @@ export function WorktreeList({ items, archivedRows, reviewRequests, selectedInde
                 <box flexGrow={1} flexShrink={0} minHeight={1} />
               ) : null}
               <Divider label="Archived" width={width} />
-              {archivedRows.map((row, i) => {
+              {archivedItems.map((item, i) => {
                 const globalIndex = archivedOffset + i;
+                if (item.kind === "remote") {
+                  return (
+                    <RemoteRowView
+                      key={`remote:${remoteEntryKey(item.entry)}`}
+                      entry={item.entry}
+                      selected={globalIndex === selectedIndex}
+                      panelWidth={width}
+                      archived
+                    />
+                  );
+                }
+                const row = item.row;
                 return (
                   <RowView
                     key={row.wt.slug}

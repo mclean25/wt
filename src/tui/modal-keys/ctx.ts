@@ -11,6 +11,7 @@ import type { PickerItem } from "../panels/action-picker.tsx";
 import type { PickerRow } from "../panels/sessions-picker.tsx";
 import type { SectionPickerItem } from "../panels/section-picker.tsx";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import type { RemoteConfig } from "../../core/config.ts";
 
 export type SimpleModalContext = {
   setModal: Dispatch<SetStateAction<Modal | null>>;
@@ -38,7 +39,11 @@ export type SimpleModalContext = {
   doYank: (slug: string, label: string, value: string | null) => void;
   doClean: () => void;
   doRemove: (slug: string, opts?: { force?: boolean }) => Promise<void>;
-  doRemoteRemove: (slug: string, opts?: { force?: boolean }) => Promise<void>;
+  doRemoteRemove: (
+    remote: RemoteConfig,
+    slug: string,
+    opts?: { force?: boolean },
+  ) => Promise<void>;
   doAutoMerge: (slug: string, mode: "enable" | "disable") => Promise<void>;
   doMarkReady: (slug: string) => Promise<void>;
   doShipPr: (slug: string) => Promise<void>;
