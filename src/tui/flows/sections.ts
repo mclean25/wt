@@ -23,7 +23,7 @@ import { theme } from "../theme.ts";
 type SectionFlowsCtx = {
   rows: WorktreeRow[];
   current: WorktreeRow | undefined;
-  selectedSection: { sectionKey: string; isStack: boolean } | undefined;
+  selectedSection: { sectionKey: string } | undefined;
   wtState: WtState | undefined;
   lastMoveTarget: string | null;
   setLastMoveTarget: (v: string | null) => void;
@@ -156,11 +156,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
    */
   function doShiftMove(dir: -1 | 1): void {
     if (selectedSection) {
-      doMoveGroup(
-        selectedSection.sectionKey,
-        dir,
-        selectedSection.isStack ? "stack" : "section",
-      );
+      doMoveGroup(selectedSection.sectionKey, dir, "section");
       return;
     }
     if (!current) return;

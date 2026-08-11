@@ -777,7 +777,6 @@ export function App({ onExit }: Props) {
       selectedRemote,
       currentTarget,
       remoteUnavailable,
-      selectedSection,
       visualItems,
       cursorIndex,
       currentSlug,

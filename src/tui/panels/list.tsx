@@ -12,7 +12,6 @@ import { TextAttributes } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
 import { type Badge, checkBadge, statusBadge, workStatusBadge } from "../badges.ts";
-import { isWorkStatusStale } from "../../core/work-status.ts";
 import {
   recentlyRemovedWorktrees,
   recentRemovalsSummary,
@@ -23,17 +22,17 @@ import {
   badgeClusterCells,
   remoteBadgeClusterCells,
 } from "../badge-cluster.tsx";
+import { StackConnector, StatusMarker, stackGutterCells } from "../row-gutter.tsx";
 import { WtScrollbox } from "../scrollbox.tsx";
 import { useScrollToEdge } from "../hooks/useScrollToEdge.ts";
 import { NF } from "../icons.ts";
 import { Divider } from "./section-divider.tsx";
 import { truncateEnd } from "../text.ts";
-import { laneColor, theme } from "../theme.ts";
+import { theme } from "../theme.ts";
 import type { HarnessId } from "../../core/harness/index.ts";
 import type { DerivedState } from "../../core/harness/status.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import { capitalizeFirst, slugLabel } from "../../core/stage.ts";
-import { STACK_CONNECTOR } from "../../core/stack-layout.ts";
 import { StatusKind, type Status } from "../../core/types.ts";
 import type { GithubData } from "../../state/queries/github.ts";
 import type { ActiveSessionGlyph } from "../hooks/useHarnessSessions.ts";
@@ -60,10 +59,9 @@ export type ListActiveItem =
   | FleetWorktreeItem
   | {
       kind: "section";
-      /** Synthetic section key (`stackSectionKey(stackId)` or a manual name). */
+      /** Section name, or the inbox sentinel. */
       sectionKey: string;
-      isStack: boolean;
-      /** Resolved header label (stack: issue + AI title; manual: the name). */
+      /** Header label (the section name, or "Inbox"). */
       label: string;
       /** The collapsed member rows (for the count + the detail-pane summary). */
       rows: WorktreeRow[];
@@ -115,124 +113,12 @@ type Props = {
    * color.
    */
   activeSessionBySlug: ReadonlyMap<string, ActiveSessionGlyph>;
-  /**
-   * Stack-section header label (issue + progress, with the AI title
-   * woven in when resolved), keyed by the synthetic stack section key
-   * (`stackSectionKey(stackId)`). Every managed stack has an entry, so
-   * the divider never falls back to rendering the raw NUL-prefixed key.
-   */
   isLoading: boolean;
   /** The SSH inventory refetch failed; last-known remote rows stay visible. */
   remoteUnavailable: boolean;
   /** One repo-wide GitHub snapshot covering local and remote branches. */
   githubData?: GithubData;
 };
-
-/**
- * Whether the git-derived status keeps the left glyph slot: the rare,
- * loud states (busy op / path missing / branch gone / merged) still
- * render their glyph there. `dirty` moved to the badge cluster and
- * `clean` renders nothing — the slot's steady-state occupant is the
- * work-status dot (`workStatusBadge`).
- */
-function statusKeepsGutter(kind: StatusKind): boolean {
-  return kind !== StatusKind.Dirty && kind !== StatusKind.Clean;
-}
-
-/** Stale signal for the row's work-status dot (see `isWorkStatusStale`). */
-function rowWorkStale(row: WorktreeRow): boolean {
-  return isWorkStatusStale(row.work, row.fields.gitActivity.data?.lastCommitMs ?? null);
-}
-
-/**
- * Leftmost glyph — the loud git states (busy / missing / gone /
- * merged) when present, else the work-status dot (a dim hollow
- * default when nothing is asserted, so the column never has holes).
- * Background refetch state is hinted via the spinner badge in the
- * right cluster instead, so it doesn't masquerade as a primary
- * status. Archived rows render dim.
- */
-function StatusMarker({
-  row,
-  sessionState,
-}: {
-  row: WorktreeRow;
-  sessionState: DerivedState | undefined;
-}) {
-  const base = statusKeepsGutter(row.status.kind)
-    ? statusBadge(row.status)
-    : workStatusBadge(row.work, sessionState, rowWorkStale(row));
-  const fg = row.archived ? theme.fgDim : base.fg;
-  return <text fg={fg}>{base.glyph}</text>;
-}
-
-/**
- * Stack connector gutter — a structural rail drawn to the LEFT of the
- * status dot, never in place of it.
- *
- * It used to REPLACE the dot with a connector + `01`/`02` ordinal,
- * which cost stacked rows the one glyph the board is scanned by: two
- * worktrees could both be ready/high and blocked on a human and render
- * with no status indicator at all, purely because they were stack
- * parents. Stacked work was invisible to the primary scanning
- * behaviour.
- *
- * The ordinals are gone too, and that's a correctness fix rather than a
- * preference: `01/02/03` asserts a linear chain, but a fork's children
- * are SIBLINGS off one parent with no order between them. Numbering
- * them claims a merge order that doesn't exist, and a reader who trusts
- * it can sequence dependent work backwards. Depth expresses fan vs
- * chain for free and can't lie: siblings share a column, a chain steps
- * right. If ordinals are ever wanted, derive them from merge EDGES,
- * which actually encode order — stack position never did.
- *
- * `cells` is the gutter width the whole list shares (see
- * `stackGutterCells`), so the dot column stays straight across stacked
- * and unstacked rows and the eye still runs down it. The connector sits
- * at `depth - 1`; a root (depth 0) draws none.
- */
-function StackConnector({
-  row,
-  cells,
-  split,
-}: {
-  row: WorktreeRow;
-  cells: number;
-  split: boolean;
-}) {
-  if (cells === 0) return null;
-  // A member whose parent sits in a DIFFERENT section draws no rail:
-  // the spine would point at a row that isn't above it (or on screen at
-  // all). Splits are legitimate — finished parents in a verification
-  // bucket, unstarted children in a backlog — so the relationship is
-  // carried by a parent reference on the label instead, and the rail is
-  // reserved for members actually adjacent to their parent.
-  const info = split ? null : row.stack;
-  const col = info ? Math.min(info.depth - 1, cells - 1) : -1;
-  return (
-    <box flexShrink={0} flexDirection="row">
-      {Array.from({ length: cells }, (_, i) => (
-        <box key={i} width={1} flexShrink={0}>
-          <text fg={info ? laneColor(info.lane) : theme.fgDim}>
-            {info && i === col ? STACK_CONNECTOR[info.pos] : " "}
-          </text>
-        </box>
-      ))}
-    </box>
-  );
-}
-
-/**
- * Width of the shared stack gutter: enough columns for the deepest
- * visible stack, capped so a pathological chain can't eat the label
- * column, and ZERO when nothing on screen is stacked — a board with no
- * stacks pays nothing for the feature.
- */
-export function stackGutterCells(rows: readonly WorktreeRow[]): number {
-  let max = 0;
-  for (const r of rows) if (r.stack) max = Math.max(max, r.stack.depth);
-  return Math.min(max, 3);
-}
 
 /**
  * Row label text. Prefers the LLM-authored `brief` (caveman-talk noun
@@ -269,8 +155,15 @@ export function rowLabel(row: WorktreeRow): string {
  * dropped on every board that has one.
  */
 const SECTION_REF_CELLS = 20;
-/** Leader for the reference; counted against the row's width budget. */
+/**
+ * Leader for the reference, and a cell held back from the label so the
+ * row never lands exactly on its computed budget. `budget` is an
+ * arithmetic estimate of a width flexbox actually decides; being one
+ * cell optimistic squeezes out the arrow's leading space on precisely
+ * the rows whose label fills its allowance, which is most of them.
+ */
 const REF_ARROW = " → ";
+const REF_SLACK = 1;
 /** What the inbox is called on screen — divider and reference alike. */
 const INBOX_LABEL = "Inbox";
 /** Below this the reference is more mystery than signal — drop it. */
@@ -340,12 +233,15 @@ const RowView = memo(function RowView({
     0,
     panelWidth - 8 - gutterCells - badgeClusterCells(row, actionRunning, activeHarnessId),
   );
-  const refRoom = Math.min(SECTION_REF_CELLS, budget - MIN_LABEL_CELLS - REF_ARROW.length);
+  const refRoom = Math.min(
+    SECTION_REF_CELLS,
+    budget - MIN_LABEL_CELLS - REF_ARROW.length - REF_SLACK,
+  );
   const parentRef =
     splitParentSection && refRoom >= SECTION_REF_MIN
       ? `${REF_ARROW}${truncateEnd(splitParentSection, refRoom)}`
       : "";
-  const labelCells = budget - parentRef.length;
+  const labelCells = budget - parentRef.length - (parentRef ? REF_SLACK : 0);
   return (
     <box
       id={row.wt.slug}
@@ -355,18 +251,7 @@ const RowView = memo(function RowView({
       paddingRight={1}
     >
       <StackConnector row={row} cells={gutterCells} split={splitParentSection !== null} />
-      <box flexShrink={0} flexDirection="row">
-        {/* Mirror the right-cluster pattern: width=2 box for the icon,
-            then a width=1 box for the gap. Same shape that produces
-            tight left-aligned icons over there. Every row gets this,
-            stacked or not, so the dot column never has holes. */}
-        <box width={2} flexShrink={0}>
-          <StatusMarker row={row} sessionState={sessionState} />
-        </box>
-        <box width={1} flexShrink={0}>
-          <text> </text>
-        </box>
-      </box>
+      <StatusMarker row={row} sessionState={sessionState} />
       <box flexGrow={1} flexShrink={1} overflow="hidden" flexDirection="row">
         {/* Truncation lives in JS, not opentui's native `truncate`,
             because the native path middle-clips with `…`. We want the

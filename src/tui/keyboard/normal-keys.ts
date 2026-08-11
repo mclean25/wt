@@ -29,7 +29,7 @@ import { closeHarnessSessionGracefully } from "../../core/tmux.ts";
 import { StatusKind } from "../../core/types.ts";
 import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 import { worktreeTargetKey } from "../../core/worktree-target.ts";
-import { setAttentionSeen, stackIdFromSectionKey } from "../../core/wtstate.ts";
+import { setAttentionSeen } from "../../core/wtstate.ts";
 import {
   isBareKey,
   isBareShiftedKey,
@@ -86,7 +86,6 @@ export type NormalKeysCtx = {
   currentTarget: VisualItems["currentTarget"];
   /** True when the selected remote's host is known-unreachable. */
   remoteUnavailable: boolean;
-  selectedSection: VisualItems["selectedSection"];
   visualItems: VisualItems["visualItems"];
   cursorIndex: VisualItems["cursorIndex"];
   currentSlug: string | undefined;
@@ -150,7 +149,6 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     selectedRemote,
     currentTarget,
     remoteUnavailable,
-    selectedSection,
     visualItems,
     cursorIndex,
     currentSlug,
@@ -357,20 +355,18 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // App-level keys shared with the removed-worktrees view (help,
     // quit, refresh, ^R, n, c, Shift+A, Shift+Tab, slot sessions, zed).
     if (handleGlobalKey(k)) return;
-    // Ctrl+A — toggle automations for the thing under the cursor
-    // (persisted in wtstate, survives restarts). A stack member or a
-    // folded stack header pauses/resumes the WHOLE stack as one, keyed
-    // by stackId (the root branch) so members stacked on later stay
-    // covered; a non-stack row toggles just itself. The escape hatch
-    // when a branch (or stack) is under manual surgery.
+    // Ctrl+A — toggle automations for the row under the cursor
+    // (persisted in wtstate, survives restarts). A stack member
+    // pauses/resumes the WHOLE stack as one, keyed by stackId (the root
+    // branch) so members stacked on later stay covered; a non-stack row
+    // toggles just itself. The escape hatch when a branch (or stack) is
+    // under manual surgery.
     if (k.ctrl && k.name === "a" && !k.shift && !k.option && !k.meta) {
       if (!automations.configured) {
         toast("no [[automations]] configured", theme.fgDim, 2000);
         return;
       }
-      const stackId = selectedSection?.isStack
-        ? stackIdFromSectionKey(selectedSection.sectionKey)
-        : current?.stack?.stackId ?? null;
+      const stackId = current?.stack?.stackId ?? null;
       if (!stackId && !current) {
         toast("select a worktree first", theme.warn, 1500);
         return;
@@ -378,13 +374,11 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       void (async () => {
         try {
           if (stackId) {
-            const memberSlugs = selectedSection?.isStack
-              ? selectedSection.rows.map((r) => r.wt.slug)
-              : visualItems.flatMap((v) =>
-                  v.kind === "wt" && v.row.stack?.stackId === stackId
-                    ? [v.row.wt.slug]
-                    : [],
-                );
+            const memberSlugs = visualItems.flatMap((v) =>
+              v.kind === "wt" && v.row.stack?.stackId === stackId
+                ? [v.row.wt.slug]
+                : [],
+            );
             const nowPaused = await toggleStackAutomationsPaused(stackId, memberSlugs);
             appLog.event.info(
               nowPaused

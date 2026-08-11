@@ -95,7 +95,6 @@ export function useVisualItems({
         out.push({
           kind: "section",
           sectionKey: sec,
-          isStack: false,
           label: r.section === null ? "Inbox" : r.section,
           rows: activeRows.filter((x) => (x.section ?? GROUP_INBOX) === sec),
         });

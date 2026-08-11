@@ -16,7 +16,7 @@ function m(slug: string, branch: string, baseBranch?: string): ChainMember {
   return baseBranch === undefined ? { slug, branch } : { slug, branch, baseBranch };
 }
 
-test("linear chain lays out root-first with 1-based ordinals and spine glyph positions", () => {
+test("linear chain lays out root-first with spine glyph positions", () => {
   const { byBranch, layouts } = buildStackIndex([
     m("c", "C", "B"),
     m("a", "A"),
@@ -25,7 +25,6 @@ test("linear chain lays out root-first with 1-based ordinals and spine glyph pos
   expect(layouts).toHaveLength(1);
   const nodes = layouts[0]!.nodes;
   expect(nodes.map((n) => n.branch)).toEqual(["A", "B", "C"]);
-  expect(nodes.map((n) => n.ordinal)).toEqual([1, 2, 3]);
   expect(nodes.map((n) => n.depth)).toEqual([0, 1, 2]);
   expect(nodes.map((n) => n.pos)).toEqual(["first", "middle", "last"]);
   expect(nodes.map((n) => n.parentBranch)).toEqual([null, "A", "B"]);

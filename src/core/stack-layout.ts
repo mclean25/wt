@@ -2,7 +2,7 @@
  * Inferred-stack layout: pure helpers that group live worktrees into
  * stacks by following their recorded fork bases (`wt new --base` →
  * wtstate `slugs[slug].baseBranch`) and lay each stack out as a tree
- * spine (connector glyph + ordinal + depth) for the worktree list.
+ * spine (connector glyph + depth) for the worktree list.
  *
  * There is no stored stack state: a worktree whose recorded base names
  * another live worktree's branch is that worktree's child, and every
@@ -55,19 +55,11 @@ export const STACK_CONNECTOR: Record<SpinePos, string> = {
   fork: "┯",
 };
 
-/** Canonical 2-cell ordinal label (`01`, `02`, …) used wherever a stack
- *  ordinal renders next to the connector glyph. */
-export function stackOrdinalLabel(ordinal: number): string {
-  return String(ordinal).padStart(2, "0").slice(0, 2);
-}
-
 export type StackNode = {
   /** Stack identity: the root member's branch. */
   stackId: string;
   slug: string;
   branch: string;
-  /** 1-based display ordinal within the stack (spine order). */
-  ordinal: number;
   /** Distance from the stack root (root = 0). */
   depth: number;
   pos: SpinePos;
@@ -176,7 +168,6 @@ export function buildStackIndex(members: readonly ChainMember[]): {
         stackId,
         slug: m.slug,
         branch: m.branch,
-        ordinal: index + 1,
         depth,
         pos,
         lane,

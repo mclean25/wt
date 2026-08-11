@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 
 import type { WtState } from "../../core/wtstate.ts";
-import { STACK_SECTION_PREFIX } from "../../core/wtstate.ts";
 import type { ActiveSessionGlyph } from "./useHarnessSessions.ts";
 import type { SectionDetail } from "../panels/details.tsx";
 import { rowLabel } from "../panels/list.tsx";
@@ -22,15 +21,19 @@ export function useSectionDetail({
 }: UseSectionDetailArgs): SectionDetail | undefined {
   return useMemo<SectionDetail | undefined>(() => {
     if (!selectedSection) return undefined;
-    const stackId = selectedSection.isStack
-      ? selectedSection.sectionKey.slice(STACK_SECTION_PREFIX.length)
-      : null;
+    // A section can hold several stacks and several loose rows, so
+    // "paused" is per member: individually (its own slug record) or via
+    // the stack it belongs to (Ctrl+A pauses a whole stack).
+    const pausedStacks = new Set(wtState?.pausedStacks ?? []);
+    const pausedCount = selectedSection.rows.filter(
+      (r) =>
+        wtState?.slugs[r.wt.slug]?.automationsPaused === true ||
+        (r.stack ? pausedStacks.has(r.stack.stackId) : false),
+    ).length;
     return {
       sectionKey: selectedSection.sectionKey,
-      isStack: selectedSection.isStack,
       label: selectedSection.label,
-      automationsPaused:
-        stackId !== null && (wtState?.pausedStacks ?? []).includes(stackId),
+      pausedCount,
       members: selectedSection.rows.map((r) => ({
         label: rowLabel(r),
         row: r,

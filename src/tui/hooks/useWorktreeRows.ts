@@ -104,13 +104,11 @@ export type StackedOn = {
 /**
  * Placement of a worktree within its inferred stack (worktrees chained
  * by their recorded fork bases). Drives the list's tree spine +
- * ordinal. `null` for any worktree that isn't part of a stack.
+ * `null` for any worktree that isn't part of a stack.
  */
 export type StackRowInfo = {
   /** Stack identity: the root member's branch. */
   stackId: string;
-  /** Stack ordinal (1-based) shown in the row gutter. */
-  ordinal: number;
   /** Spine position → connector glyph (single / first ┌ / middle ├ / last └ / fork ┯). */
   pos: SpinePos;
   /** Parallel-lane index → connector color (0 = main spine, dim). */
@@ -306,7 +304,6 @@ function stackInfoEq(a: StackRowInfo | null, b: StackRowInfo | null): boolean {
   if (!a || !b) return false;
   return (
     a.stackId === b.stackId &&
-    a.ordinal === b.ordinal &&
     a.pos === b.pos &&
     a.lane === b.lane &&
     a.depth === b.depth &&
@@ -795,7 +792,6 @@ export function useWorktreeRows(): WorktreeRowsResult {
       const stack: StackRowInfo | null = node
         ? {
             stackId: node.stackId,
-            ordinal: node.ordinal,
             pos: node.pos,
             lane: node.lane,
             depth: node.depth,
