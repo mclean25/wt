@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
-import { WtScrollbox } from "../scrollbox.tsx";
+import { scrollCursorIntoView, WtScrollbox } from "../scrollbox.tsx";
 
 type Props = {
   /**
@@ -38,7 +38,7 @@ type Props = {
 export function ScrollableList({ selectedId, revision, children }: Props) {
   const listRef = useRef<ScrollBoxRenderable>(null);
   useEffect(() => {
-    if (selectedId) listRef.current?.scrollChildIntoView(selectedId);
+    if (selectedId) scrollCursorIntoView(listRef.current, selectedId);
   }, [selectedId, revision]);
   return <WtScrollbox scrollRef={listRef}>{children}</WtScrollbox>;
 }

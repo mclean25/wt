@@ -517,6 +517,19 @@ export async function runTui(): Promise<TuiExit> {
       // debug console overlay over the panes — the error overlay above
       // owns that surface now, so keep OpenTUI's from fighting it.
       openConsoleOnError: false,
+      // wt owns its keyboard entirely (`useKeyboard` → the dispatch
+      // chain in tui/keyboard/) and has no focusable widgets — every
+      // text input is drawn and keyed by hand. OpenTUI's autoFocus,
+      // left on, focuses the first focusable ANCESTOR of whatever gets
+      // left-clicked, which is always a scrollbox, and a focused
+      // scrollbox installs a GLOBAL keypress handler that scrolls 1/5
+      // of a viewport on j/k/h/l/arrows/PgUp/PgDn — modifiers ignored,
+      // so Ctrl+J/K hit it too. One stray click (focusing the terminal
+      // window is enough) and from then on every j moves the cursor
+      // AND jerks some pane four rows, often a pane the key has
+      // nothing to do with. That's the "it gets weird after a while"
+      // bug: the trigger is a mouse click long since forgotten.
+      autoFocus: false,
     });
   } catch (err) {
     // Renderer setup failed before the teardown .finally exists — the

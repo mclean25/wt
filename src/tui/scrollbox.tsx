@@ -29,6 +29,54 @@ import { theme } from "./theme.ts";
 export const SCROLL_STEP = 3;
 
 /**
+ * Rows of context kept between the cursor and the viewport edge —
+ * vim's `scrolloff`. Zero (the library's `scrollChildIntoView`, and
+ * what every cursor list here used to do) parks the cursor ON the edge
+ * as soon as it reaches one, so you navigate the rest of the list
+ * reading the row you're leaving with nothing ahead of it. Three rows
+ * is enough to see where you're going and small enough that short
+ * lists never scroll at all.
+ */
+export const CURSOR_SCROLLOFF = 3;
+
+/**
+ * Scroll `childId` into view keeping `scrolloff` rows of context beyond
+ * it — the cursor-following primitive for every list with a selection.
+ *
+ * Prefer this over the raw `scrollChildIntoView`: same minimal-scroll
+ * behaviour (a no-op while the row sits comfortably inside the
+ * viewport), but the viewport starts moving a few rows BEFORE the
+ * cursor hits the edge, so scrolling reads as the list sliding under a
+ * stationary cursor rather than the cursor shoving the list. Clamping
+ * at the content edges is the scrollbar's (`scrollPosition` clamps), so
+ * the first and last rows still sit flush against the ends exactly like
+ * vim's.
+ */
+export function scrollCursorIntoView(
+  box: ScrollBoxRenderable | null | undefined,
+  childId: string,
+  scrolloff: number = CURSOR_SCROLLOFF,
+): void {
+  if (!box) return;
+  const child = box.content.findDescendantById(childId);
+  if (!child) return;
+  const view = box.viewport;
+  // Never ask for more context than the viewport can give: on a short
+  // modal list a fixed margin would over-run both edges at once and the
+  // two demands would fight, snapping the list on every keypress.
+  const off = Math.max(
+    0,
+    Math.min(scrolloff, Math.floor((view.height - child.height) / 2)),
+  );
+  const top = child.y - off;
+  const bottom = child.y + child.height + off;
+  const viewBottom = view.y + view.height;
+  const dy =
+    top < view.y ? top - view.y : bottom > viewBottom ? bottom - viewBottom : 0;
+  if (dy !== 0) box.scrollBy({ x: 0, y: dy });
+}
+
+/**
  * Themed scrollbar: dim thumb on a border-dim track, matching the pane
  * chrome. Applied by `WtScrollbox`; exported for the rare direct
  * `<scrollbox>` (none today).

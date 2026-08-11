@@ -26,34 +26,38 @@ export type ChainMember = {
 };
 
 /**
- * Position of a node within its stack's vertical spine, used to pick
- * the tree-connector glyph. Computed from the node's REAL child
- * structure (not its linear position), so a fork reads as a fork:
- *   - `single` = a standalone node (blank, no spine)
- *   - `first`  = a root with a single child (┌)
- *   - `middle` = an interior single-child link (├)
- *   - `last`   = a branch tip / leaf (└)
- *   - `fork`   = a node with ≥2 children, where the stack splits (┯)
- * The glyphs themselves live in `STACK_CONNECTOR` below. Because a
- * single gutter column can't draw a 2D tree, lane *identity* (which
- * parallel branch a row belongs to) is carried by `StackNode.lane` →
- * color, not by indentation; the glyph just marks where the split
- * happens.
+ * Tree-spine connector glyphs, the `tree(1)` / `git log --graph`
+ * idiom. Three questions, three answers, nothing carrying two meanings
+ * at once:
+ *
+ *   - COLUMN says depth. The rail is an indent: siblings share a
+ *     column, a chain steps right, so a fan reads as a fan without a
+ *     legend.
+ *   - GLYPH says position among siblings. `├` when another sibling
+ *     follows, `└` when this is the last one, `┌` for the row that
+ *     tops the spine. `│` continues an ancestor's column past rows
+ *     that belong to a deeper branch.
+ *   - COLOR says lane (`StackNode.lane`), which is the one thing a
+ *     single column of glyphs genuinely can't express: which parallel
+ *     branch of a fork a row descends from.
+ *
+ * The glyph used to be picked from a node's own CHILD count (`┯` where
+ * a stack forks, `┌` for a root with one child), which read as
+ * box-drawing but didn't connect: a root's connector was never drawn
+ * at all, so `┌` and `┯` were unreachable and every spine below a root
+ * hung off nothing. Position-among-siblings is what box-drawing glyphs
+ * mean everywhere else, and it joins up.
  */
-export type SpinePos = "single" | "first" | "middle" | "last" | "fork";
-
-/**
- * Tree-spine connector glyph for a stack row, by the node's position.
- * Shared by the worktree list gutter and the folded-stack summary in
- * the details pane so the spine reads identically in both.
- */
-export const STACK_CONNECTOR: Record<SpinePos, string> = {
-  single: " ",
-  first: "┌",
-  middle: "├",
+export const STACK_CONNECTOR = {
+  /** Tops the spine — the shallowest row of the group. */
+  root: "┌",
+  /** Another sibling follows below. */
+  more: "├",
+  /** Last sibling under this parent. */
   last: "└",
-  fork: "┯",
-};
+  /** Column continuation: an ancestor's spine passing this row. */
+  trail: "│",
+} as const;
 
 export type StackNode = {
   /** Stack identity: the root member's branch. */
@@ -62,7 +66,6 @@ export type StackNode = {
   branch: string;
   /** Distance from the stack root (root = 0). */
   depth: number;
-  pos: SpinePos;
   /**
    * Parallel-lane index → connector color. The root path is lane 0
    * (rendered dim, the "main" spine). At every fork the FIRST child
@@ -146,30 +149,20 @@ export function buildStackIndex(members: readonly ChainMember[]): {
     const nodes: StackNode[] = [];
     let index = 0;
     let nextLane = 0;
-    // Pre-order DFS down the spine. `pos` comes from the node's real
-    // child count + depth (so a fork reads as a fork, not a chain
-    // link); `lane` is threaded down the spine, branching at each fork.
+    // Pre-order DFS down the spine, threading `lane` and branching it
+    // at each fork. Connector glyphs are NOT decided here — they depend
+    // on which members are rendered together and in what order, which
+    // only the render surface knows (see `spineLayout`).
     const seen = new Set<string>();
     const walk = (m: ChainMember, depth: number, lane: number): void => {
       if (seen.has(m.branch)) return; // cycle guard
       seen.add(m.branch);
       const kids = children.get(m.branch) ?? [];
-      const pos: SpinePos =
-        kids.length >= 2
-          ? "fork"
-          : kids.length === 0
-            ? depth === 0
-              ? "single" // unreachable here (roots without kids skip), kept for shape parity
-              : "last"
-            : depth === 0
-              ? "first"
-              : "middle";
       nodes.push({
         stackId,
         slug: m.slug,
         branch: m.branch,
         depth,
-        pos,
         lane,
         parentBranch:
           depth === 0
@@ -193,4 +186,105 @@ export function buildStackIndex(members: readonly ChainMember[]): {
     for (const node of nodes) byBranch.set(node.branch, { layout, node });
   }
   return { byBranch, layouts };
+}
+
+/** One row's input to `spineLayout`, in the order it will be drawn. */
+export type SpineMember = {
+  /** Whatever the caller keys rows by (a slug); returned as the map key. */
+  key: string;
+  branch: string;
+  /** Recorded fork base. Only matters when it names another member. */
+  parentBranch: string | null;
+};
+
+/** Where a row's connector sits and what continues past it. */
+export type SpineCell = {
+  /** Gutter column for the connector: in-group depth, root at 0. */
+  col: number;
+  /** The connector glyph itself (`STACK_CONNECTOR`). */
+  glyph: string;
+  /**
+   * Ancestor columns 0..col-1: `true` draws `│`, because that
+   * ancestor's spine continues past this row to a later sibling.
+   */
+  trail: boolean[];
+};
+
+/**
+ * Lay out the tree spine for ONE CONTIGUOUS GROUP of rows, in the order
+ * they are drawn — a section in the list pane, a section's members in
+ * the details pane. The rail describes the sub-tree ACTUALLY ON SCREEN,
+ * which is what makes it honest:
+ *
+ *   - a member whose parent is in another section (or folded away) has
+ *     no in-group parent, so it tops its own spine or, if nothing else
+ *     from its stack is here either, draws no rail at all — the
+ *     relationship is carried by the section reference on its label
+ *     instead of by a stroke pointing at a row that isn't there;
+ *   - depth is measured within the group, so a stack whose root sits
+ *     elsewhere starts at column 0 rather than floating one column in
+ *     with an empty gutter beside it;
+ *   - "has a later sibling" is decided by render order, so `├` vs `└`
+ *     and the `│` continuations always agree with what's above and
+ *     below on screen, whatever order the row pipeline emitted.
+ *
+ * Rows not in the returned map draw a blank gutter.
+ */
+export function spineLayout(
+  group: readonly SpineMember[],
+): Map<string, SpineCell> {
+  const indexByBranch = new Map<string, number>();
+  group.forEach((m, i) => {
+    if (m.branch && !indexByBranch.has(m.branch)) indexByBranch.set(m.branch, i);
+  });
+  // In-group parent, or -1. A parent named but not present here is the
+  // same as no parent: the spine only draws what it can point at.
+  const parentOf = group.map((m, i) => {
+    const p = m.parentBranch ? (indexByBranch.get(m.parentBranch) ?? -1) : -1;
+    return p === i ? -1 : p; // self-loop guard
+  });
+
+  const depthOf = group.map(() => 0);
+  const lastChildOf = new Map<number, number>();
+  group.forEach((_, i) => {
+    let d = 0;
+    for (let p = parentOf[i]!, hops = 0; p >= 0 && hops < group.length; hops++) {
+      d++;
+      p = parentOf[p]!;
+    }
+    depthOf[i] = d;
+    const p = parentOf[i]!;
+    if (p >= 0) lastChildOf.set(p, Math.max(lastChildOf.get(p) ?? -1, i));
+  });
+  /** Is another child of this row's parent drawn below it? */
+  const moreBelow = (i: number): boolean => {
+    const p = parentOf[i]!;
+    return p >= 0 && (lastChildOf.get(p) ?? -1) > i;
+  };
+
+  const out = new Map<string, SpineCell>();
+  group.forEach((m, i) => {
+    const d = depthOf[i]!;
+    // A row alone in the group — no parent here, no children here — is
+    // not part of any visible spine and stays blank.
+    if (d === 0 && !lastChildOf.has(i)) return;
+    if (d === 0) {
+      out.set(m.key, { col: 0, glyph: STACK_CONNECTOR.root, trail: [] });
+      return;
+    }
+    // Ancestors at depths 1..d-1 own columns 0..d-2; each continues
+    // only if IT has a sibling still to come below this row.
+    const trail: boolean[] = [];
+    let anc = parentOf[i]!;
+    while (anc >= 0 && depthOf[anc]! > 0) {
+      trail.unshift(moreBelow(anc));
+      anc = parentOf[anc]!;
+    }
+    out.set(m.key, {
+      col: d - 1,
+      glyph: moreBelow(i) ? STACK_CONNECTOR.more : STACK_CONNECTOR.last,
+      trail,
+    });
+  });
+  return out;
 }

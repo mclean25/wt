@@ -11,7 +11,28 @@ Sections own the vertical axis; a stack is a **relationship between rows inside 
 
 Members therefore keep their own `section` record and a stack sorts as one contiguous **unit**, slotted by its most urgent member so `sort = "status"` can't interleave unrelated rows through a spine. `J`/`K` from any member moves the whole block (the unit's slot is the root's manual order), and filing a member via `l` — or `wt section mv` — moves the whole stack unless `--only`.
 
-**Splitting a stack across sections is legitimate**, not a mistake to reconcile: finished parents awaiting verification and their unstarted children genuinely belong in different buckets. A member whose parent sits elsewhere draws no rail (it would point at a row that isn't above it) and carries a dim `→ <parent's section>` reference instead, so the relationship survives the split. The reference names the SECTION, not the parent row: the parent is off-screen by definition, and if its section is folded the row isn't rendered at all — a section name is somewhere the reader can actually go (a divider on screen, or a header to unfold). Which parent stays a details-pane question. The reference shrinks into whatever width is left above a 24-cell floor for the row's own label, and is dropped below that rather than truncating two siblings of one parent to the same prefix — identity beats relationship when there isn't room for both.
+## The rail
+
+The stack rail is the `tree(1)` / `git log --graph` idiom, and each of its three dimensions answers exactly one question:
+
+- **Column = depth.** The rail is an indent, so siblings share a column and a chain steps right: a fan reads as a fan without a legend.
+- **Glyph = position among siblings.** `├` when another sibling follows, `└` for the last one, `┌` on the row that tops the spine, `│` continuing an ancestor's column past rows that belong to a deeper branch.
+- **Color = lane.** Which parallel branch of a fork a row descends from, which is the one thing a single column of glyphs genuinely can't express.
+
+```
+┌   Chain root lays the schema        ┌   Fan root extracts the client
+├   Chain middle adds the reader      ├   Fan left adds the writer
+│└  Chain leaf wires the cache        └   Fan right adds the reporter
+└   Chain unstarted
+```
+
+There are deliberately no `01`/`02` ordinals: numbering a fork's children asserts a merge order that doesn't exist. If ordinals are ever wanted, merge **edges** are the thing that actually encodes order.
+
+**The rail describes the sub-tree on screen, not the stack.** Glyphs are laid out per contiguous rendered group (a section in the list, the member list in a folded-section summary) and in draw order, by `spineLayout` in `core/stack-layout.ts` — `buildStackIndex` supplies structure (parent, depth, lane), never glyphs. That's what makes the rail honest rather than decorative: a member whose parent is folded away or filed elsewhere tops its own spine at column 0 instead of floating one column in above an empty gutter, a member with nothing else from its stack alongside it draws nothing at all, and `├` vs `└` always agrees with what is actually above and below. The gutter is sized from the cells that get drawn, so a stack whose root lives elsewhere never reserves a column it doesn't use.
+
+The glyph used to come from a node's own CHILD count (`┯` where a stack forked, `┌` for a root with one child). That read as box-drawing but didn't join up — a root's connector was never drawn at all, so `┌` and `┯` were unreachable and every spine hung off nothing above it.
+
+**Splitting a stack across sections is legitimate**, not a mistake to reconcile: finished parents awaiting verification and their unstarted children genuinely belong in different buckets. A member whose parent sits elsewhere draws no rail up to it and carries a dim `→ <parent's section>` reference instead, so the relationship survives the split. The reference names the SECTION, not the parent row: the parent is off-screen by definition, and if its section is folded the row isn't rendered at all — a section name is somewhere the reader can actually go (a divider on screen, or a header to unfold). Which parent stays a details-pane question. The reference shrinks into whatever width is left above a 24-cell floor for the row's own label, and is dropped below that rather than truncating two siblings of one parent to the same prefix — identity beats relationship when there isn't room for both.
 
 ## The base record
 

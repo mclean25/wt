@@ -11,7 +11,11 @@
  * every row's first glyph meant.
  */
 import { isWorkStatusStale } from "../core/work-status.ts";
-import { STACK_CONNECTOR } from "../core/stack-layout.ts";
+import {
+  STACK_CONNECTOR,
+  spineLayout,
+  type SpineCell,
+} from "../core/stack-layout.ts";
 import { StatusKind } from "../core/types.ts";
 import type { DerivedState } from "../core/harness/status.ts";
 import { statusBadge, workStatusBadge } from "./badges.ts";
@@ -92,36 +96,38 @@ export function StatusMarker({
  * right. If ordinals are ever wanted, derive them from merge EDGES,
  * which actually encode order — stack position never did.
  *
- * `cells` is the gutter width the whole list shares (see
- * `stackGutterCells`), so the marker column stays straight across
- * stacked and unstacked rows and the eye still runs down it. The
- * connector sits at `depth - 1`; a root (depth 0) draws none.
+ * `cell` comes from `spineLayout` over the rows drawn AROUND this one
+ * (null → blank gutter); `cells` is the gutter width the whole surface
+ * shares, so the marker column stays straight across stacked and
+ * unstacked rows and the eye still runs down it.
  */
 export function StackConnector({
   row,
+  cell,
   cells,
-  split = false,
 }: {
   row: WorktreeRow;
+  cell: SpineCell | null;
   cells: number;
-  /** Parent lives in another section — see the suppression note below. */
-  split?: boolean;
 }) {
   if (cells === 0) return null;
-  // A member whose parent sits in a DIFFERENT section draws no rail:
-  // the spine would point at a row that isn't above it (or on screen at
-  // all). Splits are legitimate — finished parents in a verification
-  // bucket, unstarted children in a backlog — so the relationship is
-  // carried by a section reference on the label instead, and the rail
-  // is reserved for members actually adjacent to their parent.
-  const info = split ? null : row.stack;
-  const col = info ? Math.min(info.depth - 1, cells - 1) : -1;
+  const col = cell ? Math.min(cell.col, cells - 1) : -1;
+  // One lane color for the whole rail: the continuations belong to
+  // ancestors, but an ancestor's lane only differs from its
+  // descendant's across a fork, where the column already changed.
+  const fg = row.stack ? laneColor(row.stack.lane) : theme.fgDim;
   return (
     <box flexShrink={0} flexDirection="row">
       {Array.from({ length: cells }, (_, i) => (
         <box key={i} width={1} flexShrink={0}>
-          <text fg={info ? laneColor(info.lane) : theme.fgDim}>
-            {info && i === col ? STACK_CONNECTOR[info.pos] : " "}
+          <text fg={fg}>
+            {!cell || i > col
+              ? " "
+              : i === col
+                ? cell.glyph
+                : cell.trail[i]
+                  ? STACK_CONNECTOR.trail
+                  : " "}
           </text>
         </box>
       ))}
@@ -131,12 +137,38 @@ export function StackConnector({
 
 /**
  * Width of the shared stack gutter: enough columns for the deepest
- * stack among `rows`, capped so a pathological chain can't eat the
- * label column, and ZERO when none of them is stacked — a board with
- * no stacks pays nothing for the feature.
+ * VISIBLE spine, capped so a pathological chain can't eat the label
+ * column, and ZERO when nothing on the surface draws a rail — a board
+ * with no stacks pays nothing for the feature. Taking it from the laid
+ * out cells rather than from global stack depth means a stack whose
+ * root is filed elsewhere doesn't reserve a column it never draws in.
  */
-export function stackGutterCells(rows: readonly WorktreeRow[]): number {
-  let max = 0;
-  for (const r of rows) if (r.stack) max = Math.max(max, r.stack.depth);
-  return Math.min(max, 3);
+/**
+ * Spine cells for every row of a surface, keyed by slug. Each group is
+ * one CONTIGUOUS run of rows as drawn — a section in the list, the
+ * member list in the section summary — because a rail may only connect
+ * rows that are actually adjacent on screen (see `spineLayout`).
+ * Non-stacked rows are dropped rather than passed through as gaps.
+ */
+export function rowSpine(
+  groups: readonly (readonly WorktreeRow[])[],
+): Map<string, SpineCell> {
+  const out = new Map<string, SpineCell>();
+  for (const group of groups) {
+    const members = group
+      .filter((r) => r.stack)
+      .map((r) => ({
+        key: r.wt.slug,
+        branch: r.wt.branch,
+        parentBranch: r.stackedOn?.branch ?? null,
+      }));
+    for (const [slug, cell] of spineLayout(members)) out.set(slug, cell);
+  }
+  return out;
+}
+
+export function spineGutterCells(spine: ReadonlyMap<string, SpineCell>): number {
+  let max = -1;
+  for (const cell of spine.values()) max = Math.max(max, cell.col);
+  return Math.min(max + 1, 3);
 }

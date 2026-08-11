@@ -14,7 +14,7 @@ import {
   topoOrderSlugs,
   type MergeEdge,
 } from "../../core/merge-edges.ts";
-import { buildStackIndex, type SpinePos } from "../../core/stack-layout.ts";
+import { buildStackIndex } from "../../core/stack-layout.ts";
 import { slugLabel } from "../../core/stage.ts";
 import type { LockMeta, MergeQueueEntry, PullRequest, Status, Worktree } from "../../core/types.ts";
 import { StatusKind } from "../../core/types.ts";
@@ -109,8 +109,6 @@ export type StackedOn = {
 export type StackRowInfo = {
   /** Stack identity: the root member's branch. */
   stackId: string;
-  /** Spine position → connector glyph (single / first ┌ / middle ├ / last └ / fork ┯). */
-  pos: SpinePos;
   /** Parallel-lane index → connector color (0 = main spine, dim). */
   lane: number;
   /** Depth from the stack root (root = 0). */
@@ -304,7 +302,6 @@ function stackInfoEq(a: StackRowInfo | null, b: StackRowInfo | null): boolean {
   if (!a || !b) return false;
   return (
     a.stackId === b.stackId &&
-    a.pos === b.pos &&
     a.lane === b.lane &&
     a.depth === b.depth &&
     a.index === b.index
@@ -792,7 +789,6 @@ export function useWorktreeRows(): WorktreeRowsResult {
       const stack: StackRowInfo | null = node
         ? {
             stackId: node.stackId,
-            pos: node.pos,
             lane: node.lane,
             depth: node.depth,
             index: node.index,

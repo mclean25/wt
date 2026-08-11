@@ -13,7 +13,13 @@ import type { WorktreeRow } from "../../hooks/useWorktreeRows.ts";
 import { workStateColor, workStateGlyph } from "../../badges.ts";
 import { BadgeCluster } from "../../badge-cluster.tsx";
 import { NF } from "../../icons.ts";
-import { StackConnector, StatusMarker, stackGutterCells } from "../../row-gutter.tsx";
+import {
+  rowSpine,
+  spineGutterCells,
+  StackConnector,
+  StatusMarker,
+} from "../../row-gutter.tsx";
+import type { SpineCell } from "../../../core/stack-layout.ts";
 import { wrapText } from "../../text.ts";
 import { theme } from "../../theme.ts";
 
@@ -143,21 +149,20 @@ function BatchFacts({ members, pausedCount }: { members: SectionMember[]; paused
 function MemberRow({
   m,
   gutterCells,
-  split,
+  spineCell,
 }: {
   m: SectionMember;
   gutterCells: number;
-  /** Parent isn't among this section's members, so the rail is suppressed
-   *  for the same reason the list suppresses it: it would point at a row
-   *  that isn't above it. */
-  split: boolean;
+  /** This member's rail cell, laid out over the members shown here (so a
+   *  parent filed in another section draws nothing) — `rowSpine`. */
+  spineCell: SpineCell | null;
 }) {
   const dim = m.row.archived;
   const state = memberState(m);
   const risk = state === "ready" ? m.row.work?.risk : undefined;
   return (
     <box flexDirection="row" flexShrink={0}>
-      <StackConnector row={m.row} cells={gutterCells} split={split} />
+      <StackConnector row={m.row} cell={spineCell} cells={gutterCells} />
       <StatusMarker row={m.row} sessionState={m.sessionState} />
       <box flexGrow={1} flexShrink={1} overflow="hidden">
         <text fg={dim ? theme.fgDim : theme.fg} wrapMode="none" truncate>
@@ -222,9 +227,10 @@ function BlockedNotes({ members, width }: { members: SectionMember[]; width: num
 
 /** Detail-pane body for a folded section header. */
 export function SectionSummaryBody({ section, width }: { section: SectionDetail; width: number }) {
-  const rows = section.members.map((m) => m.row);
-  const gutterCells = stackGutterCells(rows);
-  const present = new Set(rows.map((r) => r.wt.branch));
+  // The members are one contiguous run here, so they lay out as one
+  // spine group — exactly as they would if the section were unfolded.
+  const spine = rowSpine([section.members.map((m) => m.row)]);
+  const gutterCells = spineGutterCells(spine);
   // Border (2) + padding (2) — the text budget inside the box.
   const inner = Math.max(10, width - 4);
   return (
@@ -255,7 +261,7 @@ export function SectionSummaryBody({ section, width }: { section: SectionDetail;
             key={m.row.wt.slug}
             m={m}
             gutterCells={gutterCells}
-            split={m.row.stackedOn ? !present.has(m.row.stackedOn.branch) : false}
+            spineCell={spine.get(m.row.wt.slug) ?? null}
           />
         ))
       )}

@@ -78,7 +78,6 @@ function makeRow(
 function stackInfo(stackId: string, ordinal: number): StackRowInfo {
   return {
     stackId,
-    pos: "middle",
     lane: 0,
     depth: ordinal - 1,
     index: ordinal - 1,

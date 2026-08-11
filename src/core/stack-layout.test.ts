@@ -8,7 +8,12 @@
 import { expect, test } from "bun:test";
 
 import { config } from "./config.ts";
-import { buildStackIndex, type ChainMember } from "./stack-layout.ts";
+import {
+  buildStackIndex,
+  spineLayout,
+  type ChainMember,
+  type SpineMember,
+} from "./stack-layout.ts";
 
 const trunk = config.branch.base;
 
@@ -16,7 +21,7 @@ function m(slug: string, branch: string, baseBranch?: string): ChainMember {
   return baseBranch === undefined ? { slug, branch } : { slug, branch, baseBranch };
 }
 
-test("linear chain lays out root-first with spine glyph positions", () => {
+test("linear chain lays out root-first", () => {
   const { byBranch, layouts } = buildStackIndex([
     m("c", "C", "B"),
     m("a", "A"),
@@ -26,13 +31,12 @@ test("linear chain lays out root-first with spine glyph positions", () => {
   const nodes = layouts[0]!.nodes;
   expect(nodes.map((n) => n.branch)).toEqual(["A", "B", "C"]);
   expect(nodes.map((n) => n.depth)).toEqual([0, 1, 2]);
-  expect(nodes.map((n) => n.pos)).toEqual(["first", "middle", "last"]);
   expect(nodes.map((n) => n.parentBranch)).toEqual([null, "A", "B"]);
   expect(nodes.every((n) => n.stackId === "A")).toBe(true);
   expect(byBranch.get("C")!.layout.stackId).toBe("A");
 });
 
-test("a fork renders as a fork and each extra child opens a fresh lane", () => {
+test("each extra child of a fork opens a fresh lane", () => {
   const { layouts } = buildStackIndex([
     m("a", "A"),
     m("b1", "B1", "A"),
@@ -41,7 +45,6 @@ test("a fork renders as a fork and each extra child opens a fresh lane", () => {
   expect(layouts).toHaveLength(1);
   const nodes = layouts[0]!.nodes;
   expect(nodes.map((n) => n.branch)).toEqual(["A", "B1", "B2"]);
-  expect(nodes[0]!.pos).toBe("fork");
   expect(nodes.map((n) => n.lane)).toEqual([0, 0, 1]);
 });
 
@@ -99,4 +102,69 @@ test("two independent trees index as two stacks keyed by their roots", () => {
   expect(layouts.map((l) => l.stackId).sort()).toEqual(["A", "Z"]);
   expect(byBranch.get("A2")!.layout.stackId).toBe("A");
   expect(byBranch.get("Z2")!.layout.stackId).toBe("Z");
+});
+
+// --- spineLayout: the rail as DRAWN, over one contiguous group -------
+//
+// Rendered as `<trail…><glyph>` per row, which is what the gutter puts
+// on screen, so a broken rail is visible in the diff of a failure.
+
+function sp(...rows: [key: string, branch: string, parent: string | null][]): string[] {
+  const group: SpineMember[] = rows.map(([key, branch, parentBranch]) => ({
+    key,
+    branch,
+    parentBranch,
+  }));
+  const cells = spineLayout(group);
+  return group.map((mem) => {
+    const cell = cells.get(mem.key);
+    if (!cell) return "";
+    let out = "";
+    for (let i = 0; i < cell.col; i++) out += cell.trail[i] ? "\u2502" : " ";
+    return out + cell.glyph;
+  });
+}
+
+test("a chain draws a connected staircase, root included", () => {
+  expect(sp(["a", "A", null], ["b", "B", "A"], ["c", "C", "B"])).toEqual([
+    "\u250c",
+    "\u2514",
+    " \u2514",
+  ]);
+});
+
+test("siblings share a column and the last one closes the spine", () => {
+  expect(sp(["a", "A", null], ["b", "B", "A"], ["c", "C", "A"])).toEqual([
+    "\u250c",
+    "\u251c",
+    "\u2514",
+  ]);
+});
+
+test("an ancestor with a sibling still below keeps its column drawn", () => {
+  // A -> {B -> D, C}: D's own connector sits one column right, and B's
+  // column must continue past it or C reads as unattached.
+  expect(
+    sp(["a", "A", null], ["b", "B", "A"], ["d", "D", "B"], ["c", "C", "A"]),
+  ).toEqual(["\u250c", "\u251c", "\u2502\u2514", "\u2514"]);
+});
+
+test("a member whose parent is not in the group tops its own spine", () => {
+  // The split-stack case: the parent was filed in another section, so
+  // the child starts at column 0 rather than pointing at nothing.
+  expect(sp(["b", "B", "A"], ["c", "C", "B"])).toEqual(["\u250c", "\u2514"]);
+});
+
+test("a lone member of a split stack draws no rail at all", () => {
+  expect(sp(["b", "B", "A"], ["z", "Z", null])).toEqual(["", ""]);
+});
+
+test("a root whose children all went elsewhere draws no rail", () => {
+  // The mirror of the case above, and the one that used to be invisible:
+  // the root drew nothing anyway, so nothing looked wrong.
+  expect(sp(["a", "A", null], ["z", "Z", null])).toEqual(["", ""]);
+});
+
+test("a self-referential record can't make a row its own parent", () => {
+  expect(sp(["a", "A", "A"], ["b", "B", "A"])).toEqual(["\u250c", "\u2514"]);
 });

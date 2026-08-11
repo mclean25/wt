@@ -12,7 +12,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import type { RemovedWorktree } from "../../core/wtstate.ts";
 import { capitalizeFirst, slugLabel } from "../../core/stage.ts";
 import { NF } from "../icons.ts";
-import { WtScrollbox } from "../scrollbox.tsx";
+import { scrollCursorIntoView, WtScrollbox } from "../scrollbox.tsx";
 import { ageMsToText, truncateEnd } from "../text.ts";
 import { theme } from "../theme.ts";
 
@@ -110,7 +110,7 @@ export function RemovedList({
     ? `removed:${entries[selectedIndex]!.slug}`
     : undefined;
   useEffect(() => {
-    if (selectedChildId) listRef.current?.scrollChildIntoView(selectedChildId);
+    if (selectedChildId) scrollCursorIntoView(listRef.current, selectedChildId);
   }, [selectedChildId, entries]);
   return (
     <box

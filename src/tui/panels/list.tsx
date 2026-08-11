@@ -22,8 +22,13 @@ import {
   badgeClusterCells,
   remoteBadgeClusterCells,
 } from "../badge-cluster.tsx";
-import { StackConnector, StatusMarker, stackGutterCells } from "../row-gutter.tsx";
-import { WtScrollbox } from "../scrollbox.tsx";
+import {
+  rowSpine,
+  spineGutterCells,
+  StackConnector,
+  StatusMarker,
+} from "../row-gutter.tsx";
+import { scrollCursorIntoView, WtScrollbox } from "../scrollbox.tsx";
 import { useScrollToEdge } from "../hooks/useScrollToEdge.ts";
 import { NF } from "../icons.ts";
 import { Divider } from "./section-divider.tsx";
@@ -33,6 +38,7 @@ import type { HarnessId } from "../../core/harness/index.ts";
 import type { DerivedState } from "../../core/harness/status.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import { capitalizeFirst, slugLabel } from "../../core/stage.ts";
+import type { SpineCell } from "../../core/stack-layout.ts";
 import { StatusKind, type Status } from "../../core/types.ts";
 import type { GithubData } from "../../state/queries/github.ts";
 import type { ActiveSessionGlyph } from "../hooks/useHarnessSessions.ts";
@@ -188,6 +194,7 @@ const RowView = memo(function RowView({
   sessionState,
   panelWidth,
   gutterCells,
+  spineCell,
   splitParentSection,
 }: {
   row: WorktreeRow;
@@ -205,6 +212,8 @@ const RowView = memo(function RowView({
   sessionState: DerivedState | undefined;
   panelWidth: number;
   gutterCells: number;
+  /** This row's rail cell (`rowSpine`), or null for a blank gutter. */
+  spineCell: SpineCell | null;
   /** Parent's SECTION when it lives in another one; null otherwise. */
   splitParentSection: string | null;
 }) {
@@ -250,7 +259,7 @@ const RowView = memo(function RowView({
       paddingLeft={1}
       paddingRight={1}
     >
-      <StackConnector row={row} cells={gutterCells} split={splitParentSection !== null} />
+      <StackConnector row={row} cell={spineCell} cells={gutterCells} />
       <StatusMarker row={row} sessionState={sessionState} />
       <box flexGrow={1} flexShrink={1} overflow="hidden" flexDirection="row">
         {/* Truncation lives in JS, not opentui's native `truncate`,
@@ -470,16 +479,32 @@ function remoteSectionKey(entry: RemoteListEntry): string {
 }
 
 export function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, isLoading, remoteUnavailable, githubData, scrollHandle }: Props) {
-  // One gutter width for the whole list so the status-dot column is
-  // straight across stacked and unstacked rows alike. Zero when nothing
-  // visible is stacked.
   const allRows = [
     ...items.flatMap((i) =>
       i.kind === "wt" ? [i.row] : i.kind === "section" ? i.rows : [],
     ),
     ...archivedItems.flatMap((i) => (i.kind === "wt" ? [i.row] : [])),
   ];
-  const gutterCells = stackGutterCells(allRows);
+  // The rail is laid out per SECTION, over the rows actually drawn and
+  // in draw order — a folded section's rows and an archived member are
+  // not on screen next to their parent, so they can't be connected to
+  // it. Rows inside a folded section get no cell here; the folded
+  // summary in the details pane lays out its own.
+  const spine = useMemo(() => {
+    const bySection = new Map<string, WorktreeRow[]>();
+    const push = (bucket: string, row: WorktreeRow) => {
+      const g = bySection.get(bucket);
+      if (g) g.push(row);
+      else bySection.set(bucket, [row]);
+    };
+    for (const i of items) if (i.kind === "wt") push(`a ${i.row.section ?? ""}`, i.row);
+    for (const i of archivedItems) if (i.kind === "wt") push(`z ${i.row.section ?? ""}`, i.row);
+    return rowSpine([...bySection.values()]);
+  }, [items, archivedItems]);
+  // One gutter width for the whole list so the status-dot column is
+  // straight across stacked and unstacked rows alike. Zero when nothing
+  // visible draws a rail.
+  const gutterCells = spineGutterCells(spine);
   // Stack members whose parent was filed in a different section: the
   // rail is replaced by a reference to WHERE the parent went, so the
   // relationship survives the split instead of vanishing (or, worse,
@@ -519,11 +544,12 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
   // (`items + reviewRequests + archivedItems`).
   const reviewOffset = items.length;
   const archivedOffset = reviewOffset + reviewRequests.length;
-  // Keep the selected entry scrolled into view. The whole list (active +
-  // review-requests + archived) lives in one scrollbox, so the follow
-  // covers every entry. scrollChildIntoView is a no-op when it's already
-  // visible. Child ids: a worktree slug, `section:<key>` for a folded
-  // header, or the PR url for review-request rows.
+  // Keep the selected entry scrolled into view, with vim's scrolloff of
+  // context beyond it. The whole list (active + review-requests +
+  // archived) lives in one scrollbox, so the follow covers every entry;
+  // it's a no-op while the row sits comfortably inside the viewport.
+  // Child ids: a worktree slug, `section:<key>` for a folded header, or
+  // the PR url for review-request rows.
   const listRef = useRef<ScrollBoxRenderable>(null);
   // Expose scroll-to-edge to the parent's j/k handler — reveals trailing
   // blank space / the review + archived headers that sit below the last
@@ -553,7 +579,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
   // an active↔archived split shift — re-runs the follow instead of leaving
   // the cursor drifted off-screen.
   useEffect(() => {
-    if (selectedChildId) listRef.current?.scrollChildIntoView(selectedChildId);
+    if (selectedChildId) scrollCursorIntoView(listRef.current, selectedChildId);
   }, [selectedChildId, items, reviewRequests, archivedItems]);
   return (
     <box
@@ -691,6 +717,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                 ) : null}
                 <RowView
                   gutterCells={gutterCells}
+                  spineCell={spine.get(row.wt.slug) ?? null}
                   splitParentSection={splitParentSections.get(row.wt.slug) ?? null}
                   row={row}
                   selected={i === selectedIndex}
@@ -762,7 +789,8 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                 return (
                   <RowView
                     gutterCells={gutterCells}
-                    splitParentSection={splitParentSections.get(row.wt.slug) ?? null}
+                    spineCell={spine.get(row.wt.slug) ?? null}
+                  splitParentSection={splitParentSections.get(row.wt.slug) ?? null}
                     key={row.wt.slug}
                     row={row}
                     selected={globalIndex === selectedIndex}
