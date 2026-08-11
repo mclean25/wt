@@ -306,13 +306,32 @@ export async function run(argv: string[]): Promise<number> {
               merge_state: mergeField(r.pr.mergeStateStatus, r.pr.state),
               mergeable: mergeField(r.pr.mergeable, r.pr.state),
               checks: r.pr.checks,
-              // Open human review threads. A `ready` status with
-              // unresolved threads is a status/reality mismatch of the
-              // same family this surface exists to audit — agents have
-              // been observed replying via `gh pr comment` (a top-level
-              // comment, NOT a thread reply) and leaving every thread
-              // open while believing findings addressed.
-              unresolved_threads: r.pr.unresolvedThreads,
+              // Open review work, in three separate numbers, because
+              // collapsing them is what made this field lie. A `ready`
+              // status with anything outstanding is a status/reality
+              // mismatch of the family this surface exists to audit —
+              // agents have been observed replying via `gh pr comment`
+              // (a top-level comment, NOT a thread reply) and leaving
+              // every thread open while believing findings addressed.
+              //
+              // `unresolved_threads` is every open thread, matching the
+              // count GitHub's own PR page shows and what a hand-rolled
+              // `reviewThreads` query returns. `unresolved_human_threads`
+              // excludes bot-opened ones: on a repo where all review is
+              // done by a bot that number is permanently 0, so reporting
+              // ONLY it reads as "nothing to chase" while the bot sits
+              // on unaddressed findings.
+              unresolved_threads: r.pr.unresolvedThreadsTotal,
+              unresolved_human_threads: r.pr.unresolvedThreads,
+              // The review bot's own rollup — in `checklist` mode this
+              // is the unticked-box count from its summary comment,
+              // which is the number the PR page surfaces and which
+              // thread resolution does NOT affect. A PR can show zero
+              // unresolved threads and still read as having open
+              // findings; this is that other half.
+              review_bot: r.pr.reviewBot
+                ? { state: r.pr.reviewBot.state, unresolved: r.pr.reviewBot.unresolved }
+                : null,
             }
           : null,
         // Distinguishes "no PR" (pr null, pr_note null) from "GitHub

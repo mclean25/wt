@@ -426,6 +426,15 @@ function countUnresolvedHumanThreads(
   return n;
 }
 
+/** Unresolved threads regardless of author — what the PR page shows. */
+function countUnresolvedThreads(
+  threads: GqlReviewThread[] | null | undefined,
+): number {
+  let n = 0;
+  for (const t of threads ?? []) if (!t.isResolved) n++;
+  return n;
+}
+
 export function nodeToPr(pr: GqlPrNode): PullRequest {
   const headCommit = pr.commits.nodes[0]?.commit;
   const contexts = headCommit?.statusCheckRollup?.contexts?.nodes ?? null;
@@ -469,6 +478,7 @@ export function nodeToPr(pr: GqlPrNode): PullRequest {
       : null,
     comments: extractComments(pr),
     unresolvedThreads: countUnresolvedHumanThreads(threads),
+    unresolvedThreadsTotal: countUnresolvedThreads(threads),
     mergedAt: pr.mergedAt ?? null,
     closedAt: pr.closedAt ?? null,
   };

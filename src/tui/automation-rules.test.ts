@@ -38,6 +38,7 @@ function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
     autoMerge: null,
     comments: [],
     unresolvedThreads: 0,
+    unresolvedThreadsTotal: 0,
     mergedAt: null,
     closedAt: null,
     ...overrides,

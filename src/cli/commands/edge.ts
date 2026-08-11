@@ -18,6 +18,8 @@ import type { Worktree } from "../../core/types.ts";
 import { workAge } from "../../core/work-status.ts";
 import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import {
+  pruneMergeEdges,
+  recentlyRemovedWorktrees,
   readWtState,
   removeMergeEdge,
   setMergeEdge,
@@ -35,6 +37,7 @@ edges; the manager and \`wt fleet --json\` read them for merge planning.
   assert   wt edge <from> <kind> <to> [--blocks|--prefer] [-m why]
   list     wt edge [--json]
   drop     wt edge rm <from> <to>
+  prune    wt edge prune            drop edges whose endpoint is gone
 
 kinds (unique prefixes accepted):
   before     merge <from> before <to> (risk ordering)
@@ -126,6 +129,27 @@ export async function run(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // Prune: wt edge prune — drop every edge whose endpoint is no longer
+  // a live worktree. This otherwise only happens at the startup reap,
+  // so edges pointing at branches that merged hours ago keep listing
+  // (harmlessly — staleness already stops them steering — but they read
+  // as unfinished business, and `rm` is awkward for them because the
+  // endpoint no longer resolves).
+  if (positional[0] === "prune") {
+    const live = new Set(wts.map((w) => w.slug));
+    const before = readWtState().edges;
+    const dead = before.filter((e) => !live.has(e.from) || !live.has(e.to));
+    if (dead.length === 0) {
+      console.log(dim("No edges with dead endpoints."));
+      return 0;
+    }
+    pruneMergeEdges(live);
+    for (const e of dead) {
+      console.log(`${green("✓")} dropped ${cyan(e.from)} → ${cyan(e.to)} ${dim("(endpoint gone)")}`);
+    }
+    return 0;
+  }
+
   // Drop: wt edge rm <from> <to>
   if (positional[0] === "rm") {
     const [, fromArg, toArg] = positional;
@@ -133,13 +157,37 @@ export async function run(argv: string[]): Promise<number> {
       console.error(red("usage: wt edge rm <from> <to>"));
       return 2;
     }
-    const from = findWorktree(wts, fromArg)?.slug ?? fromArg;
-    const to = findWorktree(wts, toArg)?.slug ?? toArg;
+    // Endpoints are stored as slugs, and `findWorktree` only resolves a
+    // LIVE worktree — so once a branch merges and its worktree is gone,
+    // a branch-name argument stops resolving and the exact-pair match
+    // misses, which is precisely when someone is trying to clean up.
+    // The removed-worktree history still carries slug+branch, so it
+    // resolves the endpoints `rm` would otherwise be unable to name.
+    const edges = readWtState().edges;
+    const removed = recentlyRemovedWorktrees(new Set(wts.map((w) => w.slug)));
+    const resolveEndpoint = (arg: string): string =>
+      findWorktree(wts, arg)?.slug ??
+      removed.find((r) => r.slug === arg || r.branch === arg)?.slug ??
+      arg;
+    const from = resolveEndpoint(fromArg);
+    const to = resolveEndpoint(toArg);
     if (removeMergeEdge(from, to)) {
       console.log(`${green("✓")} dropped ${from} → ${to}`);
       return 0;
     }
     console.error(red(`no edge ${from} → ${to}`));
+    // Never fail silently about WHY: the usual causes are direction
+    // (edges are ordered pairs) and naming a branch whose worktree is
+    // gone, and both are invisible without seeing the real keys.
+    const related = edges.filter(
+      (e) => [e.from, e.to].includes(from) || [e.from, e.to].includes(to),
+    );
+    if (related.length > 0) {
+      console.error(dim("edges referencing either endpoint:"));
+      for (const e of related) console.error(dim(`  ${e.from} ─${e.kind}─▶ ${e.to}`));
+    } else if (edges.length > 0) {
+      console.error(dim(`${edges.length} edge(s) exist, none touching those endpoints — \`wt edge\` lists them`));
+    }
     return 1;
   }
 

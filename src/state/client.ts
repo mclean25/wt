@@ -40,7 +40,11 @@ export const CACHE_DB = config.paths.cacheDb;
 // v11: remote inventories are keyed per SSH host and each summary captures
 // its complete endpoint. The old singleton-key rows cannot safely route an
 // operation once more than one remote exists.
-const CACHE_BUSTER = "v11";
+// v12: PullRequest gained `unresolvedThreadsTotal` (unresolved review
+// threads regardless of author). A cached PR from v11 has no such field,
+// and a missing count would render as "nothing outstanding" — the exact
+// absence-reads-as-clean failure the field was added to fix.
+const CACHE_BUSTER = "v12";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

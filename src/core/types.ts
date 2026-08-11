@@ -212,6 +212,15 @@ export type PullRequest = {
    * than inlining every thread comment.
    */
   unresolvedThreads: number;
+  /**
+   * Count of unresolved review threads regardless of who opened them —
+   * what GitHub's own PR page shows. Kept separate from
+   * `unresolvedThreads` because the two answer different questions and
+   * conflating them is actively misleading: in a repo where all review
+   * is done by a bot, the human count is permanently 0, which reads as
+   * "nothing outstanding" while the bot sits on unaddressed findings.
+   */
+  unresolvedThreadsTotal: number;
   // ISO timestamps. Terminal PRs carry at least one of these; OPEN
   // PRs have neither. Used to dismiss pre-existing merged/closed PRs
   // when a worktree for the same branch is recreated from scratch.
