@@ -42,7 +42,9 @@ const USAGE = `usage: wt fleet [--json]
 The fleet audit: one row per live worktree joining the asserted work
 status (state, note, risk, staleness) with reality — live agent
 session (busy / last activity) and PR state (number, draft, merge
-state, mergeability, CI rollup) from one batched GitHub query.
+state, mergeability, CI rollup) from one batched GitHub query. The
+human's manual TUI section rides along as asserted intent (a name
+like "Merge after Release" is a merge-order hint; null/— = inbox).
 Recently-removed rows (≤48h) are appended so "everything landed" never
 reads as "nothing exists".
 
@@ -141,6 +143,8 @@ async function fetchFleetPrs(
 
 type FleetRow = {
   wt: Worktree;
+  /** Manual TUI section (human intent — e.g. merge batching); null = inbox. */
+  section: string | null;
   work: (WorkStatusRecord & { stale: boolean }) | null;
   session: SessionInfo;
   pr: PullRequest | undefined;
@@ -255,6 +259,7 @@ export async function run(argv: string[]): Promise<number> {
     const headSha = heads[i] ?? null;
     return {
       wt: w,
+      section: slugStates[w.slug]?.section ?? null,
       work: record
         ? { ...record, stale: !!(record.sha && headSha && record.sha !== headSha) }
         : null,
@@ -276,6 +281,11 @@ export async function run(argv: string[]): Promise<number> {
         slug: r.wt.slug,
         branch: r.wt.branch,
         path: r.wt.path,
+        // The human's manual grouping in the TUI ("Merge after Release",
+        // …) — asserted intent the manager should weigh; null = inbox.
+        // Inferred stack groupings deliberately don't appear here: they
+        // are derivable reality (base records + PRs), not assertion.
+        section: r.section,
         work: r.work
           ? {
               state: r.work.state,
@@ -315,6 +325,10 @@ export async function run(argv: string[]): Promise<number> {
   if (rows.length > 0) {
     const table = renderTable(rows as unknown[], [
       { header: "slug", getter: (r) => cyan((r as FleetRow).wt.slug) },
+      {
+        header: "section",
+        getter: (r) => dim((r as FleetRow).section ?? "—"),
+      },
       { header: "work", getter: (r) => workCell(r as FleetRow) },
       { header: "agent", getter: (r) => agentCell(r as FleetRow) },
       { header: "pr", getter: (r) => prCell(r as FleetRow) },

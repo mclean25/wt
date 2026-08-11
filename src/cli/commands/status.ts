@@ -365,6 +365,8 @@ export async function run(argv: string[]): Promise<number> {
             ...entries.map(({ w, record, headSha }) => ({
               slug: w.slug,
               branch: w.branch,
+              // Manual TUI section (human grouping intent); null = inbox.
+              section: state.slugs[w.slug]?.section ?? null,
               state: record?.state ?? null,
               note: record?.note ?? null,
               risk: record?.risk ?? null,
