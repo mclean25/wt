@@ -57,7 +57,7 @@ export const UNITS: readonly Unit[] = [
     kind: "instructions",
     name: "instructions",
     summary:
-      "always-on agent rules (status, testing, dev-server ownership) in your global instructions file",
+      "always-on agent rules (status, testing, dev-server ownership, manager messaging, merge edges) in your global instructions file",
     vars: [],
   },
   {

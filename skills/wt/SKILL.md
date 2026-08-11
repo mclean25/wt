@@ -64,6 +64,11 @@ in each one.
   ownership of shared changes), and papercuts worth fixing for everyone
   (`wt manager send "papercut: ..."` — misleading output, a wrong doc, a
   trap that cost you time). Nothing is returned; keep working either way.
+- `wt edge <from> <before|conflicts|enables> <to> [--blocks|--prefer] [-m why]`
+  — record merge-order knowledge as a pairwise edge instead of prose: `before`
+  / `enables` order the pair, `conflicts` means same-files-sequence-them.
+  Edges self-expire when either branch moves; assert only what you know
+  first-hand, and never treat a missing edge as "safe". Bare `wt edge` lists.
 - `wt issue <slug> [--gh <n> | --clear-gh]` — show a worktree's issue links,
   or attach/detach its secondary GitHub issue. The primary id stays parsed
   from the slug; the attached GH issue becomes the `i`-key / `y i` target

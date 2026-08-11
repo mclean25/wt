@@ -37,7 +37,19 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   nothing notable is `--risk low` with no note. The human merges PRs; never
   merge one yourself.
 - Fleet-level questions (merge order, cross-branch conflicts, who owns a
-  shared change) go to the manager session: `wt manager send "..."`.
+  shared change) go to the manager session. **Prefer your harness's
+  peer-messaging tool when it lists the manager as a peer** (it's
+  addressable as `manager`; per-worktree agents are addressable by the
+  `agent_name` in `wt fleet --json` / `wt claude ls --json`) — direct
+  messages confirm delivery and carry more than a typed line.
+  `wt manager send "..."` is the fallback: scripts, harnesses without
+  peer messaging, or a manager that isn't running yet (it cold-starts
+  the session).
+- Cross-branch merge-order knowledge becomes an EDGE, not just prose:
+  `wt edge <from> before <to> [-m why]` (also `conflicts`, `enables`;
+  `--blocks` for hard dependencies). Edges self-expire when either
+  branch moves — assert what you know first-hand, re-assert after big
+  changes if it still matters, never audit the list.
 - **Report papercuts sideways.** Anything that cost you time and will cost
   the next agent the same — misleading command output, a wrong or stale
   doc, an undocumented trap — goes to the same channel:

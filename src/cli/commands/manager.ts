@@ -98,6 +98,27 @@ export async function run(argv: string[]): Promise<number> {
       green(res.coldStarted ? "✓ manager started, message sent" : "✓ sent to manager"),
     );
     console.log(dim("» the manager picks it up as its next turn; press m in wt to watch"));
+    // Teach the better channel where one exists (same footer idiom as
+    // `wt status`). An agent calling this from inside a Claude Code
+    // session (env markers below ride every Bash subprocess) holds a
+    // peer-messaging tool that reaches a LIVE manager directly —
+    // richer than tmux typing and with delivery confirmation. Only
+    // when the manager was already running: a cold-started session
+    // has no peer address until it boots, so this path was the right
+    // call. Delivery above is unchanged either way — teach, never
+    // double-send. wt itself keeps using tmux injection: it's not an
+    // agent and has no peer channel (deliberately no reverse-
+    // engineering of the harness's private socket protocol).
+    const insideAgent =
+      !!process.env["CLAUDE_CODE_ENTRYPOINT"] ||
+      (process.env["AI_AGENT"] ?? "").startsWith("claude-code");
+    if (!res.coldStarted && insideAgent) {
+      console.log(
+        dim(
+          "» the manager is live and addressable as 'manager' via your peer-messaging tool (SendMessage) — prefer that channel for agent-to-manager messages",
+        ),
+      );
+    }
     return 0;
   }
 
