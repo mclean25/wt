@@ -19,6 +19,11 @@ import {
   latestCapturedError,
   useCapturedErrors,
 } from "./error-store.ts";
+import {
+  handleOverlayScrollKey,
+  useOverlayScroll,
+  WtScrollbox,
+} from "./scrollbox.tsx";
 import { theme } from "./theme.ts";
 import type { TuiExit } from "./app.tsx";
 
@@ -36,7 +41,12 @@ function CrashScreen({
   // re-renders when the ring catches up.
   useCapturedErrors();
   const captured = latestCapturedError();
+  // The app tree is unmounted here, so this useKeyboard is the only
+  // handler left — the shared overlay scroll keymap keeps the crash
+  // screen's j/k feel identical to the live overlays.
+  const scrollRef = useOverlayScroll();
   useKeyboard((k) => {
+    if (handleOverlayScrollKey(k)) return;
     if (k.name === "q" || (k.ctrl && k.name === "c")) {
       onExit({ kind: "quit" });
       return;
@@ -68,13 +78,13 @@ function CrashScreen({
         render · y copy error · q quit
       </text>
       <box marginTop={1} flexDirection="column" flexGrow={1} overflow="hidden">
-        <scrollbox focused scrollY flexGrow={1}>
+        <WtScrollbox scrollRef={scrollRef}>
           {(captured?.stack ?? "no captured error").split("\n").map((line, i) => (
             <text key={i} fg={i === 0 ? theme.fgBright : theme.fg} wrapMode="word">
               {line}
             </text>
           ))}
-        </scrollbox>
+        </WtScrollbox>
       </box>
     </box>
   );

@@ -18,6 +18,7 @@ import {
 } from "../../core/perf.ts";
 import type { KeyHintPair } from "../key-hint.tsx";
 import { Modal } from "../modal.tsx";
+import { useOverlayScroll, WtScrollbox } from "../scrollbox.tsx";
 import { theme } from "../theme.ts";
 
 /** Status of the `i` inject-and-enter flow, surfaced in the hint row. */
@@ -233,6 +234,9 @@ export function PerfOverlay({
   error: Error | null;
   inject: PerfInjectState;
 }) {
+  // Scrolling comes from `handleOverlayScrollKey` (modal-keys/perf.ts),
+  // not the focused-scrollbox built-in — shared overlay keymap.
+  const scrollRef = useOverlayScroll();
   const hints: KeyHintPair[] = [
     ["j k", "scroll"],
     ["i", "investigate in wt session"],
@@ -295,7 +299,7 @@ export function PerfOverlay({
         ) : null}
         {injectLine}
       </box>
-      <scrollbox focused scrollY flexGrow={1}>
+      <WtScrollbox scrollRef={scrollRef}>
         <box flexDirection="column">
           <MeterRow
             label="cpu (all)"
@@ -398,7 +402,7 @@ export function PerfOverlay({
           note="if the answer to 'why is my machine slow' is here, it isn't wt or the agents."
         />
         <ProcList procs={snapshot.outsiders} ceiling={ceiling} width={contentW} />
-      </scrollbox>
+      </WtScrollbox>
     </Modal>
   );
 }

@@ -7,7 +7,7 @@ import {
   useEvents,
   type WtEvent,
 } from "../activity-log.ts";
-import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
+import { WtScrollbox } from "../scrollbox.tsx";
 import { theme } from "../theme.ts";
 
 /**
@@ -90,7 +90,6 @@ function EventsList({
   // The full buffer renders as children; viewport culling keeps the
   // per-frame cost at "what's visible", same as the old tail slice.
   const listRef = useRef<ScrollBoxRenderable>(null);
-  const scrollRef = useScrollbarNoFlash(listRef);
   useEffect(() => {
     activityScroll.current = listRef.current;
     return () => {
@@ -113,15 +112,7 @@ function EventsList({
     }
   }
   return (
-    <scrollbox
-      ref={scrollRef}
-      scrollY
-      stickyScroll
-      stickyStart="bottom"
-      flexGrow={1}
-      minHeight={0}
-      contentOptions={{ flexDirection: "column" }}
-    >
+    <WtScrollbox scrollRef={listRef} stickyScroll stickyStart="bottom">
       {events.map((e, i) => {
         const seen = seenTs !== undefined && e.ts <= seenTs;
         return (
@@ -173,7 +164,7 @@ function EventsList({
           </Fragment>
         );
       })}
-    </scrollbox>
+    </WtScrollbox>
   );
 }
 

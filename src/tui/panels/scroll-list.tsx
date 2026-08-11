@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
-import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
+import { WtScrollbox } from "../scrollbox.tsx";
 
 type Props = {
   /**
@@ -23,9 +23,9 @@ type Props = {
 
 /**
  * Vertical-scroll wrapper for modal / picker lists whose content can
- * exceed the modal height. Fills its parent (`flexGrow`), suppresses the
- * mount scrollbar flash, and scrolls the selected row into view as the
- * cursor moves — the shared version of the pattern first used in
+ * exceed the modal height. A `WtScrollbox` (shared bar styling, gutter,
+ * no mount flash) that scrolls the selected row into view as the cursor
+ * moves — the shared version of the pattern first used in
  * `removed-list.tsx`. The `Modal` shell clips overflow with no scrollback
  * of its own, so any list that maps unbounded user data (actions,
  * sessions, branches, outputs, clean candidates) must wrap it in this or
@@ -37,19 +37,8 @@ type Props = {
  */
 export function ScrollableList({ selectedId, revision, children }: Props) {
   const listRef = useRef<ScrollBoxRenderable>(null);
-  const scrollRef = useScrollbarNoFlash(listRef);
   useEffect(() => {
     if (selectedId) listRef.current?.scrollChildIntoView(selectedId);
   }, [selectedId, revision]);
-  return (
-    <scrollbox
-      ref={scrollRef}
-      scrollY
-      flexGrow={1}
-      minHeight={0}
-      contentOptions={{ flexDirection: "column" }}
-    >
-      {children}
-    </scrollbox>
-  );
+  return <WtScrollbox scrollRef={listRef}>{children}</WtScrollbox>;
 }

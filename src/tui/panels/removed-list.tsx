@@ -12,7 +12,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import type { RemovedWorktree } from "../../core/wtstate.ts";
 import { capitalizeFirst, slugLabel } from "../../core/stage.ts";
 import { NF } from "../icons.ts";
-import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
+import { WtScrollbox } from "../scrollbox.tsx";
 import { ageMsToText, truncateEnd } from "../text.ts";
 import { theme } from "../theme.ts";
 
@@ -61,9 +61,10 @@ const RemovedRowView = memo(function RemovedRowView({
   const fg = selected ? theme.fgBright : theme.fgDim;
   const attrs = selected ? TextAttributes.BOLD : 0;
   // Width budget mirrors the live rows: borders(2) + padding(2) +
-  // leading glyph slot(3) + trailing age cell when present.
+  // scrollbar gutter(1) + leading glyph slot(3) + trailing age cell
+  // when present.
   const trailingCells = age.length > 0 ? age.length + 2 : 0;
-  const budget = Math.max(0, panelWidth - 7 - trailingCells);
+  const budget = Math.max(0, panelWidth - 8 - trailingCells);
   return (
     <box
       id={`removed:${entry.slug}`}
@@ -105,7 +106,6 @@ export function RemovedList({
   width: number;
 }) {
   const listRef = useRef<ScrollBoxRenderable>(null);
-  const listScrollRef = useScrollbarNoFlash(listRef);
   const selectedChildId = entries[selectedIndex]
     ? `removed:${entries[selectedIndex]!.slug}`
     : undefined;
@@ -133,7 +133,7 @@ export function RemovedList({
           <text fg={theme.fgDim}> to go back.</text>
         </box>
       ) : (
-        <scrollbox ref={listScrollRef} scrollY flexGrow={1} minHeight={0}>
+        <WtScrollbox scrollRef={listRef}>
           <box height={1} flexShrink={0} />
           {entries.map((entry, i) => (
             <RemovedRowView
@@ -143,7 +143,7 @@ export function RemovedList({
               panelWidth={width}
             />
           ))}
-        </scrollbox>
+        </WtScrollbox>
       )}
     </box>
   );

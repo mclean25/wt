@@ -40,7 +40,7 @@ import {
 } from "../../state/queries.ts";
 import { resolveRows, type RowModule } from "../rows/index.ts";
 import type { FetchLike, RowContext } from "../rows/types.ts";
-import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
+import { WtScrollbox } from "../scrollbox.tsx";
 import { ageMsToText, ELLIPSIS, truncateEnd } from "../text.ts";
 import { Spinner, useBouncingBall } from "../spinner.tsx";
 import { theme } from "../theme.ts";
@@ -404,7 +404,6 @@ const DetailsBody = memo(function DetailsBody({
   // re-deriving) keeps the two observers' query keys identical, which
   // is what lets the cache hit cross-pane and avoids re-running LM
   // Studio every time the details pane mounts for a stacked worktree.
-  const sbRef = useScrollbarNoFlash(scrollRef);
   const effectiveBase = row.stackedOn?.diffBase ?? null;
   const diffCtx = useQuery({
     ...wtDiffContextQuery(row.wt, effectiveBase),
@@ -472,17 +471,7 @@ const DetailsBody = memo(function DetailsBody({
       padding={1}
       flexDirection="column"
     >
-      <scrollbox
-        ref={sbRef}
-        scrollY
-        flexGrow={1}
-        minHeight={0}
-        // paddingRight reserves the scrollbar's column: the thumb is
-        // drawn OVER the last content cell, so full-width truncated
-        // rows (title, path) would otherwise lose their real last
-        // character whenever the pane grows a scrollbar.
-        contentOptions={{ flexDirection: "column", paddingRight: 1 }}
-      >
+      <WtScrollbox scrollRef={scrollRef}>
         {/* Asserted work status, full width — the note is the payload
             (merge impacts, needs-human asks) and must never truncate. */}
         <WorkStatusBlock row={row} />
@@ -507,7 +496,7 @@ const DetailsBody = memo(function DetailsBody({
           comments={row.pr?.comments ?? []}
           unresolvedThreads={row.pr?.unresolvedThreads ?? 0}
         />
-      </scrollbox>
+      </WtScrollbox>
     </box>
   );
 });

@@ -24,7 +24,7 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `Space` | jump to the next row needing attention (`needs-human` / `needs-testing` / `ready`), scanning forward and wrapping — the cross-section scan that per-section status sort can't express |
 | `Tab` | fold/unfold the section under the cursor |
 | `Ctrl+J` / `Ctrl+K` | scroll the bottom event feed (also `Ctrl+E`/`Ctrl+Y`, `Alt+J`/`Alt+K`, mouse wheel); re-follows at the bottom |
-| `Ctrl+Shift+J` / `Ctrl+Shift+K` | scroll the details pane (kitty-protocol terminals; legacy encodings can't express the chord and it degrades to the feed scroll) |
+| `Ctrl+Shift+J` / `Ctrl+Shift+K` | scroll the details pane — same 3-row step as the feed chord (kitty-protocol terminals; legacy encodings can't express the chord and it degrades to the feed scroll) |
 | `h` | flip to the removed-worktrees history view |
 
 ### Worktree actions
@@ -121,7 +121,7 @@ instead of sending you hunting through worktrees.
 | key | action |
 |---|---|
 | `P` / `Esc` / `q` | open / close |
-| `j` / `k` | scroll |
+| `j` / `k` | scroll (the shared overlay keymap: `PgUp`/`PgDn` half-page, `g`/`G` top/bottom) |
 | `i` | send the snapshot to the wt-source session (`,`) as an investigation prompt, then enter that session |
 | `r` | resample now |
 
@@ -169,7 +169,7 @@ it.
 
 | key | action |
 |---|---|
-| `j` / `k` | scroll the stack |
+| `j` / `k` | scroll the stack (shared overlay keymap: `PgUp`/`PgDn` half-page, `g`/`G` top/bottom) |
 | `i` | send the error to the wt-source session (`,`) as an investigate-and-fix prompt, then enter that session |
 | `y` | copy the error (origin, timestamp, full stack) to the clipboard |
 | `Esc` / `q` | dismiss (acknowledge) |

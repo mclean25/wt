@@ -20,6 +20,7 @@ import {
   type CapturedError,
 } from "../error-store.ts";
 import { Modal } from "../modal.tsx";
+import { useOverlayScroll, WtScrollbox } from "../scrollbox.tsx";
 import { theme } from "../theme.ts";
 
 /** Status of the `i` inject-and-enter flow, surfaced above the stack. */
@@ -97,6 +98,9 @@ function ErrorBlock({
 export function ErrorOverlay({ inject }: { inject: ErrorInjectState }) {
   const errors = useCapturedErrors();
   const contentW = useContentWidth();
+  // Scrolling comes from `handleOverlayScrollKey` (modal-keys/errors.ts),
+  // not the focused-scrollbox built-in — shared overlay keymap.
+  const scrollRef = useOverlayScroll();
   const hints: KeyHintPair[] = [
     ["j k", "scroll"],
     ["i", "investigate in wt session"],
@@ -133,14 +137,14 @@ export function ErrorOverlay({ inject }: { inject: ErrorInjectState }) {
         ) : null}
         {injectLine}
       </box>
-      <scrollbox focused scrollY flexGrow={1}>
+      <WtScrollbox scrollRef={scrollRef}>
         {newestFirst.map((e, i) => (
           <ErrorBlock key={e.id} error={e} width={contentW} latest={i === 0} />
         ))}
         {errors.length === 0 ? (
           <text fg={theme.fgDim}>no captured errors</text>
         ) : null}
-      </scrollbox>
+      </WtScrollbox>
     </Modal>
   );
 }

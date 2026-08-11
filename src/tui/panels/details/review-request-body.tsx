@@ -3,7 +3,7 @@ import { TextAttributes } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
 import type { ReviewRequestPr } from "../../../core/github.ts";
-import { useScrollbarNoFlash } from "../../hooks/useScrollbarNoFlash.ts";
+import { WtScrollbox } from "../../scrollbox.tsx";
 import { ageMsToText } from "../../text.ts";
 import { NF } from "../../icons.ts";
 import { checkBadge, reviewBadge } from "../../badges.ts";
@@ -58,7 +58,6 @@ export function ReviewRequestBody({
       ? `updated ${ageMsToText(Date.now() - updated)} ago`
       : null;
 
-  const sbRef = useScrollbarNoFlash(scrollRef);
   const check = checkBadge(pr.checks);
   const review = reviewDecisionBadge(pr.reviewDecision);
   const hasDiff = pr.additions > 0 || pr.deletions > 0 || pr.changedFiles > 0;
@@ -75,14 +74,7 @@ export function ReviewRequestBody({
       padding={1}
       flexDirection="column"
     >
-      <scrollbox
-        ref={sbRef}
-        scrollY
-        flexGrow={1}
-        minHeight={0}
-        // paddingRight reserves the scrollbar's column (see details.tsx).
-        contentOptions={{ flexDirection: "column", paddingRight: 1 }}
-      >
+      <WtScrollbox scrollRef={scrollRef}>
       <box marginBottom={1}>
         <text wrapMode="word">
           <span fg={theme.fg} attributes={TextAttributes.BOLD}>{pr.title}</span>
@@ -149,7 +141,7 @@ export function ReviewRequestBody({
           {pr.url}
         </text>
       </box>
-      </scrollbox>
+      </WtScrollbox>
     </box>
   );
 }

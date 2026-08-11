@@ -40,6 +40,7 @@ import {
 } from "../app-helpers.ts";
 import { events as activityEvents } from "../activity-log.ts";
 import { activityScroll } from "../panels/activity.tsx";
+import { SCROLL_STEP } from "../scrollbox.tsx";
 import { firstYankIndex, yankItemsFor } from "../panels/yank.tsx";
 import { enterDiffSession } from "../sessions/diff.ts";
 import { enterShellSession } from "../sessions/shell.ts";
@@ -401,19 +402,20 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       })();
       return;
     }
-    // Ctrl+Shift+J / Ctrl+Shift+K page the details pane (worktree or
-    // review request) by ~85% of a viewport — for panes too tall to
-    // fit, which otherwise clip. No-op when the content fits. Checked
-    // BEFORE the plain-Ctrl feed scroll below, which would otherwise
-    // swallow the chord. Kitty csi-u delivers the base letter plus a
-    // shift flag (never the uppercase literal); legacy encodings can't
-    // express Ctrl+Shift+letter at all — there the chord collapses to
-    // plain Ctrl+J/K and scrolls the feed instead. Known degradation,
-    // accepted: every kitty-protocol terminal gets it right.
+    // Ctrl+Shift+J / Ctrl+Shift+K scroll the details pane (worktree or
+    // review request) by the standard SCROLL_STEP rows — same feel as
+    // the feed chord below; key-repeat covers long panes (the old
+    // ~85%-viewport page read as a teleport). No-op when the content
+    // fits. Checked BEFORE the plain-Ctrl feed scroll below, which
+    // would otherwise swallow the chord. Kitty csi-u delivers the base
+    // letter plus a shift flag (never the uppercase literal); legacy
+    // encodings can't express Ctrl+Shift+letter at all — there the
+    // chord collapses to plain Ctrl+J/K and scrolls the feed instead.
+    // Known degradation, accepted: every kitty-protocol terminal gets
+    // it right.
     if (k.ctrl && k.shift && (k.name === "j" || k.name === "k")) {
       detailsScrollRef.current?.scrollBy(
-        k.name === "j" ? 0.85 : -0.85,
-        "viewport",
+        k.name === "j" ? SCROLL_STEP : -SCROLL_STEP,
       );
       return;
     }
@@ -434,7 +436,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     ) {
       const down =
         k.name === "linefeed" || k.name === "j" || k.name === "e";
-      activityScroll.current?.scrollBy(down ? 3 : -3);
+      activityScroll.current?.scrollBy(down ? SCROLL_STEP : -SCROLL_STEP);
       return;
     }
     if (k.name === "j" || k.name === "down") {

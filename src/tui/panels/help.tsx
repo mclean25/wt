@@ -9,6 +9,7 @@ import { STATE_DOT, STATE_FG } from "../claude-state.ts";
 import { NF } from "../icons.ts";
 import { Modal } from "../modal.tsx";
 import type { KeyHintPair } from "../key-hint.tsx";
+import { useOverlayScroll, WtScrollbox } from "../scrollbox.tsx";
 import { editSpans, type TextEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
 
@@ -540,6 +541,10 @@ export function HelpOverlay({
   query: TextEdit;
   searching: boolean;
 }) {
+  // j/k etc. scroll via `handleOverlayScrollKey` in modal-keys/help.ts
+  // (the shared overlay keymap), not the focused-scrollbox built-in —
+  // that's what keeps the step size uniform with every other pane.
+  const scrollRef = useOverlayScroll();
   const q = query.value.trim().toLowerCase();
   const blocks = filterBlocks(ALL_BLOCKS, q);
   const matches = countRows(blocks);
@@ -599,11 +604,11 @@ export function HelpOverlay({
           <text fg={theme.fgDim}>no matches for "{query.value.trim()}"</text>
         </box>
       ) : (
-        <scrollbox focused={!searching} scrollY flexGrow={1}>
+        <WtScrollbox scrollRef={scrollRef}>
           {blocks.map((b) => (
             <BlockView key={b.title} block={b} />
           ))}
-        </scrollbox>
+        </WtScrollbox>
       )}
     </Modal>
   );

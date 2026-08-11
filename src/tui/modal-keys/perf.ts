@@ -2,13 +2,15 @@ import type { KeyEvent } from "@opentui/core";
 
 import { isShiftedLetter } from "../app-helpers.ts";
 import { cancelPerfInvestigate } from "../flows/perf-report.ts";
+import { handleOverlayScrollKey } from "../scrollbox.tsx";
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 
 /**
- * Keys for the `P` perf overlay. j/k scrolling is handled by the
- * focused `<scrollbox>` inside the panel (same as help), so this only
- * owns the explicit affordances.
+ * Keys for the `P` perf overlay. Scrolling goes through the shared
+ * overlay keymap (`handleOverlayScrollKey` — j/k, PgUp/PgDn, g/G) so
+ * the step size matches every other pane; this only owns the explicit
+ * affordances.
  *
  * Returns true unconditionally: while the overlay is up it swallows
  * every key, so a stray letter can't fall through to a destructive
@@ -19,6 +21,7 @@ export function handlePerfKey(
   modal: Extract<Modal, { kind: "perf" }>,
   { setModal, refreshPerf, doPerfInvestigate }: SimpleModalContext,
 ): boolean {
+  if (handleOverlayScrollKey(k)) return true;
   // Send the snapshot to the wt-source session and enter it. The flow
   // owns closing the overlay — it only does so once the paste has
   // actually landed, so a failure leaves the overlay up with a reason.

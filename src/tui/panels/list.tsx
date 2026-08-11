@@ -23,7 +23,7 @@ import {
   badgeClusterCells,
   remoteBadgeClusterCells,
 } from "../badge-cluster.tsx";
-import { useScrollbarNoFlash } from "../hooks/useScrollbarNoFlash.ts";
+import { WtScrollbox } from "../scrollbox.tsx";
 import { useScrollToEdge } from "../hooks/useScrollToEdge.ts";
 import { NF } from "../icons.ts";
 import { Divider } from "./section-divider.tsx";
@@ -295,10 +295,10 @@ const RowView = memo(function RowView({
             because the native path middle-clips with `…`. We want the
             head intact (it's the most distinctive part: "ENG-1234: "
             and the leading words of the title). Width budget = panel
-            width − borders(2) − row padding(2) − left gutter (3 normal,
-            4 for a stack row) − badge cluster. */}
+            width − borders(2) − row padding(2) − scrollbar gutter(1) −
+            left gutter (3 normal, 4 for a stack row) − badge cluster. */}
         <text fg={slugFg} attributes={slugAttrs} wrapMode="none">
-          {truncateEnd(rowLabel(row), Math.max(0, panelWidth - (row.stack ? 8 : 7) - badgeClusterCells(row, actionRunning, activeHarnessId)))}
+          {truncateEnd(rowLabel(row), Math.max(0, panelWidth - (row.stack ? 9 : 8) - badgeClusterCells(row, actionRunning, activeHarnessId)))}
         </text>
       </box>
       {/* Shared with the folded section/stack summaries in the details
@@ -346,9 +346,10 @@ const ReviewRequestRowView = memo(function ReviewRequestRowView({
   // PR title only; repo + number live in the details pane.
   const label = capitalizeFirst(pr.title);
   // Match worktree row width budget: borders(2) + paddingLeft+right(2)
-  // + leading PR-icon slot(3) + trailing check slot when present(2).
+  // + scrollbar gutter(1) + leading PR-icon slot(3) + trailing check
+  // slot when present(2).
   const trailingCells = showChecks ? 2 + 2 : 0;
-  const budget = Math.max(0, panelWidth - 7 - trailingCells);
+  const budget = Math.max(0, panelWidth - 8 - trailingCells);
   const slugAttrs = selected ? TextAttributes.BOLD : 0;
   const slugFg = selected ? theme.fgBright : theme.fg;
   return (
@@ -487,7 +488,7 @@ const RemoteRowView = memo(function RemoteRowView({
           attributes={selected ? TextAttributes.BOLD : 0}
           wrapMode="none"
         >
-          {truncateEnd(label, Math.max(0, panelWidth - 7 - badgeCells))}
+          {truncateEnd(label, Math.max(0, panelWidth - 8 - badgeCells))}
         </text>
       </box>
       <RemoteBadgeCluster pr={pr} mq={mq} archived={archived} />
@@ -528,7 +529,6 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
   // visible. Child ids: a worktree slug, `section:<key>` for a folded
   // header, or the PR url for review-request rows.
   const listRef = useRef<ScrollBoxRenderable>(null);
-  const listScrollRef = useScrollbarNoFlash(listRef);
   // Expose scroll-to-edge to the parent's j/k handler — reveals trailing
   // blank space / the review + archived headers that sit below the last
   // selectable item.
@@ -616,7 +616,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
               instead of growing to fit its content (the default
               `min-height: auto`), which is what makes it actually scroll
               rather than shove the layout. */}
-          <scrollbox ref={listScrollRef} scrollY flexGrow={1} minHeight={0}>
+          <WtScrollbox scrollRef={listRef}>
           {items.map((item, i) => {
             // Section context of the previous item (a worktree's section, or a
             // folded section's key) drives the divider/blank-line transitions.
@@ -782,7 +782,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
               })}
             </>
           ) : null}
-          </scrollbox>
+          </WtScrollbox>
         </>
       )}
     </box>
