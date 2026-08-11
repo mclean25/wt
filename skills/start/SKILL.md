@@ -124,9 +124,17 @@ You own verification. After review:
 2. Blocked on the human (expired login, human-only check)?
    `wt status needs-human -m "<exactly what you need>"` and keep working on
    anything that isn't blocked.
-3. When it passes: `wt status ready --risk <low|medium|high>
-   [-m "<notable impacts only>"]` — risk judged broadly (end users, coworker
-   workflows, costs, migrations); the note is high-value-only, no noise.
+3. When it passes: `wt status ready --risk <low|medium|high> -m "<note>"` —
+   risk is your confidence AFTER testing, not the size or category of the
+   change (`wt status` prints the rubric). The note is ~400 chars of
+   fragments in this shape, with detail left to the PR body:
+
+       <one line: what changes, in user terms>
+       OPS:      <migrations / redeploys / config, or "none">
+       REVERT:   <"safe", or "no:" + the shortest true reason>
+       IF WRONG: <where it shows + the symptom>
+       UNTESTED: <omit this line entirely if nothing is>
+
    Make sure the PR body reflects the final state. The human merges — never
    merge it yourself.
 

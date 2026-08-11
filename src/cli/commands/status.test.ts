@@ -126,18 +126,21 @@ describe("parseStatusArgs", () => {
       slugArg: null,
       note: null,
       risk: "low",
+      append: false,
     });
     expect(parseStatusArgs(["some-slug", "--risk", "hi"])).toEqual({
       kind: "amend",
       slugArg: "some-slug",
       note: null,
       risk: "high",
+      append: false,
     });
     expect(parseStatusArgs(["--risk", "medium", "-m", "backfill never ran"])).toEqual({
       kind: "amend",
       slugArg: null,
       note: "backfill never ran",
       risk: "medium",
+      append: false,
     });
   });
 
@@ -147,6 +150,7 @@ describe("parseStatusArgs", () => {
       slugArg: null,
       note: "sharper ask",
       risk: null,
+      append: false,
     });
     expect(parseStatusArgs(["--note-only", "x", "--risk", "low"])).toMatchObject({
       kind: "error",

@@ -43,9 +43,28 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   browser for is not low. Re-judge as testing lands —
   `wt status --risk <r>` amends risk alone, keeping the state, timestamp
   and note, so there's never a reason to append to a note instead of
-  fixing it. The note carries ONLY what the human needs before merging
-  (what's unverified, notable impacts) — no noise. The human merges PRs;
-  never merge one yourself.
+  fixing it. The human merges PRs; never merge one yourself.
+- **The `ready` note has a shape and a budget: ~400 characters,
+  fragments not sentences.** Anything longer belongs in the PR body,
+  which the note may point at. Write it in this form:
+
+      <one line: what changes, in user terms>
+      OPS:      <migrations / redeploys / config, or "none">
+      REVERT:   <"safe", or "no:" + the shortest true reason>
+      IF WRONG: <where it shows + the symptom>
+      UNTESTED: <omit this line entirely if nothing is>
+
+  These four are the questions someone merging unread code actually
+  has. `REVERT` is the one nobody volunteers and the one that decides
+  whether a bad merge costs thirty seconds or an afternoon. `UNTESTED`
+  is the honest twin of the risk level — if risk is confidence after
+  testing, name what wasn't tested; omitting the line when everything
+  was is what makes its presence a signal. `IF WRONG` collects into a
+  post-release smoke list for free.
+
+  The character budget is load-bearing, not style advice. You are
+  writing one note; the human reads all of them at once, and "concise"
+  loses to "thorough" every time it's left to judgment.
 - Fleet-level questions (merge order, cross-branch conflicts, who owns a
   shared change) go to the manager session. **Prefer your harness's
   peer-messaging tool when it lists the manager as a peer** (it's

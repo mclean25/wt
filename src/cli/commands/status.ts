@@ -59,11 +59,25 @@ you touched:
 A one-line frontend change nobody opened a browser for is not low.
 medium/high require ${bold("-m")} saying what's unverified and what it would cost.
 
+${bold("the ready note")} — ~400 chars, fragments not sentences. Longer detail goes
+in the PR body; the note may point at it. These four are what someone
+merging unread code actually needs:
+  <one line: what changes, in user terms>
+  ${bold("OPS:")}      migrations / redeploys / config, or "none"
+  ${bold("REVERT:")}   "safe", or "no:" + the shortest true reason
+  ${bold("IF WRONG:")} where it shows + the symptom
+  ${bold("UNTESTED:")} omit the line entirely if nothing is
+You write one note; the human reads all of them at once. The budget is
+the point — without it "concise" loses to "thorough" every time.
+
 set:   wt status [<slug>] <state> [-m "note"] [--risk low|medium|high]
 show:  wt status [<slug>] [--all [--json]]     clear: wt status --clear [<slug>]
 amend: wt status [<slug>] --risk <r> [-m "..."]  re-judge risk as testing lands
        wt status [<slug>] --note-only "..."      amend the note alone
-       (both keep the state and timestamp — no need to restate anything)`;
+       (both keep the state and timestamp — no need to restate anything)
+
+${bold("-m REPLACES the note")}; add ${bold("--append")} to add to it instead. A replaced note
+is echoed back so what you overwrote is recoverable from this output.`;
 
 const HINTS_OFF = process.env.WT_NO_HINTS === "1";
 
@@ -110,6 +124,80 @@ function guidance(state: WorkState): string[] {
   }
 }
 
+/**
+ * Notes are durable, cross-session, human-facing state, and `-m`
+ * replaces the whole thing. That is the right default (a note that only
+ * ever grows becomes a wall nobody reads), but the failure mode is real
+ * and was observed: an agent asserting `review -m "addressing review
+ * findings"` silently destroyed a note carrying a nine-function redeploy
+ * list, a schema-version warning, and which functions had been verified
+ * — and nothing in the output suggested anything had been lost. After a
+ * compaction the agent cannot retype what it no longer remembers.
+ *
+ * So: `--append` for the "add to it" intent, and on any replace the old
+ * text is echoed back. The echo is the cheap half and the important
+ * one — it makes the loss visible at the moment it happens, in the
+ * scrollback of the process that caused it, which is exactly when
+ * recovery is a copy-paste.
+ */
+function resolveNote(
+  prev: string | null,
+  incoming: string | null,
+  append: boolean,
+  opts: { keepWhenAbsent: boolean } = { keepWhenAbsent: true },
+): { note: string | null; replaced: string | null } {
+  if (incoming === null) {
+    // Amending keeps the note it isn't editing; a fresh assertion drops
+    // it, and either way we only flag text that actually disappeared.
+    const note = opts.keepWhenAbsent ? prev : null;
+    return { note, replaced: note === prev ? null : prev };
+  }
+  if (append && prev) return { note: `${prev} ${incoming}`, replaced: null };
+  return { note: incoming, replaced: prev && prev !== incoming ? prev : null };
+}
+
+/**
+ * Echo a note that just stopped being the record's note — replaced by
+ * `-m`, or dropped by a fresh assertion that carried none. Printing it
+ * is what makes the loss recoverable: it lands in the scrollback of the
+ * process that caused it, at the moment it happens.
+ */
+function reportReplacedNote(replaced: string | null, gaveNote: boolean): void {
+  if (!replaced) return;
+  console.log(`  ${dim("previous note (now gone):")} ${dim(replaced)}`);
+  hint(
+    gaveNote
+      ? [
+          `${bold("-m")} replaces the note rather than adding to it — the old text is above`,
+          `if it was still needed (${bold("--append")} adds to it, ${bold("--note-only")} edits it alone).`,
+        ]
+      : [
+          `a new assertion starts a fresh note — the old text is above if it still applies;`,
+          `re-state what's still true with ${bold("-m")}, or amend in place with ${bold("--note-only")}.`,
+        ],
+  );
+}
+
+/**
+ * Soft budget for a `ready` note. Not enforced — a refusal would be
+ * worse than a long note — but named, because "concise" reliably loses
+ * to "thorough" when each agent judges its own note in isolation and
+ * never sees the wall of thirteen the human reads at once.
+ */
+const NOTE_BUDGET = 400;
+
+function noteBudgetHint(state: WorkState, note: string | null): void {
+  // 1.25× rather than a hard 400: a note a little over budget is fine
+  // and nagging about it would train agents to ignore the hint. The
+  // shape this is aimed at — a three-to-five-sentence paragraph — starts
+  // around 500 and runs well past it.
+  if (state !== "ready" || !note || note.length <= NOTE_BUDGET * 1.25) return;
+  hint([
+    `that note is ${note.length} chars; the shape is ~${NOTE_BUDGET} — one line of what changes, then`,
+    `${bold("OPS:")} / ${bold("REVERT:")} / ${bold("IF WRONG:")} / ${bold("UNTESTED:")} as fragments. Detail belongs in the PR body.`,
+  ]);
+}
+
 function stateColor(state: WorkState): (s: string) => string {
   switch (state) {
     case "needs-human":
@@ -152,6 +240,7 @@ export type StatusArgs =
       slugArg: string | null;
       note: string | null;
       risk: WorkRisk | null;
+      append: boolean;
     }
   | {
       kind: "set";
@@ -159,6 +248,7 @@ export type StatusArgs =
       state: WorkState;
       note: string | null;
       risk: WorkRisk | null;
+      append: boolean;
     };
 
 function err(message: string, hints?: string[], showVocab = false): StatusArgs {
@@ -182,6 +272,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   let clear = false;
   let all = false;
   let json = false;
+  let append = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "-m" || a === "--note" || a === "--risk" || a === "--note-only") {
@@ -193,7 +284,8 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       if (a === "--risk") riskRaw = value;
       else if (a === "--note-only") noteOnly = value;
       else note = value;
-    } else if (a === "--clear") clear = true;
+    } else if (a === "--append") append = true;
+    else if (a === "--clear") clear = true;
     else if (a === "--all") all = true;
     else if (a === "--json") json = true;
     else if (a === "--help" || a === "-h") return { kind: "help" };
@@ -230,7 +322,17 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     }
     const sanitized = sanitizeWorkNote(noteOnly);
     if (sanitized === "") return err("--note-only requires a non-empty note");
-    return { kind: "amend", slugArg: positionals[0] ?? null, note: sanitized, risk: null };
+    return {
+      kind: "amend",
+      slugArg: positionals[0] ?? null,
+      note: sanitized,
+      risk: null,
+      append,
+    };
+  }
+
+  if (append && note === null && noteOnly === null) {
+    return err("--append needs the text to append (-m \"...\" or --note-only \"...\")");
   }
 
   if (all) {
@@ -291,7 +393,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     // erroring: confidence is supposed to move as testing lands, and the
     // only alternative — re-asserting `ready` in full — fakes a fresh
     // assertion and forces the note to be restated.
-    if (risk) return { kind: "amend", slugArg, note, risk };
+    if (risk) return { kind: "amend", slugArg, note, risk, append };
     if (note !== null) {
       return err(
         "-m needs a state to set — to amend an existing note use --note-only",
@@ -333,7 +435,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     );
   }
 
-  return { kind: "set", slugArg, state, note, risk };
+  return { kind: "set", slugArg, state, note, risk, append };
 }
 
 function describe(
@@ -472,7 +574,11 @@ export async function run(argv: string[]): Promise<number> {
       ]);
       return 2;
     }
-    const note = args.note ?? prev.note ?? null;
+    const { note, replaced } = resolveNote(
+      prev.note ?? null,
+      args.note,
+      args.append,
+    );
     // Same rule as asserting: a non-low risk without a note is an
     // unexplained hedge. An existing note satisfies it.
     if (args.risk && args.risk !== "low" && !note) {
@@ -486,7 +592,7 @@ export async function run(argv: string[]): Promise<number> {
     // bump, no re-narration of an unchanged state.
     const next: WorkStatusRecord = { ...prev };
     if (args.risk) next.risk = args.risk;
-    if (args.note) next.note = args.note;
+    if (note) next.note = note;
     setSlugWorkStatus(target.slug, next);
     const what =
       args.risk && args.note ? "risk + note" : args.risk ? "risk" : "note";
@@ -500,6 +606,8 @@ export async function run(argv: string[]): Promise<number> {
       }  ${dim(`${what} amended (state + timestamp kept)`)}`,
     );
     if (next.note) console.log(`  ${dim("note:")} ${next.note}`);
+    reportReplacedNote(replaced, args.note !== null);
+    noteBudgetHint(prev.state, next.note ?? null);
     return 0;
   }
 
@@ -513,11 +621,19 @@ export async function run(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // A new assertion still starts from a clean note when none is given —
+  // notes are scoped to the assertion they explain, and carrying a
+  // "blocked on dev login" note forward into `ready` would be worse than
+  // losing it. What changes is that losing it is no longer SILENT.
+  const prevNote = state.slugs[target.slug]?.work?.note ?? null;
+  const { note, replaced } = resolveNote(prevNote, args.note, args.append, {
+    keepWhenAbsent: false,
+  });
   const record: WorkStatusRecord = {
     state: args.state,
     at: new Date().toISOString(),
   };
-  if (args.note) record.note = args.note;
+  if (note) record.note = note;
   if (args.risk) record.risk = args.risk;
   const sha = await revParse("HEAD", target.path);
   if (sha) record.sha = sha;
@@ -532,7 +648,9 @@ export async function run(argv: string[]): Promise<number> {
   console.log(
     `${green("✓")} ${cyan(target.slug)} → ${color(args.state)}${args.risk ? `  ${dim("risk:")} ${color(args.risk)}` : ""}`,
   );
-  if (args.note) console.log(`  ${dim("note:")} ${args.note}`);
+  if (record.note) console.log(`  ${dim("note:")} ${record.note}`);
+  reportReplacedNote(replaced, args.note !== null);
+  noteBudgetHint(args.state, record.note ?? null);
   hint(guidance(args.state));
   return 0;
 }
