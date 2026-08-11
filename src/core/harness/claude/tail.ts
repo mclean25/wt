@@ -1,8 +1,19 @@
 /**
  * Per-worktree tailer for the wt-managed interactive `claude` session
  * jsonl. Powers the activity-pane swap when an F12 session is live —
- * the same `ActionLine[]` shape the action runner produces, fed by
- * fs.watch on the file claude appends to.
+ * the same `ActionLine[]` shape the action runner produces.
+ *
+ * # Threading
+ *
+ * The file side lives in a Worker (`tail-worker.ts`): fs.watch,
+ * debounce, the polling backstop, byte-offset reads, and jsonl
+ * parsing all happen off the render thread — a streaming agent writes
+ * multi-kilobyte lines in bursts, and parsing them inline was
+ * measurable input latency (same offload as codex's events worker).
+ * This module is the main-thread half: it resolves jsonl paths, keeps
+ * the observable `runs` map, applies the worker's parsed deltas, and
+ * fires the query-refresh sinks. Lifecycle/seeding/pre-creation-race
+ * semantics are documented on the worker.
  *
  * # Lifecycle
  *
@@ -11,86 +22,55 @@
  * `useEffect`; new entries spin up a tailer, the rest no-op. `stop`
  * unwinds one tailer; `reconcile` runs ensure-and-stop together against
  * a fresh live set.
- *
- * # Seeding
- *
- * On first ensure, the tailer reads the last `SEED_TAIL_BYTES` of the
- * jsonl, parses entries forward, and surfaces the resulting lines as
- * the initial buffer. This means navigating to a freshly-attached row
- * after a wt restart shows real history immediately, not a blank pane.
- * `toolStarts` populates as we walk so tool_results that arrive after
- * the seed compute correct durations against pre-end-of-seed tool_uses.
- * Older entries beyond the seed window are not surfaced; tool_results
- * inside the window whose tool_use sits outside it render as
- * `✓ (earlier call)` (no tool name or duration to recover).
- *
- * # Live tail
- *
- * fs.watch fires per write; we coalesce with `READ_DEBOUNCE_MS` so a
- * burst of appends only triggers one stat+read pass. Reads are byte-
- * range from `lastByte` to the new size, parsed into entries, with
- * partial trailing fragments held in `pending` for the next read.
- *
- * # Pre-creation race
- *
- * `tmuxSessionsQuery` reports a session as live the moment tmux's
- * `new-session` returns, which can be milliseconds before claude's
- * first jsonl write. When the file isn't on disk yet, we fall back to
- * watching the parent project dir; the dir watcher promotes itself to
- * a file watcher (and seeds) the moment our uuid.jsonl appears.
  */
-import {
-  type FSWatcher,
-  existsSync,
-  mkdirSync,
-  statSync,
-  watch,
-} from "node:fs";
 import { join } from "node:path";
 
 import {
   type ActionLine,
-  type MessageEmit,
-  type ToolStartMap,
-  AWAY_RECAP_HINT_RE,
   MAX_BUFFERED_LINES,
-  asObj,
-  compactMeta,
-  formatTokens,
-  messageToLines,
-  splitMessage,
 } from "./events.ts";
 import { projectDir as claudeProjectDir, wtSessionUuid } from "./jsonl.ts";
 import { createLogger } from "../../logger.ts";
+import { type RefreshTarget } from "./refresh-triggers.ts";
 import {
-  detectRefreshTriggers,
-  type RefreshTarget,
-} from "./refresh-triggers.ts";
-import { closeSilent, jsonlTimestamp, readFileSlice } from "../../tail-util.ts";
+  type SessionContextUsage,
+  applyEmit,
+} from "./tail-parse.ts";
+import type {
+  TailWorkerMessage,
+  TailWorkerResult,
+} from "./tail-worker-protocol.ts";
 import { claudeSessionName } from "../../tmux.ts";
+
+// Compat re-exports: the parse layer moved to `tail-parse.ts` for the
+// worker seam; established importers (tests, the footer's context-%
+// math) keep reading from here.
+export { contextWindowTokens, parseEntry } from "./tail-parse.ts";
+export type { SessionContextUsage } from "./tail-parse.ts";
 
 const log = createLogger("[session-tail]");
 
 // ---------------------------------------------------------------------------
 // Refresh triggers
 //
-// While the live tail is reading the jsonl anyway, it scans each new
-// entry for Bash tool calls (`gh pr create`, `git push`, …) that change
-// GitHub-side state and asks the runtime to invalidate the matching
-// query — see `refresh-triggers.ts`. Detection is per-line; delivery is
-// debounced per target so a burst of git/gh calls collapses to one
-// refresh, and so the triggering command has finished by the time the
-// refetch fires (we match on tool_use, not tool_result).
+// While the live tail is reading the jsonl anyway, the worker scans
+// each new entry for Bash tool calls (`gh pr create`, `git push`, …)
+// that change GitHub-side state; this side asks the runtime to
+// invalidate the matching query — see `refresh-triggers.ts`. Detection
+// is per-line; delivery is debounced per target so a burst of git/gh
+// calls collapses to one refresh, and so the triggering command has
+// finished by the time the refetch fires (we match on tool_use, not
+// tool_result).
 // ---------------------------------------------------------------------------
 
 /** Debounce window for refresh triggers. See block comment above. */
 const TRIGGER_DEBOUNCE_MS = 3_000;
 
-/** Tighter window for the per-slug "this jsonl moved" sink. The 80ms
- *  read-debounce already coalesces FSEvents bursts at the file level;
- *  this just collapses a turn's worth of appends into one invalidation
- *  pass so `wtClaudeQuery` (ages, queue counts) snaps on turn end
- *  instead of drifting up to its 5s poll. */
+/** Tighter window for the per-slug "this jsonl moved" sink. The worker's
+ *  80ms read-debounce already coalesces FSEvents bursts at the file
+ *  level; this just collapses a turn's worth of appends into one
+ *  invalidation pass so `wtClaudeQuery` (ages, queue counts) snaps on
+ *  turn end instead of drifting up to its 5s poll. */
 const SLUG_CHANGE_DEBOUNCE_MS = 500;
 
 let triggerSink: ((target: RefreshTarget) => void) | null = null;
@@ -174,47 +154,6 @@ export function tailKey(slug: string, name: string | null): string {
   return claudeSessionName(slug, name);
 }
 
-/** How many trailing bytes of the jsonl to seed from on first ensure. */
-const SEED_TAIL_BYTES = 64 * 1024;
-/** Coalesce window for fs.watch bursts. */
-const READ_DEBOUNCE_MS = 80;
-/**
- * Backstop polling cadence. Bun's `fs.watch` on macOS can silently miss
- * append events on long-lived jsonls (e.g. the main-clone slot's bottom-
- * bar tail going stale even though claude is still writing). One shared
- * interval iterates every tracked tail and re-uses the same delta-read
- * pipeline; `readDelta` short-circuits when `size === lastByte`, so the
- * idle cost is one stat per tailer per tick.
- */
-const POLL_INTERVAL_MS = 3_000;
-
-/**
- * Context occupancy of the conversation, from the most recent assistant
- * entry's `message.usage`: prompt tokens actually in the window
- * (`input_tokens` + both cache buckets). Powers the footer's manager
- * context-% readout; updates push-based as the tail reads each turn,
- * and a `/compact` reflects on the first post-compaction turn.
- */
-export type SessionContextUsage = {
-  tokens: number;
-  /** Model id from the same entry, for window-size resolution. */
-  model: string | null;
-};
-
-/**
- * Context-window size for a claude model id. Deliberately NOT a
- * per-model registry (checked: the session jsonl carries no window
- * size, and scraping the pane is worse). The Claude 5 era made 1M the
- * standard window (Opus 5 included — a 200k default here read the
- * footer's manager context % ~5x too high), so 1M is the default;
- * haiku is the one current family still on 200k. If that breaks, this
- * one function is the place to teach — resist growing a model table.
- */
-export function contextWindowTokens(model: string | null): number {
-  if (!model) return 1_000_000;
-  return /haiku/i.test(model) ? 200_000 : 1_000_000;
-}
-
 export type SessionRun = {
   slug: string;
   /** `null` = primary, otherwise the user-typed name. */
@@ -226,29 +165,6 @@ export type SessionRun = {
 };
 
 type Listener = () => void;
-
-type State = {
-  slug: string;
-  name: string | null;
-  path: string;
-  projectDir: string;
-  jsonlName: string;
-  toolStarts: ToolStartMap;
-  /**
-   * Monotonic per-tail line id. Tool calls stash their assigned id on
-   * the `ToolStartEntry` so the later `tool_result` can patch the
-   * same buffer line in place (collapsing the `⚒ → ✓` two-line pair
-   * into one line that flips green/red). Survives seed→live handoff;
-   * the seed pass and the live pass share the same counter so ids
-   * stay unique across the boundary.
-   */
-  nextLineId: number;
-  lastByte: number;
-  pending: string;
-  watcher: FSWatcher | null;
-  dirWatcher: FSWatcher | null;
-  debounce: Timer | null;
-};
 
 /**
  * Description of one live claude session for reconciliation. The
@@ -267,14 +183,15 @@ class SessionTailRegistry {
   // primary, `<slug>~<name>` for named. Multiple sessions per slug
   // coexist as separate entries.
   private runs: ReadonlyMap<string, SessionRun> = new Map();
-  private state = new Map<string, State>();
+  /** Resolved jsonl path per tracked key, for ensure idempotence. */
+  private tracked = new Map<string, string>();
   private listeners = new Set<Listener>();
-  private poller: Timer | null = null;
+  private worker: Worker | null = null;
 
   /**
-   * Idempotent. Spins up a tailer for the (slug, name) session's
-   * wt-managed jsonl if not already running; safe to call on every
-   * render-driven reconcile.
+   * Idempotent. Spins up a worker-side tailer for the (slug, name)
+   * session's wt-managed jsonl if not already running; safe to call on
+   * every render-driven reconcile.
    */
   ensure(slug: string, wtPath: string, name: string | null = null): void {
     const key = tailKey(slug, name);
@@ -282,65 +199,24 @@ class SessionTailRegistry {
     const projectDir = claudeProjectDir(wtPath);
     const jsonlName = `${uuid}.jsonl`;
     const path = join(projectDir, jsonlName);
-    const existing = this.state.get(key);
-    if (existing) {
+    const existing = this.tracked.get(key);
+    if (existing !== undefined) {
       // Already tracking — only restart if the resolved path changed
       // (e.g. a destroy+recreate cycle re-pointed the slug at a
       // different worktree path within the same TUI run).
-      if (existing.path === path) return;
-      this.stop(slug, name);
+      if (existing === path) return;
+      this.stopByKey(key);
     }
-
-    const st: State = {
-      slug,
-      name,
-      path,
-      projectDir,
-      jsonlName,
-      toolStarts: new Map(),
-      nextLineId: 1,
-      lastByte: 0,
-      pending: "",
-      watcher: null,
-      dirWatcher: null,
-      debounce: null,
-    };
-    this.state.set(key, st);
-
+    this.tracked.set(key, path);
     const startedAt = Date.now();
     this.commit((m) =>
       m.set(key, { slug, name, startedAt, lines: [], lastUsage: null }),
     );
-
-    if (existsSync(path)) {
-      this.seedAndWatch(key);
-    } else {
-      this.watchForCreation(key);
-    }
-    this.ensurePoller();
+    this.post({ type: "ensure", key, slug, name, path, projectDir, jsonlName });
   }
 
   stop(slug: string, name: string | null = null): void {
     this.stopByKey(tailKey(slug, name));
-  }
-
-  /**
-   * Close watchers/timers + drop both maps for `key`. Centralizing
-   * the cleanup ensures `reconcile` / `stopAll` paths can't
-   * accidentally orphan an FSWatcher or debounce Timer if `runs` and
-   * `state` ever fall out of sync.
-   */
-  private stopByKey(key: string): void {
-    const st = this.state.get(key);
-    if (!st) return;
-    closeSilent(st.watcher);
-    closeSilent(st.dirWatcher);
-    if (st.debounce) clearTimeout(st.debounce);
-    this.state.delete(key);
-    this.commit((m) => {
-      m.delete(key);
-    });
-    if (this.state.size === 0) this.stopPoller();
   }
 
   /**
@@ -355,15 +231,22 @@ class SessionTailRegistry {
       liveKeys.add(tailKey(desc.slug, desc.name));
       this.ensure(desc.slug, desc.wtPath, desc.name);
     }
-    for (const key of [...this.state.keys()]) {
+    for (const key of [...this.tracked.keys()]) {
       if (!liveKeys.has(key)) this.stopByKey(key);
     }
   }
 
-  /** Stop every tailer. Used on TUI shutdown. */
+  /** Stop every tailer + the worker. Used on TUI shutdown. */
   stopAll(): void {
-    for (const key of [...this.state.keys()]) this.stopByKey(key);
-    this.stopPoller();
+    for (const key of [...this.tracked.keys()]) this.stopByKey(key);
+    if (this.worker) {
+      try {
+        this.worker.terminate();
+      } catch {
+        // already gone
+      }
+      this.worker = null;
+    }
     // Drop any pending debounce timers — no tailer is left to have
     // produced them, and a late fire would invalidate queries on a
     // torn-down client. Both maps, symmetrically: the runtime also nulls
@@ -393,6 +276,95 @@ class SessionTailRegistry {
 
   // ---------- internals ----------
 
+  private stopByKey(key: string): void {
+    if (!this.tracked.delete(key)) return;
+    this.post({ type: "stop", key });
+    this.commit((m) => {
+      m.delete(key);
+    });
+  }
+
+  private post(msg: TailWorkerMessage): void {
+    // stop/stop-all with no worker alive means nothing is tailing —
+    // don't spawn one just to tell it that.
+    if (!this.worker && msg.type !== "ensure") return;
+    try {
+      this.ensureWorker().postMessage(msg);
+    } catch (err) {
+      log.warn("tail worker post failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private ensureWorker(): Worker {
+    if (this.worker) return this.worker;
+    const worker = new Worker(new URL("./tail-worker.ts", import.meta.url).href);
+    worker.addEventListener("message", (event: MessageEvent) => {
+      this.onResult(event.data as TailWorkerResult);
+    });
+    worker.addEventListener("error", (event) => {
+      log.warn("tail worker error", { err: event.message });
+    });
+    worker.addEventListener("close", () => {
+      // Deliberate teardown nulls `worker` first (stopAll); anything
+      // else is a crash. Dropping the handle lets the next ensure/
+      // reconcile pass spawn a fresh worker and re-seed its tails.
+      if (this.worker === worker) {
+        log.warn("tail worker exited; will respawn on next reconcile");
+        this.worker = null;
+        const tracked = [...this.tracked.keys()];
+        this.tracked.clear();
+        // Keep runs visible (stale-but-painted beats blank); the next
+        // reconcile re-ensures every live key and the re-seed replaces
+        // the buffers wholesale.
+        void tracked;
+      }
+    });
+    // Idle worker must not keep wt alive during shutdown.
+    (worker as Worker & { unref?: () => void }).unref?.();
+    this.worker = worker;
+    return worker;
+  }
+
+  private onResult(msg: TailWorkerResult): void {
+    if (msg.type === "warn") {
+      log.warn("tail worker", { message: msg.message, key: msg.key });
+      return;
+    }
+    // A result for a key stopped while the worker had it in flight —
+    // drop it rather than resurrecting a deleted entry.
+    if (!this.tracked.has(msg.key)) return;
+    if (msg.type === "seed") {
+      this.update(msg.key, (r) => ({
+        ...r,
+        lines: msg.lines,
+        lastUsage: msg.hasUsage ? msg.usage : r.lastUsage,
+      }));
+      return;
+    }
+    // delta: the jsonl grew — `claudeStatus` reads it directly for the
+    // row's last-activity age + queue count, so a slug-scoped
+    // invalidation fires regardless of whether the batch produced a
+    // UI-visible emit (system events, queue-ops, etc).
+    scheduleSlugChange(msg.slug);
+    for (const target of msg.triggers) scheduleTrigger(target);
+    if (msg.emits.length === 0 && !msg.hasUsage) return;
+    this.update(msg.key, (r) => {
+      let next: ActionLine[] = r.lines.slice();
+      for (const emit of msg.emits) next = applyEmit(next, emit);
+      const lines =
+        next.length > MAX_BUFFERED_LINES
+          ? next.slice(-MAX_BUFFERED_LINES)
+          : next;
+      return {
+        ...r,
+        lines,
+        lastUsage: msg.hasUsage ? msg.usage : r.lastUsage,
+      };
+    });
+  }
+
   private notify(): void {
     for (const l of this.listeners) {
       try {
@@ -410,401 +382,11 @@ class SessionTailRegistry {
     this.notify();
   }
 
-  private ensurePoller(): void {
-    if (this.poller) return;
-    this.poller = setInterval(() => {
-      for (const [key, st] of this.state) {
-        // Skip tails still in `watchForCreation` mode — the dirWatcher
-        // promotes them to `seedAndWatch` when the file appears, and a
-        // pre-seed `readDelta` would race the seed's drop-first-partial
-        // logic and duplicate content.
-        if (st.watcher == null) continue;
-        this.scheduleRead(key);
-      }
-    }, POLL_INTERVAL_MS);
-  }
-
-  private stopPoller(): void {
-    if (!this.poller) return;
-    clearInterval(this.poller);
-    this.poller = null;
-  }
-
   private update(key: string, mut: (r: SessionRun) => SessionRun): void {
     const cur = this.runs.get(key);
     if (!cur) return;
     this.commit((m) => m.set(key, mut(cur)));
   }
-
-  private watchForCreation(key: string): void {
-    const st = this.state.get(key);
-    if (!st) return;
-    // Project dir may not exist if claude has never written for this
-    // worktree before; create it so fs.watch has something to attach to.
-    try {
-      mkdirSync(st.projectDir, { recursive: true });
-    } catch {
-      // best-effort; if mkdir fails the watch will too and we log below
-    }
-    try {
-      st.dirWatcher = watch(
-        st.projectDir,
-        { persistent: false },
-        (_event, filename) => {
-          // macOS reports `filename` as null on some atomic-write paths;
-          // accept null (recheck) rather than dropping the event.
-          if (filename != null && filename !== st.jsonlName) return;
-          if (!existsSync(st.path)) return;
-          closeSilent(st.dirWatcher);
-          st.dirWatcher = null;
-          this.seedAndWatch(key);
-        },
-      );
-    } catch (err) {
-      log.warn("dir watch failed", {
-        slug: st.slug,
-        name: st.name,
-        projectDir: st.projectDir,
-        err: errMsg(err),
-      });
-      return;
-    }
-    // Race close: claude can create the file between our pre-watch
-    // existsSync (in ensure) and the watcher attaching. Without this
-    // recheck the tailer would stay stuck on the dir watcher forever
-    // even though the file is on disk and growing.
-    if (existsSync(st.path)) {
-      closeSilent(st.dirWatcher);
-      st.dirWatcher = null;
-      this.seedAndWatch(key);
-    }
-  }
-
-  private seedAndWatch(key: string): void {
-    const st = this.state.get(key);
-    if (!st) return;
-    try {
-      this.readSeed(key);
-    } catch (err) {
-      log.warn("seed read failed", { slug: st.slug, name: st.name, err: errMsg(err) });
-    }
-    try {
-      st.watcher = watch(st.path, { persistent: false }, () =>
-        this.scheduleRead(key),
-      );
-    } catch (err) {
-      log.warn("file watch failed", { slug: st.slug, name: st.name, err: errMsg(err) });
-    }
-  }
-
-  private readSeed(key: string): void {
-    const st = this.state.get(key);
-    if (!st) return;
-    let size = 0;
-    try {
-      size = statSync(st.path).size;
-    } catch {
-      return;
-    }
-    if (size === 0) {
-      st.lastByte = 0;
-      return;
-    }
-    const start = Math.max(0, size - SEED_TAIL_BYTES);
-    const body = readFileSlice(st.path, start, size - start);
-    const lines = body.split("\n");
-    // Drop the first fragment if we didn't start at byte 0 — likely partial.
-    // Tool_uses outside the seed window leave their tool_results in the
-    // window without a matching start in `toolStarts`, so those results
-    // render as standalone `→ ok (—)` orphan lines via the orphan path
-    // in messageToLines. Acceptable for a seed of bounded size.
-    const startIdx = start === 0 ? 0 : 1;
-    let accum: ActionLine[] = [];
-    // `undefined` = no usage-affecting line seen yet this pass (keep
-    // whatever the run already has). A compact_boundary line sets this
-    // to `null` (explicit reset); an assistant turn's usage sets it to
-    // the parsed figure. Later lines in the forward scan win, matching
-    // jsonl order.
-    let usage: SessionContextUsage | null | undefined;
-    const nextId = () => st.nextLineId++;
-    for (let i = startIdx; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line) continue;
-      const out = parseEntry(line, st.toolStarts, nextId);
-      accum = applyEmit(accum, out);
-      if (Object.hasOwn(out, "usage")) usage = out.usage;
-    }
-    st.lastByte = size;
-    st.pending = "";
-    const trimmed =
-      accum.length > MAX_BUFFERED_LINES
-        ? accum.slice(-MAX_BUFFERED_LINES)
-        : accum;
-    this.update(key, (r) => ({
-      ...r,
-      lines: trimmed,
-      lastUsage: usage !== undefined ? usage : r.lastUsage,
-    }));
-  }
-
-  private scheduleRead(key: string): void {
-    const st = this.state.get(key);
-    if (!st) return;
-    if (st.debounce) return;
-    st.debounce = setTimeout(() => {
-      st.debounce = null;
-      try {
-        this.readDelta(key);
-      } catch (err) {
-        log.warn("delta read failed", { slug: st.slug, name: st.name, err: errMsg(err) });
-      }
-    }, READ_DEBOUNCE_MS);
-  }
-
-  private readDelta(key: string): void {
-    const st = this.state.get(key);
-    if (!st) return;
-    let size = 0;
-    try {
-      size = statSync(st.path).size;
-    } catch {
-      return;
-    }
-    if (size === st.lastByte) return;
-    if (size < st.lastByte) {
-      // File shrank — claude rotated or external truncate. Resync.
-      st.lastByte = size;
-      st.pending = "";
-      return;
-    }
-    const body = readFileSlice(st.path, st.lastByte, size - st.lastByte);
-    st.lastByte = size;
-    const combined = st.pending + body;
-    const lines = combined.split("\n");
-    st.pending = lines.pop() ?? "";
-    const nextId = () => st.nextLineId++;
-    const emits: MessageEmit[] = [];
-    // See the matching comment in `readSeed`: `undefined` = no signal
-    // this batch, `null` = explicit reset (compact_boundary), an object
-    // = fresh usage. Last signal in the batch wins.
-    let usage: SessionContextUsage | null | undefined;
-    for (const line of lines) {
-      if (!line) continue;
-      const out = parseEntry(line, st.toolStarts, nextId);
-      if (out.append.length > 0 || out.patch.length > 0) emits.push(out);
-      if (Object.hasOwn(out, "usage")) usage = out.usage;
-      // Live tail only: scan for `gh pr …` / `git push` &c and schedule
-      // a debounced query refresh. `readSeed` deliberately skips this —
-      // replaying hours-old history must not fire refreshes.
-      for (const target of detectRefreshTriggers(line)) {
-        scheduleTrigger(target);
-      }
-    }
-    // The jsonl grew — `claudeStatus` reads it directly for the row's
-    // last-activity age + queue count, so a slug-scoped invalidation
-    // here snaps the badge on turn end regardless of whether the line
-    // produced a UI-visible emit (system events, queue-ops, etc).
-    scheduleSlugChange(st.slug);
-    if (emits.length === 0 && usage === undefined) return;
-    this.update(key, (r) => {
-      let next: ActionLine[] = r.lines.slice();
-      for (const emit of emits) next = applyEmit(next, emit);
-      const lines =
-        next.length > MAX_BUFFERED_LINES
-          ? next.slice(-MAX_BUFFERED_LINES)
-          : next;
-      return { ...r, lines, lastUsage: usage !== undefined ? usage : r.lastUsage };
-    });
-  }
-
-}
-
-/**
- * Apply one parser delta to a snapshot of buffer lines, returning a
- * new array. Patches by id (no-op when the id has already been evicted
- * past `MAX_BUFFERED_LINES` — the user can't see the line anyway),
- * then appends. Single pass over the array per delta; cheap at our
- * buffer scale (1000 lines, a handful of patches per delta).
- */
-function applyEmit(prev: readonly ActionLine[], emit: MessageEmit): ActionLine[] {
-  const { append, patch } = emit;
-  if (append.length === 0 && patch.length === 0) return prev.slice();
-  let next: ActionLine[] = prev.slice();
-  if (patch.length > 0) {
-    const byId = new Map<number, ActionLine>();
-    for (const p of patch) byId.set(p.id, p.line);
-    next = next.map((l) => byId.get(l.id) ?? l);
-  }
-  if (append.length > 0) next = [...next, ...append];
-  return next;
-}
-
-const EMPTY_EMIT: MessageEmit = { append: [], patch: [] };
-
-/**
- * Context tokens occupied per an assistant entry's `message.usage`:
- * fresh input plus both cache buckets (cache reads ARE in the window;
- * only their price differs). Null for non-assistant entries or when
- * the envelope carries no numeric usage.
- */
-function extractUsage(e: Record<string, unknown>): SessionContextUsage | null {
-  if (e.type !== "assistant") return null;
-  // Sidechain (subagent) turns carry the SUBAGENT's window, not the
-  // conversation's — surfacing them would make the % sawtooth.
-  if (e.isSidechain === true) return null;
-  const m = asObj(e.message);
-  if (!m) return null;
-  const u = asObj(m.usage);
-  if (!u) return null;
-  const num = (v: unknown): number => (typeof v === "number" ? v : 0);
-  if (typeof u.input_tokens !== "number") return null;
-  const tokens =
-    num(u.input_tokens) +
-    num(u.cache_read_input_tokens) +
-    num(u.cache_creation_input_tokens);
-  return { tokens, model: typeof m.model === "string" ? m.model : null };
-}
-
-/**
- * Exported for unit tests only — the registry is the real caller. Parses
- * one raw jsonl line into a buffer delta plus an optional context-usage
- * signal (see the `usage` field: absent = no change, `null` = explicit
- * reset from a compact boundary, an object = fresh figure).
- */
-export function parseEntry(
-  raw: string,
-  toolStarts: ToolStartMap,
-  nextId: () => number,
-): MessageEmit & { usage?: SessionContextUsage | null } {
-  let evt: unknown;
-  try {
-    evt = JSON.parse(raw);
-  } catch {
-    return EMPTY_EMIT;
-  }
-  const e = asObj(evt);
-  if (!e) return EMPTY_EMIT;
-  const t = e.type;
-  const ts = jsonlTimestamp(e);
-  if (t === "assistant" || t === "user") {
-    // The auto-injected post-compaction summary blob ("This session is
-    // being continued from a previous conversation…") arrives as a
-    // user envelope flagged with `isCompactSummary`. Skip it — the
-    // `compact_boundary` system event below carries the high-signal
-    // marker (token deltas, trigger), and rendering the full summary
-    // would dump several hundred lines of internal detail into the pane.
-    if (t === "user" && e.isCompactSummary === true) return EMPTY_EMIT;
-    const usage = extractUsage(e);
-    const emit = messageToLines({
-      role: t,
-      message: e.message,
-      ts,
-      toolStarts,
-      nextId,
-    });
-    return usage ? { ...emit, usage } : emit;
-  }
-  // system.compact_boundary — fired when the conversation is compacted
-  // (manual `/compact` or auto when the context window fills). Surface
-  // as a single dim marker line so the user can see where compactions
-  // landed in the timeline. Token counts come from `compactMetadata`;
-  // we annotate the trigger only when it's `auto` since manual is the
-  // common case (the user just typed /compact).
-  if (t === "system" && e.subtype === "compact_boundary") {
-    const meta = asObj(e.compactMetadata);
-    const pre =
-      meta && typeof meta.preTokens === "number" ? meta.preTokens : null;
-    const post =
-      meta && typeof meta.postTokens === "number" ? meta.postTokens : null;
-    const trigger =
-      meta && typeof meta.trigger === "string" ? meta.trigger : null;
-    const tokenPart =
-      pre != null && post != null
-        ? ` (${formatTokens(pre)} → ${formatTokens(post)})`
-        : "";
-    const triggerPart = trigger && trigger !== "manual" ? ` ${trigger}` : "";
-    return {
-      append: [
-        {
-          id: nextId(),
-          ts,
-          kind: "info",
-          text: `↘ compacted${triggerPart}${tokenPart}`,
-        },
-      ],
-      patch: [],
-      // Explicit reset (not just "no info this line" — that's `usage`
-      // absent). The pre-compact tokens/model no longer describe the
-      // window; clearing to null makes the footer hide the % until the
-      // next assistant turn lands with a fresh usage figure. Distinct
-      // from the sidechain/non-numeric skip in `extractUsage`, which
-      // omits the `usage` key entirely so callers keep the prior value.
-      usage: null,
-    };
-  }
-  // system.away_summary — claude's auto-generated context-recap when
-  // the conversation is auto-compacted. High-signal: the user can
-  // glance at the pane and see "this is what the previous turns were
-  // about" without re-reading the whole tail. Multi-line: same
-  // newline-split + per-line cap as assistant text, with the leading
-  // `─` only on the first row so the block reads as one summary
-  // group rather than a series of dash bullets.
-  if (t === "system" && e.subtype === "away_summary") {
-    const raw = typeof e.content === "string" ? e.content : "";
-    const content = raw.replace(AWAY_RECAP_HINT_RE, "");
-    const { pieces, truncated } = splitMessage(content);
-    if (pieces.length === 0) return EMPTY_EMIT;
-    const lines: ActionLine[] = pieces.map((piece, i) => ({
-      id: nextId(),
-      ts,
-      kind: "info",
-      text: `${i === 0 ? "─ " : "  "}${piece}`,
-    }));
-    if (truncated > 0) {
-      lines.push({
-        id: nextId(),
-        ts,
-        kind: "info",
-        text: `  …${truncated} more line${truncated === 1 ? "" : "s"} truncated`,
-      });
-    }
-    return { append: lines, patch: [] };
-  }
-  // attachment.queued_command — when the user types-ahead while
-  // claude is still processing, the prompt sits queued. Surface the
-  // user-typed ones (`commandMode === "prompt"`) so the pane shows
-  // intent that would otherwise be invisible. `task-notification`
-  // and other system-injected attachments stay dropped.
-  if (t === "attachment") {
-    const att = asObj(e.attachment);
-    if (
-      att &&
-      att.type === "queued_command" &&
-      att.commandMode === "prompt" &&
-      typeof att.prompt === "string"
-    ) {
-      const compacted = compactMeta(att.prompt);
-      if (compacted) {
-        return {
-          append: [
-            {
-              id: nextId(),
-              ts,
-              kind: "info",
-              text: `⏎ queued: ${compacted}`,
-            },
-          ],
-          patch: [],
-        };
-      }
-    }
-    return EMPTY_EMIT;
-  }
-  return EMPTY_EMIT;
-}
-
-function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 export const sessionTailRegistry = new SessionTailRegistry();

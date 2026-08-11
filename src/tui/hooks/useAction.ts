@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSyncExternalStore } from "react";
 
 import {
@@ -8,18 +8,19 @@ import {
 } from "../../core/actions.ts";
 
 /**
- * The current run for a slug, or `null` when there is none. Re-renders
- * any time the registry mutates — the snapshot is the registry's
- * `Map<slug, ActionRun>`, identity changes on every update.
+ * The current run for a slug, or `null` when there is none. Per-key
+ * selector: the registry replaces only the touched entry on an update,
+ * so this re-renders on THIS slug's run changing (per-line while it
+ * streams — which is load-bearing: the action viewer reads the
+ * registry non-reactively and rides its parent's re-render), never on
+ * other slugs' runs.
  */
 export function useAction(slug: string | undefined): ActionRun | null {
-  const map = useSyncExternalStore(
-    actionRegistry.subscribe,
-    actionRegistry.getSnapshot,
-    actionRegistry.getSnapshot,
+  const get = useCallback(
+    () => (slug ? actionRegistry.getSnapshot().get(slug) ?? null : null),
+    [slug],
   );
-  if (!slug) return null;
-  return map.get(slug) ?? null;
+  return useSyncExternalStore(actionRegistry.subscribe, get, get);
 }
 
 /**

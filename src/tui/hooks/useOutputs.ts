@@ -6,7 +6,7 @@
  * mutation. F11 diff is deliberately excluded from this universe —
  * see `core/outputs.ts`.
  */
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo, useRef, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { actionRegistry } from "../../core/actions.ts";
@@ -55,6 +55,37 @@ function pruneDestroyStamps(live: readonly string[]): void {
   }
 }
 
+/**
+ * Two outputs lists are equivalent for rendering purposes when they
+ * agree on membership, order, and every display-relevant field. The
+ * deliberate exclusions are `startedAt`/`lastActivity`: they advance on
+ * every tail append, they only matter through the sort order (already
+ * covered by comparing order) and the picker's age column (transient,
+ * and a picker whose rows don't jump under the cursor mid-stream is a
+ * feature) — and comparing them would put the App-level caller back on
+ * a re-render-per-append cadence, which is what this check exists to
+ * prevent.
+ */
+function outputsEquivalent(
+  a: readonly Output[],
+  b: readonly Output[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (
+      x.id !== y.id ||
+      x.kind !== y.kind ||
+      x.title !== y.title ||
+      x.status !== y.status
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function useOutputs(opts: {
   /** Slugs whose lock op is `"remove"` — drives the destroy outputs. */
   destroyingSlugs: readonly string[];
@@ -94,7 +125,7 @@ export function useOutputs(opts: {
   );
   const sessions = useQuery(tmuxSessionsQuery()).data;
 
-  return useMemo(() => {
+  const computed = useMemo(() => {
     const out: Output[] = [];
 
     const lastEvtTs = evts[evts.length - 1]?.ts ?? Date.now();
@@ -182,4 +213,13 @@ export function useOutputs(opts: {
     sessions,
     destroyingSlugs,
   ]);
+  // Identity stabilization (see `outputsEquivalent`): the sources above
+  // mutate on every tail/event append, but App — this hook's caller via
+  // useOutputFocus — only needs a new array when the list meaningfully
+  // changed.
+  const prevRef = useRef<readonly Output[]>([]);
+  if (!outputsEquivalent(prevRef.current, computed)) {
+    prevRef.current = computed;
+  }
+  return prevRef.current;
 }

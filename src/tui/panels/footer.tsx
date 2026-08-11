@@ -81,6 +81,11 @@ const BUTTON_SLOTS: readonly SessionSlot[] = [
   DOTFILES_SLOT,
 ];
 
+const getManagerUsage = () =>
+  sessionTailRegistry
+    .getSnapshot()
+    .get(tailKey(MANAGER_SLUG, MANAGER_CLAUDE_NAME))?.lastUsage ?? null;
+
 /**
  * Manager conversation context occupancy in percent, from the session
  * tail's `lastUsage` (see `SessionContextUsage`). Null while no live
@@ -89,11 +94,14 @@ const BUTTON_SLOTS: readonly SessionSlot[] = [
  * `/compact` (palette `m` command) snaps the number on the next turn.
  */
 function useManagerContextPct(): number | null {
-  const runs = useSyncExternalStore(
+  // Per-key selector: the footer must not re-render on every OTHER
+  // session's tail append — only when the manager entry's own usage
+  // object changes identity.
+  const usage = useSyncExternalStore(
     sessionTailRegistry.subscribe,
-    sessionTailRegistry.getSnapshot,
+    getManagerUsage,
+    getManagerUsage,
   );
-  const usage = runs.get(tailKey(MANAGER_SLUG, MANAGER_CLAUDE_NAME))?.lastUsage;
   if (!usage) return null;
   return Math.min(
     100,
