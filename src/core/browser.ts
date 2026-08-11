@@ -14,11 +14,17 @@
  *     told what it is, and
  *  2. deletes that session on destroy, which closes the pages it opened.
  *
- * The `wt-` prefix is the safety boundary: wt only ever deletes sessions
- * it named, never one an agent or the user made up. And `session delete`
- * *releases* a tab the user attached by hand rather than closing it — so
- * the worst case is a tab wt opened outliving its worktree, never one of
- * the user's own tabs disappearing.
+ * Two ownership rules decide what wt may close, and BOTH are things wt
+ * itself handed out: the `wt-` session name it set, and the dev PORT it
+ * allocated. The port rule exists because the sessions actually sitting
+ * on a worktree's app are usually named by a login or setup script, not
+ * by wt, so name-matching alone sees none of them — but a tab on
+ * `localhost:<the port wt assigned this worktree>` cannot belong to
+ * anything else. wt never closes a session on a guess about its name.
+ * And `session delete` *releases* a tab the user attached by hand
+ * rather than closing it — so the worst case is a tab wt opened
+ * outliving its worktree, never one of the user's own tabs
+ * disappearing.
  *
  * Every failure here is swallowed. A browser tab is not worth failing a
  * teardown over, and the common "failures" are ordinary: browser-control
@@ -55,20 +61,44 @@ export function ownsBrowserSession(slug: string, sessionId: string): boolean {
   return sessionId === own || sessionId.startsWith(`${own}-`);
 }
 
+/**
+ * Whether a session is parked on `port` of the loopback host — the
+ * SECOND ownership rule, and the one that doesn't depend on who named
+ * the session. wt allocates each worktree a stable dev port and pins
+ * the server to it, so a tab on `localhost:<that port>` is that
+ * worktree's dev server by construction, whoever opened it. That
+ * matters because the sessions actually sitting on those ports are
+ * routinely named by login/setup scripts (`czlogin8105`), never by wt,
+ * so the `wt-` prefix rule can't see them at all.
+ */
+export function sessionOnDevPort(pageUrl: string | null, port: number): boolean {
+  if (!pageUrl) return false;
+  let url: URL;
+  try {
+    url = new URL(pageUrl);
+  } catch {
+    return false;
+  }
+  if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return false;
+  return url.port === String(port);
+}
+
+export type BrowserSession = { id: string; pageUrl: string | null };
+
 type StatusJson = {
   relay?: { running?: boolean };
-  extension?: { sessions?: { id?: unknown }[] };
+  extension?: { sessions?: { id?: unknown; pageUrl?: unknown }[] };
 };
 
 /**
- * Session ids the relay currently knows about, or `null` when we can't
+ * Sessions the relay currently knows about, or `null` when we can't
  * ask (no binary, relay down, unparseable output). `status --json` is
  * the right probe precisely because it is read-only and — unlike the
  * relay-backed commands — never *starts* a relay: a destroy must not
  * spin up browser infrastructure just to discover there was nothing to
  * clean up.
  */
-async function liveSessionIds(): Promise<string[] | null> {
+async function liveSessions(): Promise<BrowserSession[] | null> {
   if (!Bun.which(BIN)) return null;
   const res = await run([BIN, "status", "--json"], { timeoutMs: 5000 });
   if (res.exitCode !== 0) return null;
@@ -80,28 +110,68 @@ async function liveSessionIds(): Promise<string[] | null> {
   }
   if (parsed.relay?.running !== true) return null;
   const sessions = parsed.extension?.sessions ?? [];
-  return sessions.map((s) => s.id).filter((id): id is string => typeof id === "string");
+  return sessions
+    .filter((s): s is { id: string; pageUrl?: unknown } => typeof s.id === "string")
+    .map((s) => ({
+      id: s.id,
+      pageUrl: typeof s.pageUrl === "string" ? s.pageUrl : null,
+    }));
+}
+
+/** Delete the given sessions, returning the ids that actually went. */
+async function deleteSessions(ids: readonly string[]): Promise<string[]> {
+  const closed: string[] = [];
+  for (const id of ids) {
+    const res = await run([BIN, "session", "delete", id], { timeoutMs: 10_000 });
+    if (res.exitCode === 0) closed.push(id);
+    else log.debug("browser session delete failed", { id, stderr: res.stderr.trim() });
+  }
+  return closed;
 }
 
 /**
- * Close the browser tabs a worktree's agents opened, by deleting the
- * browser sessions wt named for it. Matches the slug's own session plus
- * any `wt-<slug>-<suffix>` an agent made for a second browser context.
+ * Close the browser tabs belonging to a worktree that is going away:
+ * the sessions wt named for it, plus anything parked on its dev port
+ * (see `sessionOnDevPort` — the login-script sessions are the ones
+ * actually holding the app open, and they carry nobody's prefix).
  *
  * Returns the session ids actually deleted, so the caller can report
  * real work and stay silent otherwise — no news is the common case.
  */
-export async function closeWorktreeBrowserSessions(slug: string): Promise<string[]> {
+export async function closeWorktreeBrowserSessions(
+  slug: string,
+  devPort?: number | null,
+): Promise<string[]> {
+  return closeBrowserSessions(
+    slug,
+    (s) =>
+      ownsBrowserSession(slug, s.id) ||
+      (devPort != null && sessionOnDevPort(s.pageUrl, devPort)),
+  );
+}
+
+/**
+ * Close the tabs a worktree's dev server was serving, by dev port only.
+ * Stopping the server strands them on a refused port, so they're dead
+ * weight the moment it goes down — and unlike destroy, this must NOT
+ * touch the worktree's other sessions: an agent's reference tabs, a PR
+ * page, anything it opened that has nothing to do with the server.
+ */
+export async function closeDevServerBrowserSessions(
+  slug: string,
+  devPort: number,
+): Promise<string[]> {
+  return closeBrowserSessions(slug, (s) => sessionOnDevPort(s.pageUrl, devPort));
+}
+
+async function closeBrowserSessions(
+  slug: string,
+  owned: (session: BrowserSession) => boolean,
+): Promise<string[]> {
   try {
-    const ids = await liveSessionIds();
-    if (ids === null) return [];
-    const mine = ids.filter((id) => ownsBrowserSession(slug, id));
-    const closed: string[] = [];
-    for (const id of mine) {
-      const res = await run([BIN, "session", "delete", id], { timeoutMs: 10_000 });
-      if (res.exitCode === 0) closed.push(id);
-      else log.debug("browser session delete failed", { id, stderr: res.stderr.trim() });
-    }
+    const sessions = await liveSessions();
+    if (sessions === null) return [];
+    const closed = await deleteSessions(sessions.filter(owned).map((s) => s.id));
     if (closed.length > 0) log.info("closed browser sessions", { slug, closed });
     return closed;
   } catch (err) {

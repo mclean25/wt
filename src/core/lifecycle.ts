@@ -9,6 +9,7 @@ import { clearOpencodeNames } from "./harness/opencode/names.ts";
 import {
   clearRemovedWorktree,
   clearSlugState,
+  readWtState,
   recordRemovedWorktrees,
   reparentBaseReferences,
   setSlugBase,
@@ -565,7 +566,10 @@ export async function removeWorktree(
     // bailed above leaves a worktree the user is still working in, and
     // closing its tabs would be pure loss. Best-effort and silent when
     // there was nothing to close, which is the common case.
-    const closedTabs = await closeWorktreeBrowserSessions(wt.slug);
+    const closedTabs = await closeWorktreeBrowserSessions(
+      wt.slug,
+      readWtState().slugs[wt.slug]?.devPort ?? null,
+    );
     if (closedTabs.length > 0) {
       opts.onLog?.(`closed browser session ${closedTabs.join(", ")}`);
     }

@@ -92,6 +92,8 @@ List SST stages in the configured state bucket and flag orphans (no matching liv
 
 Manage the worktree's `[dev_server]` (see [configuration.md](configuration.md#dev_server--optional-per-worktree-dev-server)). `start` is also restart; `stop` keeps the slug's port reserved; `logs` prints the supervisor pane's recent output. The slug defaults to the worktree containing the current directory.
 
+`stop` also closes the browser tabs that were on the server, matched by the dev port (not by session name, so the login-script sessions actually holding the app open are covered). Stopping the server strands those tabs on a refused port, so they go with it. The worktree's other browser sessions are deliberately untouched — an agent's reference tabs are not the dev server's.
+
 ### `wt logs [<slug>]`
 
 Tail a destroy log (`tail -F`). No slug ⇒ the most recently modified log.

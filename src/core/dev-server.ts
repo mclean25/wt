@@ -34,6 +34,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import net from "node:net";
 import { join } from "node:path";
 
+import { closeDevServerBrowserSessions } from "./browser.ts";
 import { config, type DevServerConfig } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { run } from "./proc.ts";
@@ -234,6 +235,9 @@ export async function startDevServer(wt: {
 }): Promise<{ port: number; url: string }> {
   const dev = requireDevServer();
   const session = sessionName(wt.slug, "dev");
+  // Kill directly rather than through `stopDevServer`: start is also
+  // restart, and restarting must NOT take the user's browser tabs with
+  // it — they're about to be pointed at the same port again.
   await killByName(session);
   // A just-killed server takes a beat to release its socket; wait for
   // the recorded port to actually close so the allocator doesn't
@@ -351,6 +355,18 @@ export async function stopDevServer(slug: string): Promise<void> {
     // Marker is advisory; the killed session already means "not running".
   }
   log.event.info(`dev server stopped (${slug})`);
+  // The tabs pointed at this server are stranded on a refused port the
+  // moment it goes down, so they go with it — same reflex as destroy,
+  // narrowed to the port (an agent's other tabs aren't the server's).
+  // After the kill, never before: a stop that failed to take leaves a
+  // server the user is still browsing.
+  const port = readWtState().slugs[slug]?.devPort;
+  if (port !== undefined) {
+    const closed = await closeDevServerBrowserSessions(slug, port);
+    if (closed.length > 0) {
+      log.event.info(`closed browser session ${closed.join(", ")} (${slug})`);
+    }
+  }
 }
 
 /**
