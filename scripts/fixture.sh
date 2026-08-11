@@ -78,8 +78,20 @@ commit_in() { # slug subject
 }
 
 build() {
-  [ -d "$FX" ] && [ ! -e "$FX/origin.git" ] && [ -n "$(ls -A "$FX" 2>/dev/null)" ] &&
-    die "$FX exists and is not a fixture — refusing to delete it"
+  # Refuse to rm -rf a path that isn't ours. "Ours" is judged per entry
+  # rather than by origin.git alone, because the corpse of a torn-down
+  # fixture is a real state: a wt process outliving the last `rm`
+  # recreates `cache/locks`, and a guard keyed on origin.git then refuses
+  # to rebuild over a directory it created itself.
+  if [ -d "$FX" ]; then
+    for entry in "$FX"/* "$FX"/.[!.]*; do
+      [ -e "$entry" ] || continue
+      case "${entry##*/}" in
+        origin.git|main-clone|wts|cache|config.toml|env.sh) ;;
+        *) die "$FX holds ${entry##*/}, which no fixture creates — refusing to delete it" ;;
+      esac
+    done
+  fi
   # A probe still attached to the old fixture keeps polling git in a
   # directory this is about to delete, and races the rebuild for index
   # locks. Stop it first.

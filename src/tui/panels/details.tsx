@@ -518,6 +518,10 @@ function RemoteDetails({
   return (
     <box
       flexGrow={1}
+      flexShrink={1}
+      // Every detail body clips: a pane that overflows doesn't stop at
+      // its own border, it paints over whatever is below it.
+      overflow="hidden"
       border
       borderStyle="single"
       borderColor={theme.border}
@@ -575,7 +579,14 @@ export function Details({
     return <RemovedBody key={`removed:${removed.slug}`} entry={removed} width={width} />;
   }
   if (section) {
-    return <SectionSummaryBody key={`section:${section.sectionKey}`} section={section} width={width} />;
+    return (
+      <SectionSummaryBody
+        key={`section:${section.sectionKey}`}
+        section={section}
+        width={width}
+        scrollRef={scrollRef}
+      />
+    );
   }
   if (reviewRequest) {
     // Key by url so navigating across review-request rows remounts

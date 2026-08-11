@@ -1,4 +1,6 @@
 import { TextAttributes } from "@opentui/core";
+import type { ScrollBoxRenderable } from "@opentui/core";
+import type { RefObject } from "react";
 
 import { StatusKind } from "../../../core/types.ts";
 import type { HarnessId } from "../../../core/harness/index.ts";
@@ -20,6 +22,7 @@ import {
   StatusMarker,
 } from "../../row-gutter.tsx";
 import type { SpineCell } from "../../../core/stack-layout.ts";
+import { WtScrollbox } from "../../scrollbox.tsx";
 import { wrapText } from "../../text.ts";
 import { theme } from "../../theme.ts";
 
@@ -201,7 +204,7 @@ function BlockedNotes({ members, width }: { members: SectionMember[]; width: num
   return (
     <>
       <box height={1} flexShrink={0} />
-      <text fg={theme.err} wrapMode="none">
+      <text fg={theme.err} wrapMode="none" flexShrink={0}>
         {`${NF.conflict} blocked on you`}
       </text>
       {blocked.map((m) => (
@@ -225,49 +228,72 @@ function BlockedNotes({ members, width }: { members: SectionMember[]; width: num
   );
 }
 
-/** Detail-pane body for a folded section header. */
-export function SectionSummaryBody({ section, width }: { section: SectionDetail; width: number }) {
+/**
+ * Detail-pane body for a folded section header.
+ *
+ * The member list and the blocked notes are both unbounded — a section
+ * is whatever batch the human dragged into it — so the body scrolls
+ * (same `WtScrollbox`, same Ctrl+J/K chord as the worktree pane) and
+ * the pane clips. Both matter: without the clip, overflow paints
+ * straight over the pane below its own border, and without the scroll
+ * region the overflowing rows are simply unreachable.
+ */
+export function SectionSummaryBody({
+  section,
+  width,
+  scrollRef,
+}: {
+  section: SectionDetail;
+  width: number;
+  scrollRef?: RefObject<ScrollBoxRenderable | null>;
+}) {
   // The members are one contiguous run here, so they lay out as one
   // spine group — exactly as they would if the section were unfolded.
   const spine = rowSpine([section.members.map((m) => m.row)]);
   const gutterCells = spineGutterCells(spine);
-  // Border (2) + padding (2) — the text budget inside the box.
-  const inner = Math.max(10, width - 4);
+  // Border (2) + padding (2) + the scrollbox's reserved scrollbar
+  // column — the text budget inside the scroll region.
+  const inner = Math.max(10, width - 5);
   return (
     <box
       flexGrow={1}
       width={width}
       flexShrink={0}
+      overflow="hidden"
       border
       borderStyle="single"
       borderColor={theme.border}
       title=" section "
       titleAlignment="left"
       padding={1}
+      flexDirection="column"
     >
-      <box flexShrink={0} overflow="hidden">
-        <text fg={theme.fgBright} attributes={TextAttributes.BOLD} wrapMode="none" truncate>
-          {section.label}
-        </text>
-      </box>
-      <WorkRollup members={section.members} />
-      <BatchFacts members={section.members} pausedCount={section.pausedCount} />
-      <box height={1} flexShrink={0} />
-      {section.members.length === 0 ? (
-        <text fg={theme.fgDim}>no worktrees</text>
-      ) : (
-        section.members.map((m) => (
-          <MemberRow
-            key={m.row.wt.slug}
-            m={m}
-            gutterCells={gutterCells}
-            spineCell={spine.get(m.row.wt.slug) ?? null}
-          />
-        ))
-      )}
-      <BlockedNotes members={section.members} width={inner} />
-      <box flexGrow={1} flexShrink={1} minHeight={0} />
-      <text fg={theme.fgDim} wrapMode="none" truncate>
+      <WtScrollbox scrollRef={scrollRef}>
+        <box flexShrink={0} overflow="hidden">
+          <text fg={theme.fgBright} attributes={TextAttributes.BOLD} wrapMode="none" truncate>
+            {section.label}
+          </text>
+        </box>
+        <WorkRollup members={section.members} />
+        <BatchFacts members={section.members} pausedCount={section.pausedCount} />
+        <box height={1} flexShrink={0} />
+        {section.members.length === 0 ? (
+          <text fg={theme.fgDim}>no worktrees</text>
+        ) : (
+          section.members.map((m) => (
+            <MemberRow
+              key={m.row.wt.slug}
+              m={m}
+              gutterCells={gutterCells}
+              spineCell={spine.get(m.row.wt.slug) ?? null}
+            />
+          ))
+        )}
+        <BlockedNotes members={section.members} width={inner} />
+      </WtScrollbox>
+      {/* Outside the scroll region: the keys stay on screen however far
+          down a long section the reader has scrolled. */}
+      <text fg={theme.fgDim} wrapMode="none" truncate flexShrink={0}>
         TAB expand · L rename · J/K move
       </text>
     </box>
