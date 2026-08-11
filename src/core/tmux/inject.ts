@@ -41,6 +41,31 @@ const PASTE_RETRY_GRACE_MS = 1_000;
  * the current paste proceeds to submit as-is.
  */
 const PASTE_VERIFY_BUDGET_MS = 20_000;
+/**
+ * How long to wait for the submitted prompt to show up in the harness's
+ * own transcript. Sized for "claude wrote the user entry", not for the
+ * turn to finish: the entry is written as the input is accepted, so this
+ * only has to cover process scheduling and the fs flush.
+ */
+const DELIVERY_CONFIRM_MS = 8_000;
+/** Poll interval while confirming delivery. */
+const DELIVERY_POLL_MS = 250;
+
+export type InjectResult =
+  | {
+      ok: true;
+      /** The session wasn't running and was started for this message. */
+      coldStarted: boolean;
+      /**
+       * Did the prompt reach the conversation? `null` = the harness
+       * exposes no transcript to check against, so delivery is unknown —
+       * report it that way, never as success.
+       */
+      delivered: boolean | null;
+      /** A first attempt was swallowed and the prompt was sent again. */
+      resent: boolean;
+    }
+  | { ok: false; reason: string };
 
 /**
  * Wait until a freshly-started harness pane stops changing — meaning it
@@ -226,8 +251,14 @@ async function pasteBuffer(name: string, text: string): Promise<void> {
  * lands in the live conversation — with its existing context and history
  * — rather than a fresh headless action run.
  *
- * Fire-and-forget by nature: there's no completion sentinel, so callers
- * can't observe when the harness finishes.
+ * Fire-and-forget as to the RESULT — there's no completion sentinel, so
+ * callers can't observe when the harness finishes — but no longer as to
+ * the delivery: `delivered` reports whether the prompt actually entered
+ * the conversation (`null` when the harness offers no way to tell). A
+ * cold start that swallowed the prompt is re-sent once automatically.
+ * Callers must not print an unqualified success line on
+ * `delivered === false`; a lost fan-out that reports success is how a
+ * fleet-wide nudge evaporates in silence.
  *
  * Known edge: a brand-new worktree directory the harness has never run in may
  * show its trust prompt on cold start; the paste+Enter would answer that
@@ -241,7 +272,7 @@ export async function injectIntoSession(opts: {
   /** Claude-only named-session identity (the manager); null = primary. */
   managedName?: string | null;
   text: string;
-}): Promise<{ ok: true; coldStarted: boolean } | { ok: false; reason: string }> {
+}): Promise<InjectResult> {
   // Cross-process serialization per target session. Historically every
   // inject target was single-writer, but the manager slot is a genuine
   // multi-writer singleton (TUI automations, `wt manager send` from N
@@ -261,7 +292,7 @@ async function injectIntoSessionUnlocked(opts: {
   harnessId?: HarnessId;
   managedName?: string | null;
   text: string;
-}): Promise<{ ok: true; coldStarted: boolean } | { ok: false; reason: string }> {
+}): Promise<InjectResult> {
   const { slug, cwd, text } = opts;
   const harnessId = opts.harnessId ?? "claude";
   const managedName = opts.managedName ?? null;
@@ -283,6 +314,85 @@ async function injectIntoSessionUnlocked(opts: {
   } else {
     await sleep(WARM_SETTLE_MS);
   }
+  // Stamped before the paste: the transcript entry we're looking for
+  // can't predate the keystrokes that produced it.
+  const sinceMs = Date.now();
+  const submitted = await pasteAndSubmit(name, harnessId, text);
+  if (!submitted.ok) return submitted;
+
+  // The pane accepted the keystrokes — that is NOT the same as the
+  // conversation accepting the prompt. See `injectionLanded`: a modal
+  // over the input box (claude's continue-or-compact picker on resuming
+  // a long conversation) swallows the paste and takes the submit key as
+  // its own answer, and every layer below reports success. Ask the
+  // harness's transcript instead.
+  let delivered = await confirmDelivery({ slug, cwd, harnessId, managedName, text, sinceMs });
+  let resent = false;
+  if (delivered === false && coldStarted) {
+    // Cold start only, deliberately: it's where the failure lives (the
+    // resume-time picker) and where a re-send is safe — the session had
+    // no turn in flight to hide a slow-landing prompt behind, so
+    // "nothing in the transcript" really does mean nothing arrived.
+    // Whatever consumed the first submit is gone now (the picker
+    // answered itself), so the pane is at a real prompt.
+    log.warn("injected prompt never reached the conversation; re-sending", { name });
+    // The dismissed picker usually kicks off work of its own (the
+    // default answer compacts), so settle again before typing.
+    await waitForPaneReady(name);
+    const retrySince = Date.now();
+    const again = await pasteAndSubmit(name, harnessId, text);
+    if (!again.ok) return again;
+    resent = true;
+    delivered = await confirmDelivery({
+      slug,
+      cwd,
+      harnessId,
+      managedName,
+      text,
+      sinceMs: retrySince,
+    });
+  }
+  return { ok: true, coldStarted, delivered, resent };
+}
+
+/**
+ * Poll the harness's transcript until the injected prompt shows up.
+ * `null` = this harness can't tell (no `injectionLanded`), which callers
+ * must report as unknown rather than as success.
+ */
+async function confirmDelivery(opts: {
+  slug: string;
+  cwd: string;
+  harnessId: HarnessId;
+  managedName: string | null;
+  text: string;
+  sinceMs: number;
+}): Promise<boolean | null> {
+  const { cwd, harnessId, managedName, text, sinceMs } = opts;
+  const harness = getHarness(harnessId);
+  if (!harness.injectionLanded) return null;
+  const deadline = Date.now() + DELIVERY_CONFIRM_MS;
+  for (;;) {
+    try {
+      if (harness.injectionLanded({ cwd, managedName, text, sinceMs })) return true;
+    } catch (err) {
+      log.warn("delivery check failed", {
+        slug: opts.slug,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+    if (Date.now() >= deadline) return false;
+    await sleep(DELIVERY_POLL_MS);
+  }
+}
+
+/** Paste `text` into a ready pane and press the harness's submit keys. */
+async function pasteAndSubmit(
+  name: string,
+  harnessId: HarnessId,
+  text: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
     // Paste, then VERIFY the pane actually changed. Claude's REPL can
     // sit visually stable — banner rendered, prompt drawn — while its
@@ -348,5 +458,5 @@ async function injectIntoSessionUnlocked(opts: {
       reason: err instanceof Error ? err.message : String(err),
     };
   }
-  return { ok: true, coldStarted };
+  return { ok: true };
 }

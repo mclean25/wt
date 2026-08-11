@@ -16,7 +16,12 @@
  * scan resolves.
  */
 import { isRiftWorktree } from "../../backend.ts";
-import { claudeStatus, wtSessionArgs, wtSessionUuid } from "./jsonl.ts";
+import {
+  claudeStatus,
+  injectedPromptLanded,
+  wtSessionArgs,
+  wtSessionUuid,
+} from "./jsonl.ts";
 import {
   readRegistry,
   type RegistrySession,
@@ -174,6 +179,10 @@ export const claudeHarness: Harness = {
         displayName,
       }),
     ];
+  },
+
+  injectionLanded({ cwd, managedName, text, sinceMs }) {
+    return injectedPromptLanded(cwd, managedName, text, sinceMs);
   },
 
   ensureTrusted(wtPath) {

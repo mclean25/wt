@@ -64,7 +64,7 @@ Everything is ordinary CLI surface, so any harness can drive it:
 - `wt status --all --json` — the status-only view (state, risk, note, staleness per worktree), plus recently-removed rows (`kind: "merged"|"removed"`, ≤48h) so an all-merged fleet doesn't read as an empty one.
 - `wt status <slug> <state> …` — assert on a worktree's behalf after acting on it (`--note-only` sharpens a note without touching state or timestamp).
 - `wt edge <from> <before|conflicts|enables> <to> [--blocks|--prefer] [-m why]` — record merge sequencing as structured state instead of prose ([cli.md](cli.md#wt-edge-from-kind-to)); `wt edge --json` reads it back with staleness computed. Edges self-expire when either branch moves — re-assert what still matters, never audit the list. Worktrees assert their own first-hand dependencies; cross-branch edges are yours to assert.
-- `wt claude send <slug> "<text>"` — nudge a worktree's live session (also accepts the `wt`/`main`/`dotfiles`/`manager` repo-level slugs; an archived slug answers with why it's gone).
+- `wt claude send <slug> "<text>"` — nudge a worktree's live session (also accepts the `wt`/`main`/`dotfiles`/`manager` repo-level slugs; an archived slug answers with why it's gone). Delivery is confirmed against the target's transcript before it reports success, and a cold start that swallowed the prompt is re-sent once — a non-zero exit means the message is genuinely not in that conversation, so a fan-out can be trusted row by row.
 - `wt claude ls --json` — live sessions with `busy` / `last_activity` / `agent_name` per session.
 - `wt manager report [--ok|--warn|--err] "<text>"` — surface a terse result on the TUI's attention feed (the palette's report-back channel).
 - `gh` — PR state, merges (only when the human asked), CI.
@@ -82,6 +82,8 @@ wt does not implement that transport, and shouldn't: it guarantees the names, no
 - Worker → manager escalations and papercuts stay on `wt manager send` for exactly this reason: fire-and-forget with a cold start beats "list peers, find the manager, handle it being down".
 
 An agent nudging a peer it can see live may use direct messaging and skip the paste machinery; anything that must arrive regardless of the target's state uses wt.
+
+**Injection confirms delivery.** Pasting into a pane is not the same as the conversation receiving a prompt: a modal over the input box eats both the paste and the submit key, and the layer wt can see (tmux) reports success either way. The observed case is claude's continue-or-compact picker on resuming a long conversation, which took the submit key as its own answer and left the session compacting with the prompt gone — a fan-out of 13 that lost 12 messages and reported 13 successes. So every inject now checks the target's own transcript for the text (a message, or a queued one when the session is mid-turn) before reporting, re-sends once when a cold start swallowed it, and surfaces a warning on the attention feed (or a non-zero exit, for the CLI) when it still isn't there. Delivery is `null` — reported as unconfirmed, never as success — for harnesses whose transcript wt can't read.
 
 ## Feedback channel (opt-in)
 

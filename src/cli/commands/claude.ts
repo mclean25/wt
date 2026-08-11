@@ -131,6 +131,25 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
     console.error(red(`inject failed: ${res.reason}`));
     return 1;
   }
+  // Delivery is CONFIRMED against the conversation transcript, not
+  // assumed from "tmux accepted the keys" — a modal over the input box
+  // (claude's continue-or-compact picker when it resumes a long
+  // conversation) used to eat the prompt while this printed a tick.
+  // A fan-out that silently loses 12 of 13 messages is the worst
+  // possible failure here, so an unconfirmed send exits non-zero.
+  if (res.delivered === false) {
+    console.error(
+      red(`✗ ${slug}'s claude session did not receive the prompt`),
+    );
+    console.error(
+      dim(
+        res.resent
+          ? "re-sent once and still nothing in the transcript — attach (F12) and check what the pane is showing"
+          : "the session was already running; something in its pane consumed the input — attach (F12) to check",
+      ),
+    );
+    return 1;
+  }
   console.log(
     green(
       res.coldStarted
@@ -138,7 +157,16 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
         : `✓ sent the prompt to ${slug}'s claude session`,
     ),
   );
-  console.log(dim("fire-and-forget — attach via the wt TUI (F12) to watch"));
+  if (res.resent) {
+    console.log(dim("(the first attempt was swallowed on startup; re-sent)"));
+  }
+  console.log(
+    dim(
+      res.delivered === null
+        ? "delivery unconfirmed — this harness exposes no transcript to check"
+        : "delivered — fire-and-forget from here; attach via the wt TUI (F12) to watch",
+    ),
+  );
   return 0;
 }
 

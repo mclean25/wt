@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { currentSessionSummary, type Entry } from "./jsonl.ts";
+import {
+  currentSessionSummary,
+  promptLandedIn,
+  promptNeedle,
+  type Entry,
+} from "./jsonl.ts";
 
 const user: Entry = { type: "user", raw: { type: "user" } };
 const assistant: Entry = { type: "assistant", raw: { type: "assistant" } };
@@ -66,5 +71,89 @@ describe("currentSessionSummary", () => {
 
   test("a message after the recap makes it stale", () => {
     expect(currentSessionSummary([recap("old news"), user])).toBeNull();
+  });
+});
+
+describe("promptLandedIn", () => {
+  const T0 = Date.parse("2026-08-11T12:00:00.000Z");
+  const at = (offsetMs: number): string => new Date(T0 + offsetMs).toISOString();
+  const userEntry = (text: string, offsetMs: number): Entry => ({
+    type: "user",
+    raw: { type: "user", timestamp: at(offsetMs), message: { role: "user", content: text } },
+  });
+
+  test("finds the prompt in a user entry written after the send", () => {
+    const entries = [userEntry("go fix the flaky test please", 500)];
+    expect(promptLandedIn(entries, promptNeedle("go fix the flaky test please"), T0)).toBe(true);
+  });
+
+  test("ignores an identical prompt from BEFORE the send", () => {
+    // The manager fans the same text out repeatedly; matching an older
+    // copy would confirm a delivery that never happened.
+    const entries = [userEntry("status check", -60_000)];
+    expect(promptLandedIn(entries, promptNeedle("status check"), T0)).toBe(false);
+  });
+
+  test("a queued prompt counts as delivered", () => {
+    const entries: Entry[] = [
+      {
+        type: "queue-operation",
+        raw: { type: "queue-operation", operation: "enqueue", timestamp: at(200), content: "run the suite" },
+      },
+    ];
+    expect(promptLandedIn(entries, promptNeedle("run the suite"), T0)).toBe(true);
+  });
+
+  test("a dequeue carries no prompt", () => {
+    const entries: Entry[] = [
+      {
+        type: "queue-operation",
+        raw: { type: "queue-operation", operation: "dequeue", timestamp: at(200), content: "run the suite" },
+      },
+    ];
+    expect(promptLandedIn(entries, promptNeedle("run the suite"), T0)).toBe(false);
+  });
+
+  test("matches through reflowed whitespace", () => {
+    // What tmux pasted and what claude recorded differ in wrapping.
+    const entries = [userEntry("please   read\nthe   docs first", 100)];
+    expect(promptLandedIn(entries, promptNeedle("please read the docs first"), T0)).toBe(true);
+  });
+
+  test("reads text blocks out of array content", () => {
+    const entries: Entry[] = [
+      {
+        type: "user",
+        raw: {
+          type: "user",
+          timestamp: at(100),
+          message: { role: "user", content: [{ type: "text", text: "ship it now" }] },
+        },
+      },
+    ];
+    expect(promptLandedIn(entries, promptNeedle("ship it now"), T0)).toBe(true);
+  });
+
+  test("a tool_result user entry is not a prompt", () => {
+    const entries: Entry[] = [
+      {
+        type: "user",
+        raw: {
+          type: "user",
+          timestamp: at(100),
+          message: { content: [{ type: "tool_result", content: "ship it now" }] },
+        },
+      },
+    ];
+    expect(promptLandedIn(entries, promptNeedle("ship it now"), T0)).toBe(false);
+  });
+
+  test("a different prompt in the window does not count", () => {
+    const entries = [userEntry("something else entirely", 100)];
+    expect(promptLandedIn(entries, promptNeedle("go fix the flaky test please"), T0)).toBe(false);
+  });
+
+  test("empty text never matches", () => {
+    expect(promptLandedIn([userEntry("anything", 100)], promptNeedle("   "), T0)).toBe(false);
   });
 });

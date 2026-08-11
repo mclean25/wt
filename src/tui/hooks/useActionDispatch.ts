@@ -327,7 +327,17 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
         text: target.text,
       }).then(
         (res) => {
-          if (res.ok) {
+          if (res.ok && res.delivered === false) {
+            // Delivery is checked against the session's own transcript
+            // (see injectIntoSession): a modal over the input box eats
+            // both the paste and the submit key, so "tmux accepted the
+            // keys" is not "the session got the prompt". An automation
+            // dispatch has no other witness — attention, not the
+            // firehose.
+            sessionLog.attention.warn(
+              `${target.label} never received ${def.name} — attach and check its pane`,
+            );
+          } else if (res.ok) {
             // Toast: the "sending…" ack above has long expired by the
             // time a cold start finishes, and this may be an automation
             // dispatch with no keystroke to acknowledge.
@@ -428,7 +438,13 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       text: body,
     }).then(
       (res) => {
-        if (res.ok) {
+        if (res.ok && res.delivered === false) {
+          // See the row path above: confirmed against the transcript, so
+          // a swallowed manager briefing is visible instead of silent.
+          slotLog.attention.warn(
+            `${slot.label} never received ${label} — attach and check its pane`,
+          );
+        } else if (res.ok) {
           // Toast: the "sending…" ack above has long expired by the time
           // a cold start finishes.
           slotLog.event.ok(

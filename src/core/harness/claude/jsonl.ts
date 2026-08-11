@@ -184,6 +184,106 @@ export function wtSessionArgs(opts: {
   return args;
 }
 
+/** Injected-prompt matching: whitespace-normalized prefix length. */
+const MATCH_PREFIX_CHARS = 48;
+
+function normalizeForMatch(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** The prompt text an entry carries, if it carries one. */
+function promptTextOf(e: Entry): string | null {
+  if (e.type === "queue-operation") {
+    // Claude queues input arriving mid-turn; the enqueue entry lands
+    // immediately and carries the full text, so a queued prompt counts
+    // as delivered (it will run) without waiting for the dequeue.
+    return e.raw.operation === "enqueue" && typeof e.raw.content === "string"
+      ? e.raw.content
+      : null;
+  }
+  if (e.type !== "user") return null;
+  const content = asObj(e.raw.message)?.content;
+  if (typeof content === "string") return content;
+  const blocks = asArr(content);
+  if (!blocks) return null;
+  const texts: string[] = [];
+  for (const b of blocks) {
+    const obj = asObj(b);
+    if (obj?.type === "text" && typeof obj.text === "string") texts.push(obj.text);
+  }
+  return texts.length > 0 ? texts.join("\n") : null;
+}
+
+/**
+ * Did an injected prompt actually enter the conversation at/after
+ * `sinceMs`?
+ *
+ * `injectIntoSession` types into a tmux pane and cannot see whether the
+ * harness's input box received the text. A modal swallows both — claude
+ * renders a continue-or-compact picker when it resumes a long
+ * conversation, which eats the paste and takes the submit key as its
+ * own answer — leaving a session that looks freshly started and idle
+ * with the prompt simply gone. The conversation jsonl is the ground
+ * truth: an accepted prompt lands as a `user` entry, or a
+ * `queue-operation` enqueue when claude is mid-turn.
+ *
+ * Matching is on a whitespace-normalized prefix, because what wt pasted
+ * and what claude recorded differ in reflow, not in content.
+ */
+export function injectedPromptLanded(
+  wtPath: string,
+  name: string | null,
+  text: string,
+  sinceMs: number,
+): boolean {
+  const needle = promptNeedle(text);
+  if (!needle) return false;
+  const path = sessionJsonlPath(wtPath, wtSessionUuid(wtPath, name));
+  let size = 0;
+  try {
+    const st = statSync(path);
+    if (!st.isFile()) return false;
+    size = st.size;
+  } catch {
+    return false;
+  }
+  if (size === 0) return false;
+  let entries: Entry[];
+  try {
+    entries = parseTailLines(readTail(path, size), size <= TAIL_BYTES);
+  } catch {
+    return false;
+  }
+  return promptLandedIn(entries, needle, sinceMs);
+}
+
+/**
+ * Matching half of `injectedPromptLanded`, split out so it's testable on
+ * hand-built entries. `needle` is already normalized and clipped.
+ */
+export function promptLandedIn(
+  entries: readonly Entry[],
+  needle: string,
+  sinceMs: number,
+): boolean {
+  if (!needle) return false;
+  // Walk back from the tail: the match is always among the newest
+  // entries, and the first timestamp older than the send bounds the scan.
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    const ts = entryTimestampMs(e.raw);
+    if (ts !== null && ts < sinceMs) break;
+    const body = promptTextOf(e);
+    if (body && normalizeForMatch(body).includes(needle)) return true;
+  }
+  return false;
+}
+
+/** The normalized, length-clipped needle `promptLandedIn` matches on. */
+export function promptNeedle(text: string): string {
+  return normalizeForMatch(text).slice(0, MATCH_PREFIX_CHARS);
+}
+
 function readTail(filePath: string, size: number): string {
   const start = Math.max(0, size - TAIL_BYTES);
   return readFileSlice(filePath, start, size - start);

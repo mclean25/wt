@@ -94,9 +94,26 @@ export async function run(argv: string[]): Promise<number> {
       console.error(red(`inject failed: ${res.reason}`));
       return 1;
     }
+    // Confirmed against the manager's transcript, not assumed — see the
+    // note in `injectIntoSession`. A papercut report that never arrived
+    // is worse than one that failed loudly.
+    if (res.delivered === false) {
+      console.error(red("✗ the manager session did not receive the message"));
+      console.error(
+        dim(
+          res.resent
+            ? "re-sent once and still nothing in its transcript — press m in wt and check the pane"
+            : "something in its pane consumed the input — press m in wt and check the pane",
+        ),
+      );
+      return 1;
+    }
     console.log(
       green(res.coldStarted ? "✓ manager started, message sent" : "✓ sent to manager"),
     );
+    if (res.resent) {
+      console.log(dim("» the first attempt was swallowed on startup; re-sent"));
+    }
     console.log(dim("» the manager picks it up as its next turn; press m in wt to watch"));
     // Teach the better channel where one exists (same footer idiom as
     // `wt status`). An agent calling this from inside a Claude Code

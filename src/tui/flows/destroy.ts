@@ -425,7 +425,14 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       harnessId: primaryHarness,
       text,
     }).then((res) => {
-      if (res.ok) {
+      if (res.ok && res.delivered === false) {
+        // Confirmed against the session's transcript (see
+        // injectIntoSession). An unattended handoff that vanished must
+        // say so — the conflict is still sitting there either way.
+        log.attention.warn(
+          `${skill} handoff never reached the ${harness.label} session — run it by hand`,
+        );
+      } else if (res.ok) {
         // Toast: the handoff lands well after the restack's own toast
         // expired, and cold starts take seconds — worth an async ack.
         log.event.ok(

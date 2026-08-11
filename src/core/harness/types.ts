@@ -165,6 +165,22 @@ export interface Harness {
   readonly injectSubmitKeys: readonly string[];
 
   /**
+   * Did an injected prompt actually reach the conversation at/after
+   * `sinceMs`? Optional: `undefined` means this harness has no
+   * transcript wt can read, so `injectIntoSession` reports delivery as
+   * unknown rather than claiming success. Implementations answer from
+   * durable state (the conversation log), never from the pane — the
+   * whole point is to catch the case where the pane accepted keystrokes
+   * that a modal, not the input box, consumed.
+   */
+  injectionLanded?(opts: {
+    cwd: string;
+    managedName: string | null;
+    text: string;
+    sinceMs: number;
+  }): boolean;
+
+  /**
    * Tmux session name for a (slug, managedName). Each impl encodes its
    * own scheme so harnesses can coexist on the same slug without
    * colliding. Claude preserves the legacy `<slug>` / `<slug>~<name>`
