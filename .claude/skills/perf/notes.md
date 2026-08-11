@@ -24,20 +24,6 @@ should be idle is a bug, not load (see bare-promise signature below).
 
 ## Open issues
 
-- **The TUI renders continuously, forever — permanent "live mode"**
-  (found 2026-08-11, j/k-lag investigation; fix proposed, not yet
-  applied). OpenTUI is on-demand by default, but any playing Timeline
-  holds a refcounted live request that pins the render loop at
-  ~60fps, and `RefreshWave`/`useEased` (spinner.tsx) register
-  forever-looping timelines at App mount. Every frame walks the whole
-  renderable tree, does a yoga-WASM `getComputedLayout()` per visible
-  node (scrollbox children pay this even when culled offscreen), and
-  fully repaints into the native buffer. Idle cost ~11-14% CPU per
-  instance on a tiny fixture board; scales with tree size (the
-  500-event activity feed dominates). In live mode `requestRender()`
-  is a no-op, so a keypress commit can't pull a frame forward
-  (mean +8ms). This is the root of "j/k laggy when lots is
-  happening" — see the proposal in the session that added this note.
 - **Destroy dispatch double-fetches GitHub** — two concurrent
   `fetching GitHub...` ~40ms apart (double invalidation while the first
   is in flight). Harmless, minor quota waste. Found in dogfood sweep
@@ -65,17 +51,30 @@ Failure signatures (check these first):
   probe shows blocks correlated with a data source, suspect synchronous
   parsing and reach for the same worker pattern.
 
-- **Whole-App re-render per fetch event.** `useIsFetching()` sits in
-  App itself (app.tsx), so every fetch start/finish anywhere re-renders
-  the entire tree — worst exactly during refresh waves. Keep global
-  in-flight counters inside a small leaf component (title bar), never
-  at the root.
-- **@opentui pinned at 0.1.102; upstream is 0.5.x** with real perf
-  work landed since: native yoga (vs WASM here), text-measurement
-  callback pressure (0.4.3), stdin-parser stuck-bytes race (#891),
-  stale-fps/backpressure fixes (0.4.2), faster FFI layout reads
-  (0.5.0). Upstream #1339 (per-frame O(tree) walk) is still open even
-  at 0.5.1 — tree size stays a per-frame tax regardless of version.
+- **Permanent live-mode rendering (RESOLVED 2026-08-11, f54910e…0094b27).**
+  OpenTUI Timelines held a renderer-wide live request: continuous
+  ~60fps full-tree walk + full repaint, `requestRender()` a no-op (so
+  keypresses couldn't pull frames forward), ~13% idle CPU per
+  instance, cost scaling with board size — the root of "j/k laggy
+  when lots is happening". Fixed as a six-part series: shared
+  refcounted 100ms ticker replacing all Timelines (f54910e, idle
+  0.1%); `useIsFetching` isolated into a memoized TitleBar +
+  `React.memo` on WorktreeList/Details (a152a9a); the events feed
+  renders a 120-event window behind an exact-height spacer (d6def0c);
+  keypress→frame histogram + live-duty instrumentation (e89602b);
+  claude jsonl tailing in a worker + per-key registry selectors
+  (c832d3c); @opentui 0.1.102 → 0.5.1, native yoga (0094b27). The
+  invariants live in docs/architecture.md#rendering--input-latency
+  and the Timeline trap in CLAUDE.md. Signature if it regresses:
+  idle TUI CPU >5%, or WT_PERF's `input-latency` line showing
+  liveDutyPct > 0.
+- **Whole-App re-render per fetch event** (fixed a152a9a): keep
+  global in-flight counters inside a small leaf component (title
+  bar), never at the root — `useIsFetching()` re-renders per fetch
+  start/finish anywhere.
+- Upstream opentui #1339 (per-frame O(tree) walk) is still open even
+  at 0.5.1 — renderable-tree size stays a per-frame tax regardless of
+  version; window unbounded buffers.
 
 Measurement traps:
 
@@ -133,8 +132,12 @@ Tooling inventory:
   "us" from the CLI).
 - TUI `P` overlay — same sampler, 2s cadence while open; `i` injects
   the report into the wt-source session.
-- `WT_PERF=1` loop-lag probe — 100ms sample, warns at >50ms block,
+- `WT_PERF=1` loop-lag probe — 100ms sample, warns at >20ms block,
   `grep 'event-loop blocked'` in the daily log. Startup-only.
+- `WT_PERF=1` input-latency probe (same arming) — keypress→painted-
+  frame histogram, one `input-latency` INFO line per minute
+  (p50/p90/max + liveDutyPct), immediate warn on any >100ms sample.
+  Fixture baseline post-fix: p50 4ms / p90 6ms / duty 0.
 - `wt-state` skill — read-only cache/tmux/log/lock inspection.
 - `scripts/tui-test.sh` — probe harness for reproducing TUI-side
   behavior without touching the live instance (read-only rules apply).
