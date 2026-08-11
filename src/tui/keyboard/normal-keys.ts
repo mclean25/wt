@@ -202,6 +202,20 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       freshSlot: getHarness(target.harnessId).singleSlot && resumeSessionId !== null,
     };
   };
+    // Drop Esc-prefixed keys outright. Outside the kitty protocol a
+    // terminal encodes Alt+<key> as the two bytes `\x1b` `<key>`, which
+    // is byte-identical to Esc followed by that key — so the parser
+    // reports meta on a bare `j` typed quickly after dismissing a modal,
+    // and on anything a terminal binding emits Esc-prefixed (a Cmd layer
+    // sending `\x1bu`, say). wt binds NOTHING to Alt/Meta in normal
+    // mode, so the only thing such an event can do is impersonate the
+    // unmodified key and fire a random binding — scroll a pane, open the
+    // status picker. Swallowing is the honest reading of an
+    // unrepresentable chord: an unsupported modifier does nothing.
+    // Narrow on the two-byte form so a paste blob that happens to begin
+    // with Esc isn't caught; bare Esc parses with meta false (name
+    // "escape") and reaches the handler below untouched.
+    if (k.meta && k.sequence.length === 2) return;
     // Escape clears this worktree's explicit focus so the bottom
     // pane returns to follow-row auto-rules.
     if (k.name === "escape" && focusedOutputId) {
@@ -408,8 +422,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // plus a shift flag (never the uppercase literal); legacy encodings
     // can't express Ctrl+Shift+letter at all — there the chord collapses
     // to plain Ctrl+J/K and scrolls the details pane instead, with
-    // Ctrl+E/Y and Alt+J/K below still reaching the feed. Known
-    // degradation, accepted: every kitty-protocol terminal gets it right.
+    // Ctrl+E/Y below still reaching the feed. Known degradation,
+    // accepted: every kitty-protocol terminal gets it right.
     if (k.ctrl && k.shift && (k.name === "j" || k.name === "k")) {
       activityScroll.current?.scrollBy(
         k.name === "j" ? SCROLL_STEP : -SCROLL_STEP,
@@ -419,8 +433,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // Ctrl+J / Ctrl+K scroll the DETAILS pane (worktree or review
     // request) by the standard SCROLL_STEP rows — the pane read
     // alongside the cursor row earns the prime j/k chord; the feed took
-    // Ctrl+Shift above and keeps the Ctrl+E / Ctrl+Y (vim scroll) and
-    // Alt+J / Alt+K aliases. List navigation stays on bare j/k. Ctrl+J
+    // Ctrl+Shift above and keeps the Ctrl+E / Ctrl+Y (vim scroll)
+    // alias. List navigation stays on bare j/k. Ctrl+J
     // arrives as "linefeed" in legacy terminals (it's the LF byte,
     // special-cased ahead of ctrl-letter mapping) and as ctrl+"j" under
     // the kitty keyboard protocol — accept both. No-op when the content
@@ -432,15 +446,24 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       );
       return;
     }
-    // Feed aliases: vim's Ctrl+E / Ctrl+Y and Alt+J / Alt+K. Sticky-
-    // bottom releases while scrolled back and re-engages at the bottom
-    // edge.
-    if (
-      (k.ctrl && (k.name === "e" || k.name === "y")) ||
-      (k.meta && (k.name === "j" || k.name === "k"))
-    ) {
-      const down = k.name === "j" || k.name === "e";
-      activityScroll.current?.scrollBy(down ? SCROLL_STEP : -SCROLL_STEP);
+    // Feed alias: vim's Ctrl+E / Ctrl+Y. Sticky-bottom releases while
+    // scrolled back and re-engages at the bottom edge.
+    //
+    // There is deliberately NO Alt+J / Alt+K alias here. Outside the
+    // kitty protocol, Alt+<letter> is indistinguishable from Esc
+    // followed by that letter — the bytes are identical (`\x1b` `j`),
+    // and the parser reports meta whenever a read chunk starts with
+    // Esc. So a plain `j` typed quickly after dismissing a modal
+    // arrives as meta+j, as does any terminal binding that emits an
+    // Esc-prefixed letter. Binding meta+j/k therefore hijacks bare
+    // list navigation at random, which is strictly worse than the
+    // alias is useful: the terminals where it would be unambiguous
+    // (kitty protocol) are exactly the ones where Ctrl+Shift+J/K
+    // already works, and legacy terminals keep Ctrl+E/Y.
+    if (k.ctrl && (k.name === "e" || k.name === "y")) {
+      activityScroll.current?.scrollBy(
+        k.name === "e" ? SCROLL_STEP : -SCROLL_STEP,
+      );
       return;
     }
     if (k.name === "j" || k.name === "down") {
