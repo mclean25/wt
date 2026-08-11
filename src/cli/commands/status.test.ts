@@ -105,6 +105,20 @@ describe("parseStatusArgs", () => {
     });
   });
 
+  test("dropped requires a note and takes no risk", () => {
+    expect(parseStatusArgs(["dropped"])).toMatchObject({ kind: "error" });
+    expect(parseStatusArgs(["dropped", "--risk", "low", "-m", "dupe"])).toMatchObject({
+      kind: "error",
+    });
+    expect(
+      parseStatusArgs(["d", "-m", "duplicate of COZ-2050 — #1091 merged"]),
+    ).toMatchObject({
+      kind: "set",
+      state: "dropped",
+      note: "duplicate of COZ-2050 — #1091 merged",
+    });
+  });
+
   test("whitespace-only notes count as absent", () => {
     expect(parseStatusArgs(["needs-human", "-m", "   "])).toMatchObject({
       kind: "error",

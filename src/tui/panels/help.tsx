@@ -143,7 +143,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "l n", label: "new section (chord)" },
       { key: "L", label: "rename current section" },
       { key: "b", label: "set fork base (picker · b b confirms) · record only, never rebases" },
-      { key: "u", label: "set work status (picker · t/w/r/n/h/y quick-set, x clears, m adds a note) — same record as `wt status`" },
+      { key: "u", label: "set work status (picker · t/w/r/n/h/y/d quick-set, x clears, m adds a note) — same record as `wt status`" },
       { key: "R", label: "rebase/restack row — whole stack, or standalone onto base/main (/restack on conflict)" },
       { key: "J / K", label: "move row · stack/folded section: move whole group (status sort: within same status)" },
     ],
@@ -277,6 +277,7 @@ const WORK_STATUS_LABELS: Record<WorkState, string> = {
   review: "review — findings being addressed",
   working: "working — implementation in flight",
   todo: "todo — queued, not started",
+  dropped: "dropped — will never land (superseded / duplicate)",
 };
 const WORK_STATUS_ORDER: readonly WorkState[] = [
   "needs-human",
@@ -285,6 +286,7 @@ const WORK_STATUS_ORDER: readonly WorkState[] = [
   "review",
   "working",
   "todo",
+  "dropped",
 ];
 const WORK_STATUS_GLYPHS: GlyphItem[] = [
   ...WORK_STATUS_ORDER.map((state) => ({

@@ -103,12 +103,16 @@ export function workStateColor(state: WorkState): string {
     case "working":
       return theme.accent;
     case "todo":
+    case "dropped":
       return theme.fgDim;
   }
 }
 
-/** The dot glyph for a work state: solid, hollow for `todo`. */
+/** The dot glyph for a work state: solid, hollow for `todo`, a dim
+ *  circle-slash for `dropped` (will never land — visually kin to the
+ *  gone marker, but in the status-dot slot and always dim). */
 export function workStateGlyph(state: WorkState): string {
+  if (state === "dropped") return NF.slash;
   return state === "todo" ? NF.dotOutline : NF.dot;
 }
 

@@ -56,9 +56,9 @@ in each one.
   that stacks the new worktree on that parent (diff base, TUI grouping,
   restack target).
 - `wt status [<slug>] [<state>]` — show or assert the worktree's work status
-  (`todo`/`working`/`review`/`needs-testing`/`needs-human`/`ready`). Built
-  for agents; it prints the rules and expected next steps as you use it.
-  `wt status --all` is the fleet overview.
+  (`todo`/`working`/`review`/`needs-testing`/`needs-human`/`ready`/`dropped`).
+  Built for agents; it prints the rules and expected next steps as you use
+  it. `wt status --all` is the fleet overview.
 - `wt manager send <text…>` — fire-and-forget message to the manager session.
   Two uses: fleet-level questions (merge order, cross-branch conflicts,
   ownership of shared changes), and papercuts worth fixing for everyone

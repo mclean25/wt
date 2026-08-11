@@ -35,9 +35,23 @@ import type { DerivedState } from "./harness/status.ts";
  *                      Carries a merge `risk` and, when notable, a
  *                      note saying what the human should know before
  *                      merging. The human merges — never the agent.
+ *  - `dropped`       — this branch will never land: superseded,
+ *                      duplicate, or deliberately not pursued. The
+ *                      OTHER terminal state — where `ready` asks for
+ *                      merge attention, `dropped` asks to stop being
+ *                      looked at (it sinks to the bottom of its
+ *                      section, below todo). No risk (risk is a merge
+ *                      concept); note required — why it will never
+ *                      land is the one fact worth keeping. Named
+ *                      `dropped`, not `abandoned`: that word already
+ *                      means "session died mid-turn" in the harness
+ *                      vocabulary.
  *
  * There is no asserted `done`: merged/gone is derived from git and
- * outranks anything asserted.
+ * outranks anything asserted. `dropped` is not `done` — it is the
+ * asserted "will never land", which the machine cannot derive (a
+ * closed PR isn't proof: branches are dropped pre-PR too, and a
+ * closed PR can be reopened).
  */
 export const WORK_STATES = [
   "todo",
@@ -46,6 +60,7 @@ export const WORK_STATES = [
   "needs-testing",
   "needs-human",
   "ready",
+  "dropped",
 ] as const;
 
 export type WorkState = (typeof WORK_STATES)[number];
@@ -131,11 +146,13 @@ const RANK: Record<WorkState, number> = {
   review: 3,
   working: 4,
   todo: 6,
+  // Will never land: below even todo — future work outranks no work.
+  dropped: 7,
 };
 
 export const NO_STATUS_RANK = 5;
 /** Merged/gone rows sink below everything, whatever they last asserted. */
-export const LANDED_RANK = 7;
+export const LANDED_RANK = 8;
 
 export function workStateRank(state: WorkState | null | undefined): number {
   return state ? RANK[state] : NO_STATUS_RANK;

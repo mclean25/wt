@@ -40,6 +40,8 @@ function describe(record: WorkStatusRecord): string {
       return `ready to merge${suffix}`;
     case "needs-testing":
       return `needs testing${suffix}`;
+    case "dropped":
+      return `dropped — won't land${suffix}`;
     default:
       return `→ ${record.state}${suffix}`;
   }

@@ -37,6 +37,7 @@ export const WORK_STATE_CHORDS: Record<WorkState, string> = {
   "needs-testing": "n",
   "needs-human": "h",
   ready: "y",
+  dropped: "d",
 };
 
 type WorkStatusFlowsCtx = {

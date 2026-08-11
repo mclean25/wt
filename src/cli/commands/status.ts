@@ -44,6 +44,9 @@ const VOCAB = `states (unique prefixes + nh/nt work):
                  (dev env + browser), it is not a request for a human
   ${bold("needs-human")}    blocked on the human; ${bold("-m")} required: say exactly what you need
   ${bold("ready")}          tested & safe to merge; requires ${bold("--risk low|medium|high")}
+  ${bold("dropped")}        will never land (superseded / duplicate / not pursued); ${bold("-m")}
+                 required: why. No --risk — nothing is being merged. The row
+                 sinks out of the queue instead of wearing a fake ready
 
 ${bold("risk")} = how confident you are AFTER testing — NOT how big or scary the
 change is. The human can already see the diff on the PR; your confidence
@@ -120,6 +123,11 @@ function guidance(state: WorkState): string[] {
       return [
         `leave the PR ready for the human to merge — do NOT merge it yourself.`,
         `make sure the PR body reflects the final state of the change.`,
+      ];
+    case "dropped":
+      return [
+        `close (don't merge) any open PR for this branch and say why in a PR comment.`,
+        `Leave the worktree itself alone — destroying it is the human's call.`,
       ];
   }
 }
@@ -211,6 +219,7 @@ function stateColor(state: WorkState): (s: string) => string {
     case "working":
       return cyan;
     case "todo":
+    case "dropped":
       return dim;
   }
 }
@@ -433,6 +442,13 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
         `re-auth in the open browser and restarting the dev server"`,
       ],
     );
+  }
+  if (state === "dropped" && !note) {
+    return err("dropped requires -m: why will this never land?", [
+      `e.g. -m "duplicate of COZ-2050 — #1091 merged, #1092 closed", or`,
+      `-m "superseded by the v2 approach in <branch>". The note is the only`,
+      `record of why this row exists but goes nowhere.`,
+    ]);
   }
 
   return { kind: "set", slugArg, state, note, risk, append };

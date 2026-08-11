@@ -44,6 +44,11 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   `wt status --risk <r>` amends risk alone, keeping the state, timestamp
   and note, so there's never a reason to append to a note instead of
   fixing it. The human merges PRs; never merge one yourself.
+  If the branch will NEVER land (superseded, duplicate, deliberately not
+  pursued), the honest terminal state is `wt status dropped -m "<why>"` —
+  never `ready` with a "nothing to merge" note (ready puts the row at the
+  top of the merge queue; dropped sinks it), and never `needs-human`
+  (nothing is needed). Close any open PR without merging and say why.
 - **The `ready` note has a shape and a budget: ~400 characters,
   fragments not sentences.** Anything longer belongs in the PR body,
   which the note may point at. Write it in this form:
