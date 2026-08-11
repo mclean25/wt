@@ -88,9 +88,6 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
       if (r.section === null || seen.has(r.section)) continue;
       seen.add(r.section);
       if (r.section === currentSection) continue;
-      // Inferred stack sections aren't manually joinable — skip
-      // them so the picker only lists manual named sections.
-      if (r.sectionIsStack) continue;
       items.push({ kind: "section", name: r.section });
     }
     items.push({ kind: "create" });
@@ -171,23 +168,32 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
       toast("archived rows don't reorder, use `a` to restore", theme.fgDim, 1500);
       return;
     }
-    if (current.sectionIsStack) {
-      doMoveGroup(current.section!, dir, "stack");
-      return;
-    }
-    const active = rows.filter((r) => !r.archived);
-    const idx = active.indexOf(current);
+    // A stack is one unit in the sort, slotted by its ROOT's manual
+    // order — so reordering from any member moves the whole block.
+    // Redirect to the root and skip over its own members when picking
+    // the swap target, or the block would reorder against itself.
+    const stackId = current.stack?.stackId ?? null;
+    const activeAll = rows.filter((r) => !r.archived);
+    const mover = stackId
+      ? activeAll.find(
+          (r) => r.stack?.stackId === stackId && r.stack.depth === 0,
+        ) ?? current
+      : current;
+    const active = activeAll.filter(
+      (r) => !stackId || r.stack?.stackId !== stackId || r === mover,
+    );
+    const idx = active.indexOf(mover);
     if (idx < 0) return;
-    const slug = current.wt.slug;
+    const slug = mover.wt.slug;
     const target = active[idx + dir];
-    if (target && target.section === current.section) {
+    if (target && target.section === mover.section) {
       // Status-first sort: a swap across different urgency ranks is a
       // silent no-op (the rank tier re-asserts itself on the next
       // render), so refuse with a hint instead of writing an order
       // that changes nothing visible.
       if (
         config.ui.sort === "status" &&
-        rowWorkRank(current) !== rowWorkRank(target)
+        rowWorkRank(mover) !== rowWorkRank(target)
       ) {
         toast(
           "status sort pins this row — reorder within the same status, or set [ui] sort = \"manual\"",
@@ -205,14 +211,14 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
       // swap correctly either way (rank is the primary sort key, so
       // inverting the pair's manual order inverts them within the
       // rank).
-      const sectionRows = active.filter((r) => r.section === current.section);
+      const sectionRows = active.filter((r) => r.section === mover.section);
       const manualOrderOf = (r: (typeof sectionRows)[number]): number =>
         wtState?.slugs[r.wt.slug]?.order ?? -Infinity;
       const bucket = sectionRows
         .slice()
         .sort((a, b) => manualOrderOf(a) - manualOrderOf(b))
         .map((r) => r.wt.slug);
-      swapOrder(slug, target.wt.slug, current.section, bucket).catch((err) =>
+      swapOrder(slug, target.wt.slug, mover.section, bucket).catch((err) =>
         reportActionError("reorder", err),
       );
       return;
@@ -250,10 +256,6 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
       toast("archived rows don't have a section context, use `a` to restore", theme.fgDim, 2000);
       return;
     }
-    if (current.sectionIsStack) {
-      toast("stack rows are ordered by their base records — move the whole stack", theme.fgDim, 1800);
-      return;
-    }
     const items = buildSectionItems(current);
     // Default cursor: sticky last-move-target if it's still in the
     // list (and isn't the current section), else the first item.
@@ -276,10 +278,31 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     });
   }
 
+  /**
+   * Every live slug in the same stack as `slug`, including it. A stack
+   * is one merge unit, so filing a member files the unit — matching
+   * `wt section mv`. Splits stay reachable (move a member back out);
+   * nothing here reconciles an existing split.
+   */
+  function stackGroup(slug: string): string[] {
+    const row = rows.find((r) => r.wt.slug === slug);
+    const stackId = row?.stack?.stackId;
+    if (!stackId) return [slug];
+    return rows
+      .filter((r) => !r.archived && r.stack?.stackId === stackId)
+      .map((r) => r.wt.slug);
+  }
+
+  function moveSlugs(slugs: string[], target: string | null): Promise<unknown> {
+    return Promise.all(slugs.map((s) => setSection(s, target)));
+  }
+
   function commitSectionPick(item: SectionPickerItem, slug: string): void {
+    const group = stackGroup(slug);
+    const suffix = group.length > 1 ? ` (stack of ${group.length})` : "";
     if (item.kind === "none") {
-      setSection(slug, null).then(
-        () => toast("moved to Inbox", theme.info, 1500),
+      moveSlugs(group, null).then(
+        () => toast(`moved to Inbox${suffix}`, theme.info, 1500),
         (err) => reportActionError("move", err),
       );
       setLastMoveTarget(null);
@@ -288,8 +311,8 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     }
     if (item.kind === "section") {
       const target = item.name;
-      setSection(slug, target).then(
-        () => toast(`moved to ${target}`, theme.info, 1500),
+      moveSlugs(group, target).then(
+        () => toast(`moved to ${target}${suffix}`, theme.info, 1500),
         (err) => reportActionError("move", err),
       );
       setLastMoveTarget(target);
@@ -312,10 +335,6 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     if (!current || current.archived) return;
     if (current.section === null) {
       toast("the Inbox can't be renamed", theme.fgDim, 1500);
-      return;
-    }
-    if (current.sectionIsStack) {
-      toast("stack section name is auto-derived", theme.fgDim, 1500);
       return;
     }
     setPendingRename(current.section);

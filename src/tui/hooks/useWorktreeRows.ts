@@ -27,7 +27,6 @@ import type { SyncState } from "../../core/worktree.ts";
 import {
   GROUP_INBOX,
   STACK_SECTION_PREFIX,
-  stackSectionKey,
   type WtState,
 } from "../../core/wtstate.ts";
 import { type DevServerStatus } from "../../core/dev-server.ts";
@@ -185,12 +184,6 @@ export type WorktreeRow = {
    * `null` means the unsectioned inbox.
    */
   section: string | null;
-  /**
-   * True when `section` is an inferred stack section. Drives the spine
-   * rendering in the list pane and the J/K/move-into refusals in the
-   * action layer (stack order follows the base-record chain).
-   */
-  sectionIsStack: boolean;
 };
 
 const FIELD_ORDER = [
@@ -454,6 +447,32 @@ function sortActiveRows(
     rank.set(sectionsOrder[i]!, i);
   }
   const groupOf = (r: WorktreeRow): string => r.section ?? GROUP_INBOX;
+  // A stack sorts as ONE contiguous unit inside its section, taking the
+  // position its most urgent member would take. Members have genuinely
+  // different statuses (finished parent, unstarted child), so ranking
+  // them independently would interleave unrelated rows through a spine
+  // and leave a connector pointing at a parent several rows away.
+  // Members that live in DIFFERENT sections are separate units — a
+  // split stack is legitimate, and each half sorts where it sits.
+  const unitKey = (r: WorktreeRow): string =>
+    r.stack ? `${groupOf(r)}\u0000${r.stack.stackId}` : `\u0000${r.wt.slug}`;
+  const unitRank = new Map<string, number>();
+  const unitOrder = new Map<string, number>();
+  const unitDepth = new Map<string, number>();
+  for (const r of active) {
+    const k = unitKey(r);
+    const rank = rowWorkRank(r);
+    const prevRank = unitRank.get(k);
+    if (prevRank === undefined || rank < prevRank) unitRank.set(k, rank);
+    // The unit's slot is the ROOT's manual order (shallowest member
+    // present), so `J`/`K` on the root still moves the whole block.
+    const depth = r.stack?.depth ?? 0;
+    const prevDepth = unitDepth.get(k);
+    if (prevDepth === undefined || depth < prevDepth) {
+      unitDepth.set(k, depth);
+      unitOrder.set(k, effectiveOrders.get(r.wt.slug) ?? -Infinity);
+    }
+  }
   // Unranked stack keys sort to the front (where new stacks live) —
   // but never above an Inbox that currently holds the top slot: the
   // Inbox is where new worktrees land, and a freshly formed stack
@@ -473,12 +492,21 @@ function sortActiveRows(
       if (rankA !== rankB) return rankA - rankB;
       return groupA.localeCompare(groupB);
     }
-    if (statusSort && !a.sectionIsStack) {
-      const wr = rowWorkRank(a) - rowWorkRank(b);
+    const keyA = unitKey(a);
+    const keyB = unitKey(b);
+    if (keyA === keyB) {
+      // Same stack: spine order IS the layout (base-record chain).
+      const ia = a.stack?.index ?? 0;
+      const ib = b.stack?.index ?? 0;
+      if (ia !== ib) return ia - ib;
+      return (unsortedIndex.get(a.wt.slug) ?? 0) - (unsortedIndex.get(b.wt.slug) ?? 0);
+    }
+    if (statusSort) {
+      const wr = (unitRank.get(keyA) ?? 0) - (unitRank.get(keyB) ?? 0);
       if (wr !== 0) return wr;
     }
-    const orderA = effectiveOrders.get(a.wt.slug) ?? -Infinity;
-    const orderB = effectiveOrders.get(b.wt.slug) ?? -Infinity;
+    const orderA = unitOrder.get(keyA) ?? -Infinity;
+    const orderB = unitOrder.get(keyB) ?? -Infinity;
     if (orderA !== orderB) return orderA - orderB;
     return (unsortedIndex.get(a.wt.slug) ?? 0) - (unsortedIndex.get(b.wt.slug) ?? 0);
   });
@@ -513,7 +541,7 @@ function applyMergeEdgeOrder(
   const buckets = new Map<string, number[]>();
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]!;
-    if (r.sectionIsStack) continue;
+    if (r.stack) continue;
     const key = r.section ?? GROUP_INBOX;
     const list = buckets.get(key);
     if (list) list.push(i);
@@ -774,12 +802,14 @@ export function useWorktreeRows(): WorktreeRowsResult {
             index: node.index,
           }
         : null;
-      const section = stack ? stackSectionKey(stack.stackId) : manualSection;
-      const sectionIsStack = stack !== null;
-      effectiveOrders.set(
-        wt.slug,
-        stack?.index ?? stateSlugs[wt.slug]?.order ?? -Infinity,
-      );
+      // Sections own the vertical axis. A stack is a RELATIONSHIP
+      // between rows, drawn as a spine inside whichever section each
+      // member was placed in — it is not a place. The derived grouping
+      // used to override the stated one, which evicted the human's own
+      // section name (three stacks rendered as three headers all
+      // literally named "stack") and made stacked worktrees unfilable.
+      const section = manualSection;
+      effectiveOrders.set(wt.slug, stateSlugs[wt.slug]?.order ?? -Infinity);
       const githubIssue = stateSlugs[wt.slug]?.githubIssue ?? null;
       const work = stateSlugs[wt.slug]?.work ?? null;
       const llmTitle = aiResults[i]?.title ?? null;
@@ -819,7 +849,6 @@ export function useWorktreeRows(): WorktreeRowsResult {
         prev.titleSource === titleSource &&
         prev.brief === llmBrief &&
         prev.section === section &&
-        prev.sectionIsStack === sectionIsStack &&
         stackInfoEq(prev.stack, stack) &&
         stackedOnEq(prev.stackedOn, stackedOn)
       ) {
@@ -846,7 +875,6 @@ export function useWorktreeRows(): WorktreeRowsResult {
         titleSource,
         brief: llmBrief,
         section,
-        sectionIsStack,
       };
       rowCache.current.set(wt.slug, next);
       return next;

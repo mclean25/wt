@@ -5,6 +5,14 @@ relationship as one small per-worktree record and derives everything else from
 it — there is no managed stack state, no registration step, and nothing to
 keep in sync.
 
+## Stacks and sections
+
+Sections own the vertical axis; a stack is a **relationship between rows inside one**, not a place of its own. A stack used to render as its own pseudo-section, which overrode whatever section the human had filed each member in — three stacks produced three headers all literally named `stack`, mutually indistinguishable, each displacing a real section name, and stacked worktrees could not be filed at all.
+
+Members therefore keep their own `section` record and a stack sorts as one contiguous **unit**, slotted by its most urgent member so `sort = "status"` can't interleave unrelated rows through a spine. `J`/`K` from any member moves the whole block (the unit's slot is the root's manual order), and filing a member via `l` — or `wt section mv` — moves the whole stack unless `--only`.
+
+**Splitting a stack across sections is legitimate**, not a mistake to reconcile: finished parents awaiting verification and their unstarted children genuinely belong in different buckets. A member whose parent sits elsewhere draws no rail (it would point at a row that isn't above it) and carries a dim `→ <parent>` reference instead, so the relationship survives the split. On a narrow pane the reference is dropped rather than truncating two siblings of one parent to the same prefix — identity beats relationship when there isn't room for both.
+
 ## The base record
 
 Every worktree can carry a **fork base**: the branch it's based on, plus the

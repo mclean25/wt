@@ -245,8 +245,7 @@ export function App({ onExit }: Props) {
     }
   });
 
-  const { wtStateForStacks, foldedSections, stackSectionLabels } =
-    useStackSections(rows);
+  const { wtStateForStacks, foldedSections } = useStackSections();
 
   // Narrate work-status transitions (from any process) into the
   // attention feed.
@@ -286,7 +285,6 @@ export function App({ onExit }: Props) {
   } = useVisualItems({
     rows,
     foldedSections,
-    stackSectionLabels,
     selectedKey: sel,
     remoteCreation,
     remoteWorktrees: remoteWorktreeList.data ?? [],
@@ -908,7 +906,6 @@ export function App({ onExit }: Props) {
             activeTails={activeTails}
             activeActions={activeActions}
             activeSessionBySlug={activeSessionBySlug}
-            stackSectionLabels={stackSectionLabels}
             isLoading={isLoading}
             remoteUnavailable={remoteUnavailable}
             githubData={githubData}

@@ -37,7 +37,6 @@ export function visualKey(item: VisualItem): string {
 type UseVisualItemsArgs = {
   rows: readonly WorktreeRow[];
   foldedSections: ReadonlySet<string>;
-  stackSectionLabels: ReadonlyMap<string, string>;
   selectedKey: string | null;
   remoteCreation: RemoteCreation | null;
   remoteWorktrees: readonly RemoteWorktreeSummary[];
@@ -47,7 +46,6 @@ type UseVisualItemsArgs = {
 export function useVisualItems({
   rows,
   foldedSections,
-  stackSectionLabels,
   selectedKey,
   remoteCreation,
   remoteWorktrees,
@@ -97,13 +95,8 @@ export function useVisualItems({
         out.push({
           kind: "section",
           sectionKey: sec,
-          isStack: r.sectionIsStack,
-          label:
-            r.section === null
-              ? "Inbox"
-              : r.sectionIsStack
-                ? stackSectionLabels.get(sec) ?? sec
-                : sec,
+          isStack: false,
+          label: r.section === null ? "Inbox" : r.section,
           rows: activeRows.filter((x) => (x.section ?? GROUP_INBOX) === sec),
         });
       } else {
@@ -114,8 +107,7 @@ export function useVisualItems({
   }, [
     rows,
     foldedSections,
-    stackSectionLabels,
-    remoteCreation,
+      remoteCreation,
     remoteWorktrees,
     archivedKeys,
   ]);

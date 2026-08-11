@@ -121,7 +121,6 @@ type Props = {
    * (`stackSectionKey(stackId)`). Every managed stack has an entry, so
    * the divider never falls back to rendering the raw NUL-prefixed key.
    */
-  stackSectionLabels: ReadonlyMap<string, string>;
   isLoading: boolean;
   /** The SSH inventory refetch failed; last-known remote rows stay visible. */
   remoteUnavailable: boolean;
@@ -192,9 +191,23 @@ function StatusMarker({
  * and unstacked rows and the eye still runs down it. The connector sits
  * at `depth - 1`; a root (depth 0) draws none.
  */
-function StackConnector({ row, cells }: { row: WorktreeRow; cells: number }) {
+function StackConnector({
+  row,
+  cells,
+  split,
+}: {
+  row: WorktreeRow;
+  cells: number;
+  split: boolean;
+}) {
   if (cells === 0) return null;
-  const info = row.stack;
+  // A member whose parent sits in a DIFFERENT section draws no rail:
+  // the spine would point at a row that isn't above it (or on screen at
+  // all). Splits are legitimate — finished parents in a verification
+  // bucket, unstarted children in a backlog — so the relationship is
+  // carried by a parent reference on the label instead, and the rail is
+  // reserved for members actually adjacent to their parent.
+  const info = split ? null : row.stack;
   const col = info ? Math.min(info.depth - 1, cells - 1) : -1;
   return (
     <box flexShrink={0} flexDirection="row">
@@ -241,6 +254,16 @@ export function rowLabel(row: WorktreeRow): string {
   return numId ? `${numId}: ${text}` : text;
 }
 
+/** Longest parent name a split-stack reference will show. */
+const PARENT_REF_CELLS = 16;
+/**
+ * Cells the row's own label must keep before a parent reference earns
+ * its space. Tuned so a narrow pane drops the reference rather than
+ * truncating two siblings of one parent to the same prefix — identity
+ * beats relationship when there isn't room for both.
+ */
+const MIN_LABEL_CELLS = 24;
+
 const RowView = memo(function RowView({
   row,
   selected,
@@ -250,6 +273,7 @@ const RowView = memo(function RowView({
   sessionState,
   panelWidth,
   gutterCells,
+  splitParent,
 }: {
   row: WorktreeRow;
   selected: boolean;
@@ -266,6 +290,8 @@ const RowView = memo(function RowView({
   sessionState: DerivedState | undefined;
   panelWidth: number;
   gutterCells: number;
+  /** Parent's label when it lives in another section; null otherwise. */
+  splitParent: string | null;
 }) {
   const bg = selected ? theme.rowSelectedBg : undefined;
   // Archived rows render dim (unless selected, where we still want
@@ -284,6 +310,18 @@ const RowView = memo(function RowView({
   const slugAttrs =
     (selected ? TextAttributes.BOLD : 0) |
     (isTailing ? TextAttributes.ITALIC : 0);
+  // The row's OWN name wins the space. A parent reference is only
+  // worth showing if what's left still identifies this row — two
+  // siblings of one parent truncated to "Product a..." are exactly the
+  // indistinguishable pair the reference was meant to disambiguate.
+  const budget = Math.max(
+    0,
+    panelWidth - 8 - gutterCells - badgeClusterCells(row, actionRunning, activeHarnessId),
+  );
+  const ref = splitParent ? ` → ${truncateEnd(splitParent, PARENT_REF_CELLS)}` : "";
+  const showRef = ref !== "" && budget - ref.length >= MIN_LABEL_CELLS;
+  const parentRef = showRef ? ref : "";
+  const labelCells = budget - parentRef.length;
   return (
     <box
       id={row.wt.slug}
@@ -292,7 +330,7 @@ const RowView = memo(function RowView({
       paddingLeft={1}
       paddingRight={1}
     >
-      <StackConnector row={row} cells={gutterCells} />
+      <StackConnector row={row} cells={gutterCells} split={splitParent !== null} />
       <box flexShrink={0} flexDirection="row">
         {/* Mirror the right-cluster pattern: width=2 box for the icon,
             then a width=1 box for the gap. Same shape that produces
@@ -305,7 +343,7 @@ const RowView = memo(function RowView({
           <text> </text>
         </box>
       </box>
-      <box flexGrow={1} flexShrink={1} overflow="hidden">
+      <box flexGrow={1} flexShrink={1} overflow="hidden" flexDirection="row">
         {/* Truncation lives in JS, not opentui's native `truncate`,
             because the native path middle-clips with `…`. We want the
             head intact (it's the most distinctive part: "ENG-1234: "
@@ -313,8 +351,13 @@ const RowView = memo(function RowView({
             width − borders(2) − row padding(2) − scrollbar gutter(1) −
             left gutter (3 normal, 4 for a stack row) − badge cluster. */}
         <text fg={slugFg} attributes={slugAttrs} wrapMode="none">
-          {truncateEnd(rowLabel(row), Math.max(0, panelWidth - 8 - gutterCells - badgeClusterCells(row, actionRunning, activeHarnessId)))}
+          {truncateEnd(rowLabel(row), labelCells)}
         </text>
+        {parentRef ? (
+          <box flexShrink={0}>
+            <text fg={theme.fgDim} wrapMode="none">{parentRef}</text>
+          </box>
+        ) : null}
       </box>
       {/* Shared with the folded section/stack summaries in the details
           pane (badge-cluster.tsx) so both render identically. */}
@@ -517,16 +560,31 @@ function remoteSectionKey(entry: RemoteListEntry): string {
   return `${REMOTE_SECTION_PREFIX}${entry.hostKey}`;
 }
 
-export function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, stackSectionLabels, isLoading, remoteUnavailable, githubData, scrollHandle }: Props) {
+export function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, isLoading, remoteUnavailable, githubData, scrollHandle }: Props) {
   // One gutter width for the whole list so the status-dot column is
   // straight across stacked and unstacked rows alike. Zero when nothing
   // visible is stacked.
-  const gutterCells = stackGutterCells([
+  const allRows = [
     ...items.flatMap((i) =>
       i.kind === "wt" ? [i.row] : i.kind === "section" ? i.rows : [],
     ),
     ...archivedItems.flatMap((i) => (i.kind === "wt" ? [i.row] : [])),
-  ]);
+  ];
+  const gutterCells = stackGutterCells(allRows);
+  // Stack members whose parent was filed in a different section: the
+  // rail is replaced by a reference so the relationship survives the
+  // split instead of vanishing (or, worse, pointing at nothing).
+  const splitParents = useMemo(() => {
+    const byBranch = new Map(allRows.map((r) => [r.wt.branch, r]));
+    const m = new Map<string, string>();
+    for (const r of allRows) {
+      const parentBranch = r.stackedOn?.branch;
+      if (!r.stack || !parentBranch) continue;
+      const parent = byBranch.get(parentBranch);
+      if (parent && parent.section !== r.section) m.set(r.wt.slug, rowLabel(parent));
+    }
+    return m;
+  }, [allRows]);
   const hasArchived = archivedItems.length > 0;
   const hasReviewRequests = reviewRequests.length > 0;
   const hasActive = items.length > 0;
@@ -713,11 +771,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                     <box height={1} flexShrink={0} />
                     <Divider
                       label={
-                        row.section === null
-                          ? "Inbox"
-                          : row.sectionIsStack
-                            ? stackSectionLabels.get(row.section) ?? row.section
-                            : row.section
+                        row.section === null ? "Inbox" : row.section
                       }
                       width={width}
                     />
@@ -725,6 +779,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                 ) : null}
                 <RowView
                   gutterCells={gutterCells}
+                  splitParent={splitParents.get(row.wt.slug) ?? null}
                   row={row}
                   selected={i === selectedIndex}
                   isTailing={activeTails.has(row.wt.slug)}
@@ -795,6 +850,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                 return (
                   <RowView
                     gutterCells={gutterCells}
+                    splitParent={splitParents.get(row.wt.slug) ?? null}
                     key={row.wt.slug}
                     row={row}
                     selected={globalIndex === selectedIndex}
