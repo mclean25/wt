@@ -88,6 +88,20 @@ async function main(): Promise<number> {
 
 try {
   const code = await main();
+  // Drain the log write chain before the hard exit below. Every log
+  // write is an async `appendFile`, so a short CLI command that returns
+  // immediately (`wt status`, `wt section`) would otherwise exit with
+  // its lines still queued — silently losing the file-only audit trail
+  // those commands deliberately write, and any warning raised during a
+  // read. The TUI flushes in its own shutdown path; this covers
+  // everything else. Best-effort: a logging failure must never change a
+  // command's exit code.
+  try {
+    const { flushLogger } = await import("./core/logger.ts");
+    await flushLogger();
+  } catch {
+    /* logging is diagnostics, never correctness */
+  }
   // Explicit exit: the TUI path can leave behind background listeners
   // (persister sub, refetch intervals, sqlite handle) that keep the
   // event loop alive even after cleanup. A hard exit is the standard

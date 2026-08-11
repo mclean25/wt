@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { config } from "../config.ts";
@@ -26,7 +26,14 @@ export function readWtState(): WtState {
   if (!existsSync(STATE_FILE)) return emptyWtState();
   try {
     const raw = readFileSync(STATE_FILE, "utf8");
-    return parseWtState(maybeMigrateRaw(JSON.parse(raw)));
+    const parsed = JSON.parse(raw);
+    // Captured BEFORE migration: a downgrade write stamps the older
+    // build's version, and `maybeMigrateRaw` would migrate that away
+    // before the detector could see who wrote it.
+    const fileVersion = rawWtStateVersion(parsed);
+    const state = parseWtState(maybeMigrateRaw(parsed));
+    detectForeignWrite(fileVersion);
+    return state;
   } catch (err) {
     log.error(err instanceof Error ? err : String(err), { file: STATE_FILE });
     return emptyWtState();
@@ -304,6 +311,100 @@ function atomicWriteJson(value: unknown): void {
   renameSync(tmp, STATE_FILE);
 }
 
+/**
+ * Sidecar recording who last wrote `state.json` — the detector for the
+ * silent field-stripping described in docs/updates.md.
+ *
+ * The failure it catches: a still-running wt on an OLDER build reads
+ * state.json, drops every field its `parseWtState` doesn't know, and
+ * writes the result back. Seven merge edges vanished this way, and the
+ * only reason anyone noticed was re-listing them on a hunch. The human
+ * had no signal at all; from their side the board simply didn't contain
+ * what an agent said it had recorded.
+ *
+ * Why a sidecar rather than a field in state.json: an older build
+ * strips unknown fields (so an in-file writer stamp is the first thing
+ * to go) AND down-stamps `version` to its own on write, so neither the
+ * stamp nor the version number survives to be compared. The signal has
+ * to live somewhere the old build never touches, and a file it has
+ * never heard of is exactly that.
+ *
+ * The mechanism is an exact mtime match, not a timestamp comparison: we
+ * record state.json's mtime immediately after writing it, so any later
+ * write by something that doesn't maintain this sidecar leaves the two
+ * disagreeing. Self-expiring by construction — the next write from a
+ * current build re-syncs them, which is also precisely when the danger
+ * window closes.
+ */
+const WRITER_FILE = join(WT_STATE_DIR, "state.writer.json");
+
+type WriterStamp = { mtimeMs: number; at: string; stateVersion: number };
+
+function recordWriterStamp(): void {
+  try {
+    const stamp: WriterStamp = {
+      mtimeMs: statSync(STATE_FILE).mtimeMs,
+      at: new Date().toISOString(),
+      stateVersion: WT_STATE_VERSION,
+    };
+    const tmp = `${WRITER_FILE}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(stamp)}\n`);
+    renameSync(tmp, WRITER_FILE);
+  } catch {
+    // Best-effort: the stamp is a diagnostic, never a correctness
+    // dependency. A missing one reads as "unknown", never as "clean".
+  }
+}
+
+function readWriterStamp(): WriterStamp | null {
+  try {
+    const raw = JSON.parse(readFileSync(WRITER_FILE, "utf8")) as Partial<WriterStamp>;
+    if (typeof raw.mtimeMs !== "number" || typeof raw.stateVersion !== "number") return null;
+    return { mtimeMs: raw.mtimeMs, at: String(raw.at ?? ""), stateVersion: raw.stateVersion };
+  } catch {
+    return null;
+  }
+}
+
+/** Warn at most once per process — this is news, not a running commentary. */
+let foreignWriteReported = false;
+
+/**
+ * Compare state.json against the sidecar and say so when something
+ * else wrote it. Deliberately does NOT try to name what was lost: this
+ * build cannot see fields that are already gone. What it can do is tell
+ * whoever is reading that "I recorded that" and "it is in the file" may
+ * have come apart, and that re-asserting is the recovery — which is the
+ * step nobody thinks to take, because the failure is silent.
+ */
+function detectForeignWrite(fileVersion: number): void {
+  if (foreignWriteReported) return;
+  const stamp = readWriterStamp();
+  if (!stamp) return; // no baseline yet — unknown, not clean
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(STATE_FILE).mtimeMs;
+  } catch {
+    return;
+  }
+  if (mtimeMs === stamp.mtimeMs) return;
+  foreignWriteReported = true;
+  // Re-baseline so this is reported once per OCCURRENCE rather than
+  // once per process: without it every future process re-reports the
+  // same stale mismatch until something happens to write state again.
+  recordWriterStamp();
+  const older = fileVersion < stamp.stateVersion;
+  log.attention.warn(
+    older
+      ? `state.json was rewritten by an OLDER wt build (state v${fileVersion}, this build writes v${stamp.stateVersion}) — fields it doesn't know were dropped`
+      : "state.json was rewritten by something that isn't this build — fields it doesn't know may have been dropped",
+  );
+  log.warn(
+    "re-assert anything recorded recently (edges, statuses, sections); restarting long-lived wt processes closes the window",
+    { file: STATE_FILE, lastStampedAt: stamp.at, fileVersion, stampVersion: stamp.stateVersion },
+  );
+}
+
 export function writeWtState(state: WtState): void {
   try {
     // Every write path stamps the CURRENT version, matching
@@ -312,6 +413,7 @@ export function writeWtState(state: WtState): void {
     // fields dropped at parse time, so there's no newer shape left to
     // preserve by keeping a higher version number here.
     atomicWriteJson({ ...state, version: WT_STATE_VERSION });
+    recordWriterStamp();
   } catch (err) {
     log.error(err instanceof Error ? err : String(err), { file: STATE_FILE });
     // Re-raise so the action layer can surface the failure to the

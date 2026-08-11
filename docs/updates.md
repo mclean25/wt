@@ -133,6 +133,26 @@ restarted onto the new build (observed live with `edges` at v3).
 Bounded by restart, but worth knowing when a freshly-shipped record
 "didn't stick".
 
+**This is now detected rather than remembered.** Relying on a human to
+recall the caveat failed exactly as you'd expect: seven merge edges
+were stripped this way and were only noticed because someone re-listed
+them on a hunch — from the outside, the board simply didn't contain
+what an agent said it had recorded. Every write from a current build
+records `state.writer.json` beside the state file, holding the mtime it
+just produced; on read, a mismatch means something wrote `state.json`
+that doesn't maintain that stamp, which is reported on the attention
+feed (naming the older build's state version when the file was
+down-stamped, since that identifies the culprit). The signal has to
+live outside `state.json` precisely because an older build both strips
+unknown fields — so an in-file writer stamp is the first thing to go —
+and rewrites `version` to its own on write, leaving neither the stamp
+nor the version to compare. It self-expires: the next write from a
+current build re-syncs the pair, which is exactly when the danger
+window closes. It is reported once per occurrence, not once per
+process, and the recovery it names is the one nobody thinks to take —
+re-assert what you recorded recently, and restart long-lived wt
+processes to close the window.
+
 The blast radius is exactly the fields that are new to the running
 build, and nothing else. `parseWtState` is a whitelist parser: it
 rebuilds each record from the fields it knows, so a field an old build

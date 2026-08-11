@@ -17,7 +17,7 @@
  * this command adds no inference — it only lets the other party to the
  * conversation write down what was agreed. Every move narrates onto
  * the attention feed (the TUI diffs wtstate, see
- * `useWorkStatusEvents`), so a grouping change an agent makes is
+ * `useWtStateEvents`), so a grouping change an agent makes is
  * something the human sees, not something they discover.
  *
  * Stack sections are excluded throughout: they're synthetic keys
@@ -69,9 +69,20 @@ function manualSections(state: WtState): string[] {
   );
 }
 
-function slugsIn(state: WtState, section: string | null): string[] {
+/**
+ * Slugs in a section, in display order. `live` filters to worktrees
+ * that still exist: per-slug records outlive the worktree (they're
+ * reaped at the next startup), so listing straight from wtstate would
+ * show rows that have been archived for days as though they were part
+ * of the grouping.
+ */
+function slugsIn(
+  state: WtState,
+  section: string | null,
+  live: ReadonlySet<string> | null,
+): string[] {
   return Object.entries(state.slugs)
-    .filter(([, v]) => v.section === section)
+    .filter(([slug, v]) => v.section === section && (!live || live.has(slug)))
     .sort((a, b) => a[1].order - b[1].order)
     .map(([slug]) => slug);
 }
@@ -103,18 +114,18 @@ function resolveSection(state: WtState, arg: string): string | null {
   return matches.length === 1 ? matches[0]! : null;
 }
 
-function runList(state: WtState, json: boolean): number {
+function runList(state: WtState, live: ReadonlySet<string>, json: boolean): number {
   const sections = manualSections(state);
   const folded = new Set(state.foldedSections);
   if (json) {
-    const inbox = slugsIn(state, null);
+    const inbox = slugsIn(state, null, live);
     console.log(
       JSON.stringify(
         [
           ...sections.map((name) => ({
             name,
             folded: folded.has(name),
-            slugs: slugsIn(state, name),
+            slugs: slugsIn(state, name, live),
           })),
           { name: null, folded: folded.has(GROUP_INBOX), slugs: inbox },
         ],
@@ -128,12 +139,12 @@ function runList(state: WtState, json: boolean): number {
     console.log(dim("No sections. Create one: wt section mv <slug> <section>"));
   }
   for (const name of sections) {
-    const rows = slugsIn(state, name);
+    const rows = slugsIn(state, name, live);
     const tag = folded.has(name) ? dim(" (folded)") : "";
     console.log(`${bold(name)}${dim(` · ${rows.length}`)}${tag}`);
     for (const slug of rows) console.log(`  ${cyan(slug)}`);
   }
-  const inbox = slugsIn(state, null);
+  const inbox = slugsIn(state, null, live);
   if (inbox.length > 0) {
     console.log(`${dim("(inbox)")}${dim(` · ${inbox.length}`)}`);
     for (const slug of inbox) console.log(`  ${cyan(slug)}`);
@@ -222,7 +233,7 @@ function runRemove(positional: string[]): number {
     console.error(red(`no such section: ${positional[0]}`));
     return 1;
   }
-  const rows = slugsIn(state, name);
+  const rows = slugsIn(state, name, null);
   for (const slug of rows) setSlugSection(slug, null);
   console.log(
     `${green("✓")} dropped ${bold(name)}${rows.length ? dim(` · ${rows.length} row${rows.length === 1 ? "" : "s"} → inbox`) : ""}`,
@@ -248,7 +259,10 @@ export async function run(argv: string[]): Promise<number> {
 
   const [sub, ...rest] = positional;
   if (sub === undefined || sub === "ls" || sub === "list") {
-    return runList(readWtState(), json);
+    const live = new Set(
+      (await listWorktrees()).filter((w) => !w.isMain).map((w) => w.slug),
+    );
+    return runList(readWtState(), live, json);
   }
   switch (sub) {
     case "mv":
