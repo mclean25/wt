@@ -96,6 +96,7 @@ import {
 import type { DiffContext } from "../core/diff/index.ts";
 import { gitRun, invalidateMainFirstParents } from "../core/git.ts";
 import { fetchAuthenticatedLogin } from "../core/github.ts";
+import { createLogger } from "../core/logger.ts";
 import type { PullRequest, Worktree } from "../core/types.ts";
 import type { WorkStatusRecord } from "../core/work-status.ts";
 import {
@@ -626,6 +627,15 @@ export function useWtActions() {
      */
     async setSection(slug: string, section: string | null): Promise<void> {
       setSlugSectionOnDisk(slug, section);
+      // Logged because sections are the HUMAN's own grouping intent and
+      // nothing else writes them: without a line here, "why is this row
+      // in Done?" has no answer at all — the record shows where it is,
+      // never how it got there. (A folded section hiding its rows reads
+      // exactly like a row that moved, which is how the question comes
+      // up.) The firehose, not attention: it's a routine act.
+      createLogger(slug).event.info(
+        section ? `moved to section ${section}` : "moved to Inbox",
+      );
       await qc.invalidateQueries({ queryKey: qk.wtState() });
     },
     /**
@@ -754,6 +764,14 @@ export function useWtActions() {
      */
     async toggleSectionFold(sectionKey: string): Promise<boolean> {
       const folded = toggleSectionFoldedOnDisk(sectionKey);
+      // File-only: a fold is view state and TAB is pressed constantly,
+      // so this would drown the activity pane. It's in the log because
+      // a folded section makes its rows vanish from the list, which is
+      // indistinguishable from them having moved — the daily log is
+      // where that question gets settled.
+      createLogger("[app]").debug(
+        `section ${folded ? "folded" : "unfolded"}: ${sectionKey}`,
+      );
       await qc.invalidateQueries({ queryKey: qk.wtState() });
       return folded;
     },

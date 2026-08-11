@@ -133,6 +133,16 @@ restarted onto the new build (observed live with `edges` at v3).
 Bounded by restart, but worth knowing when a freshly-shipped record
 "didn't stick".
 
+The blast radius is exactly the fields that are new to the running
+build, and nothing else. `parseWtState` is a whitelist parser: it
+rebuilds each record from the fields it knows, so a field an old build
+knows (`section`, `order`, `work`, `baseBranch`, …) round-trips through
+that build untouched. A downgrade write can therefore never drop or
+default a pre-existing value — if long-standing state looks like it
+moved on its own, the cause is elsewhere, and the daily log is where to
+settle it (section moves and fold toggles are recorded there for exactly
+this reason).
+
 ## Escape hatches
 
 `[update] startup_check = false` disables the daily startup offer;
