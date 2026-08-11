@@ -80,7 +80,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "G", label: "bottom" },
       { key: "space", label: "jump to next row needing attention (needs-human / needs-testing / ready), wraps" },
       { key: "TAB", label: "fold / unfold the section under the cursor (Inbox too)" },
-      { key: "ctrl+shift+j/k", label: "scroll details pane" },
+      { key: "ctrl+j / ctrl+k", label: "scroll details pane" },
     ],
   },
   {
@@ -225,7 +225,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "[ / ]", label: "cycle prev / next output for this worktree" },
       { key: '"', label: "attention feed · press again for the full events firehose" },
       { key: "x", label: "mark attention feed seen — handled rows dim below a ── seen rule (persisted; only while the feed is showing)" },
-      { key: "ctrl+j / ctrl+k", label: "scroll the event feed (ctrl+e/y, alt+j/k, and mouse wheel too); it re-follows at the bottom" },
+      { key: "ctrl+shift+j/k", label: "scroll the event feed (ctrl+e/y, alt+j/k, and mouse wheel too); it re-follows at the bottom" },
       { key: "esc", label: "clear focus (return to follow-row auto)" },
     ],
   },

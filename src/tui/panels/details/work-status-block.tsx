@@ -21,9 +21,17 @@ function bannerGlyph(state: WorkState): string {
   return state === "todo" ? "○" : "●";
 }
 import type { WorktreeRow } from "../../hooks/useWorktreeRows.ts";
+import { wrapText } from "../../text.ts";
 import { theme } from "../../theme.ts";
 
-export function WorkStatusBlock({ row }: { row: WorktreeRow }) {
+export function WorkStatusBlock({
+  row,
+  contentWidth,
+}: {
+  row: WorktreeRow;
+  /** Details-pane width inside its chrome; the rail costs 2 more cells. */
+  contentWidth: number;
+}) {
   const record = row.work;
   if (!record) return null;
   const color = workStateColor(record.state);
@@ -54,10 +62,23 @@ export function WorkStatusBlock({ row }: { row: WorktreeRow }) {
         // backgroundColor cell reads as a chunky block); the mid-tone
         // text keeps the colored header dominant without dimming the
         // note to metadata-gray.
-        <box border={["left"]} borderStyle="single" borderColor={color} paddingLeft={1}>
-          <text fg={theme.fgMid} wrapMode="word">
-            {record.note}
-          </text>
+        <box
+          border={["left"]}
+          borderStyle="single"
+          borderColor={color}
+          paddingLeft={1}
+          flexDirection="column"
+        >
+          {/* Pre-wrapped rather than `wrapMode="word"`: the native
+              wrapper left the whitespace it broke on at the head of each
+              continuation line and spent a blank line on the last
+              character, which showed up as a phantom empty row of rail
+              under every long note. */}
+          {wrapText(record.note, Math.max(1, contentWidth - 2)).map((line, i) => (
+            <text key={i} fg={theme.fgMid} wrapMode="none">
+              {line}
+            </text>
+          ))}
         </box>
       ) : null}
     </box>

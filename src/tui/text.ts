@@ -29,6 +29,71 @@ export function ageMsToText(ms: number): string {
  * (middle-truncation, or layout that needs to know the final string
  * width). Glyph matches the native flag for visual consistency.
  */
+/**
+ * Word-wrap `s` into lines of at most `width` terminal cells, with an
+ * optional narrower `firstWidth` for hanging-indent layouts (a first
+ * line that shares its row with a fixed-width prefix).
+ *
+ * Hand-rolled rather than opentui's `wrapMode="word"` because the native
+ * wrapper (in the Zig text buffer) keeps the whitespace it broke on — so
+ * continuation lines start indented by however many spaces the break ate
+ * — and drops the break character when the tail lands exactly at the
+ * edge, which was eating a trailing `.` and emitting a blank line in its
+ * place. Here every run of whitespace collapses to one space, explicit
+ * newlines survive as breaks, and words wider than the budget hard-break
+ * rather than overflowing the pane.
+ */
+export function wrapText(s: string, width: number, firstWidth = width): string[] {
+  if (width <= 0 || firstWidth <= 0) return [];
+  const out: string[] = [];
+  let line = "";
+  let lineW = 0;
+  // The narrower budget applies to the first emitted line only; every
+  // continuation gets the full width.
+  const budget = () => (out.length === 0 ? firstWidth : width);
+  const breakLine = () => {
+    out.push(line);
+    line = "";
+    lineW = 0;
+  };
+  for (const para of s.split(/\r?\n/)) {
+    for (const word of para.split(/\s+/)) {
+      if (!word) continue;
+      const w = Bun.stringWidth(word);
+      if (lineW > 0 && lineW + 1 + w <= budget()) {
+        line += ` ${word}`;
+        lineW += 1 + w;
+        continue;
+      }
+      if (lineW > 0) breakLine();
+      if (w <= budget()) {
+        line = word;
+        lineW = w;
+        continue;
+      }
+      // Over-long word (a URL, a path): hard-break it by cells. Same
+      // deliberately non-grapheme-aware trim as `truncateEnd`.
+      let rest = word;
+      while (Bun.stringWidth(rest) > budget()) {
+        let cut = rest;
+        while (cut.length > 0 && Bun.stringWidth(cut) > budget()) cut = cut.slice(0, -1);
+        // Pathological only: a wide glyph against a 1-cell budget, where
+        // no prefix fits. Emit the glyph anyway so the loop terminates.
+        if (cut.length === 0) cut = rest.slice(0, 1);
+        out.push(cut);
+        rest = rest.slice(cut.length);
+      }
+      line = rest;
+      lineW = Bun.stringWidth(rest);
+    }
+    // A newline in the source is a hard break; an empty paragraph keeps
+    // its blank line.
+    if (lineW > 0) breakLine();
+    else if (para.trim() === "") out.push("");
+  }
+  return out;
+}
+
 export function truncateEnd(s: string, maxWidth: number): string {
   if (maxWidth <= 0) return "";
   if (Bun.stringWidth(s) <= maxWidth) return s;

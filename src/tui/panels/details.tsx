@@ -474,7 +474,7 @@ const DetailsBody = memo(function DetailsBody({
       <WtScrollbox scrollRef={scrollRef}>
         {/* Asserted work status, full width — the note is the payload
             (merge impacts, needs-human asks) and must never truncate. */}
-        <WorkStatusBlock row={row} />
+        <WorkStatusBlock row={row} contentWidth={Math.max(0, width - PANE_CHROME_WIDTH)} />
         {RESOLVED_ROWS.map((m) => (
           <RenderedRow key={m.id} module={m} ctx={ctx} />
         ))}
