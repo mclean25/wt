@@ -160,7 +160,7 @@ const KEY_BLOCKS: Block[] = [
   {
     kind: "keys",
     title: "manager",
-    note: "the singleton fleet-coordinator session. Palette commands inject prompts and expect results back via `wt manager report`, which lands on the attention feed. The footer shows the manager's context % left of [m] (warn ≥70, red ≥85 — compact before it auto-compacts).",
+    note: "the singleton fleet-coordinator session. Palette commands send prompts and expect results back via `wt manager report`, which lands on the attention feed. The footer shows the manager's context % left of [m] (warn ≥70, red ≥85 — compact before it auto-compacts).",
     items: [
       { key: "m", label: "enter the manager session (fleet coordinator) · F12 to detach" },
       { key: "M", label: "manager palette — digest / triage / merge order / nudge / audit / start next todo" },

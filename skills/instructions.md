@@ -66,14 +66,9 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   writing one note; the human reads all of them at once, and "concise"
   loses to "thorough" every time it's left to judgment.
 - Fleet-level questions (merge order, cross-branch conflicts, who owns a
-  shared change) go to the manager session. **Prefer your harness's
-  peer-messaging tool when it lists the manager as a peer** (it's
-  addressable as `manager`; per-worktree agents are addressable by the
-  `agent_name` in `wt fleet --json` / `wt claude ls --json`) — direct
-  messages confirm delivery and carry more than a typed line.
-  `wt manager send "..."` is the fallback: scripts, harnesses without
-  peer messaging, or a manager that isn't running yet (it cold-starts
-  the session).
+  shared change) go through `wt manager send "..."`. wt ensures the manager
+  session exists and uses the selected harness's supported transport. For
+  Claude this is its native messaging socket, never tmux input.
 - Cross-branch merge-order knowledge becomes an EDGE, not just prose:
   `wt edge <from> before <to> [-m why]` (also `conflicts`, `enables`;
   `--blocks` for hard dependencies). Edges self-expire when either

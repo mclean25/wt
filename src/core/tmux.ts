@@ -55,4 +55,7 @@ export { listAllSessionsRaw } from "./tmux/process.ts";
 export { attachOrCreate } from "./tmux/attach.ts";
 export type { AttachResult } from "./tmux/attach.ts";
 
+export { startHarnessSessionDetached } from "./tmux/lifecycle.ts";
+export type { StartHarnessSessionResult } from "./tmux/lifecycle.ts";
+
 export { injectIntoSession } from "./tmux/inject.ts";

@@ -184,7 +184,7 @@ export function wtSessionArgs(opts: {
   return args;
 }
 
-/** Injected-prompt matching: whitespace-normalized prefix length. */
+/** Delivered-prompt matching: whitespace-normalized prefix length. */
 const MATCH_PREFIX_CHARS = 48;
 
 function normalizeForMatch(s: string): string {
@@ -202,6 +202,13 @@ function promptTextOf(e: Entry): string | null {
       : null;
   }
   if (e.type !== "user") return null;
+  // Native cross-session messages are rendered with safety context in
+  // message.content. Claude also records the exact submitted text in
+  // origin.body; use that stable body for delivery confirmation.
+  const origin = asObj(e.raw.origin);
+  if (origin?.kind === "peer" && typeof origin.body === "string") {
+    return origin.body;
+  }
   const content = asObj(e.raw.message)?.content;
   if (typeof content === "string") return content;
   const blocks = asArr(content);
@@ -215,20 +222,16 @@ function promptTextOf(e: Entry): string | null {
 }
 
 /**
- * Did an injected prompt actually enter the conversation at/after
+ * Did a programmatically delivered prompt enter the conversation at/after
  * `sinceMs`?
  *
- * `injectIntoSession` types into a tmux pane and cannot see whether the
- * harness's input box received the text. A modal swallows both — claude
- * renders a continue-or-compact picker when it resumes a long
- * conversation, which eats the paste and takes the submit key as its
- * own answer — leaving a session that looks freshly started and idle
- * with the prompt simply gone. The conversation jsonl is the ground
- * truth: an accepted prompt lands as a `user` entry, or a
+ * A successful socket write proves transport acceptance, not durable
+ * conversation delivery. The conversation jsonl is the ground truth:
+ * an accepted prompt lands as a `user` entry, or a
  * `queue-operation` enqueue when claude is mid-turn.
  *
- * Matching is on a whitespace-normalized prefix, because what wt pasted
- * and what claude recorded differ in reflow, not in content.
+ * Matching is on a whitespace-normalized prefix to tolerate transcript
+ * reflow without weakening the identity check.
  */
 export function injectedPromptLanded(
   wtPath: string,
@@ -236,9 +239,19 @@ export function injectedPromptLanded(
   text: string,
   sinceMs: number,
 ): boolean {
+  return promptLandedForSession(wtPath, wtSessionUuid(wtPath, name), text, sinceMs);
+}
+
+/** Confirm delivery against a discovered session whose UUID may not be wt-derived. */
+export function promptLandedForSession(
+  wtPath: string,
+  sessionId: string,
+  text: string,
+  sinceMs: number,
+): boolean {
   const needle = promptNeedle(text);
   if (!needle) return false;
-  const path = sessionJsonlPath(wtPath, wtSessionUuid(wtPath, name));
+  const path = sessionJsonlPath(wtPath, sessionId);
   let size = 0;
   try {
     const st = statSync(path);

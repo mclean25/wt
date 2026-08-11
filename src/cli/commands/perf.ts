@@ -8,7 +8,7 @@ One-shot perf snapshot framed as wt-downstream vs the rest of the
 machine: verdict numbers, per-category and per-worktree-session
 breakdowns, the heaviest processes on both sides, and any leaked
 headless wt instances. The default output is the same plain-text
-report the TUI's \`P\` overlay injects as an investigation prompt —
+report the TUI's \`P\` overlay sends as an investigation prompt —
 hand it to an agent as-is.
 
   --json    raw PerfSnapshot as JSON (fields documented in

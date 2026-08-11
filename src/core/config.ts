@@ -383,12 +383,12 @@ type ActionUi = {
 
 /**
  * Where a prompt action is delivered. `headless` (default) spawns a tracked
- * non-interactive run for the selected primary harness. `session` injects
+ * non-interactive run for the selected primary harness. `session` sends
  * the prompt into the worktree's live primary (F12) harness session, starting
  * it first if it isn't running, so the prompt lands in a conversation with
  * existing context and history. Session delivery is fire-and-forget: there's
  * no completion sentinel, so `affects` does not auto-refresh on finish.
- * `manager` injects into the singleton manager session instead (the fleet
+ * `manager` sends to the singleton manager session instead (the fleet
  * coordinator; see docs/manager.md), prefixed with the originating slug so
  * the manager knows which worktree the prompt is about.
  *
@@ -495,8 +495,7 @@ export type AutomationTrigger =
  * (live session working/asking, action running, recent edits):
  * `queue` (default) holds the intent and delivers once things settle;
  * `skip` marks the fire handled and does nothing. There is deliberately
- * no "force" — injecting into an `asking` session would answer its
- * permission dialog with the paste's trailing Enter.
+ * no "force" so delivery does not collide with an `asking` session.
  */
 export type AutomationBusyPolicy = "queue" | "skip";
 
@@ -1460,7 +1459,7 @@ function parseActions(raw: unknown, errs: Errors): readonly ActionDef[] {
     if (typeof keyRaw === "string") ui.key = keyRaw;
     if (typeof groupRaw === "string") ui.group = groupRaw;
     // `target` is prompt-action-only: it selects a supervised headless
-    // primary-harness run (default) vs injecting into the live F12 session.
+    // primary-harness run (default) vs sending to the live F12 session.
     // Reject it on shell actions so a misplaced field fails loud instead
     // of silently doing nothing.
     const targetRaw = entry.target;

@@ -1,14 +1,6 @@
-/**
- * `--name` is the session's address, not decoration: peer Claude
- * instances list and message a session by it, and wt's registry
- * matchers (`cli/commands/{claude,fleet}.ts`) join on it. A regression
- * to a generic label makes every worktree indistinguishable to a peer,
- * which is silent — nothing in wt breaks, the fleet just stops being
- * addressable. Hence a test.
- */
 import { describe, expect, test } from "bun:test";
 
-import { claudeAgentAddress, claudeHarness } from "./harness.ts";
+import { claudeHarness } from "./harness.ts";
 
 function nameArg(argv: string[]): string {
   const i = argv.indexOf("--name");
@@ -45,23 +37,19 @@ describe("claudeHarness.buildArgs naming", () => {
       expect(nameArg(argv)).toBe(claudeHarness.tmuxSessionName("eng-1-slug", managedName));
     }
   });
-});
 
-describe("claudeAgentAddress", () => {
-  test("a session registered under the name wt gave it is addressable", () => {
-    expect(claudeAgentAddress("eng-1-slug", "eng-1-slug")).toBe("eng-1-slug");
-  });
+  test("every wt-managed process registers its native inbox", () => {
+    const argv = claudeHarness.buildArgs({ ...base, slug: "eng-1-slug", managedName: null });
+    const settingsIndex = argv.indexOf("--settings");
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    const settings = JSON.parse(argv[settingsIndex + 1]!) as {
+      crossSessionInbound?: string;
+      hooks?: { SessionStart?: Array<{ hooks?: Array<{ command?: string }> }> };
+    };
 
-  test("a pre-convention label is no address — it belongs to no worktree", () => {
-    expect(claudeAgentAddress("primary", "eng-1-slug")).toBeNull();
-  });
-
-  test("no registered process, or one started outside wt, has no address", () => {
-    expect(claudeAgentAddress(undefined, "eng-1-slug")).toBeNull();
-    expect(claudeAgentAddress(null, "eng-1-slug")).toBeNull();
-  });
-
-  test("a session that shares a cwd doesn't borrow its neighbour's address", () => {
-    expect(claudeAgentAddress("manager", "main")).toBeNull();
+    expect(settings.crossSessionInbound).toBe("accept");
+    expect(settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command).toContain(
+      "_claude-hook register",
+    );
   });
 });

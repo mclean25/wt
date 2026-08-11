@@ -53,7 +53,7 @@ run = "builtin:close-issue"
 When a condition holds and its fire key is unseen, the rule creates an **intent** in an in-memory queue (deliberately not persisted; it rebuilds from conditions on the next boot). Delivery then waits for:
 
 - **Settle window** (`settle_seconds`): the intent must be at least this old AND the worktree free of edits for this long. This is also your window to cancel by just… doing something in the worktree. Merge triggers default to 10s (a merge can't un-happen); everything else defaults to 120s to ride out CI/review churn.
-- **Quiescence**: if the worktree has a live session that's working or asking, or an action already running, the `busy` policy decides — `queue` (default) holds the intent until things settle, `skip` marks the fire handled and drops it. There is deliberately no "force": injecting into a session that's asking a permission question would answer the dialog with the paste's trailing Enter.
+- **Quiescence**: if the worktree has a live session that's working or asking, or an action already running, the `busy` policy decides. `queue` (default) holds the intent until things settle, while `skip` marks the fire handled and drops it. There is deliberately no "force" so automations do not collide with an active or blocked turn, regardless of harness transport.
 - **Cooldown** (`cooldown_minutes`): minimum spacing between dispatches per (rule, worktree).
 
 Dispatch goes through the exact same paths keystrokes use (`launchAction`, the clean flow, the restack flow) — automations have no special powers.

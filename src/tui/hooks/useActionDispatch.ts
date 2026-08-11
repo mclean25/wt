@@ -25,8 +25,8 @@ import {
 import { recordRun as recordHistoryRun } from "../../core/actions.ts";
 import { config } from "../../core/config.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
+import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
-import { injectIntoSession } from "../../core/tmux.ts";
 import { StatusKind } from "../../core/types.ts";
 import { ensureManagerClaudeName, MANAGER_SLUG } from "../../core/manager.ts";
 import { MANAGER_SLOT, SESSION_SLOTS } from "../sessions/slots.ts";
@@ -68,8 +68,8 @@ export type LaunchActionOpts = {
  * running, unmet requirements, …) — for manual launches the toast is
  * the whole story, but the automations engine uses the distinction to
  * un-consume the fire instead of recording a run that never happened.
- * Session-target injections report `launched: true` at hand-off (the
- * paste is fire-and-forget by design).
+ * Session-target messages report `launched: true` at hand-off (delivery
+ * is fire-and-forget by design).
  */
 export type LaunchOutcome = { launched: boolean; reason?: string };
 
@@ -236,7 +236,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       return { launched: false, reason: "prompt is empty" };
     }
     // Manager-target actions never touch the source worktree — they
-    // inject into the manager session and only READ the row for
+    // send to the manager session and only READ the row for
     // template vars — so the destroy/busy gates below don't apply
     // (a needs-human fire happens exactly while the source session is
     // busy asking; gating on it would decline/retry forever).
@@ -285,9 +285,9 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       pendingArgs.current.set(`${slug}/${def.id}`, arg);
     }
     // Session- and manager-target prompt actions bypass the headless
-    // `-p` runner and type the prompt into a live tmux session
-    // (starting it detached if needed): the worktree's primary F12
-    // session for `session`, the singleton manager session — prefixed
+    // `-p` runner and deliver the prompt to a live harness session
+    // (starting its tmux host detached if needed): the worktree's
+    // primary F12 session for `session`, the singleton manager session — prefixed
     // `[re: <slug>]` so the subject is explicit — for `manager`.
     // Fire-and-forget: there's no run to track or focus, so we just log
     // progress to the activity pane. The cold-start path can take a few
@@ -319,7 +319,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       const sessionLog = createLogger(slug);
       sessionLog.event.info(`${def.name} → ${target.label}`);
       ack(`sending ${def.name} to ${target.label}…`, theme.info, 2000);
-      void injectIntoSession({
+      void sendSessionMessage({
         slug: target.slug,
         cwd: target.cwd,
         harnessId: primaryHarness,
@@ -328,12 +328,10 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       }).then(
         (res) => {
           if (res.ok && res.delivered === false) {
-            // Delivery is checked against the session's own transcript
-            // (see injectIntoSession): a modal over the input box eats
-            // both the paste and the submit key, so "tmux accepted the
-            // keys" is not "the session got the prompt". An automation
-            // dispatch has no other witness — attention, not the
-            // firehose.
+            // Non-Claude harnesses verify delivery against their
+            // transcript; a failed verification needs attention because
+            // an automation dispatch has no other witness. Claude's native
+            // messaging path reports successful delivery directly.
             sessionLog.attention.warn(
               `${target.label} never received ${def.name} — attach and check its pane`,
             );
@@ -351,16 +349,16 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
             // Logger-toast (not ctx.toast): the failure lands after the
             // dispatch ack expired, and it must flash for automation
             // launches too — this is their only failure surface.
-            sessionLog.event.err(`inject failed: ${res.reason}`, { toast: true });
+            sessionLog.event.err(`send failed: ${res.reason}`, { toast: true });
           }
         },
-        // injectIntoSession resolves {ok:false} for its own failures,
-        // but the cross-process inject lock can REJECT on timeout
+        // sendSessionMessage resolves {ok:false} for its own failures,
+        // but the cross-process delivery lock can REJECT on timeout
         // (withAsyncFileLock) — unhandled, that's a process-level
         // rejection, not a logged miss.
         (err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
-          sessionLog.event.err(`inject failed: ${msg}`, { toast: true });
+          sessionLog.event.err(`send failed: ${msg}`, { toast: true });
         },
       );
       return { launched: true };
@@ -401,7 +399,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
    * gates and no `[re: <slug>]` prefix. The builtin's own prompt still
    * renders through `applyVars` for the row-less vars (`{{today}}`);
    * the user's free text deliberately does NOT, since rendering it
-   * would eat literal `{{…}}` they typed. Same fire-and-forget inject
+   * would eat literal `{{…}}` they typed. Same fire-and-forget delivery
    * + logging contract otherwise.
    */
   async function launchSlotCommand(
@@ -431,7 +429,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     const slotLog = createLogger(slot.slug);
     slotLog.event.info(`${label} → ${slot.label}`);
     toast(`sending ${label} to ${slot.label}…`, theme.info, 2000);
-    void injectIntoSession({
+    void sendSessionMessage({
       slug: slot.slug,
       cwd: slot.path,
       harnessId: primaryHarness,
@@ -440,8 +438,8 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     }).then(
       (res) => {
         if (res.ok && res.delivered === false) {
-          // See the row path above: confirmed against the transcript, so
-          // a swallowed manager briefing is visible instead of silent.
+          // See the row path above: non-Claude harnesses confirm against
+          // their transcript, so an unverified briefing stays visible.
           slotLog.attention.warn(
             `${slot.label} never received ${label} — attach and check its pane`,
           );
@@ -455,14 +453,14 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
             { toast: true },
           );
         } else {
-          slotLog.event.err(`inject failed: ${res.reason}`, { toast: true });
+          slotLog.event.err(`send failed: ${res.reason}`, { toast: true });
         }
       },
       // Same rejection leg as the row path above: a slot session is a
-      // multi-writer singleton, so the inject lock CAN time out.
+      // multi-writer singleton, so the delivery lock CAN time out.
       (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        slotLog.event.err(`inject failed: ${msg}`, { toast: true });
+        slotLog.event.err(`send failed: ${msg}`, { toast: true });
       },
     );
     return { launched: true };

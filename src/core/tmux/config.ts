@@ -104,7 +104,7 @@ export function writeConfig(): { path: string; changed: boolean } {
 /**
  * Ensure a tmux config exists on disk WITHOUT the change-detection
  * kill-server dance, returning its path. For non-interactive codepaths
- * (`startHarnessSessionDetached`, and via it `injectIntoSession` / the
+ * (`startHarnessSessionDetached`, and via it session messaging / the
  * `wt claude send` CLI) that may run from an arbitrary environment —
  * including from a claude session INSIDE the wt tmux server itself,
  * where TERM is `tmux-256color` rather than the user's outer terminal.

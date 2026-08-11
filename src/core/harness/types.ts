@@ -149,25 +149,23 @@ export interface Harness {
    * like `{{skill_prefix}}restack` lands correctly regardless of which
    * harness is the row's primary. Headless prompt actions use the
    * selected primary harness's non-interactive CLI, so they use the
-   * same prefix as session-injected prompts.
+   * same prefix as prompts sent to a session.
    */
   readonly skillPrefix: string;
   /**
-   * tmux `send-keys` key sequence submitted after a bracketed-paste
-   * inject (see `injectIntoSession` in `core/tmux.ts`) to commit the
-   * pasted prompt. Most harnesses take a single `Enter`; Claude Code
-   * and Codex receive the bracketed paste as a multi-line input blob
-   * whose first `Enter` only exits that state, so they need a second
-   * to actually submit. Keys are sent in order with a small gap
+   * tmux `send-keys` key sequence submitted after a bracketed paste for
+   * harnesses whose messaging adapter uses terminal input. Claude leaves
+   * this empty because it uses its native messaging socket. Keys are sent
+   * in order with a small gap
    * between each. Override per harness when a different sequence
    * (e.g. `C-d`, `C-j`) turns out to fit better.
    */
   readonly injectSubmitKeys: readonly string[];
 
   /**
-   * Did an injected prompt actually reach the conversation at/after
+   * Did a programmatically delivered prompt reach the conversation at/after
    * `sinceMs`? Optional: `undefined` means this harness has no
-   * transcript wt can read, so `injectIntoSession` reports delivery as
+   * transcript wt can read, so a terminal adapter reports delivery as
    * unknown rather than claiming success. Implementations answer from
    * durable state (the conversation log), never from the pane — the
    * whole point is to catch the case where the pane accepted keystrokes

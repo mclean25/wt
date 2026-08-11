@@ -10,8 +10,8 @@ One identity subtlety: the manager shares the main clone's directory with the `.
 
 - **`m`** in the TUI attaches it (F12 detaches back), creating it on first use with the Shift+TAB-selected primary harness.
 - **`M`** opens the [command palette](#the-command-palette-m) — push a canned play (or free text) into the manager without attaching. (Auto-merge, which once lived on `M`, is now the `! m` picker row.)
-- **`wt manager`** attaches from a shell; **`wt manager send <text…>`** injects a message (cold-starting the session detached if needed) — the fire-and-forget outbound channel for worktree agents (`wt manager send "who owns the shared migration ordering?"`) and scripts. Workers use it for fleet-level questions and for **papercuts** (`wt manager send "papercut: ..."`); nothing is returned either way, so a papercut costs the worker one line and never parks its branch in `needs-human`. When the sender is an agent whose harness lists the manager as a peer, **direct peer messaging is the better channel** (address `manager`; delivery-confirmed, no tmux typing) — `wt manager send` detects that case and teaches it in its footer while still delivering, keeping itself as the universal fallback (scripts, non-agent callers, a cold manager). wt's own injections (palette, automations) always use tmux: wt isn't an agent and deliberately doesn't speak any harness's private peer protocol.
-- **`[[actions]]` with `target = "manager"`** inject their rendered prompt into the manager instead of the worktree's session, prefixed `[re: <slug>]` so the subject is explicit. Combined with [automations](automations.md), that's how wt briefs the manager hands-free:
+- **`wt manager`** attaches from a shell; **`wt manager send <text…>`** sends a message, cold-starting the session detached if needed. It is the single outbound channel for worktree agents and scripts. Claude delivery uses its native messaging socket and never tmux input.
+- **`[[actions]]` with `target = "manager"`** send their rendered prompt to the manager instead of the worktree's session, prefixed `[re: <slug>]` so the subject is explicit. Combined with [automations](automations.md), that's how wt briefs the manager hands-free:
 
 ```toml
 [[actions]]
@@ -44,7 +44,7 @@ Manager briefings (like `builtin:notify`) bypass the automation quiescence gate 
 | `m` | Compact manager context | raw `/compact`, sent directly (no extras screen) |
 | `c` | Custom message… | free text to the manager, fleet-scoped |
 
-Fleet-scoped commands (`d`/`t`/`o`/`n`/`a`/`s` and custom text) inject with no row context and no `[re:]` prefix. The row-scoped entries (`r`, plus any of your `[[actions]]` with `target = "manager"`, which also appear in the palette) launch against the row selected when the palette opened — grayed out when there isn't one.
+Fleet-scoped commands (`d`/`t`/`o`/`n`/`a`/`s` and custom text) send with no row context and no `[re:]` prefix. The row-scoped entries (`r`, plus any of your `[[actions]]` with `target = "manager"`, which also appear in the palette) launch against the row selected when the palette opened — grayed out when there isn't one.
 
 **Reporting back.** Every fleet builtin's prompt ends with the same contract: finish by running
 
@@ -64,26 +64,16 @@ Everything is ordinary CLI surface, so any harness can drive it:
 - `wt status --all --json` — the status-only view (state, risk, note, staleness per worktree), plus recently-removed rows (`kind: "merged"|"removed"`, ≤48h) so an all-merged fleet doesn't read as an empty one.
 - `wt status <slug> <state> …` — assert on a worktree's behalf after acting on it (`--note-only` sharpens a note without touching state or timestamp).
 - `wt edge <from> <before|conflicts|enables> <to> [--blocks|--prefer] [-m why]` — record merge sequencing as structured state instead of prose ([cli.md](cli.md#wt-edge-from-kind-to)); `wt edge --json` reads it back with staleness computed. Edges self-expire when either branch moves — re-assert what still matters, never audit the list. Worktrees assert their own first-hand dependencies; cross-branch edges are yours to assert.
-- `wt claude send <slug> "<text>"` — nudge a worktree's live session (also accepts the `wt`/`main`/`dotfiles`/`manager` repo-level slugs; an archived slug answers with why it's gone). Delivery is confirmed against the target's transcript before it reports success, and a cold start that swallowed the prompt is re-sent once — a non-zero exit means the message is genuinely not in that conversation, so a fan-out can be trusted row by row.
-- `wt claude ls --json` — live sessions with `busy` / `last_activity` / `agent_name` per session.
+- `wt claude send <slug> "<text>"` — ensure and nudge a worktree session (also accepts the `wt`/`main`/`dotfiles`/`manager` repo-level slugs; an archived slug answers with why it is gone). Claude delivery uses the native socket and is confirmed against the target transcript; a non-zero exit means the message is not in that conversation.
+- `wt claude ls --json` — live sessions with stable session, process, socket, tmux, and activity fields. Tokens are never printed.
 - `wt manager report [--ok|--warn|--err] "<text>"` — surface a terse result on the TUI's attention feed (the palette's report-back channel).
 - `gh` — PR state, merges (only when the human asked), CI.
-- Cross-session messaging, when the harness supports it — see below.
 
-### Session names are addresses
+### wt owns session addressing and delivery
 
-Every Claude session wt spawns is named after its wt identity: `<slug>` for a worktree's primary session, `<slug>~<name>` for a named one, the slot label for the `wt` / `main` / `dotfiles` / `manager` slots. That name is the `/resume` label, the process registry's `name`, and — the reason it's slug-derived rather than a generic `primary` — **the address peer Claude instances reach the session by**. An agent that can list its peers can therefore map a row straight back to a worktree, and message it without going through tmux at all.
+Callers address worktrees and repo slots through `wt claude send`, never through a Claude peer name, socket path, or tmux pane. wt maps the canonical cwd and managed name to a stable Claude conversation identity, discovers a live process, cold-starts it when absent, and recovers from stale registrations. Tmux remains the process and interactive UI host.
 
-Don't derive that address from the slug, though: read it off `session.agent_name` in `wt fleet --json` (or `wt claude ls --json`). A session keeps whatever `--name` it was spawned with until it restarts, so a long-lived one can predate the naming convention and answer to `primary` — an address that belongs to no worktree in particular. wt is the only thing that can join those rows back to a slug, so it reports the address it can actually vouch for and `null` otherwise, and the reader needs no rule beyond "null means use `wt claude send`". That's the general shape to reach for: an agent asking the fleet beats an agent remembering a caveat.
-
-wt does not implement that transport, and shouldn't: it guarantees the names, nothing more. Direct messaging only reaches a session that is **already live**, only works for Claude, and delivers text into a conversation rather than typed input — so it cannot cold-start a stopped worktree, cannot invoke a slash command, and cannot carry wt's own traffic (automations, briefings, `[[actions]]`) since wt is a Bun process, not a Claude instance. Those all stay on tmux injection, which boots what it needs to and pastes as though the human typed it:
-
-- `wt claude send <slug>` / `wt manager send` — work whether or not the target is running, and the `!` menu's custom actions deliberately act like keystrokes.
-- Worker → manager escalations and papercuts stay on `wt manager send` for exactly this reason: fire-and-forget with a cold start beats "list peers, find the manager, handle it being down".
-
-An agent nudging a peer it can see live may use direct messaging and skip the paste machinery; anything that must arrive regardless of the target's state uses wt.
-
-**Injection confirms delivery.** Pasting into a pane is not the same as the conversation receiving a prompt: a modal over the input box eats both the paste and the submit key, and the layer wt can see (tmux) reports success either way. The observed case is claude's continue-or-compact picker on resuming a long conversation, which took the submit key as its own answer and left the session compacting with the prompt gone — a fan-out of 13 that lost 12 messages and reported 13 successes. So every inject now checks the target's own transcript for the text (a message, or a queued one when the session is mid-turn) before reporting, re-sends once when a cold start swallowed it, and surfaces a warning on the attention feed (or a non-zero exit, for the CLI) when it still isn't there. Delivery is `null` — reported as unconfirmed, never as success — for harnesses whose transcript wt can't read.
+Claude messages use Claude Code's native Unix-domain messaging socket. They never type, paste, or send keys into the pane, so a human's draft is untouched. Idle sessions begin a new turn using Claude's native semantics, while active sessions receive the message at Claude's supported handoff point. A successful send is checked against the conversation transcript before wt reports delivery.
 
 ## Feedback channel (opt-in)
 
@@ -91,4 +81,4 @@ With `[manager] wt_feedback = true` ([configuration.md](configuration.md#manager
 
 ## Lifecycle
 
-The session survives wt restarts by construction (it lives on the wt tmux server) and is whitelisted from the orphan reaper like the other slots. It is not auto-spawned at boot: the first `m` / `wt manager` / injection creates it. Keep its context lean — the playbook should mandate terse replies and periodic `/compact`; the durable fleet state lives in wt (statuses, PRs), never in the manager's conversation.
+The session survives wt restarts by construction (it lives on the wt tmux server) and is whitelisted from the orphan reaper like the other slots. It is not auto-spawned at boot: the first `m` / `wt manager` / send creates it. Keep its context lean. The playbook should mandate terse replies and periodic `/compact`; the durable fleet state lives in wt (statuses, PRs), never in the manager's conversation.

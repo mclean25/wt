@@ -2,8 +2,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { config } from "../../core/config.ts";
-import { readRegistry } from "../../core/harness/claude/registry.ts";
-import { claudeAgentAddress } from "../../core/harness/index.ts";
+import { wtSessionUuid } from "../../core/harness/claude/jsonl.ts";
+import { claudeSessions } from "../../core/harness/claude/sessions.ts";
 import {
   ensureManagerClaudeName,
   MANAGER_CLAUDE_NAME,
@@ -11,8 +11,6 @@ import {
 } from "../../core/manager.ts";
 import { dirSlug } from "../../core/stage.ts";
 import {
-  injectIntoSession,
-  killSession,
   listSessions,
   WT_SOURCE_SLUG,
 } from "../../core/tmux.ts";
@@ -23,15 +21,15 @@ import type { Worktree } from "../../core/types.ts";
 import { hasHelpFlag } from "../args.ts";
 import { dim, green, red } from "../colors.ts";
 
-const USAGE = `usage: wt claude send <slug> [text...]   type a prompt into the worktree's claude session
+const USAGE = `usage: wt claude send <slug> [text...]   send a prompt to the worktree's claude session
        wt claude ls [--json]             list live claude sessions
-       wt claude kill <slug>             kill the worktree's primary claude session
+       wt claude stop <slug>             stop the worktree's primary claude session
 
 \`send\` upserts the worktree's PRIMARY Claude Code session: starts it
 detached in the wt tmux server when absent (waiting for claude to
-finish booting), pastes the text as if typed at the prompt, and
-submits it. The prompt lands in the live conversation with its
-existing context — not a headless \`claude -p\` run. Fire-and-forget:
+finish booting), then delivers the prompt through Claude Code's native
+session messaging transport. The prompt lands in the live conversation
+with its existing context — not a headless \`claude -p\` run. Fire-and-forget:
 there is no completion signal; attach via the TUI (F12) to watch.
 
 Besides worktree slugs, \`send\` accepts the repo-level session slugs
@@ -39,9 +37,9 @@ that \`wt claude ls\` lists: wt (the wt source repo), main (the main
 clone), dotfiles, and manager (the fleet coordinator — same session
 as \`wt manager send\`).
 
-\`ls --json\` adds per-session busy + last_activity from Claude's live
-process registry (null when the tmux session has no registered
-claude process).
+\`ls --json\` adds the stable session id, pid, cwd, native socket,
+tmux identity, status, and last activity. The messaging token is never
+printed.
 
 With no [text...], stdin is read instead (heredoc-friendly for
 multiline prompts). <slug> also accepts a branch name
@@ -118,36 +116,19 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
     return 2;
   }
   const slug = slot ? slugOrBranch : wt!.slug;
-  // The manager lives as a named claude session; discovery needs the
-  // name persisted before the inject (same dance as `wt manager send`).
+  // The manager lives as a named Claude session; discovery needs the
+  // name persisted before sending (same setup as `wt manager send`).
   if (slug === MANAGER_SLUG) ensureManagerClaudeName();
-  const res = await injectIntoSession({
-    slug,
-    cwd: slot ? slot.cwd : wt!.path,
-    managedName: slot?.managedName ?? null,
+  const res = await claudeSessions.send(
+    {
+      slug,
+      cwd: slot ? slot.cwd : wt!.path,
+      managedName: slot?.managedName ?? null,
+    },
     text,
-  });
+  );
   if (!res.ok) {
-    console.error(red(`inject failed: ${res.reason}`));
-    return 1;
-  }
-  // Delivery is CONFIRMED against the conversation transcript, not
-  // assumed from "tmux accepted the keys" — a modal over the input box
-  // (claude's continue-or-compact picker when it resumes a long
-  // conversation) used to eat the prompt while this printed a tick.
-  // A fan-out that silently loses 12 of 13 messages is the worst
-  // possible failure here, so an unconfirmed send exits non-zero.
-  if (res.delivered === false) {
-    console.error(
-      red(`✗ ${slug}'s claude session did not receive the prompt`),
-    );
-    console.error(
-      dim(
-        res.resent
-          ? "re-sent once and still nothing in the transcript — attach (F12) and check what the pane is showing"
-          : "the session was already running; something in its pane consumed the input — attach (F12) to check",
-      ),
-    );
+    console.error(red(`send failed: ${res.reason}`));
     return 1;
   }
   console.log(
@@ -157,14 +138,9 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
         : `✓ sent the prompt to ${slug}'s claude session`,
     ),
   );
-  if (res.resent) {
-    console.log(dim("(the first attempt was swallowed on startup; re-sent)"));
-  }
   console.log(
     dim(
-      res.delivered === null
-        ? "delivery unconfirmed — this harness exposes no transcript to check"
-        : "delivered — fire-and-forget from here; attach via the wt TUI (F12) to watch",
+      "delivered through Claude's native session messaging — fire-and-forget from here; attach via the wt TUI (F12) to watch",
     ),
   );
   return 0;
@@ -174,62 +150,36 @@ async function ls(json: boolean): Promise<number> {
   const sessions = await listSessions();
   const entries = [...sessions.claude].sort((a, b) => a.slug.localeCompare(b.slug));
   if (json) {
-    // Enrich each live tmux session from Claude's process registry
-    // (`~/.claude/sessions/<pid>.json` — the same signal the TUI's
-    // status glyphs read), matched by cwd + session name. `busy` /
-    // `last_activity` are null when no registered process matches
-    // (e.g. claude exited but the tmux session lingers).
     const wts = (await listWorktrees()).filter((w) => !w.isMain);
     const cwdBySlug = new Map<string, string>(wts.map((w) => [w.slug, w.path]));
     for (const [slug, t] of Object.entries(SLOT_TARGETS)) {
       if (!cwdBySlug.has(slug)) cwdBySlug.set(slug, t.cwd);
     }
-    const registry = readRegistry();
+    const nativeById = new Map(
+      (await claudeSessions.list()).map((session) => [session.sessionId, session]),
+    );
     const payload = entries.map((e) => {
       const cwd = cwdBySlug.get(e.slug);
-      // Registry `name` is the `--name` label wt spawned claude with —
-      // the tmux session name, so `<slug>` for a primary and
-      // `<slug>~<name>` for a named session (slot primaries carry the
-      // slot label, == slug). The name leg matters because slots can
-      // share a cwd (main clone + manager) — cwd alone would cross-wire
-      // their statuses. The bare-name / "primary" forms are what
-      // sessions spawned before names became slug-derived registered
-      // as; still matched so a long-lived one keeps reporting.
-      const nameMatches = (r: { name: string | null }): boolean =>
-        e.name !== null
-          ? r.name === `${e.slug}~${e.name}` || r.name === e.name
-          : r.name === e.slug || r.name === "primary" || r.name === null;
-      const match =
-        cwd === undefined
-          ? undefined
-          : registry
-              .filter((r) => r.cwd === cwd && nameMatches(r))
-              .sort((a, b) => b.updatedAt - a.updatedAt)[0];
-      // Slots register under their label (== slug); worktree sessions
-      // under the tmux name. Mismatch → a pre-slug-naming session, and
-      // `claudeAgentAddress` returns null rather than a label that
-      // could belong to any worktree.
-      const expected =
-        SLOT_TARGETS[e.slug] !== undefined
-          ? e.slug
-          : e.name === null
-            ? e.slug
-            : `${e.slug}~${e.name}`;
+      const native = cwd
+        ? nativeById.get(wtSessionUuid(cwd, e.name)) ?? null
+        : null;
       return {
         slug: e.slug,
         name: e.name,
-        // The address a peer Claude instance can message this session
-        // by directly; null = not addressable, use `wt claude send`.
-        agent_name: claudeAgentAddress(match?.name, expected),
-        // Listed = a live tmux session (that's what listSessions sees).
+        session_id: native?.sessionId ?? null,
+        pid: native?.pid ?? null,
+        cwd: cwd ?? null,
+        socket_path: native?.socketPath ?? null,
+        tmux_session: e.name === null ? e.slug : `${e.slug}~${e.name}`,
         alive: true,
-        // "busy"/"shell" mean the agent is mid-turn or running a task;
-        // "idle"/"waiting" mean it's sitting at the prompt / blocked.
-        busy: match ? match.status === "busy" || match.status === "shell" : null,
-        last_activity:
-          match && match.updatedAt > 0
-            ? new Date(match.updatedAt).toISOString()
+        status: native?.status ?? null,
+        busy: native
+          ? native.status === "busy" || native.status === "shell"
+          : null,
+        last_activity: native && native.updatedAt > 0
+            ? new Date(native.updatedAt).toISOString()
             : null,
+        source: native?.source ?? null,
       };
     });
     console.log(JSON.stringify(payload, null, 2));
@@ -249,18 +199,20 @@ async function ls(json: boolean): Promise<number> {
   return 0;
 }
 
-async function kill(slugOrBranch: string): Promise<number> {
-  const slug = slugOrBranch.includes("/")
-    ? dirSlug(slugOrBranch)
-    : slugOrBranch;
-  const sessions = await listSessions();
-  const live = sessions.claude.some((e) => e.slug === slug && e.name === null);
-  if (!live) {
-    console.log(dim(`${slug}: no live primary claude session`));
-    return 0;
+async function stop(slugOrBranch: string): Promise<number> {
+  const slot = SLOT_TARGETS[slugOrBranch] ?? null;
+  const wt = slot ? null : await findWorktree(slugOrBranch);
+  if (!slot && !wt) {
+    explainMissingTarget(slugOrBranch);
+    return 1;
   }
-  await killSession(slug);
-  console.log(green(`✓ killed ${slug}'s primary claude session`));
+  const slug = slot ? slugOrBranch : wt!.slug;
+  await claudeSessions.stop({
+    slug,
+    cwd: slot ? slot.cwd : wt!.path,
+    managedName: slot?.managedName ?? null,
+  });
+  console.log(green(`✓ stopped ${slug}'s claude session`));
   return 0;
 }
 
@@ -283,13 +235,13 @@ export async function run(argv: string[]): Promise<number> {
     return send(slug, text);
   }
   if (first === "ls") return ls(rest.includes("--json"));
-  if (first === "kill") {
+  if (first === "stop" || first === "kill") {
     const [slug] = rest;
     if (!slug || hasHelpFlag([slug])) {
       console.log(USAGE);
       return slug ? 0 : 2;
     }
-    return kill(slug);
+    return stop(slug);
   }
   console.error(red(USAGE));
   return 2;

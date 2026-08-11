@@ -9,9 +9,9 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import type { HarnessId } from "../../core/harness/index.ts";
+import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
 import { buildPerfInvestigationPrompt, type PerfSnapshot } from "../../core/perf.ts";
-import { injectIntoSession } from "../../core/tmux.ts";
 import type { Modal } from "../modal-state.ts";
 import { WT_SOURCE_SLOT, type SessionSlot } from "../sessions/slots.ts";
 import { theme } from "../theme.ts";
@@ -19,14 +19,14 @@ import { theme } from "../theme.ts";
 const log = createLogger(WT_SOURCE_SLOT.label);
 
 /**
- * In-flight state for the inject, held at module scope rather than in
+ * In-flight state for the send, held at module scope rather than in
  * React state because both guards have to hold *between* the keypress
  * and the next commit.
  *
- * `inFlight` blocks a second `i` — an inject takes seconds (up to
- * `READY_MAX_MS` on a cold start) and a repeat keystroke lands long
- * before a re-render, so a React-state guard would miss it. Two injects
- * means the prompt submitted twice AND two concurrent
+ * `inFlight` blocks a second `i` because a cold-started send can take
+ * seconds, and a repeat keystroke lands long before a re-render, so a
+ * React-state guard would miss it. Two sends mean the prompt submitted
+ * twice AND two concurrent
  * `doEnterSlotSession` calls racing for the terminal, which corrupts tty
  * state (both suspend the renderer; whichever finishes first resumes it
  * while the other tmux client still holds stdin).
@@ -41,7 +41,7 @@ let cancelled = false;
 
 /**
  * Called when the perf overlay closes. A send already in flight still
- * completes (the paste is on its way; there's no un-sending it) but
+ * completes (the message is on its way; there's no un-sending it) but
  * stops short of the terminal handoff.
  */
 export function cancelPerfInvestigate(): void {
@@ -62,8 +62,8 @@ export function makePerfFlows(ctx: PerfFlowCtx): {
   const { snapshot, primaryHarness, setModal, doEnterSlotSession, toast } = ctx;
 
   /**
-   * Patch the perf modal's inject state, but only if it's still the
-   * modal on screen — the user can Esc out mid-inject, and resurrecting
+   * Patch the perf modal's send state, but only if it's still the
+   * modal on screen — the user can Esc out mid-send, and resurrecting
    * a closed overlay to show a status line would be worse than silence.
    */
   function patchInject(inject: Extract<Modal, { kind: "perf" }>["inject"]): void {
@@ -80,11 +80,12 @@ export function makePerfFlows(ctx: PerfFlowCtx): {
     cancelled = false;
     patchInject({ kind: "sending" });
     void (async () => {
-      // Targets the same tmux session `,` attaches to: injectIntoSession
-      // and doEnterSlotSession both resolve the name from (slug,
-      // primaryHarness), so the prompt lands in the conversation the
-      // user is about to be dropped into rather than a second one.
-      const result = await injectIntoSession({
+      // Targets the same harness session `,` attaches to:
+      // sendSessionMessage and doEnterSlotSession both resolve the name
+      // from (slug, primaryHarness), so the prompt lands in the
+      // conversation the user is about to be dropped into rather than a
+      // second one.
+      const result = await sendSessionMessage({
         slug: WT_SOURCE_SLOT.slug,
         cwd: WT_SOURCE_SLOT.path,
         harnessId: primaryHarness,
@@ -93,7 +94,7 @@ export function makePerfFlows(ctx: PerfFlowCtx): {
       inFlight = false;
       if (!result.ok) {
         patchInject({ kind: "failed", reason: result.reason });
-        log.event.err(`perf inject failed: ${result.reason}`);
+        log.event.err(`perf send failed: ${result.reason}`);
         return;
       }
       // Closed mid-send: the prompt landed, but don't yank the terminal

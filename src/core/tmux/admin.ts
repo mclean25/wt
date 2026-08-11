@@ -54,22 +54,31 @@ export async function killHarnessSession(
   await killByName(sessionName(slug, harnessId, managedName));
 }
 
+/** Whether closing this harness may send its exit gesture through the pane. */
+export function closeHarnessUsesPaneInput(harnessId: HarnessId): boolean {
+  return harnessId !== "claude";
+}
+
 /**
- * Gracefully end a harness session by typing the harness's own exit
- * gesture into its pane — Ctrl+D twice, the same "I'm done with this
- * convo" keys you'd press inside claude — rather than `kill-session`
- * yanking the slot out from under it. The harness shuts down cleanly
- * (conversation persisted, terminal restored) and the tmux session
- * ends when its command exits. Best-effort by design: a harness with
- * text in its input box ignores EOF, so the session just stays up and
- * nothing is lost. No-ops on a missing session (send-keys just fails;
- * `run` swallows the exit code).
+ * End a harness session. Claude is always hard-killed through tmux so
+ * lifecycle management never types into its pane or interferes with
+ * human input. Other harnesses retain their graceful Ctrl+D-twice exit
+ * gesture: their process exits cleanly and the tmux session follows.
+ * That path is best-effort because a harness with text in its input box
+ * may ignore EOF. Missing sessions are harmless on both paths.
  */
 export async function closeHarnessSessionGracefully(
   slug: string,
   harnessId: HarnessId,
   managedName: string | null = null,
 ): Promise<void> {
+  // Claude's pane is never an input transport. Killing the tmux session
+  // avoids colliding with partially typed human input; Claude persists
+  // its conversation independently of the terminal process lifetime.
+  if (!closeHarnessUsesPaneInput(harnessId)) {
+    await killHarnessSession(slug, harnessId, managedName);
+    return;
+  }
   const name = sessionName(slug, harnessId, managedName);
   // `=${name}` alone is a valid SESSION target (kill-session) but
   // send-keys resolves a PANE target, where the bare exact-match form
@@ -78,9 +87,8 @@ export async function closeHarnessSessionGracefully(
   const send = () =>
     run(["tmux", "-L", TMUX_SOCKET, "send-keys", "-t", `=${name}:`, "C-d"]);
   await send();
-  // A beat between the two presses: claude arms its "press ctrl+d
-  // again to exit" confirm on the first and needs a render tick before
-  // the second registers as the confirmation.
+  // A beat between the two presses lets a harness render any exit
+  // confirmation before the second key arrives.
   await new Promise((r) => setTimeout(r, 200));
   await send();
 }

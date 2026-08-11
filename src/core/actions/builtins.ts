@@ -46,7 +46,7 @@ export const BUILTIN_ACTIONS: readonly ActionDef[] = config.reviewBot.rerunComma
 
 /**
  * The two agent-delegation builtins, pinned at the very top of the `!`
- * picker. Both inject into the row's primary harness session (cold-
+ * picker. Both send to the row's primary harness session (cold-
  * starting it when needed) — the same delivery the automations engine
  * uses — because their whole point is moving work the human would
  * otherwise do onto the row's own agent:

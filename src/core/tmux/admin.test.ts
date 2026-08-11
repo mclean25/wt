@@ -1,6 +1,21 @@
 import { describe, expect, test } from "bun:test";
 
-import { classifySessions, orphanedSessions } from "./admin.ts";
+import {
+  classifySessions,
+  closeHarnessUsesPaneInput,
+  orphanedSessions,
+} from "./admin.ts";
+
+describe("closeHarnessUsesPaneInput", () => {
+  test("hard-kills Claude without typing into its pane", () => {
+    expect(closeHarnessUsesPaneInput("claude")).toBe(false);
+  });
+
+  test("preserves graceful pane input for other harnesses", () => {
+    expect(closeHarnessUsesPaneInput("codex")).toBe(true);
+    expect(closeHarnessUsesPaneInput("opencode")).toBe(true);
+  });
+});
 
 describe("classifySessions", () => {
   test("partitions raw session names by kind", () => {

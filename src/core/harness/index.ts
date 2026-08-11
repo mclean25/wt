@@ -12,7 +12,6 @@ export type {
   HarnessSpawnArgs,
 } from "./types.ts";
 export {
-  claudeAgentAddress,
   claudeSessionId,
   claudeTmuxName,
   parseClaudeTmuxName,

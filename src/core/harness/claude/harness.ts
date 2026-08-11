@@ -32,6 +32,7 @@ import {
   reapClaudeNames,
 } from "./names.ts";
 import { trustClaudeWorkspace } from "./trust.ts";
+import { claudeMessagingSettings } from "./hooks.ts";
 
 import type {
   Harness,
@@ -75,10 +76,10 @@ export const claudeHarness: Harness = {
   singleSlot: false,
   // Claude Code skills are invoked with a `/` prefix (e.g. /restack).
   skillPrefix: "/",
-  // Claude Code receives a bracketed paste as a multi-line input blob;
-  // the first Enter only exits that state, so a second is needed to
-  // actually submit the prompt.
-  injectSubmitKeys: ["Enter", "Enter"],
+  // Claude's pane is never a messaging transport. Native socket sends
+  // bypass the prompt editor completely; the generic injector rejects
+  // Claude before consulting this field.
+  injectSubmitKeys: [],
 
   tmuxSessionName(slug, managedName) {
     return claudeTmuxName(slug, managedName);
@@ -156,13 +157,10 @@ export const claudeHarness: Harness = {
     return out;
   },
 
-  // `--name` is not cosmetic: it's the label in `/resume`, the
-  // registry's `name` field, AND the address other Claude instances
-  // reach this session by (`ListAgents` / `SendMessage`). So it gets
-  // the session's wt identity — the tmux session name — which is
-  // unique across the fleet. Before this, every worktree primary
-  // spawned as `primary` and a peer agent saw N indistinguishable
-  // rows with no way back to a slug.
+  // `--name` is not cosmetic: it is the label in `/resume` and the
+  // registry's `name` field. Give it the stable wt identity used for
+  // display and process correlation. External callers address the
+  // worktree through wt, never through this harness-private label.
   //
   // Safe to change for live conversations: the conversation UUID is
   // `wtSessionUuid(wtPath, managedName)`, so relabeling never forks or
@@ -178,6 +176,8 @@ export const claudeHarness: Harness = {
         name: args.managedName,
         displayName,
       }),
+      "--settings",
+      claudeMessagingSettings(),
     ];
   },
 
@@ -196,29 +196,6 @@ export const claudeHarness: Harness = {
     reapClaudeNames(liveSlugs);
   },
 };
-
-/**
- * The name a live Claude session answers to when a PEER Claude instance
- * addresses it directly (its agent listing / cross-session messaging) —
- * i.e. the `--name` it actually registered, but only when that matches
- * the wt-derived name `buildArgs` would have given it.
- *
- * Null means "not addressable by name": no live registered process, or
- * a session whose label predates slug-derived naming (`primary`, a bare
- * managed name) or that was started outside wt with no `--name` at all.
- * Those are indistinguishable from other sessions' labels, so handing
- * one out as an address would be worse than admitting there isn't one.
- * Callers surface null as "reach it with `wt claude send`", which works
- * regardless — and that's what makes the naming transition self-healing
- * rather than a caveat every agent has to carry: the answer comes from
- * the fleet, not from remembering which sessions predate the change.
- */
-export function claudeAgentAddress(
-  registryName: string | null | undefined,
-  expected: string,
-): string | null {
-  return registryName != null && registryName === expected ? registryName : null;
-}
 
 /**
  * Parse a tmux session name and decide whether it represents a Claude

@@ -346,7 +346,7 @@ export function buildActionVars(row: WorktreeRow, skillPrefix: string): ActionVa
  * Pick the harness whose skill-invocation prefix goes into `{{skill_prefix}}`
  * for this action launch.
  *
- *  - `target: "session"` prompts are injected into the row's live primary
+ *  - `target: "session"` prompts are sent to the row's live primary
  *    harness session, so the prefix must match that harness's skill syntax.
  *  - `kind: "shell"` actions run raw shell; if they reference
  *    `{{skill_prefix}}` at all it's to construct a skill call for the

@@ -104,6 +104,22 @@ describe("promptLandedIn", () => {
     expect(promptLandedIn(entries, promptNeedle("run the suite"), T0)).toBe(true);
   });
 
+  test("matches the exact body of a native cross-session message", () => {
+    const entries: Entry[] = [
+      {
+        type: "user",
+        raw: {
+          type: "user",
+          timestamp: at(200),
+          message: { role: "user", content: "Another Claude session sent a message: wrapped" },
+          origin: { kind: "peer", from: "external", body: "rebase onto main" },
+        },
+      },
+    ];
+
+    expect(promptLandedIn(entries, promptNeedle("rebase onto main"), T0)).toBe(true);
+  });
+
   test("a dequeue carries no prompt", () => {
     const entries: Entry[] = [
       {
@@ -115,7 +131,7 @@ describe("promptLandedIn", () => {
   });
 
   test("matches through reflowed whitespace", () => {
-    // What tmux pasted and what claude recorded differ in wrapping.
+    // The submitted and recorded forms can differ in wrapping.
     const entries = [userEntry("please   read\nthe   docs first", 100)];
     expect(promptLandedIn(entries, promptNeedle("please read the docs first"), T0)).toBe(true);
   });

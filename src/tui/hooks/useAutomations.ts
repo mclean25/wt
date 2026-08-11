@@ -314,7 +314,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       case "headless":
         return actionRegistry.get(ex.slug)?.status !== "running";
       case "session":
-        // The injected prompt runs invisibly inside the session; hold
+        // The delivered prompt runs invisibly inside the session; hold
         // the slot while it's observably working, with a hard cap so a
         // long manual session can't pin the slot forever.
         return (
@@ -645,10 +645,8 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       ) {
         continue;
       }
-      // One manager injection at a time: the manager pane is a shared
-      // singleton, and interleaved paste+submit sequences would garble
-      // both briefings. (The inject path also holds a cross-process
-      // lock; this gate just keeps the queue orderly.)
+      // One manager send at a time. The session is a shared singleton;
+      // this gate keeps the queue orderly across every harness transport.
       if (isManagerRun && managerInFlight) continue;
       if (!intent.announced) {
         intent.announced = true;

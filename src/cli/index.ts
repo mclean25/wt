@@ -28,6 +28,7 @@ import * as remoteCmd from "./commands/remote.ts";
 import * as remoteExecCmd from "./commands/_remote.ts";
 import * as sessionExecCmd from "./commands/_session.ts";
 import * as destroyCmd from "./commands/_destroy.ts";
+import * as claudeHookCmd from "./commands/_claude-hook.ts";
 
 const HELP = `usage: wt <command> [options]
 
@@ -55,7 +56,7 @@ commands:
   section     list / move / rename / drop the fleet's sections (the human's batching)
   manager     attach the fleet-coordinator session / send it a message / report a result
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
-  claude      drive a worktree's Claude Code session (send / ls / kill)
+  claude      drive a worktree's Claude Code session (send / ls / stop)
   dev         start / stop / inspect a worktree's [dev_server]
 
 Run \`wt <command> --help\` for per-command options where available.`;
@@ -91,6 +92,7 @@ const RUNNERS: Record<string, Runner> = {
   claude: claudeCmd.run,
   dev: devCmd.run,
   _destroy: destroyCmd.run,
+  "_claude-hook": claudeHookCmd.run,
 };
 
 export async function dispatch(argv: string[]): Promise<number> {

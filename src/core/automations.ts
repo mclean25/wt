@@ -23,7 +23,7 @@
  * On boot, a stuck `dispatched` entry is reconciled against the
  * rehydrated action runs by fire key (headless runs stamp their keys
  * into meta.json): matched → delivered, unmatched → dropped so the
- * still-true condition re-fires. Session injections have no artifact
+ * still-true condition re-fires. Session sends have no artifact
  * to reconcile against; their sub-second crash window is accepted.
  *
  * # Circuit breaker

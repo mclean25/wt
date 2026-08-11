@@ -1,13 +1,11 @@
-import { join } from "node:path";
-
 import { getHarness, type HarnessId } from "../harness/index.ts";
 import { withAsyncFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
-import { buildInnerArgs, sessionsDir, tmuxClientCwd } from "./attach.ts";
-import { ensureConfig } from "./config.ts";
-import { wrapInnerArgs } from "./inner-process.ts";
+import { startHarnessSessionDetached } from "./lifecycle.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
 import { capturePane, listAllSessionsRaw, paneTarget, runTmux } from "./process.ts";
+
+type TerminalHarnessId = Exclude<HarnessId, "claude">;
 
 const log = createLogger("[tmux]");
 
@@ -26,7 +24,7 @@ const READY_POLL_MS = 350;
 const READY_MAX_MS = 12_000;
 /** Gap between the paste landing and the Enter that submits it. */
 const SUBMIT_DELAY_MS = 500;
-/** Gap between successive submit keys (e.g. claude's double Enter). */
+/** Gap between successive submit keys. */
 const SUBMIT_KEY_GAP_MS = 250;
 /** Re-paste attempts when the pane shows no trace of the paste. */
 const PASTE_MAX_RETRIES = 3;
@@ -43,7 +41,7 @@ const PASTE_RETRY_GRACE_MS = 1_000;
 const PASTE_VERIFY_BUDGET_MS = 20_000;
 /**
  * How long to wait for the submitted prompt to show up in the harness's
- * own transcript. Sized for "claude wrote the user entry", not for the
+ * own transcript. Sized for the harness to write the user entry, not for the
  * turn to finish: the entry is written as the input is accepted, so this
  * only has to cover process scheduling and the fs flush.
  */
@@ -91,119 +89,6 @@ async function waitForPaneReady(name: string): Promise<boolean> {
   return false;
 }
 
-/**
- * Create the worktree's primary harness session detached (no client
- * attach). Byte-for-byte the session `attachOrCreate({kind:harnessId})`
- * would make — same name, same `buildArgs` argv (via the shared
- * `buildInnerArgs`/`wrapInnerArgs` helpers in attach.ts), same stderr
- * wrapper and TMUX-stripping env — so a later F12 `new-session -A` just
- * attaches to this one rather than spawning a second. Sized generously
- * so the harness doesn't render cramped before the user attaches; tmux
- * resizes to the client on attach.
- */
-async function startHarnessSessionDetached(
-  slug: string,
-  cwd: string,
-  harnessId: HarnessId,
-  managedName: string | null,
-): Promise<{ ok: boolean; reason?: string }> {
-  const harness = getHarness(harnessId);
-  const name = sessionName(slug, harnessId, managedName);
-  // ensureConfig, NOT writeConfig: this can run from inside the wt tmux
-  // server (e.g. `wt claude send` issued by another claude session),
-  // where the rendered config differs and the kill-server-on-change
-  // dance would take down every live session including the caller's.
-  const configPath = ensureConfig();
-  const stderrPath = join(sessionsDir(), `${name}.err`);
-  // buildInnerArgs also calls harness.ensureTrusted?.(cwd) — rift
-  // checkouts otherwise trip Claude's per-project trust prompt.
-  const innerArgs = buildInnerArgs({
-    slug,
-    cwd,
-    kind: harnessId,
-    harness,
-    managedNameNorm: managedName,
-    resumeSessionId: null,
-  });
-  let proc: Bun.Subprocess;
-  try {
-    proc = Bun.spawn(
-      [
-        "tmux",
-        "-L",
-        TMUX_SOCKET,
-        "-f",
-        configPath,
-        "new-session",
-        "-d",
-        "-s",
-        name,
-        "-c",
-        cwd,
-        "-x",
-        "200",
-        "-y",
-        "50",
-        // See attachOrCreate header: claude downgrades to 256-color when
-        // $TMUX is set, so strip it before exec'ing. The bash wrapper
-        // redirects stderr to a file so a spawn-and-die surfaces a reason.
-        ...wrapInnerArgs(harnessId, stderrPath, innerArgs, slug),
-      ],
-      {
-        // NOT the worktree — the pane cwd comes from `-c`; the client
-        // cwd only matters as the server's birth cwd (see tmuxClientCwd).
-        cwd: tmuxClientCwd(),
-        stdout: "ignore",
-        stderr: "pipe",
-        env: {
-          ...process.env,
-          TERM: process.env.TERM ?? "xterm-256color",
-          COLORTERM: process.env.COLORTERM ?? "truecolor",
-          FORCE_COLOR: process.env.FORCE_COLOR ?? "3",
-        },
-      },
-    );
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    log.error("detached harness start spawn failed", {
-      slug,
-      harnessId,
-      reason,
-    });
-    return { ok: false, reason };
-  }
-  const [code, stderr] = await Promise.all([
-    proc.exited,
-    new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-  ]);
-  if (code !== 0) {
-    // No client attached means no `-A` (it needs a tty), so a plain
-    // `new-session -d` loses the create race against a concurrent
-    // `attachOrCreate` (the user pressing F12 as an automation fires)
-    // with "duplicate session". A live session is exactly what the
-    // caller needs for the paste — recheck reality before failing, or
-    // the injected message silently drops.
-    const nowExists = (await listAllSessionsRaw().catch(() => new Set<string>())).has(name);
-    if (nowExists) {
-      log.warn("detached harness start lost create race; session exists, proceeding", {
-        slug,
-        harnessId,
-        code,
-      });
-      return { ok: true };
-    }
-    const reason = stderr.trim() || `tmux new-session exited ${code}`;
-    log.warn("detached harness start failed", {
-      slug,
-      harnessId,
-      code,
-      reason,
-    });
-    return { ok: false, reason };
-  }
-  return { ok: true };
-}
-
 /** Pipe text into the inject buffer and paste it into a session's pane. */
 async function pasteBuffer(name: string, text: string): Promise<void> {
   // A UNIQUE buffer name per call: `load-buffer` and `paste-buffer` hand off
@@ -230,8 +115,8 @@ async function pasteBuffer(name: string, text: string): Promise<void> {
   // transient tmux hiccup is worse. Revisit if a silent empty submit
   // ever actually bites.
   await load.exited;
-  // `-p` = bracketed paste (claude receives it as one chunk, so internal
-  // newlines and a leading slash command don't submit early); `-d` drops
+  // `-p` = bracketed paste, so internal newlines do not submit early;
+  // `-d` drops
   // the buffer after.
   await runTmux([
     "paste-buffer",
@@ -268,20 +153,27 @@ async function pasteBuffer(name: string, text: string): Promise<void> {
 export async function injectIntoSession(opts: {
   slug: string;
   cwd: string;
-  harnessId?: HarnessId;
-  /** Claude-only named-session identity (the manager); null = primary. */
+  harnessId: TerminalHarnessId;
   managedName?: string | null;
   text: string;
 }): Promise<InjectResult> {
+  // Keep a runtime tripwire as well as the TerminalHarnessId type. Callers
+  // outside TypeScript must never be able to turn this into a Claude fallback.
+  if ((opts.harnessId as HarnessId) === "claude") {
+    return {
+      ok: false,
+      reason: "Claude terminal messaging is disabled; use claudeSessions.send",
+    };
+  }
   // Cross-process serialization per target session. Historically every
-  // inject target was single-writer, but the manager slot is a genuine
+  // terminal-message target was single-writer, but the manager slot is a genuine
   // multi-writer singleton (TUI automations, `wt manager send` from N
   // worktree agents, [[actions]] target="manager") — without this,
   // near-simultaneous injections interleave paste text and stray
   // Enters in one pane, and two cold starts race. Worktree targets get
-  // the same guard for free (`wt claude send` vs the TUI's automations).
+  // the same guard for free.
   return withAsyncFileLock(
-    `__inject__${sessionName(opts.slug, opts.harnessId ?? "claude", opts.managedName ?? null)}`,
+    `__inject__${sessionName(opts.slug, opts.harnessId, opts.managedName ?? null)}`,
     () => injectIntoSessionUnlocked(opts),
   );
 }
@@ -289,12 +181,12 @@ export async function injectIntoSession(opts: {
 async function injectIntoSessionUnlocked(opts: {
   slug: string;
   cwd: string;
-  harnessId?: HarnessId;
+  harnessId: TerminalHarnessId;
   managedName?: string | null;
   text: string;
 }): Promise<InjectResult> {
   const { slug, cwd, text } = opts;
-  const harnessId = opts.harnessId ?? "claude";
+  const harnessId = opts.harnessId;
   const managedName = opts.managedName ?? null;
   const name = sessionName(slug, harnessId, managedName);
   const running = (
@@ -321,16 +213,12 @@ async function injectIntoSessionUnlocked(opts: {
   if (!submitted.ok) return submitted;
 
   // The pane accepted the keystrokes — that is NOT the same as the
-  // conversation accepting the prompt. See `injectionLanded`: a modal
-  // over the input box (claude's continue-or-compact picker on resuming
-  // a long conversation) swallows the paste and takes the submit key as
-  // its own answer, and every layer below reports success. Ask the
-  // harness's transcript instead.
+  // conversation accepting the prompt. Ask the harness transcript too.
   let delivered = await confirmDelivery({ slug, cwd, harnessId, managedName, text, sinceMs });
   let resent = false;
   if (delivered === false && coldStarted) {
     // Cold start only, deliberately: it's where the failure lives (the
-    // resume-time picker) and where a re-send is safe — the session had
+    // startup UI) and where a re-send is safe — the session had
     // no turn in flight to hide a slow-landing prompt behind, so
     // "nothing in the transcript" really does mean nothing arrived.
     // Whatever consumed the first submit is gone now (the picker
@@ -363,7 +251,7 @@ async function injectIntoSessionUnlocked(opts: {
 async function confirmDelivery(opts: {
   slug: string;
   cwd: string;
-  harnessId: HarnessId;
+  harnessId: TerminalHarnessId;
   managedName: string | null;
   text: string;
   sinceMs: number;
@@ -390,22 +278,21 @@ async function confirmDelivery(opts: {
 /** Paste `text` into a ready pane and press the harness's submit keys. */
 async function pasteAndSubmit(
   name: string,
-  harnessId: HarnessId,
+  harnessId: TerminalHarnessId,
   text: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
-    // Paste, then VERIFY the pane actually changed. Claude's REPL can
+    // Paste, then verify the pane actually changed. A harness can
     // sit visually stable — banner rendered, prompt drawn — while its
     // input is not yet accepting paste (the MCP-connect window on a
     // cold start), and a paste sent into that window is dropped
     // wholesale with no error from tmux: waitForPaneReady can't tell
     // "settled and ready" from "settled and deaf". An accepted paste
-    // always changes the pane text (inline, or Claude's "[Pasted text
-    // …]" placeholder), so a pane still identical to the PRE-paste
+    // always changes the pane text, so a pane still identical to the PRE-paste
     // snapshot means the paste vanished — wait out another settle round
     // and re-paste, bounded by attempts AND elapsed time (the lock-hold
     // note on PASTE_VERIFY_BUDGET_MS). Every comparison is against the
-    // ORIGINAL pre-paste snapshot, and each retry re-checks it first —
+    // original pre-paste snapshot, and each retry re-checks it first —
     // a first paste that merely RENDERED slowly is detected as landed
     // and never double-pasted. Accepted residual (audited): on a warm
     // pane that happens to be streaming unrelated output, ambient churn
@@ -431,9 +318,8 @@ async function pasteAndSubmit(
       await sleep(SUBMIT_DELAY_MS);
     }
     // Harnesses declare their own submit-key sequence: most take a
-    // single Enter, but Claude Code and Codex receive the bracketed
-    // paste as a multi-line input blob whose first Enter only exits
-    // that state, so they need a second to actually submit. Keys are
+    // single Enter, while some receive a bracketed multi-line paste as
+    // an input blob that needs another key to submit. Keys are
     // sent in order with a small gap so the harness processes each
     // before the next lands.
     const submitKeys = getHarness(harnessId).injectSubmitKeys;

@@ -12,8 +12,8 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import type { HarnessId } from "../../core/harness/index.ts";
+import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
-import { injectIntoSession } from "../../core/tmux.ts";
 import {
   buildErrorInvestigationPrompt,
   latestCapturedError,
@@ -30,7 +30,7 @@ let cancelled = false;
 
 /**
  * Called when the error overlay closes. A send already in flight still
- * completes (the paste is on its way) but stops short of entering the
+ * completes (the message is on its way) but stops short of entering the
  * session.
  */
 export function cancelErrorInvestigate(): void {
@@ -69,7 +69,7 @@ export function makeErrorFlows(ctx: ErrorFlowCtx): {
     void (async () => {
       // Same tmux session `,` attaches to — the prompt lands in the
       // conversation the user is about to be dropped into.
-      const result = await injectIntoSession({
+      const result = await sendSessionMessage({
         slug: WT_SOURCE_SLOT.slug,
         cwd: WT_SOURCE_SLOT.path,
         harnessId: primaryHarness,
@@ -78,7 +78,7 @@ export function makeErrorFlows(ctx: ErrorFlowCtx): {
       inFlight = false;
       if (!result.ok) {
         patchInject({ kind: "failed", reason: result.reason });
-        log.event.err(`error-report inject failed: ${result.reason}`);
+        log.event.err(`error-report send failed: ${result.reason}`);
         return;
       }
       if (cancelled) {

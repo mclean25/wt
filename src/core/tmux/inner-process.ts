@@ -25,7 +25,7 @@ export function capturesInnerStderr(kind: InnerSessionKind): boolean {
  *
  * The capture branch uses `exec` to keep the process tree flat, and
  * passes `stderrPath` as `$1` so callers never have to shell-escape it.
- * Shared by attached, detached, and injected session creation paths so
+ * Shared by attached, detached, and messaged session creation paths so
  * their routing policy cannot drift.
  */
 export function wrapInnerArgs(

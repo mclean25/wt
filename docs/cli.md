@@ -100,7 +100,7 @@ Tail a destroy log (`tail -F`). No slug ⇒ the most recently modified log.
 
 ### `wt perf [--json]`
 
-One-shot perf snapshot framed as **wt-downstream vs the rest of the machine** — the headless form of the TUI's [`P` overlay](tui.md#perf-overlay-p): verdict numbers, per-category and per-worktree-session breakdowns, the heaviest processes on both sides, and any leaked headless wt instances. The default output is the same plain-text report the overlay's `i` key injects, written for handing to an agent ("is this load reasonable, and if not, whose is it?"); `--json` emits the raw `PerfSnapshot` instead. Same accuracy caveats as the overlay: `%CPU` is `ps`'s lifetime decaying average, not a profile.
+One-shot perf snapshot framed as **wt-downstream vs the rest of the machine** — the headless form of the TUI's [`P` overlay](tui.md#perf-overlay-p): verdict numbers, per-category and per-worktree-session breakdowns, the heaviest processes on both sides, and any leaked headless wt instances. The default output is the same plain-text report the overlay's `i` key sends, written for handing to an agent ("is this load reasonable, and if not, whose is it?"); `--json` emits the raw `PerfSnapshot` instead. Same accuracy caveats as the overlay: `%CPU` is `ps`'s lifetime decaying average, not a profile.
 
 Unlike the overlay (where the TUI process itself anchors the tree), the CLI also roots at any live wt instance it finds in the process table, so the running TUI counts as "us" rather than showing up as an outsider.
 
@@ -137,7 +137,7 @@ Sections stay **asserted, never derived** (nothing in wt infers one), but they a
 
 ### `wt fleet`
 
-The [manager session](manager.md)'s single audit surface: one row per live worktree joining the **asserted** work status (state, note, risk, `at`, staleness vs HEAD) with observable **reality** — the primary Claude session's liveness (`alive`/`busy`/`last_activity`/`agent_name`, the same signals as `wt claude ls --json`) and the PR (number, title, draft, merge state, mergeability, CI rollup), all from the same single batched GraphQL round trip the TUI uses (never per-row `gh` calls). Each row also carries the human's manual TUI **section** — a second channel of asserted intent alongside the work status (a name like "Merge after Release" is a merge-ordering hint the manager should weigh; `null`/`—` = inbox, and inferred stack groupings never appear — those are derivable from base records and PRs). Rows sort ready-first, then needs-human (the TUI's urgency ranking), and the recently-removed rows ride along like on every fleet surface.
+The [manager session](manager.md)'s single audit surface: one row per live worktree joining the **asserted** work status (state, note, risk, `at`, staleness vs HEAD) with observable **reality** — the primary Claude session's liveness (`alive`/`busy`/`last_activity`, the same activity signals as `wt claude ls --json`) and the PR (number, title, draft, merge state, mergeability, CI rollup), all from the same single batched GraphQL round trip the TUI uses (never per-row `gh` calls). Each row also carries the human's manual TUI **section** — a second channel of asserted intent alongside the work status (a name like "Merge after Release" is a merge-ordering hint the manager should weigh; `null`/`—` = inbox, and inferred stack groupings never appear — those are derivable from base records and PRs). Rows sort ready-first, then needs-human (the TUI's urgency ranking), and the recently-removed rows ride along like on every fleet surface.
 
 - `--json` — the contract. Live rows carry `section` plus nested `work`, `session`, and `pr` objects. Review state is **three separate numbers**, because collapsing them made the field lie: `unresolved_threads` is every open review thread (what GitHub's PR page shows), `unresolved_human_threads` excludes bot-opened ones, and `review_bot` is the bot's own rollup — in `checklist` mode the unticked-box count from its summary comment, which thread resolution does **not** affect. On a repo where all review is done by a bot, the human count is permanently 0, so reporting only it reads as "nothing to chase" while the bot sits on unaddressed findings; when GitHub is unreachable (no `gh`, not authenticated, fetch failure) rows still emit with `pr: null` plus a `pr_note` saying why — so "no PR" (`pr` and `pr_note` both null) stays distinguishable from "couldn't ask". Removed rows are the same `kind: "merged"|"removed"` entries as `wt ls --json`; live rows never carry `kind`.
 
@@ -145,7 +145,7 @@ Merge fields (`merge_state` from GitHub's `mergeStateStatus`, `mergeable`) are l
 
 ### `wt manager` / `wt manager send <text…>` / `wt manager report [--ok|--warn|--err] <text…>`
 
-Attach the singleton [manager session](manager.md) (create on first use), or inject a message into it — the fire-and-forget outbound channel for worktree agents and scripts, carrying both fleet-level questions and `papercut:` reports (`wt manager send` cold-starts the session detached when it isn't running; the message lands as its next turn, and nothing comes back). Same session the TUI's `m` key enters.
+Attach the singleton [manager session](manager.md) (create on first use), or send a message to it. This is the fire-and-forget outbound channel for worktree agents and scripts, carrying both fleet-level questions and `papercut:` reports. `wt manager send` cold-starts the session detached when it is not running; the message lands as its next turn, and nothing comes back. Same session the TUI's `m` key enters.
 
 `wt manager report` is the reverse channel: it appends a short result line to a spool a running TUI watches and surfaces on the **attention feed** (with a toast). It's how [`M` palette](manager.md#the-command-palette-m) commands hand their outcome back without the human attaching; the level flag (default `info`) picks the line's color/loudness. Reports while no TUI runs aren't replayed later — it's a live-delivery channel, not a log (the daily log records whatever surfaced).
 
@@ -210,12 +210,16 @@ The optional GitHub webhook daemon — see [github-events.md](github-events.md).
 ### `wt claude <sub>`
 
 Drive a worktree's Claude Code tmux session from scripts or other sessions.
+Native delivery requires Claude Code 2.1.228 or newer. This includes the
+cross-session inbox reliability fix shipped after the initial 2.1.224 release;
+older versions fail before wt starts or writes to a session. See Anthropic's
+[cross-session messaging documentation](https://code.claude.com/docs/en/cross-session-messaging).
 
 | sub | what it does |
 |---|---|
-| `send <slug> [text...]` | upsert the target's primary Claude session (cold-starts it if absent) and paste + submit the text; reads stdin when no text args (heredoc-friendly). Accepts a branch name in place of the slug, plus the repo-level session slugs `wt` / `main` / `dotfiles` / `manager` (the same targets `ls` lists; `manager` is the same session as `wt manager send`). A slug in the recent removed history answers with why it's gone ("archived on merge (#N, 2h ago)") instead of a bare "no worktree"; anything else errors naming the addressable set. Fire-and-forget as to the *result*, but **delivery is confirmed**: the prompt has to show up in the session's own transcript (as a message or a queued one) before this reports success, so a send that a modal swallowed exits non-zero and says so instead of printing a tick. A cold start that swallowed the prompt is re-sent once automatically |
-| `ls [--json]` | list slugs with a live Claude session. `--json` adds per-session `name`, `agent_name`, `alive`, `busy`, and `last_activity` (the last two from Claude's live process registry, matched by cwd + session name; `null` when the tmux session has no registered claude process). `agent_name` is the label the session registered under **when it matches the name wt would have given it** — the address a peer Claude instance can message it by directly; `null` means there's no usable address (no registered process, or a session labelled before names became slug-derived) and `send` is the way to reach it |
-| `kill <slug>` | kill the worktree's primary Claude session |
+| `send <slug> [text...]` | ensure the target Claude session exists, then deliver the text through Claude Code's native messaging socket; reads stdin when no text args. Accepts a branch name plus `wt` / `main` / `dotfiles` / `manager`. Tmux hosts the process and UI but is never used for Claude message input. Delivery is confirmed against the target transcript before success is reported |
+| `ls [--json]` | list slugs with a live Claude tmux session. `--json` adds `session_id`, `pid`, `cwd`, `socket_path`, `tmux_session`, `status`, `busy`, `last_activity`, and discovery `source`; the messaging token is never exposed |
+| `stop <slug>` | stop the target Claude session without typing into its pane (`kill` remains an alias) |
 
 ---
 

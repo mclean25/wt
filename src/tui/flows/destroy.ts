@@ -10,13 +10,14 @@ import { existsSync } from "node:fs";
 import { actionRegistry } from "../../core/actions.ts";
 import type { RemoteConfig } from "../../core/config.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
+import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { spawnBackgroundRemove } from "../../core/lifecycle.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { runRemoteWt } from "../../core/remote.ts";
 import { removeShellLog } from "../../core/shell-tail.ts";
 import { rebaseStack, STACK_BUSY } from "../../core/stack-ops.ts";
-import { injectIntoSession, killAllSessionsFor } from "../../core/tmux.ts";
+import { killAllSessionsFor } from "../../core/tmux.ts";
 import {
   recordRemovedWorktrees,
   type RemovedWorktree,
@@ -378,17 +379,17 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
   }
 
   /**
-   * Conflict-bail handoff: inject the restack skill into the failing
+   * Conflict-bail handoff: send the restack skill to the failing
    * worktree's primary harness session (cold-starting it if needed),
    * so `R` completes the same loop `/restack` runs by hand — the
    * engine does the mechanical replay, the LLM takes over exactly at
    * the judgment call the engine refuses to make. Same
-   * `injectIntoSession` primitive session-target actions use, minus
+   * `sendSessionMessage` primitive session-target actions use, minus
    * `launchAction`'s busy guards: the row's cached lock state still
    * reads busy for a beat after the engine released its flocks, and
    * we KNOW the true state here — the bail itself just freed the
    * locks and left the tree clean. Fire-and-forget like every session
-   * inject; progress lands in the activity pane. Returns whether the
+   * message; progress lands in the activity pane. Returns whether the
    * handoff was dispatched (false = no live row for the branch; the
    * caller falls back to the manual-toast wording).
    */
@@ -403,8 +404,8 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     const log = createLogger(slug);
     // Don't cold-start a harness session in a worktree that's gone or
     // being torn down. A conflict usually means active work (so this is
-    // rare), but the fire-and-forget inject reads a per-render `rows`
-    // snapshot — if the worktree was cleaned in the meantime, injecting
+    // rare), but the fire-and-forget send reads a per-render `rows`
+    // snapshot — if the worktree was cleaned in the meantime, sending
     // would spawn a session with cwd inside a deleted directory.
     if (row.archived || lockStatus(slug) || !existsSync(row.wt.path)) {
       log.event.warn(
@@ -419,16 +420,16 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       : "";
     const text = `${skill}\n\nwt's restack engine just bailed on this worktree: ${detail}.${backup} Resolve the conflict and finish the restack.`;
     log.event.info(`conflict — sending ${skill} to ${harness.label} session`);
-    void injectIntoSession({
+    void sendSessionMessage({
       slug,
       cwd: row.wt.path,
       harnessId: primaryHarness,
       text,
     }).then((res) => {
       if (res.ok && res.delivered === false) {
-        // Confirmed against the session's transcript (see
-        // injectIntoSession). An unattended handoff that vanished must
-        // say so — the conflict is still sitting there either way.
+        // Non-Claude harnesses verify against their transcript. An
+        // unattended handoff that cannot be verified must say so because
+        // the conflict is still sitting there either way.
         log.attention.warn(
           `${skill} handoff never reached the ${harness.label} session — run it by hand`,
         );

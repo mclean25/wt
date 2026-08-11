@@ -258,7 +258,7 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
         // shell commands; the Claude robot glyph for claude prompts (two
         // spaces: the nerd-font glyph renders wide and reads cramped with
         // one). Session-target claude actions add a `↪` to mark that they
-        // inject into the live F12 session instead of spawning a headless
+        // send to the live F12 session instead of spawning a headless
         // tracked headless run. All stay muted like the id. Unavailable items
         // show the block reason instead; the custom entry shows "freeform".
         const hint = isCustom

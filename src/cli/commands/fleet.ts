@@ -14,7 +14,6 @@
 import { revParse } from "../../core/git.ts";
 import { fetchGithub, hasGh, pickPrForWorktree, repoSlug } from "../../core/github.ts";
 import { readRegistry } from "../../core/harness/claude/registry.ts";
-import { claudeAgentAddress } from "../../core/harness/index.ts";
 import { listSessions } from "../../core/tmux.ts";
 import type {
   MergeableState,
@@ -78,8 +77,6 @@ type SessionInfo = {
   alive: boolean;
   busy: boolean | null;
   last_activity: string | null;
-  /** Address for direct peer-to-peer messaging; null = use `wt claude send`. */
-  agent_name: string | null;
 };
 
 /**
@@ -97,7 +94,7 @@ function sessionInfoFor(
   registry: ReturnType<typeof readRegistry>,
 ): SessionInfo {
   const alive = liveClaudeSlugs.has(wt.slug);
-  if (!alive) return { alive: false, busy: null, last_activity: null, agent_name: null };
+  if (!alive) return { alive: false, busy: null, last_activity: null };
   const match = registry
     .filter(
       (r) => r.cwd === wt.path && (r.name === wt.slug || r.name === "primary" || r.name === null),
@@ -108,7 +105,6 @@ function sessionInfoFor(
     busy: match ? match.status === "busy" || match.status === "shell" : null,
     last_activity:
       match && match.updatedAt > 0 ? new Date(match.updatedAt).toISOString() : null,
-    agent_name: claudeAgentAddress(match?.name, wt.slug),
   };
 }
 
