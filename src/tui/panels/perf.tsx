@@ -237,6 +237,10 @@ export function PerfOverlay({
   // Scrolling comes from `handleOverlayScrollKey` (modal-keys/perf.ts),
   // not the focused-scrollbox built-in — shared overlay keymap.
   const scrollRef = useOverlayScroll();
+  // Hook order must not depend on whether the first perf sample has landed.
+  // The overlay normally renders once with no snapshot, then again with data;
+  // measuring below that early return adds a hook on the second render.
+  const contentW = useContentWidth();
   const hints: KeyHintPair[] = [
     ["j k", "scroll"],
     ["i", "investigate in wt session"],
@@ -265,7 +269,6 @@ export function PerfOverlay({
   }
 
   const ceiling = snapshot.cores * 100;
-  const contentW = useContentWidth();
   const injectLine =
     inject.kind === "sending" ? (
       <text fg={theme.accent}>sending snapshot to the wt session…</text>
