@@ -132,7 +132,8 @@ export const qk = {
        */
       gitActivity: (base: string) =>
         ["wt", slug, "gitActivity", base] as const,
-      firstCommit: () => ["wt", slug, "firstCommit"] as const,
+      firstCommit: (base: string | null = null) =>
+        ["wt", slug, "firstCommit", base] as const,
       /**
        * Diff context keyed by both slug and effective base. When the
        * base flips (e.g. stack parent changes from `origin/main` to a

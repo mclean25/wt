@@ -184,10 +184,24 @@ export const wtConflictQuery = (
 /**
  * Subject of the oldest commit on the branch — fallback title when
  * there's no PR yet. Cheap (one `git log`); short staleTime.
+ *
+ * `baseBranch` is the worktree's RECORDED fork base, and passing it is
+ * load-bearing for stacked worktrees: measured against the trunk, a
+ * child with no commits of its own walks its parent's history and
+ * resolves to the PARENT's oldest commit — so every sibling of a fan
+ * renders the same title and two different tasks become
+ * indistinguishable in the list. Measured against its own base the
+ * range is empty, the title falls back to the slug, and the rows are
+ * telling apart again. The base is part of the query key so a `wt base`
+ * edit or a restack reconcile refetches.
  */
-export const wtFirstCommitQuery = (wt: Pick<Worktree, "slug" | "path">) =>
+export const wtFirstCommitQuery = (
+  wt: Pick<Worktree, "slug" | "path">,
+  baseBranch?: string | null,
+) =>
   queryOptions({
-    queryKey: qk.wt(wt.slug).firstCommit(),
-    queryFn: async (): Promise<string | null> => firstCommitSubject(wt.path),
+    queryKey: qk.wt(wt.slug).firstCommit(baseBranch ?? null),
+    queryFn: async (): Promise<string | null> =>
+      firstCommitSubject(wt.path, await effectiveBaseOrTrunk(wt.path, baseBranch)),
     staleTime: STALE.mid,
   });

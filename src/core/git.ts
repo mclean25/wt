@@ -217,20 +217,22 @@ export function invalidateMainFirstParents(): void {
 }
 
 /**
- * Subject line of the *oldest* commit on the branch since `origin/main`.
+ * Subject line of the *oldest* commit on the branch since its base.
  * That's the human's "what is this work" framing — captures intent
  * before a PR exists. Returns null if the branch has no commits ahead
  * of base, or `git log` fails.
+ *
+ * `base` defaults to the trunk, but a STACKED worktree must pass its
+ * own fork base: against the trunk, a child with no commits of its own
+ * walks its parent's history and reports the parent's oldest commit,
+ * so every sibling in a fan resolves to one identical title.
  */
-export async function firstCommitSubject(wtPath: string): Promise<string | null> {
+export async function firstCommitSubject(
+  wtPath: string,
+  base: string = `origin/${config.branch.base}`,
+): Promise<string | null> {
   const r = await run(
-    [
-      "git",
-      "log",
-      "--reverse",
-      "--format=%s",
-      `origin/${config.branch.base}..HEAD`,
-    ],
+    ["git", "log", "--reverse", "--format=%s", `${base}..HEAD`],
     { cwd: wtPath, timeoutMs: 5_000 },
   );
   if (r.exitCode !== 0) return null;

@@ -724,7 +724,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
   // race a destroying worktree's git state.
   const firstCommitResults = useQueries({
     queries: worktrees.map((wt, i) => ({
-      ...wtFirstCommitQuery(wt),
+      ...wtFirstCommitQuery(wt, stateSlugs[wt.slug]?.baseBranch ?? null),
       enabled: !busyByIndex[i],
     })),
     combine: combineQueryData,
