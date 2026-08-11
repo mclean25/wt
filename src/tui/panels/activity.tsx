@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
 
@@ -23,6 +23,46 @@ const PREFIX_WIDTH = 8 + 1 + 16 + 1;
 const CONT_INDENT = "  ";
 /** Pane border (2) + pane padding (2) + the scrollbox's gutter (1). */
 const PANE_CHROME = 5;
+
+/**
+ * The feed renders a bottom-anchored WINDOW of the buffer, not all of
+ * it. The buffers hold up to 500/200 events and are seeded to full at
+ * boot from the daily logs — and every renderable in the tree is a
+ * per-commit (and, mid-animation, per-frame) cost in OpenTUI, offscreen
+ * scrollbox children included. Rendering the whole buffer made this
+ * pane the single largest subtree in the app by an order of magnitude.
+ *
+ * The window is invisible in normal use: an exact-height spacer stands
+ * in for the hidden events (1 row each, or the cached wrap count on the
+ * wrapping feed), so the scrollbar geometry and scroll positions are
+ * identical to rendering everything — and a slow check expands the
+ * window in chunks as the reader scrolls up toward it, well before
+ * they reach it. Back at the bottom, the window snaps back to the
+ * tail. The full record is never further than the daily log anyway.
+ */
+const TAIL_WINDOW = 120;
+const EXPAND_CHUNK = 150;
+/** Grow when the viewport gets within one screen of the hidden region. */
+const EXPAND_CHECK_MS = 400;
+
+/**
+ * Wrapped-lines cache. Events are immutable and identity-stable in the
+ * ring buffers, so wrap work is done once per (event, width) instead of
+ * re-wrapping the whole feed on every append. WeakMap: evicted events
+ * release their entries with themselves.
+ */
+const wrapCacheByEvent = new WeakMap<
+  WtEvent,
+  { first: number; rest: number; lines: string[] }
+>();
+
+function wrappedLinesFor(e: WtEvent, rest: number, first: number): string[] {
+  const hit = wrapCacheByEvent.get(e);
+  if (hit && hit.first === first && hit.rest === rest) return hit.lines;
+  const lines = wrapText(e.text, rest, first);
+  wrapCacheByEvent.set(e, { first, rest, lines });
+  return lines;
+}
 
 /**
  * Handle to whichever events scrollbox is currently on screen (the
@@ -101,8 +141,6 @@ function EventsList({
   // Scrollbox with sticky-bottom: follows the live tail like before,
   // releases when the user scrolls up (wheel, or ctrl+e/ctrl+y via
   // `activityScroll`), and re-sticks once they return to the bottom.
-  // The full buffer renders as children; viewport culling keeps the
-  // per-frame cost at "what's visible", same as the old tail slice.
   const listRef = useRef<ScrollBoxRenderable>(null);
   useEffect(() => {
     activityScroll.current = listRef.current;
@@ -110,6 +148,11 @@ function EventsList({
       if (activityScroll.current === listRef.current) activityScroll.current = null;
     };
   }, []);
+  // Render window (see TAIL_WINDOW above). `windowSize` only ever grows
+  // while the reader is up in the history; it snaps back to the tail
+  // window once they return to the bottom.
+  const [windowSize, setWindowSize] = useState(TAIL_WINDOW);
+  const windowStart = Math.max(0, events.length - windowSize);
   // The bottom pane spans the full terminal width, so the message
   // budgets come from the terminal minus this pane's own chrome —
   // there's no parent-measured width to read here. Only the wrapping
@@ -118,12 +161,19 @@ function EventsList({
   const avail = Math.max(1, width - PANE_CHROME);
   const firstWidth = Math.max(1, avail - PREFIX_WIDTH);
   const restWidth = Math.max(1, avail - CONT_INDENT.length);
-  const wrapped = useMemo(
-    () => (wrap ? events.map((e) => wrapText(e.text, restWidth, firstWidth)) : null),
-    [wrap, events, restWidth, firstWidth],
-  );
-  if (events.length === 0) {
-    return <text fg={theme.fgDim}>{emptyText}</text>;
+  // Rows hidden above the window, so the spacer reproduces their exact
+  // height and scroll geometry matches a full render. There is no
+  // wrap-cache miss risk of O(all) work repeating: entries are
+  // computed once per event lifetime.
+  let spacerRows = 0;
+  if (windowStart > 0) {
+    if (wrap) {
+      for (let i = 0; i < windowStart; i++) {
+        spacerRows += wrappedLinesFor(events[i]!, restWidth, firstWidth).length;
+      }
+    } else {
+      spacerRows = windowStart;
+    }
   }
   // Events are appended in arrival order, so "last seen row" is a
   // single reverse scan; per-row dimming still compares each row's own
@@ -137,12 +187,41 @@ function EventsList({
       }
     }
   }
+  // The seen rule renders as two rows (margin + rule); when it falls in
+  // the hidden region the spacer stands in for it too.
+  if (lastSeenIdx >= 0 && lastSeenIdx < windowStart) spacerRows += 2;
+  // Slow window-expansion check: grow the window before the reader's
+  // viewport reaches the hidden region; snap back once they re-stick to
+  // the bottom. Steady state (stuck to the tail) is a couple of
+  // property reads that change nothing — no renders, no layout.
+  const geomRef = useRef({ windowStart, spacerRows, windowSize, total: events.length });
+  geomRef.current = { windowStart, spacerRows, windowSize, total: events.length };
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const box = listRef.current;
+      if (!box) return;
+      const g = geomRef.current;
+      const viewH = box.viewport.height;
+      const maxScroll = Math.max(0, box.scrollHeight - viewH);
+      if (g.windowStart > 0 && box.scrollTop < g.spacerRows + viewH) {
+        setWindowSize(Math.min(g.windowSize + EXPAND_CHUNK, Math.max(g.total, TAIL_WINDOW)));
+      } else if (g.windowSize > TAIL_WINDOW && box.scrollTop >= maxScroll - 1) {
+        setWindowSize(TAIL_WINDOW);
+      }
+    }, EXPAND_CHECK_MS);
+    return () => clearInterval(timer);
+  }, []);
+  if (events.length === 0) {
+    return <text fg={theme.fgDim}>{emptyText}</text>;
+  }
   return (
     <WtScrollbox scrollRef={listRef} stickyScroll stickyStart="bottom">
-      {events.map((e, i) => {
+      {spacerRows > 0 ? <box height={spacerRows} flexShrink={0} /> : null}
+      {events.slice(windowStart).map((e, wi) => {
+        const i = windowStart + wi;
         const seen = seenTs !== undefined && e.ts <= seenTs;
         const fg = seen ? theme.fgDim : levelFg(e.level);
-        const lines = wrapped?.[i];
+        const lines = wrap ? wrappedLinesFor(e, restWidth, firstWidth) : null;
         return (
           <Fragment key={e.id}>
             {/* The prefix (time + source) is grouped into a
