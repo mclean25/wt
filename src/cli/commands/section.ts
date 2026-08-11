@@ -24,6 +24,7 @@
  * derived from the fork-base records, so naming one here would be
  * writing down something wt re-derives on the next render.
  */
+import { buildStackIndex } from "../../core/stack-layout.ts";
 import type { Worktree } from "../../core/types.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import {
@@ -45,7 +46,7 @@ derived — wt infers nothing here — and the TUI renders rows grouped by
 them, with per-section fold state.
 
   list     wt section [ls] [--json]
-  move     wt section mv <slug>... <section>
+  move     wt section mv <slug>... <section> [--only]
   rename   wt section rename <old> <new>
   remove   wt section rm <section>
 
@@ -55,6 +56,12 @@ them, with per-section fold state.
   \`rename\` onto an existing section MERGES into it (rows append at the
   bottom, keeping their relative order). \`rm\` drops the section and its
   rows fall back to the inbox; no worktree is touched.
+
+  \`mv\` moves a worktree's whole STACK by default — a stack is one merge
+  unit — and \`--only\` moves just the named ones. Splitting a stack is
+  legitimate, not a mistake: finished parents awaiting verification and
+  their unstarted children belong in different buckets, and wt never
+  reconciles a split you made on purpose.
 
 Grouping is a decision, not a status: use it to record a batch you and
 the human agreed on ("held back from today's release"), and use
@@ -152,7 +159,32 @@ function runList(state: WtState, live: ReadonlySet<string>, json: boolean): numb
   return 0;
 }
 
-async function runMove(positional: string[]): Promise<number> {
+/**
+ * Every live slug in the same inferred stack as `slug`, including it.
+ * A stack is one merge unit, so moving a member usually means moving
+ * the unit — but see `--only`: splits are legitimate and common (the
+ * finished parents sitting in a verification bucket while their
+ * unstarted children sit in a backlog is a real, deliberate board).
+ */
+function stackSiblings(wts: Worktree[], slug: string, state: WtState): string[] {
+  const target = wts.find((w) => w.slug === slug);
+  if (!target?.branch) return [slug];
+  const { byBranch } = buildStackIndex(
+    wts.map((w) => ({
+      slug: w.slug,
+      branch: w.branch,
+      baseBranch: state.slugs[w.slug]?.baseBranch,
+    })),
+  );
+  const entry = byBranch.get(target.branch);
+  if (!entry) return [slug];
+  const bySlug = new Map(wts.map((w) => [w.branch, w.slug]));
+  return entry.layout.nodes
+    .map((n) => bySlug.get(n.branch))
+    .filter((s): s is string => Boolean(s));
+}
+
+async function runMove(positional: string[], only: boolean): Promise<number> {
   if (positional.length < 2) {
     console.error(red("usage: wt section mv <slug>... <section>   (`-` = inbox)"));
     return 2;
@@ -182,11 +214,35 @@ async function runMove(positional: string[]): Promise<number> {
   const state = readWtState();
   const section = toInbox ? null : resolveSection(state, target) ?? target.trim();
   const created = section !== null && !manualSections(state).includes(section);
-  for (const slug of slugs) setSlugSection(slug, section);
+  // A stack is one merge unit, so the whole unit moves unless --only.
+  // Named slugs always move; siblings are pulled in around them.
+  const named = new Set(slugs);
+  const moving = only
+    ? slugs
+    : [...new Set(slugs.flatMap((s) => stackSiblings(wts, s, state)))];
+  const pulled = moving.filter((s) => !named.has(s));
+  // Skip rows already in the target: `setSlugSection` places at the
+  // BOTTOM of the section, so re-asserting a row's current section
+  // silently reorders it (and narrates a move that didn't happen).
+  const changed = moving.filter((s) => (state.slugs[s]?.section ?? null) !== section);
+  for (const slug of changed) setSlugSection(slug, section);
+  if (changed.length === 0) {
+    console.log(
+      `${dim("·")} ${slugs.map((s) => cyan(s)).join(", ")} ${dim(`already in ${section === null ? "the inbox" : section}`)}`,
+    );
+    return 0;
+  }
   const where = section === null ? "the inbox" : bold(section);
   console.log(
     `${green("✓")} ${slugs.map((s) => cyan(s)).join(", ")} → ${where}${created ? dim(" (new)") : ""}`,
   );
+  const pulledChanged = pulled.filter((s) => changed.includes(s));
+  if (pulledChanged.length > 0) {
+    console.log(
+      `  ${dim(`moved ${changed.length} (stack) — also ${pulledChanged.join(", ")}`)}`,
+    );
+    console.log(`  ${dim("--only moves just the named worktrees; splitting a stack is legitimate")}`);
+  }
   return 0;
 }
 
@@ -248,8 +304,10 @@ export async function run(argv: string[]): Promise<number> {
   }
   const positional: string[] = [];
   let json = false;
+  let only = false;
   for (const a of argv) {
     if (a === "--json") json = true;
+    else if (a === "--only") only = true;
     // `-` is the inbox sentinel for `mv`, not a flag.
     else if (a.startsWith("-") && a !== "-") {
       console.error(red(`unknown flag: ${a}`));
@@ -267,7 +325,7 @@ export async function run(argv: string[]): Promise<number> {
   switch (sub) {
     case "mv":
     case "move":
-      return runMove(rest);
+      return runMove(rest, only);
     case "rename":
       return runRename(rest);
     case "rm":
