@@ -95,7 +95,7 @@ export const wtMergedQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).merged(),
     queryFn: async (): Promise<boolean> =>
-      wt.branch ? branchIsMerged(wt.branch, wt.path) : false,
+      wt.branch ? branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path }) : false,
     staleTime: STALE.mid,
   });
 

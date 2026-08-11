@@ -80,6 +80,11 @@ commit_in() { # slug subject
 build() {
   [ -d "$FX" ] && [ ! -e "$FX/origin.git" ] && [ -n "$(ls -A "$FX" 2>/dev/null)" ] &&
     die "$FX exists and is not a fixture — refusing to delete it"
+  # A probe still attached to the old fixture keeps polling git in a
+  # directory this is about to delete, and races the rebuild for index
+  # locks. Stop it first.
+  bash "$ROOT/scripts/tui-test.sh" stop "$PROBE" >/dev/null 2>&1 || true
+  tmux -L "$SOCKET" kill-server >/dev/null 2>&1 || true
   rm -rf "$FX"
   mkdir -p "$FX/cache" "$FX/wts"
 
@@ -162,6 +167,11 @@ UNTESTED: everything, by construction" >/dev/null
   new_wt chain-root;                            commit_in chain-root "Chain root lays the schema"
   new_wt chain-mid  "$PREFIX/chain-root";       commit_in chain-mid  "Chain middle adds the reader"
   new_wt chain-leaf "$PREFIX/chain-mid";        commit_in chain-leaf "Chain leaf wires the cache"
+  # Deliberately never committed: a stacked worktree between `wt new` and
+  # its first commit shares its parent's tip, which is the population the
+  # vacuous-containment guard protects (an empty branch is "not started",
+  # never "merged"). Its title falls back to the slug for the same reason.
+  new_wt chain-unstarted "$PREFIX/chain-root"
   wtfx section mv chain-root "Chain" >/dev/null   # a stack moves as a unit
 
   # --- A fan: two siblings off one parent, no order between them -------
@@ -185,7 +195,8 @@ board:
   Inbox                 plain / dirty / no-commit rows, plus the two split
                         children (no rail, "-> Hold: Verify on Dev" reference)
   Statuses              one row per work state, ready at low and high risk
-  Chain                 depth 0/1/2 co-located: rail steps right per level
+  Chain                 depth 0/1/2 co-located: rail steps right per level,
+                        plus a stacked row with zero commits of its own
   Fan                   two siblings sharing depth 1: no implied merge order
   Hold: Verify on Dev   the split parent its two inbox children point at
 

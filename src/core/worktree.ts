@@ -429,7 +429,7 @@ export async function worktreeStatus(wt: Worktree): Promise<Status> {
     if (await branchIsGone(wt.branch, wt.path)) {
       return { kind: StatusKind.Gone, label: "gone (squash-merged or deleted)" };
     }
-    if (await branchIsMerged(wt.branch, wt.path)) {
+    if (await branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path })) {
       return { kind: StatusKind.Merged, label: "merged into origin/main" };
     }
   }

@@ -161,7 +161,7 @@ export async function run(argv: string[]): Promise<number> {
     // so a landed worktree tears down without a spurious --force.
     const landed =
       !dirty && target.branch
-        ? (await branchIsMerged(target.branch, target.path)) ||
+        ? (await branchIsMerged({ slug: target.slug, branch: target.branch, path: target.path })) ||
           (await branchIsGone(target.branch, target.path))
         : false;
     const unpushed = dirty || landed ? 0 : await unpushedCommits(target.path);

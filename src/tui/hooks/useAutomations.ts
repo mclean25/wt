@@ -428,7 +428,13 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       }
       const r = await closeGithubIssue(issue);
       if (r.ok) {
-        wtLog.event.info(`auto ${rule.id}: closed issue #${issue}`);
+        // ATTENTION, not the firehose: this is the one builtin that
+        // writes to a system OUTSIDE wt, where wt's undo does not
+        // reach. Every other automation touches a worktree the human
+        // can see on the board; a closed GitHub issue is invisible here
+        // and stays closed until somebody notices. It earns a line the
+        // human actually reads, plus the toast that comes with it.
+        wtLog.attention.info(`auto ${rule.id}: closed issue #${issue}`);
       } else {
         // Deliberately non-fatal: repos whose PR bodies carry closing
         // keywords race us to it, and "already closed" (or any other

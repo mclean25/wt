@@ -194,7 +194,7 @@ async function checkGhMergeBase(wt: Worktree): Promise<Check> {
 
 async function checkMerged(wt: Worktree): Promise<Check> {
   if (!wt.branch) return mkCheck("merged", "info", "no branch");
-  if (await branchIsMerged(wt.branch, wt.path))
+  if (await branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path }))
     return mkCheck("merged", "info", "merged into origin/main");
   return mkCheck("merged", "ok", "not merged into origin/main");
 }

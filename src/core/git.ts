@@ -3,6 +3,7 @@ import { resolve as resolvePath } from "node:path";
 
 import { config } from "./config.ts";
 import { run, runOk, runQuiet } from "./proc.ts";
+import { readWtState } from "./wtstate.ts";
 
 export async function git(args: string[], cwd?: string): Promise<string> {
   return runOk(["git", ...args], { cwd: cwd ?? config.paths.mainClone });
@@ -248,7 +249,12 @@ export async function firstCommitSubject(
  * objects are reachable in the main clone via `origin/<branch>`; an
  * unpushed tip is unknown there, and unknown-to-origin means unmerged.
  */
-export async function branchIsMerged(branch: string, wtPath?: string): Promise<boolean> {
+export async function branchIsMerged(wt: {
+  slug: string;
+  branch: string;
+  path?: string;
+}): Promise<boolean> {
+  const { branch, path: wtPath } = wt;
   let branchSha: string;
   let mainSha: string;
   try {
@@ -273,5 +279,61 @@ export async function branchIsMerged(branch: string, wtPath?: string): Promise<b
   // (branch never got its own commits). Real merge-commit merges attach
   // the branch via a second parent.
   const fps = await mainFirstParentShas();
-  return !fps.has(branchSha);
+  if (fps.has(branchSha)) return false;
+  return !(await forkBaseIsVacuous(wt, branchSha));
+}
+
+/**
+ * VACUOUS CONTAINMENT: is this branch contained in trunk only because
+ * it has no commits of its own?
+ *
+ * "Every commit reachable from the branch is on trunk" is trivially
+ * true for a branch that added none, and that is evidence there is no
+ * work, not that the work landed. It bites exactly one population, and
+ * bites it hard: a freshly created STACKED worktree shares its parent's
+ * tip until its first commit, so the moment the parent merges by merge
+ * commit (which puts the parent's tip off trunk's first-parent chain,
+ * past the check above) every unstarted child reads as merged. That
+ * window is not an edge case — it is the normal state of a stack
+ * between `wt new` and the first commit.
+ *
+ * The cost of getting it wrong is asymmetric. Offering an empty
+ * worktree for cleanup loses nothing (there is no work in it), but the
+ * merged status also drives `close-issue-on-merge`, which closes a
+ * GitHub issue — off-machine, where wt's undo does not reach, and
+ * describing work that was never started.
+ *
+ * Measured against the recorded fork base (`baseSha` preferred: it is
+ * the exact commit the branch forked at, and it survives the parent
+ * branch being deleted because the object stays reachable from trunk).
+ * No record means an unstacked worktree, where an empty branch sits ON
+ * trunk's first-parent chain and the check above already caught it.
+ * An unresolvable base counts as vacuous: unable to prove work exists,
+ * the safe answer is "not started" — that leaves a row on the board,
+ * which is visible and cheap, rather than closing an issue.
+ */
+async function forkBaseIsVacuous(
+  wt: { slug: string; path?: string },
+  branchSha: string,
+): Promise<boolean> {
+  const rec = readWtState().slugs[wt.slug];
+  const base = rec?.baseSha ?? rec?.baseBranch;
+  if (!base) return false;
+  return branchIsEmptySince(base, branchSha, wt.path);
+}
+
+/**
+ * Has `branchSha` added nothing since `base`? Exported for the
+ * vacuous-containment guard's tests; see `forkBaseIsVacuous` for why
+ * an unresolvable base answers `true`.
+ */
+export async function branchIsEmptySince(
+  base: string,
+  branchSha: string,
+  cwd?: string,
+): Promise<boolean> {
+  if (base === branchSha) return true;
+  const r = await gitRun(["rev-list", "--count", `${base}..${branchSha}`], cwd);
+  if (r.exitCode !== 0) return true;
+  return Number(r.stdout.trim()) === 0;
 }
