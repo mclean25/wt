@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSyncExternalStore } from "react";
 
 import {
@@ -37,11 +37,22 @@ export function useActiveActions(): ReadonlySet<string> {
     actionRegistry.getSnapshot,
     actionRegistry.getSnapshot,
   );
+  // Identity-stabilized: the registry snapshot changes on every line a
+  // running action emits, but consumers (the memoized list pane, the
+  // section detail) only care about membership. Returning the previous
+  // Set when membership is unchanged keeps their memo/React.memo
+  // boundaries intact through an action's output stream.
+  const prevRef = useRef<ReadonlySet<string>>(new Set());
   return useMemo(() => {
     const out = new Set<string>();
     for (const [slug, run] of map) {
       if (run.status === "running") out.add(slug);
     }
+    const prev = prevRef.current;
+    if (prev.size === out.size && [...out].every((s) => prev.has(s))) {
+      return prev;
+    }
+    prevRef.current = out;
     return out;
   }, [map]);
 }

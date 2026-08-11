@@ -478,7 +478,14 @@ function remoteSectionKey(entry: RemoteListEntry): string {
   return `${REMOTE_SECTION_PREFIX}${entry.hostKey}`;
 }
 
-export function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, isLoading, remoteUnavailable, githubData, scrollHandle }: Props) {
+/**
+ * Memoized: every prop is identity-stable across unrelated App renders
+ * (the visual-item arrays come out of `useVisualItems` memos, the row
+ * cache keeps `WorktreeRow` references stable, `activeTails` /
+ * `activeActions` are identity-stabilized in their hooks), so fetch
+ * churn and tail appends elsewhere in the tree skip this whole pane.
+ */
+export const WorktreeList = memo(function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, isLoading, remoteUnavailable, githubData, scrollHandle }: Props) {
   const allRows = [
     ...items.flatMap((i) =>
       i.kind === "wt" ? [i.row] : i.kind === "section" ? i.rows : [],
@@ -809,4 +816,4 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
       )}
     </box>
   );
-}
+});

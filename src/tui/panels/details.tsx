@@ -559,7 +559,14 @@ function RemoteDetails({
   );
 }
 
-export function Details({
+/**
+ * Memoized: props are identity-stable across unrelated App renders
+ * (`row` via the useWorktreeRows cache, `section` via its hook memo,
+ * the rest primitives/refs), so background churn elsewhere doesn't
+ * re-render the pane. The 30s age tick below is internal state and
+ * unaffected by the memo boundary.
+ */
+export const Details = memo(function Details({
   row,
   reviewRequest,
   section,
@@ -639,4 +646,4 @@ export function Details({
       sessionState={sessionState}
     />
   );
-}
+});

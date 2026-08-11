@@ -1,10 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useIsFetching, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 
 import { createLogger } from "../core/logger.ts";
-import { config } from "../core/config.ts";
 import { perfSnapshotQuery, qk, remoteWorktreesQuery, useWtActions } from "../state/index.ts";
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
 import { remoteWorktreeLedgerKey } from "../core/worktree-ref.ts";
@@ -12,7 +11,7 @@ import { remoteWorktreeLedgerKey } from "../core/worktree-ref.ts";
 import { Details } from "./panels/details.tsx";
 import { Footer, type FooterMode } from "./panels/footer.tsx";
 import { OutputViewer } from "./panels/output-viewer.tsx";
-import { RefreshWave } from "./spinner.tsx";
+import { TitleBar } from "./panels/title-bar.tsx";
 import { WorktreeList, type ListScrollHandle } from "./panels/list.tsx";
 import { RemovedList } from "./panels/removed-list.tsx";
 import { usePrimaryHarness } from "./hooks/usePrimaryHarness.ts";
@@ -71,7 +70,6 @@ import { useErrorOverlayAutoPop } from "./hooks/useErrorOverlay.ts";
 import { usePrTargetChord } from "./hooks/usePrTargetChord.ts";
 import { useRemovedView } from "./hooks/useRemovedView.ts";
 import { useSessionsPickerData } from "./hooks/useSessionsPickerData.ts";
-import { PrimaryHarnessBadge, UsageBadge } from "./usage-badge.tsx";
 import { writeClipboard } from "../core/macos.ts";
 import { theme } from "./theme.ts";
 import { showToast } from "./toast.ts";
@@ -819,12 +817,6 @@ export function App({ onExit }: Props) {
     handleNormalKey(k, normalCtx);
   });
 
-  // Global in-flight count — covers the root queries and the imperative
-  // `fetchOriginQuery` call, not just the observed per-worktree fields.
-  // Using the per-row aggregate alone made the indicator flash briefly
-  // at the tail of a refresh (after `git fetch origin` resolved) instead
-  // of lighting up for the whole window.
-  const fetchingCount = useIsFetching();
   const remoteRows = remoteWorktreeList.data ?? [];
   const pendingRemoteCount =
     remoteCreation && !remoteRows.some((row) => row.slug === remoteCreation.input)
@@ -838,15 +830,6 @@ export function App({ onExit }: Props) {
     (remoteRows.length - remoteArchivedCount) +
     pendingRemoteCount;
   const archivedCount = rows.filter((r) => r.archived).length + remoteArchivedCount;
-  // The "refreshing" signal is the animated `RefreshWave` rendered after
-  // this string (width = in-flight count); the title itself stays static
-  // so it doesn't re-render on every count tick. `loading...` still wins
-  // during cold start — the wave is suppressed below while isLoading.
-  const titleBar = useMemo(() => {
-    const loadingNote = isLoading ? " · loading..." : "";
-    const archivedNote = archivedCount > 0 ? ` · ${archivedCount} archived` : "";
-    return ` wt · ${activeCount} worktree${activeCount === 1 ? "" : "s"}${archivedNote}${loadingNote} `;
-  }, [activeCount, archivedCount, isLoading]);
 
   const footerHint = useMemo(() => {
     const parts: string[] = [];
@@ -856,38 +839,19 @@ export function App({ onExit }: Props) {
 
   return (
     <box flexDirection="column" width={width} height={height} backgroundColor={theme.bg}>
-      <box
-        flexShrink={0}
-        flexDirection="row"
-        backgroundColor={theme.bgAlt}
-        paddingLeft={1}
-        paddingRight={1}
-        height={1}
-      >
-        <box flexGrow={1} flexShrink={1} overflow="hidden" flexDirection="row">
-          <text fg={theme.fgBright} attributes={1}>
-            {titleBar}
-          </text>
-          <RefreshWave count={isLoading ? 0 : fetchingCount} fg={theme.fgDim} />
-          {remoteUnavailable ? (
-            <text fg={theme.warn}>{` ⚠ ${config.remote?.label ?? "remote"} offline`}</text>
-          ) : null}
-        </box>
-        {automations.configured && automations.paused ? (
-          // Inverse chip, not plain warn text: while paused the whole
-          // automated leg of the escalation ladder is inert, which is a
-          // different tier of fact than the CPU/mem telemetry it sits
-          // next to — it must not blend into that cluster.
-          <text fg={theme.bg} bg={theme.warn} attributes={1}>
-            {" auto ⏸ "}
-          </text>
-        ) : automations.pendingCount > 0 ? (
-          <text fg={theme.fgDim}>{`auto ${automations.pendingCount} queued  `}</text>
-        ) : null}
-        {automations.configured && automations.paused ? <text>{"  "}</text> : null}
-        <UsageBadge primary={primaryHarness} />
-        <PrimaryHarnessBadge primary={primaryHarness} />
-      </box>
+      <TitleBar
+        isLoading={isLoading}
+        activeCount={activeCount}
+        archivedCount={archivedCount}
+        remoteUnavailable={remoteUnavailable}
+        automationsConfigured={automations.configured}
+        automationsPaused={automations.paused}
+        automationsPending={automations.pendingCount}
+        primaryHarness={primaryHarness}
+      />
+      {/* The in-flight fetch counter + refresh wave live INSIDE TitleBar
+          (see its header comment): useIsFetching re-renders per fetch
+          event, and at App level that re-rendered the whole tree. */}
       <box flexDirection="row" flexGrow={1}>
         {removedView ? (
           <RemovedList
