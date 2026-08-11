@@ -39,11 +39,13 @@ git clone https://github.com/micthiesen/wt.git ~/.wt
 cd ~/.wt && bun install
 ```
 
-Add to your shell rc:
+Then put the launcher on your `PATH` — a **symlink, not a shell alias**:
 
 ```sh
-alias wt='~/.wt/bin/wt'
+ln -s ~/.wt/bin/wt ~/.local/bin/wt   # any PATH dir you own
 ```
+
+An alias satisfies interactive use but doesn't exist inside a script file, so anything that scripts wt (an agent looping over worktrees, a cron job) fails with `wt: command not found` partway through. The launcher resolves symlinks to find its own source tree, so linking it anywhere works. `wt doctor` warns when `wt` isn't reachable this way, or resolves to a different clone.
 
 Updating is a fast-forward of that clone: `wt update` does it on demand, and the TUI offers it at startup when new commits have landed (once a day at most, declines remembered). Updates target the newest CI-green commit, boot-probe the result before keeping it, and `wt rollback` (offered automatically after a crash) steps back to the last version that worked — see [docs/updates.md](docs/updates.md). `wt version` prints the running git hash.
 

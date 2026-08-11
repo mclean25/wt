@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { config } from "../../core/config.ts";
@@ -256,6 +257,61 @@ async function checkSkillsFreshness(): Promise<Check> {
   }
 }
 
+/**
+ * Is `wt` reachable as a command, from a SCRIPT?
+ *
+ * A shell alias satisfies "I can type wt" while failing every
+ * non-interactive caller, because aliases don't exist in script files
+ * — and wt's own README used to recommend exactly that install. The
+ * failure is silent and scales badly: a loop over N worktrees in a .sh
+ * file dies with "wt: command not found" partway, leaving the fleet
+ * half-updated. It hits manager sessions hardest, since scripting wt
+ * across many worktrees IS the job, and it punishes the right instinct
+ * (writing a reviewable script instead of a long inline command).
+ *
+ * `PATH` is resolved manually rather than via `command -v`, because
+ * this process's own shell may have the alias and answer misleadingly.
+ */
+async function checkWtOnPath(): Promise<Check> {
+  const launcher = join(import.meta.dir, "..", "..", "..", "bin", "wt");
+  const dirs = (process.env.PATH ?? "").split(":").filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = join(dir, "wt");
+    try {
+      if (!existsSync(candidate)) continue;
+      // Follow the link: a `wt` on PATH belonging to some other install
+      // is worse than none, since scripts would silently drive it.
+      const real = realpathSync(candidate);
+      if (real === realpathSync(launcher)) {
+        return mkCheck("wt on PATH", "ok", candidate);
+      }
+      return mkCheck(
+        "wt on PATH",
+        "warn",
+        `${candidate} resolves to ${real}, not this clone's ${launcher}`,
+      );
+    } catch {
+      /* unreadable PATH entry — keep looking */
+    }
+  }
+  const target = dirs.find((d) => d === join(homedir(), ".local", "bin"))
+    ?? dirs.find((d) => d.startsWith(homedir()))
+    ?? join(homedir(), ".local", "bin");
+  // The message carries the fix because this check renders as a BANNER
+  // in the common (summary) path, and banners print one line — detail
+  // is only seen in the per-worktree report.
+  return mkCheck(
+    "wt on PATH",
+    "warn",
+    `not on PATH — scripts can't call \`wt\`; fix: ln -s ${launcher} ${join(target, "wt")}`,
+    [
+      "a shell alias satisfies interactive use but does not exist inside a",
+      "script file, so a .sh looping over worktrees dies partway with",
+      "`wt: command not found` and leaves the fleet half-updated.",
+    ],
+  );
+}
+
 async function checkMainClone(): Promise<Check> {
   const main = config.paths.mainClone;
   const base = config.branch.base;
@@ -319,9 +375,10 @@ function renderBanner(c: Check): void {
 }
 
 async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
-  const [mainBanner, skillsBanner, checks] = await Promise.all([
+  const [mainBanner, skillsBanner, pathBanner, checks] = await Promise.all([
     jsonOut ? Promise.resolve(null) : checkMainClone(),
     jsonOut ? Promise.resolve(null) : checkSkillsFreshness(),
+    jsonOut ? Promise.resolve(null) : checkWtOnPath(),
     runAllChecks(wt, true),
   ]);
   if (jsonOut) {
@@ -330,6 +387,7 @@ async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
   }
   if (mainBanner) renderBanner(mainBanner);
   if (skillsBanner) renderBanner(skillsBanner);
+  if (pathBanner) renderBanner(pathBanner);
   console.log(`${bold("doctor")} · ${cyan(wt.slug)} ${dim(wt.branch)}`);
   for (const c of checks) {
     console.log(`  ${MARKERS[c.status]}  ${bold(c.name.padEnd(14))} ${c.message}`);
@@ -344,10 +402,11 @@ async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
 
 async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
   const skipPrs = jsonOut;
-  const [prs, mainCheck, skillsCheck, allChecks] = await Promise.all([
+  const [prs, mainCheck, skillsCheck, pathCheck, allChecks] = await Promise.all([
     skipPrs ? Promise.resolve(new Map()) : fetchPrs(),
     jsonOut ? Promise.resolve(null) : checkMainClone(),
     jsonOut ? Promise.resolve(null) : checkSkillsFreshness(),
+    jsonOut ? Promise.resolve(null) : checkWtOnPath(),
     Promise.all(wts.map((w) => runAllChecks(w, false))),
   ]);
   if (jsonOut) {
@@ -357,6 +416,7 @@ async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
   }
   if (mainCheck) renderBanner(mainCheck);
   if (skillsCheck) renderBanner(skillsCheck);
+  if (pathCheck) renderBanner(pathCheck);
 
   type Row = { wt: Worktree; checks: Check[] };
   const rows: Row[] = wts.map((wt, i) => ({ wt, checks: allChecks[i]! }));

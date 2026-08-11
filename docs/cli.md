@@ -69,7 +69,7 @@ Remove every worktree that is merged or whose remote branch is gone. "Gone" is o
 
 ### `wt doctor [<slug>]`
 
-Health report: working tree, sync vs trunk, SST stage pin + deploy state, node_modules, locks, `gh-merge-base` branch config (must match the recorded fork base / trunk, or a bare `gh pr create` targets the repo default branch — see `wt new`), merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, and pending agent-skill updates (`wt skills`).
+Health report: working tree, sync vs trunk, SST stage pin + deploy state, node_modules, locks, `gh-merge-base` branch config (must match the recorded fork base / trunk, or a bare `gh pr create` targets the repo default branch — see `wt new`), merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, pending agent-skill updates (`wt skills`), and **`wt` not being reachable on `PATH`** — a shell alias satisfies interactive use but doesn't exist inside a script file, so anything that scripts wt (an agent looping over worktrees) dies partway with `wt: command not found` and leaves the fleet half-updated. The check resolves `PATH` itself rather than shelling out, since this process's own shell may carry the alias and answer misleadingly; it also warns when a `wt` on `PATH` resolves to a *different* clone, which is worse than none.
 
 - `--all` / `-a` — force the full summary table.
 - `--json` — machine-readable.
