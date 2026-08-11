@@ -43,13 +43,27 @@ const VOCAB = `states (unique prefixes + nh/nt work):
   ${bold("needs-testing")}  built; manual verification pending — YOU own that testing
                  (dev env + browser), it is not a request for a human
   ${bold("needs-human")}    blocked on the human; ${bold("-m")} required: say exactly what you need
-  ${bold("ready")}          tested & safe to merge; requires ${bold("--risk low|medium|high")}.
-                 medium/high require ${bold("-m")} naming the notable impacts (end
-                 users, coworker workflows, costs). High-value only — no noise.
+  ${bold("ready")}          tested & safe to merge; requires ${bold("--risk low|medium|high")}
+
+${bold("risk")} = how confident you are AFTER testing — NOT how big or scary the
+change is. The human can already see the diff on the PR; your confidence
+is the one thing they can't. Judge it by what you verified, not by what
+you touched:
+  ${bold("low")}     verified in a real environment, or pure logic with tests that
+          fail against the old code. A mistake would be obvious and cheap
+          to undo. (A migration you ran end to end on dev belongs here.)
+  ${bold("medium")}  correct by construction and unit-tested, but never exercised
+          for real. Or plainly revertable but broad.
+  ${bold("high")}    something material is unverified AND backing it out is not a
+          plain revert.
+A one-line frontend change nobody opened a browser for is not low.
+medium/high require ${bold("-m")} saying what's unverified and what it would cost.
 
 set:   wt status [<slug>] <state> [-m "note"] [--risk low|medium|high]
 show:  wt status [<slug>] [--all [--json]]     clear: wt status --clear [<slug>]
-note:  wt status [<slug>] --note-only "..."    amend the note; state + timestamp kept`;
+amend: wt status [<slug>] --risk <r> [-m "..."]  re-judge risk as testing lands
+       wt status [<slug>] --note-only "..."      amend the note alone
+       (both keep the state and timestamp — no need to restate anything)`;
 
 const HINTS_OFF = process.env.WT_NO_HINTS === "1";
 
@@ -126,7 +140,19 @@ export type StatusArgs =
   | { kind: "all"; json: boolean }
   | { kind: "show"; slugArg: string | null }
   | { kind: "clear"; slugArg: string | null }
-  | { kind: "note"; slugArg: string | null; note: string }
+  /**
+   * Amend an EXISTING record in place — risk, note, or both — keeping
+   * its state, timestamp and sha. Risk is a confidence call that
+   * legitimately changes as testing lands, and making an agent restate
+   * the whole assertion to move it is what produces walls of appended
+   * note text.
+   */
+  | {
+      kind: "amend";
+      slugArg: string | null;
+      note: string | null;
+      risk: WorkRisk | null;
+    }
   | {
       kind: "set";
       slugArg: string | null;
@@ -204,7 +230,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     }
     const sanitized = sanitizeWorkNote(noteOnly);
     if (sanitized === "") return err("--note-only requires a non-empty note");
-    return { kind: "note", slugArg: positionals[0] ?? null, note: sanitized };
+    return { kind: "amend", slugArg: positionals[0] ?? null, note: sanitized, risk: null };
   }
 
   if (all) {
@@ -261,8 +287,15 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   }
 
   if (stateArg === null) {
-    if (riskRaw !== null || note !== null) {
-      return err("-m/--risk only apply when setting a state");
+    // `--risk` with no state RE-JUDGES an existing record rather than
+    // erroring: confidence is supposed to move as testing lands, and the
+    // only alternative — re-asserting `ready` in full — fakes a fresh
+    // assertion and forces the note to be restated.
+    if (risk) return { kind: "amend", slugArg, note, risk };
+    if (note !== null) {
+      return err(
+        "-m needs a state to set — to amend an existing note use --note-only",
+      );
     }
     return { kind: "show", slugArg };
   }
@@ -275,16 +308,19 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     return err(`--risk only applies to ready (got ${state})`);
   }
   if (state === "ready" && !risk) {
-    return err("ready requires --risk low|medium|high — how risky is merging this?", [
-      "judge broadly: end users, coworker workflows/dev tooling, costs, migrations.",
-      `medium/high also require ${bold("-m")} naming the notable impacts. No noise: if`,
-      `nothing is notable, that's ${bold("--risk low")} with no note.`,
+    return err("ready requires --risk low|medium|high — how confident are you in it?", [
+      "risk is your residual uncertainty AFTER testing, not the size of the diff:",
+      `${bold("low")} = verified in a real environment (or logic with tests that fail`,
+      `against the old code) · ${bold("medium")} = unit-tested but never exercised for real`,
+      `· ${bold("high")} = something material is unverified AND it isn't a plain revert.`,
+      `medium/high also require ${bold("-m")} saying what's unverified.`,
     ]);
   }
   if (state === "ready" && risk !== "low" && !note) {
-    return err(`ready --risk ${risk} requires -m: what should the human know before merging?`, [
-      "high-value only — end-user impact, coworker disruption, cost, irreversibility",
-      `(e.g. "calendar integrations may need a resync", "not reasonably testable").`,
+    return err(`ready --risk ${risk} requires -m: what's unverified, and what would it cost?`, [
+      `e.g. "migration applied on dev but the backfill path was never run", or`,
+      `"not reasonably testable outside prod". If everything material IS verified,`,
+      `the honest answer is ${bold("--risk low")} — don't hedge a tested change to medium.`,
     ]);
   }
   if (state === "needs-human" && !note) {
@@ -417,28 +453,53 @@ export async function run(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (args.kind === "note") {
+  if (args.kind === "amend") {
     const prev = state.slugs[target.slug]?.work;
     if (!prev) {
       console.error(
         red(
-          `${target.slug} has no status asserted — --note-only amends an existing record; set a state first`,
+          `${target.slug} has no status asserted — amending edits an existing record; set a state first`,
         ),
       );
       return 2;
     }
-    // Spread keeps state/risk/at/sha byte-identical: the record still
-    // describes the same assertion, just with a better note — so no
-    // timestamp bump, no re-narration of an unchanged state.
-    setSlugWorkStatus(target.slug, { ...prev, note: args.note });
+    if (args.risk && prev.state !== "ready") {
+      console.error(
+        red(`--risk only applies to ready (${target.slug} is ${prev.state})`),
+      );
+      hint([
+        `assert the state and the risk together: ${bold(`wt status ready --risk <r>`)}`,
+      ]);
+      return 2;
+    }
+    const note = args.note ?? prev.note ?? null;
+    // Same rule as asserting: a non-low risk without a note is an
+    // unexplained hedge. An existing note satisfies it.
+    if (args.risk && args.risk !== "low" && !note) {
+      console.error(
+        red(`--risk ${args.risk} requires -m: what's unverified, and what would it cost?`),
+      );
+      return 2;
+    }
+    // Spread keeps state/at/sha byte-identical: the record still
+    // describes the same assertion, just better judged — so no timestamp
+    // bump, no re-narration of an unchanged state.
+    const next: WorkStatusRecord = { ...prev };
+    if (args.risk) next.risk = args.risk;
+    if (args.note) next.note = args.note;
+    setSlugWorkStatus(target.slug, next);
+    const what =
+      args.risk && args.note ? "risk + note" : args.risk ? "risk" : "note";
     createLogger(target.slug).info(
-      `work status note amended${workStatusSuffix({ note: args.note })}`,
+      `work status ${what} amended${workStatusSuffix(next)}`,
     );
     const color = stateColor(prev.state);
     console.log(
-      `${green("✓")} ${cyan(target.slug)} ${color(prev.state)}  ${dim("note amended (state + timestamp kept)")}`,
+      `${green("✓")} ${cyan(target.slug)} ${color(prev.state)}${
+        next.risk ? `  ${dim("risk:")} ${color(next.risk)}` : ""
+      }  ${dim(`${what} amended (state + timestamp kept)`)}`,
     );
-    console.log(`  ${dim("note:")} ${args.note}`);
+    if (next.note) console.log(`  ${dim("note:")} ${next.note}`);
     return 0;
   }
 

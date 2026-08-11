@@ -31,11 +31,21 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   not configured` means the project has none — then start the dev
   server however the project documents.
 - **Never end a session without a clear status.** Finished means
-  `wt status ready --risk low|medium|high [-m ...]`, risk judged broadly (end
-  users, coworker workflows, costs, migrations, reversibility). The note
-  carries ONLY notable merge impacts the human should know — no noise;
-  nothing notable is `--risk low` with no note. The human merges PRs; never
-  merge one yourself.
+  `wt status ready --risk low|medium|high [-m ...]`. **Risk is your
+  confidence AFTER testing, not the size or category of the change** —
+  the human can already see the diff on the PR; what you verified is the
+  part only you know. `low` = verified in a real environment, or pure
+  logic with tests that fail against the old code (a migration you ran
+  end to end on dev belongs here); `medium` = correct by construction and
+  unit-tested but never exercised for real, or plainly revertable but
+  broad; `high` = something material is unverified AND backing it out
+  isn't a plain revert. A one-line frontend change nobody opened a
+  browser for is not low. Re-judge as testing lands —
+  `wt status --risk <r>` amends risk alone, keeping the state, timestamp
+  and note, so there's never a reason to append to a note instead of
+  fixing it. The note carries ONLY what the human needs before merging
+  (what's unverified, notable impacts) — no noise. The human merges PRs;
+  never merge one yourself.
 - Fleet-level questions (merge order, cross-branch conflicts, who owns a
   shared change) go to the manager session. **Prefer your harness's
   peer-messaging tool when it lists the manager as a peer** (it's

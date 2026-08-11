@@ -33,9 +33,8 @@ import type { DerivedState } from "./harness/status.ts";
  *                      means "the human must act". Note required.
  *  - `ready`         — tested as far as reasonable; safe to merge.
  *                      Carries a merge `risk` and, when notable, a
- *                      high-value impacts note (end users, coworker
- *                      workflows, costs). The human merges — never
- *                      the agent.
+ *                      note saying what the human should know before
+ *                      merging. The human merges — never the agent.
  *
  * There is no asserted `done`: merged/gone is derived from git and
  * outranks anything asserted.
@@ -51,6 +50,29 @@ export const WORK_STATES = [
 
 export type WorkState = (typeof WORK_STATES)[number];
 
+/**
+ * Merge risk on a `ready` record — deliberately a measure of the
+ * asserter's residual UNCERTAINTY after testing, not of the change's
+ * blast radius. Blast radius is visible on the PR; confidence is the
+ * one thing only the person (or agent) who did the work knows, and it's
+ * what the human sorts by when deciding what to merge without reading
+ * the code. Read as blast radius the field collapses — a fleet where
+ * every migration is `medium` and every frontend tweak is `low` carries
+ * no signal, and it inverts the true calls in both directions (a
+ * migration verified end to end on dev really is low; an untested
+ * one-liner really isn't).
+ *
+ *  - `low`    — verified in a real environment, or pure logic with
+ *               tests that fail against the old code. A mistake would
+ *               be obvious and cheap to undo.
+ *  - `medium` — correct by construction and unit-tested, but never
+ *               exercised for real. Or plainly revertable but broad.
+ *  - `high`   — something material is unverified AND backing it out is
+ *               not a plain revert.
+ *
+ * It follows that risk is re-judged as testing lands, which is why
+ * `wt status --risk <r>` amends it without restating the assertion.
+ */
 export const WORK_RISKS = ["low", "medium", "high"] as const;
 export type WorkRisk = (typeof WORK_RISKS)[number];
 

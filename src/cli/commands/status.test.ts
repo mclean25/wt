@@ -111,8 +111,49 @@ describe("parseStatusArgs", () => {
     });
   });
 
-  test("-m / --risk without a state to set is an error", () => {
-    expect(parseStatusArgs(["-m", "note only"])).toMatchObject({ kind: "error" });
+  test("-m without a state points at --note-only instead of guessing", () => {
+    const r = parseStatusArgs(["-m", "note only"]);
+    expect(r).toMatchObject({ kind: "error" });
+    expect((r as { message: string }).message).toContain("--note-only");
+  });
+
+  test("--risk without a state amends an existing record", () => {
+    // Risk is a confidence call that moves as testing lands; re-asserting
+    // `ready` in full to change it fakes a fresh assertion and forces the
+    // note to be restated.
+    expect(parseStatusArgs(["--risk", "low"])).toEqual({
+      kind: "amend",
+      slugArg: null,
+      note: null,
+      risk: "low",
+    });
+    expect(parseStatusArgs(["some-slug", "--risk", "hi"])).toEqual({
+      kind: "amend",
+      slugArg: "some-slug",
+      note: null,
+      risk: "high",
+    });
+    expect(parseStatusArgs(["--risk", "medium", "-m", "backfill never ran"])).toEqual({
+      kind: "amend",
+      slugArg: null,
+      note: "backfill never ran",
+      risk: "medium",
+    });
+  });
+
+  test("--note-only amends the note alone", () => {
+    expect(parseStatusArgs(["--note-only", "sharper ask"])).toEqual({
+      kind: "amend",
+      slugArg: null,
+      note: "sharper ask",
+      risk: null,
+    });
+    expect(parseStatusArgs(["--note-only", "x", "--risk", "low"])).toMatchObject({
+      kind: "error",
+    });
+    expect(parseStatusArgs(["--note-only", "x", "ready"])).toMatchObject({
+      kind: "error",
+    });
   });
 
   test("help and unknown flags", () => {

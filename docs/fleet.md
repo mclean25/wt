@@ -36,7 +36,7 @@ None of that was visible without opening each session and reading scrollback. Ag
 | pain | response |
 |---|---|
 | can't see fleet state | the **work-status dot** (leftmost glyph) + the **status-first sort** inside each section — `wt status` / `u`, `[ui] sort` |
-| "done" can't be trusted | statuses are made **trustworthy by construction**: `ready` requires a merge-risk level, medium/high risk require a notable-impacts note, `needs-human` requires saying exactly what's needed. The CLI refuses anything less |
+| "done" can't be trusted | statuses are made **trustworthy by construction**: `ready` requires a merge-risk level, medium/high risk require a note saying what's unverified, `needs-human` requires saying exactly what's needed. The CLI refuses anything less. Risk means the asserter's **confidence after testing**, never the diff's blast radius — the diff is already visible, so a risk field that restates it is redundant with the PR and carries no signal |
 | agents end without a verdict | the **ownership conventions** (the wt-managed instructions block + the bundled skills): never end a task without an asserted status |
 | agent config drifts per machine/teammate | wt **distributes its own skills + instructions** ([skills.md](skills.md)): startup y/n updates, rulesync/symlink-aware installs, so nobody hand-maintains agent setup |
 | agents punt testing to the human | agents **own manual testing** — dev env + browser themselves; `needs-testing` means "I still have to verify", never "please test this for me" |
@@ -62,7 +62,7 @@ The current contract. These are deliberate, not accidental — expanding one (sa
 **Worktree agents** own their task end-to-end:
 
 - Implement, self-review, and **run the manual/browser testing themselves** (dev env, browser-control). Asking the human to test is a failure mode, not a hand-off. Long-lived processes go through wt (`wt dev`) so the fleet can see, supervise, and reap them.
-- Assert every lifecycle transition (`wt status`), and never end a session without a clear one. Finishing means `ready --risk <r>` with only *notable* impacts in the note (end users, coworker workflows, cost, irreversibility) — or an honest `needs-testing`/`needs-human`.
+- Assert every lifecycle transition (`wt status`), and never end a session without a clear one. Finishing means `ready --risk <r>` — risk judged on what they verified, not on what they touched — with only what the human needs before merging in the note, or an honest `needs-testing`/`needs-human`. Re-judging risk as testing lands is expected (`wt status --risk <r>` amends it alone).
 - Escalate `needs-human` **only** for genuine blockers: auth that needs a person present, judgment calls, human-only checks. Keep working on whatever isn't blocked while waiting. The *same* blocker a second time is a setup defect, not a human dependency — papercut it (below) rather than parking the branch again.
 - Ask fleet-level questions of the manager (`wt manager send`), not the human — and send papercuts the same way (`"papercut: ..."`, fire and forget). A rough edge in the shared tooling is an observation worth capturing, not a reason to stall the branch in `needs-human`; the manager batches them to whoever can fix the tool.
 - **Never merge a PR.** Never update the external issue tracker's status.
