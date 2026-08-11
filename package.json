@@ -17,8 +17,8 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@opentui/core": "^0.1.102",
-    "@opentui/react": "^0.1.102",
+    "@opentui/core": "0.5.1",
+    "@opentui/react": "0.5.1",
     "@tanstack/query-persist-client-core": "^5.99.2",
     "@tanstack/react-query": "^5.99.2",
     "react": "^19.2.5",
