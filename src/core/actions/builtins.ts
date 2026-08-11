@@ -330,8 +330,15 @@ export const MANAGER_BUILTIN_ACTIONS: readonly ActionDef[] = [
     // state, and make the FIRST post-compact action re-running /manager
     // so the playbook (and its opt-in briefs) survives every compaction
     // explicitly instead of decaying into the summary.
+    //
+    // The date leads, and the carry-forward instruction is the
+    // load-bearing half: a date that appears only in this prompt gets
+    // summarized away, and the manager then reasons from its training
+    // cutoff (observed: recommending a hold "to Monday" on a Tuesday).
+    // `{{today}}` re-resolves on every dispatch, so each compaction
+    // re-stamps rather than aging inside the previous summary.
     prompt:
-      "/compact Preserve: current fleet state (per-slug statuses, in-flight nudges, pending merge order, unresolved escalations) and any standing briefs from the config. You are the wt manager session; immediately after this compaction, re-run /manager to reload your playbook before doing anything else.",
+      "/compact Today is {{today}}. State that date verbatim in the summary you produce — a compaction summary is otherwise undated, and everything after it reasons from a stale one. Preserve: current fleet state (per-slug statuses, in-flight nudges, pending merge order, unresolved escalations) and any standing briefs from the config. You are the wt manager session; immediately after this compaction, re-run /manager to reload your playbook before doing anything else.",
     target: "manager",
     affects: [],
     requires: [],
@@ -378,7 +385,10 @@ export const SLOT_BUILTIN_ACTIONS: readonly ActionDef[] = [
     kind: "claude",
     id: "slot-compact",
     name: "Compact context",
-    prompt: "/compact",
+    // Same date anchor as the manager's compact, minus the fleet
+    // preservation list — a slot session has no fleet role.
+    prompt:
+      "/compact Today is {{today}}. State that date verbatim in the summary you produce, so nothing after this compaction has to guess it.",
     target: "slot",
     affects: [],
     requires: [],

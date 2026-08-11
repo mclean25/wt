@@ -398,9 +398,10 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
    * true` builtins and free-text messages, addressed to a session slot
    * (the `M` manager palette and the `<` / `>` / `\` slot palettes).
    * Unlike the row path above there is no subject worktree: no row
-   * gates, no template vars (palette prompts are static; rendering
-   * free text through `applyVars` could eat literal `{{…}}` the user
-   * typed), and no `[re: <slug>]` prefix. Same fire-and-forget inject
+   * gates and no `[re: <slug>]` prefix. The builtin's own prompt still
+   * renders through `applyVars` for the row-less vars (`{{today}}`);
+   * the user's free text deliberately does NOT, since rendering it
+   * would eat literal `{{…}}` they typed. Same fire-and-forget inject
    * + logging contract otherwise.
    */
   async function launchSlotCommand(
@@ -415,7 +416,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       return { launched: false, reason: `unknown slot ${slotSlug}` };
     }
     const trimmedExtras = extras.trim();
-    const prompt = def && def.kind === "claude" ? def.prompt : "";
+    const prompt = def && def.kind === "claude" ? applyVars(def.prompt, {}) : "";
     const body = trimmedExtras
       ? prompt
         ? `${prompt}\n\n${trimmedExtras}`
