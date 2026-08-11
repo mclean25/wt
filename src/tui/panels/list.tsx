@@ -33,7 +33,7 @@ import type { HarnessId } from "../../core/harness/index.ts";
 import type { DerivedState } from "../../core/harness/status.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import { capitalizeFirst, slugLabel } from "../../core/stage.ts";
-import { STACK_CONNECTOR, stackOrdinalLabel } from "../../core/stack-layout.ts";
+import { STACK_CONNECTOR } from "../../core/stack-layout.ts";
 import { StatusKind, type Status } from "../../core/types.ts";
 import type { GithubData } from "../../state/queries/github.ts";
 import type { ActiveSessionGlyph } from "../hooks/useHarnessSessions.ts";
@@ -168,39 +168,57 @@ function StatusMarker({
 }
 
 /**
- * Left gutter for a stacked row, repurposing the status-marker slot: a
- * 1-cell tree connector (structural, dim) followed by the 2-cell stack
- * ordinal colored by the member's loud git status when present, else
- * its work status (so blocked/ready members still read at a glance
- * without a separate dot).
+ * Stack connector gutter — a structural rail drawn to the LEFT of the
+ * status dot, never in place of it.
+ *
+ * It used to REPLACE the dot with a connector + `01`/`02` ordinal,
+ * which cost stacked rows the one glyph the board is scanned by: two
+ * worktrees could both be ready/high and blocked on a human and render
+ * with no status indicator at all, purely because they were stack
+ * parents. Stacked work was invisible to the primary scanning
+ * behaviour.
+ *
+ * The ordinals are gone too, and that's a correctness fix rather than a
+ * preference: `01/02/03` asserts a linear chain, but a fork's children
+ * are SIBLINGS off one parent with no order between them. Numbering
+ * them claims a merge order that doesn't exist, and a reader who trusts
+ * it can sequence dependent work backwards. Depth expresses fan vs
+ * chain for free and can't lie: siblings share a column, a chain steps
+ * right. If ordinals are ever wanted, derive them from merge EDGES,
+ * which actually encode order — stack position never did.
+ *
+ * `cells` is the gutter width the whole list shares (see
+ * `stackGutterCells`), so the dot column stays straight across stacked
+ * and unstacked rows and the eye still runs down it. The connector sits
+ * at `depth - 1`; a root (depth 0) draws none.
  */
-function StackGutter({
-  row,
-  sessionState,
-}: {
-  row: WorktreeRow;
-  sessionState: DerivedState | undefined;
-}) {
-  const info = row.stack!;
-  const ordFg = row.archived
-    ? theme.fgDim
-    : statusKeepsGutter(row.status.kind)
-      ? statusBadge(row.status).fg
-      : workStatusBadge(row.work, sessionState, rowWorkStale(row)).fg;
-  const ord = stackOrdinalLabel(info.ordinal);
+function StackConnector({ row, cells }: { row: WorktreeRow; cells: number }) {
+  if (cells === 0) return null;
+  const info = row.stack;
+  const col = info ? Math.min(info.depth - 1, cells - 1) : -1;
   return (
     <box flexShrink={0} flexDirection="row">
-      <box width={1} flexShrink={0}>
-        <text fg={laneColor(info.lane)}>{STACK_CONNECTOR[info.pos]}</text>
-      </box>
-      <box width={2} flexShrink={0}>
-        <text fg={ordFg}>{ord}</text>
-      </box>
-      <box width={1} flexShrink={0}>
-        <text> </text>
-      </box>
+      {Array.from({ length: cells }, (_, i) => (
+        <box key={i} width={1} flexShrink={0}>
+          <text fg={info ? laneColor(info.lane) : theme.fgDim}>
+            {info && i === col ? STACK_CONNECTOR[info.pos] : " "}
+          </text>
+        </box>
+      ))}
     </box>
   );
+}
+
+/**
+ * Width of the shared stack gutter: enough columns for the deepest
+ * visible stack, capped so a pathological chain can't eat the label
+ * column, and ZERO when nothing on screen is stacked — a board with no
+ * stacks pays nothing for the feature.
+ */
+export function stackGutterCells(rows: readonly WorktreeRow[]): number {
+  let max = 0;
+  for (const r of rows) if (r.stack) max = Math.max(max, r.stack.depth);
+  return Math.min(max, 3);
 }
 
 /**
@@ -231,6 +249,7 @@ const RowView = memo(function RowView({
   activeHarnessId,
   sessionState,
   panelWidth,
+  gutterCells,
 }: {
   row: WorktreeRow;
   selected: boolean;
@@ -246,6 +265,7 @@ const RowView = memo(function RowView({
    *  otherwise the glyph falls back to the harness brand color. */
   sessionState: DerivedState | undefined;
   panelWidth: number;
+  gutterCells: number;
 }) {
   const bg = selected ? theme.rowSelectedBg : undefined;
   // Archived rows render dim (unless selected, where we still want
@@ -272,24 +292,19 @@ const RowView = memo(function RowView({
       paddingLeft={1}
       paddingRight={1}
     >
-      {row.stack ? (
-        // Stack rows repurpose the marker slot for the tree gutter
-        // (connector + ordinal). 4 cells wide (1 + 2 + gap), so the
-        // label budget below accounts for one extra cell of indent.
-        <StackGutter row={row} sessionState={sessionState} />
-      ) : (
-        <box flexShrink={0} flexDirection="row">
-          {/* Mirror the right-cluster pattern: width=2 box for the icon,
-              then a width=1 box for the gap. Same shape that produces
-              tight left-aligned icons over there. */}
-          <box width={2} flexShrink={0}>
-            <StatusMarker row={row} sessionState={sessionState} />
-          </box>
-          <box width={1} flexShrink={0}>
-            <text> </text>
-          </box>
+      <StackConnector row={row} cells={gutterCells} />
+      <box flexShrink={0} flexDirection="row">
+        {/* Mirror the right-cluster pattern: width=2 box for the icon,
+            then a width=1 box for the gap. Same shape that produces
+            tight left-aligned icons over there. Every row gets this,
+            stacked or not, so the dot column never has holes. */}
+        <box width={2} flexShrink={0}>
+          <StatusMarker row={row} sessionState={sessionState} />
         </box>
-      )}
+        <box width={1} flexShrink={0}>
+          <text> </text>
+        </box>
+      </box>
       <box flexGrow={1} flexShrink={1} overflow="hidden">
         {/* Truncation lives in JS, not opentui's native `truncate`,
             because the native path middle-clips with `…`. We want the
@@ -298,7 +313,7 @@ const RowView = memo(function RowView({
             width − borders(2) − row padding(2) − scrollbar gutter(1) −
             left gutter (3 normal, 4 for a stack row) − badge cluster. */}
         <text fg={slugFg} attributes={slugAttrs} wrapMode="none">
-          {truncateEnd(rowLabel(row), Math.max(0, panelWidth - (row.stack ? 9 : 8) - badgeClusterCells(row, actionRunning, activeHarnessId)))}
+          {truncateEnd(rowLabel(row), Math.max(0, panelWidth - 8 - gutterCells - badgeClusterCells(row, actionRunning, activeHarnessId)))}
         </text>
       </box>
       {/* Shared with the folded section/stack summaries in the details
@@ -503,6 +518,15 @@ function remoteSectionKey(entry: RemoteListEntry): string {
 }
 
 export function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, stackSectionLabels, isLoading, remoteUnavailable, githubData, scrollHandle }: Props) {
+  // One gutter width for the whole list so the status-dot column is
+  // straight across stacked and unstacked rows alike. Zero when nothing
+  // visible is stacked.
+  const gutterCells = stackGutterCells([
+    ...items.flatMap((i) =>
+      i.kind === "wt" ? [i.row] : i.kind === "section" ? i.rows : [],
+    ),
+    ...archivedItems.flatMap((i) => (i.kind === "wt" ? [i.row] : [])),
+  ]);
   const hasArchived = archivedItems.length > 0;
   const hasReviewRequests = reviewRequests.length > 0;
   const hasActive = items.length > 0;
@@ -700,6 +724,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                   </>
                 ) : null}
                 <RowView
+                  gutterCells={gutterCells}
                   row={row}
                   selected={i === selectedIndex}
                   isTailing={activeTails.has(row.wt.slug)}
@@ -769,6 +794,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                 const row = item.row;
                 return (
                   <RowView
+                    gutterCells={gutterCells}
                     key={row.wt.slug}
                     row={row}
                     selected={globalIndex === selectedIndex}
