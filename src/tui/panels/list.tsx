@@ -246,21 +246,43 @@ export function stackGutterCells(rows: readonly WorktreeRow[]): number {
  */
 export function rowLabel(row: WorktreeRow): string {
   const text = capitalizeFirst(row.brief ?? row.title);
-  // Inside a stack section the issue ID is on the section header, so the
-  // row drops the redundant `<id>: ` prefix and shows just the member.
-  if (row.stack) return text;
+  // Stacked rows used to drop the `<id>: ` prefix because a stack
+  // section header carried the ID. Stacks render inside the human's
+  // sections now and there is no such header, so dropping it just cost
+  // those rows their identifier.
   const { id } = slugLabel(row.wt.slug);
   const numId = id ? id.replace(/^[A-Z]+-/, "") : null;
   return numId ? `${numId}: ${text}` : text;
 }
 
-/** Longest parent name a split-stack reference will show. */
-const PARENT_REF_CELLS = 16;
 /**
- * Cells the row's own label must keep before a parent reference earns
+ * A split-stack reference names the parent's SECTION, not the parent
+ * row. The reference exists so a member whose rail is missing can still
+ * be followed, and "somewhere else" is only followable if it says
+ * where: the parent's title pointed at a row that is off-screen by
+ * definition (that's what makes the stack split) and, when the parent's
+ * section is folded, isn't rendered anywhere at all. A section name is
+ * a destination — it matches a divider on screen, or a header the user
+ * can unfold. Which parent is a details-pane question (the `base` row),
+ * and the two never fit together anyway: the list pane is ~50 cells at
+ * any terminal width, so a title-plus-section reference would be
+ * dropped on every board that has one.
+ */
+const SECTION_REF_CELLS = 20;
+/** Leader for the reference; counted against the row's width budget. */
+const REF_ARROW = " → ";
+/** What the inbox is called on screen — divider and reference alike. */
+const INBOX_LABEL = "Inbox";
+/** Below this the reference is more mystery than signal — drop it. */
+const SECTION_REF_MIN = 10;
+/**
+ * Cells the row's own label must keep before a section reference earns
  * its space. Tuned so a narrow pane drops the reference rather than
  * truncating two siblings of one parent to the same prefix — identity
- * beats relationship when there isn't room for both.
+ * beats relationship when there isn't room for both. The reference
+ * shrinks into whatever sits above this line rather than vanishing at a
+ * cliff, so a row that gains one badge loses a character instead of the
+ * whole pointer.
  */
 const MIN_LABEL_CELLS = 24;
 
@@ -273,7 +295,7 @@ const RowView = memo(function RowView({
   sessionState,
   panelWidth,
   gutterCells,
-  splitParent,
+  splitParentSection,
 }: {
   row: WorktreeRow;
   selected: boolean;
@@ -290,8 +312,8 @@ const RowView = memo(function RowView({
   sessionState: DerivedState | undefined;
   panelWidth: number;
   gutterCells: number;
-  /** Parent's label when it lives in another section; null otherwise. */
-  splitParent: string | null;
+  /** Parent's SECTION when it lives in another one; null otherwise. */
+  splitParentSection: string | null;
 }) {
   const bg = selected ? theme.rowSelectedBg : undefined;
   // Archived rows render dim (unless selected, where we still want
@@ -310,7 +332,7 @@ const RowView = memo(function RowView({
   const slugAttrs =
     (selected ? TextAttributes.BOLD : 0) |
     (isTailing ? TextAttributes.ITALIC : 0);
-  // The row's OWN name wins the space. A parent reference is only
+  // The row's OWN name wins the space. A section reference is only
   // worth showing if what's left still identifies this row — two
   // siblings of one parent truncated to "Product a..." are exactly the
   // indistinguishable pair the reference was meant to disambiguate.
@@ -318,9 +340,11 @@ const RowView = memo(function RowView({
     0,
     panelWidth - 8 - gutterCells - badgeClusterCells(row, actionRunning, activeHarnessId),
   );
-  const ref = splitParent ? ` → ${truncateEnd(splitParent, PARENT_REF_CELLS)}` : "";
-  const showRef = ref !== "" && budget - ref.length >= MIN_LABEL_CELLS;
-  const parentRef = showRef ? ref : "";
+  const refRoom = Math.min(SECTION_REF_CELLS, budget - MIN_LABEL_CELLS - REF_ARROW.length);
+  const parentRef =
+    splitParentSection && refRoom >= SECTION_REF_MIN
+      ? `${REF_ARROW}${truncateEnd(splitParentSection, refRoom)}`
+      : "";
   const labelCells = budget - parentRef.length;
   return (
     <box
@@ -330,7 +354,7 @@ const RowView = memo(function RowView({
       paddingLeft={1}
       paddingRight={1}
     >
-      <StackConnector row={row} cells={gutterCells} split={splitParent !== null} />
+      <StackConnector row={row} cells={gutterCells} split={splitParentSection !== null} />
       <box flexShrink={0} flexDirection="row">
         {/* Mirror the right-cluster pattern: width=2 box for the icon,
             then a width=1 box for the gap. Same shape that produces
@@ -572,16 +596,21 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
   ];
   const gutterCells = stackGutterCells(allRows);
   // Stack members whose parent was filed in a different section: the
-  // rail is replaced by a reference so the relationship survives the
-  // split instead of vanishing (or, worse, pointing at nothing).
-  const splitParents = useMemo(() => {
+  // rail is replaced by a reference to WHERE the parent went, so the
+  // relationship survives the split instead of vanishing (or, worse,
+  // pointing at nothing). Inbox parents name the inbox by the same word
+  // its divider uses, so the reference always matches something the
+  // user can find on screen.
+  const splitParentSections = useMemo(() => {
     const byBranch = new Map(allRows.map((r) => [r.wt.branch, r]));
     const m = new Map<string, string>();
     for (const r of allRows) {
       const parentBranch = r.stackedOn?.branch;
       if (!r.stack || !parentBranch) continue;
       const parent = byBranch.get(parentBranch);
-      if (parent && parent.section !== r.section) m.set(r.wt.slug, rowLabel(parent));
+      if (parent && parent.section !== r.section) {
+        m.set(r.wt.slug, parent.section ?? INBOX_LABEL);
+      }
     }
     return m;
   }, [allRows]);
@@ -770,16 +799,14 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                   <>
                     <box height={1} flexShrink={0} />
                     <Divider
-                      label={
-                        row.section === null ? "Inbox" : row.section
-                      }
+                      label={row.section ?? INBOX_LABEL}
                       width={width}
                     />
                   </>
                 ) : null}
                 <RowView
                   gutterCells={gutterCells}
-                  splitParent={splitParents.get(row.wt.slug) ?? null}
+                  splitParentSection={splitParentSections.get(row.wt.slug) ?? null}
                   row={row}
                   selected={i === selectedIndex}
                   isTailing={activeTails.has(row.wt.slug)}
@@ -850,7 +877,7 @@ export function WorktreeList({ items, archivedItems, reviewRequests, selectedInd
                 return (
                   <RowView
                     gutterCells={gutterCells}
-                    splitParent={splitParents.get(row.wt.slug) ?? null}
+                    splitParentSection={splitParentSections.get(row.wt.slug) ?? null}
                     key={row.wt.slug}
                     row={row}
                     selected={globalIndex === selectedIndex}
