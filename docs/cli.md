@@ -18,7 +18,7 @@ and an independently configured `wt` on that host.
 
 List all non-main worktrees (slug, stage when `[deploy.sst]` is configured, PR, status). Worktrees destroyed in the last 48h stay visible — a dim `recently merged:` footer under the table, and an empty list says why it's empty (`No active worktrees (2 archived today: x, y).`) — so "everything landed" never reads identically to "nothing exists". Derived from the existing removed-worktrees history; the TUI's `h` view keeps the full 14-day record.
 
-- `--json` — machine-readable array (slug, branch, path, stage, section, status, dirty, issue_id, issue_url, work_state, …). `section` is the manual TUI section the human placed the row in (`null` = inbox; inferred stack groupings never appear here — they're derived, not stored). Recently-removed rows are appended with `kind: "merged"` (PR landed) or `"removed"`, plus `pr`, `pr_url`, `title`, and `archived_at`; live rows never carry a `kind` field, so consumers discriminate on it (the remote section's parser skips these rows).
+- `--json` — machine-readable array (slug, branch, path, stage, section, base, status, dirty, issue_id, issue_url, work_state, …). `section` is the manual TUI section the human placed the row in (`null` = inbox; inferred stack groupings never appear here — they're derived, not stored). `base` is the effective merge target (recorded fork base for stacked worktrees, else `[branch] base`) — never null. Recently-removed rows are appended with `kind: "merged"` (PR landed) or `"removed"`, plus `pr`, `pr_url`, `title`, and `archived_at`; live rows never carry a `kind` field, so consumers discriminate on it (the remote section's parser skips these rows).
 - Push fields: `unpushed` counts commits `origin/<branch>` doesn't have — true unpushed work, not divergence from the base (wt sets the branch upstream to its BASE, so an upstream-relative count would misread as "never pushed"). `pushed` says whether `origin/<branch>` exists at all; when it's `false`, `unpushed` falls back to the ahead-of-base count. `ahead_of_base` is commits ahead of the upstream/base — the restack-pressure signal. All three are `null` when git couldn't answer; never read `null` as 0.
 
 ### `wt new <id [title…]|url|branch|slug>`
@@ -42,6 +42,8 @@ Issue-id input resolves like this:
 - `--no-install` — skip the package-install step. Ignored under the `rift` backend, which copies packages via its clone.
 
 If the branch already has a worktree, prints its path instead of erroring. A dirty main clone never blocks creation: the `rift` backend's CoW clone copies the main clone's uncommitted changes, and the post-clone branch switch discards them in the copy (`--discard-changes` — the main clone itself is never touched). Any create failure surfaces its reason on the CLI and the TUI attention feed instead of a row silently vanishing.
+
+Creation also sets `branch.<name>.gh-merge-base` to the branch's real merge target (its fork base; the trunk for plain worktrees, the parent for stacked ones). `gh pr create` consults that config **before** the repository's default branch, so a bare `gh pr create` opens against the right base even in repos whose GitHub default branch isn't the integration branch — without it, agents were opening PRs against the default (the harness's own context hints them there), burning CI and review passes on a 100-file diff of other people's code. `wt doctor` checks the config against the recorded base to catch worktrees created before this or left stale by a reparent.
 
 ### `wt rm [<slug>]`
 
@@ -67,7 +69,7 @@ Remove every worktree that is merged or whose remote branch is gone. "Gone" is o
 
 ### `wt doctor [<slug>]`
 
-Health report: working tree, sync vs trunk, SST stage pin + deploy state, node_modules, locks, merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, and pending agent-skill updates (`wt skills`).
+Health report: working tree, sync vs trunk, SST stage pin + deploy state, node_modules, locks, `gh-merge-base` branch config (must match the recorded fork base / trunk, or a bare `gh pr create` targets the repo default branch — see `wt new`), merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, and pending agent-skill updates (`wt skills`).
 
 - `--all` / `-a` — force the full summary table.
 - `--json` — machine-readable.

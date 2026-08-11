@@ -19,7 +19,7 @@ import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { clearDevServerFiles } from "./dev-server.ts";
 import { resolveInstallCommand } from "./install.ts";
-import { branchExists, git, gitQuiet, originBranchExists, revParse } from "./git.ts";
+import { branchExists, git, gitQuiet, gitRun, originBranchExists, revParse } from "./git.ts";
 import { ISSUE_ID_RE, ISSUE_URL_RE } from "./issue-tracker.ts";
 import { lockLabel, lockStatus, tryAcquireLock } from "./locks.ts";
 import { runStreaming } from "./proc.ts";
@@ -313,6 +313,32 @@ export async function createWorktree(
         const sha = await revParse("HEAD", path);
         setSlugBase(slug, { branch: baseBranch, sha: sha ?? undefined });
         opts.onLog?.(`recorded fork base ${baseBranch}`);
+      }
+    }
+
+    // Point a bare `gh pr create` at the real merge target. gh resolves
+    // its base as: `--base` flag → `branch.<name>.gh-merge-base` config
+    // → the REPO DEFAULT BRANCH — and agents are actively steered toward
+    // that default (the harness's gitStatus block names it "the branch
+    // you will usually use for PRs" in every session). In a repo whose
+    // default branch isn't the integration branch, that combination
+    // opened PRs against the wrong base: 100-file diffs, red CI on other
+    // people's code, review bots confidently auditing someone else's
+    // delta. This branch config outranks the bad hint with zero agent
+    // cooperation, costs one local config line, and dies with the
+    // branch. A new branch records its actual fork base (a stacked
+    // branch's PR correctly targets its parent); an existing branch gets
+    // the trunk default only when nothing set a value already (it may
+    // carry deliberate config from a previous life).
+    const ghMergeBase = existing
+      ? (await gitRun(["config", `branch.${branch}.gh-merge-base`], path))
+          .exitCode === 0
+        ? null
+        : config.branch.base
+      : (baseRef ?? "").replace(/^origin\//, "") || config.branch.base;
+    if (ghMergeBase) {
+      if (await gitQuiet(["config", `branch.${branch}.gh-merge-base`, ghMergeBase], path)) {
+        opts.onLog?.(`gh merge base → ${ghMergeBase}`);
       }
     }
 

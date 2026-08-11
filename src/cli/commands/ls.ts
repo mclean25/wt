@@ -35,7 +35,7 @@ configured, PR, status). Worktrees destroyed in the last 48h stay
 visible as a dim "recently merged" footer, so an empty fleet says why.
 
   --json    machine-readable array (slug, branch, path, stage, section,
-            status, dirty, issue_id, issue_url, …). Recently-removed rows are
+            base, status, dirty, issue_id, issue_url, …). Recently-removed rows are
             appended with kind: "merged"|"removed", pr, archived_at;
             live rows never carry a "kind" field.`;
 
@@ -75,6 +75,11 @@ export async function run(argv: string[]): Promise<number> {
           // after Release"); null = inbox. Never a stack key — those
           // groupings are inferred at render time, not stored.
           section: slugStates[w.slug]?.section ?? null,
+          // Effective merge target: the recorded fork base (stacked
+          // worktrees) or the configured trunk. Never null — consumers
+          // were probing for a `base` field and reading its absence as
+          // "no base recorded".
+          base: slugStates[w.slug]?.baseBranch ?? config.branch.base,
           exists: existsSync(w.path),
           status: st.kind,
           status_label: st.label,

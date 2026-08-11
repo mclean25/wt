@@ -16,6 +16,7 @@ import { computeStage } from "../../core/stage.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
 import type { Check, CheckStatus, Worktree } from "../../core/types.ts";
 import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
+import { readWtState } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import {
@@ -161,6 +162,35 @@ async function checkLock(wt: Worktree): Promise<Check> {
   return mkCheck("lock", "warn", `${label} (pid ${pid}${suffix})`);
 }
 
+/**
+ * A bare `gh pr create` falls back to the REPO DEFAULT BRANCH unless
+ * `branch.<name>.gh-merge-base` says otherwise — in a repo whose
+ * default branch isn't the integration branch that opens PRs against
+ * the wrong base. `wt new` records the config at creation; this catches
+ * worktrees created before that, and drift after a reparent (a parent
+ * merged and the recorded fork base moved on). Expected = the recorded
+ * fork base when one exists (stacked PRs target their parent), else
+ * `[branch] base`.
+ */
+async function checkGhMergeBase(wt: Worktree): Promise<Check> {
+  if (!wt.branch) return mkCheck("gh merge base", "info", "no branch");
+  const expected =
+    readWtState().slugs[wt.slug]?.baseBranch ?? config.branch.base;
+  const r = await sh(["git", "config", `branch.${wt.branch}.gh-merge-base`], {
+    cwd: wt.path,
+  });
+  const actual = r.exitCode === 0 ? r.stdout.trim() : "";
+  if (actual === expected) return mkCheck("gh merge base", "ok", expected);
+  return mkCheck(
+    "gh merge base",
+    "warn",
+    actual
+      ? `set to ${actual}, expected ${expected}`
+      : `unset — a bare \`gh pr create\` targets the repo default branch`,
+    [`fix: git -C ${wt.path} config branch.${wt.branch}.gh-merge-base ${expected}`],
+  );
+}
+
 async function checkMerged(wt: Worktree): Promise<Check> {
   if (!wt.branch) return mkCheck("merged", "info", "no branch");
   if (await branchIsMerged(wt.branch, wt.path))
@@ -260,6 +290,7 @@ async function runAllChecks(wt: Worktree, includePr: boolean): Promise<Check[]> 
     checkSstDeploy(wt),
     checkNodeModules(wt),
     checkLock(wt),
+    checkGhMergeBase(wt),
   ];
   if (includePr) tasks.push(checkPr(wt));
   tasks.push(checkMerged(wt));
