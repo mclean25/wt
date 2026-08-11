@@ -511,7 +511,12 @@ export async function runTui(): Promise<TuiExit> {
   try {
     renderer = await createCliRenderer({
       exitOnCtrlC: false,
-      targetFps: 60,
+      // No targetFps override: it only applies in the renderer's "live"
+      // (continuous) mode, which wt never enters now that no Timeline /
+      // requestAnimationFrame users exist (see spinner.tsx). If some
+      // future dependency re-arms live mode, the default 30fps halves
+      // the damage vs the 60 this used to pass. On-demand keypress
+      // frames are throttled by maxFps (60), not this.
       // OpenTUI installs its own uncaughtException/unhandledRejection
       // hook that console.errors the stack and (by default) pops its
       // debug console overlay over the panes — the error overlay above
