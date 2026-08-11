@@ -1,9 +1,12 @@
 /**
- * Performance instrumentation. Two unrelated tools that happen to share
- * the subject:
+ * Performance instrumentation. Three tools that happen to share the
+ * subject:
  *
  *  - `loop-lag.ts` — the opt-in (`WT_PERF=1`) event-loop-lag probe. Answers
- *    "why does j/k feel laggy", i.e. is *wt's own render thread* blocked.
+ *    "is *wt's own render thread* blocked", one sync chunk at a time.
+ *  - `input-latency.ts` — the opt-in (`WT_PERF=1`) keypress→frame
+ *    histogram + live-mode duty check. Answers "what does j/k actually
+ *    feel like", stacked costs included.
  *  - `sample.ts` — the process/CPU sampler behind the `P` overlay. Answers
  *    "why does the machine feel slow", i.e. is anything downstream of wt
  *    eating the box.
@@ -13,6 +16,10 @@
  */
 
 export { startLoopLagProbe } from "./perf/loop-lag.ts";
+export {
+  attachInputLatencyProbe,
+  markKeypress,
+} from "./perf/input-latency.ts";
 
 export {
   buildPerfInvestigationPrompt,

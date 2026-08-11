@@ -13,7 +13,10 @@ import { createLogger } from "../logger.ts";
 
 const log = createLogger("[perf]");
 const SAMPLE_MS = 100;
-const LAG_THRESHOLD_MS = 50;
+// One dropped frame is ~17ms and three is what "laggy" feels like;
+// the old 50ms threshold only caught the egregious tail. 20ms logs
+// anything that cost more than a frame.
+const LAG_THRESHOLD_MS = 20;
 
 export function startLoopLagProbe(): () => void {
   if (!process.env.WT_PERF) return () => {};

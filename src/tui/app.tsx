@@ -4,6 +4,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 
 import { createLogger } from "../core/logger.ts";
+import { markKeypress } from "../core/perf.ts";
 import { perfSnapshotQuery, qk, remoteWorktreesQuery, useWtActions } from "../state/index.ts";
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
 import { remoteWorktreeLedgerKey } from "../core/worktree-ref.ts";
@@ -655,6 +656,9 @@ export function App({ onExit }: Props) {
   // mode. The per-layer key maps live in `keyboard/` and
   // `modal-keys/`; this callback only routes.
   useKeyboard((k) => {
+    // WT_PERF input-latency probe: stamp the keypress before any
+    // dispatch work (no-op when unarmed).
+    markKeypress();
     // Shadow the render-closure values with the authoritative refs —
     // several key events can land in one tick (see the footer/modal
     // state comment), and routing on a stale closure would misdispatch

@@ -35,7 +35,7 @@ import {
   watchWtStateFiles,
 } from "../core/repo-watch.ts";
 import { isRiftWorktree } from "../core/backend.ts";
-import { startLoopLagProbe } from "../core/perf.ts";
+import { attachInputLatencyProbe, startLoopLagProbe } from "../core/perf.ts";
 import { reapShellLogs, shellTailRegistry } from "../core/shell-tail.ts";
 import { reapOrphanedSessions } from "../core/tmux.ts";
 import { listWorktrees } from "../core/worktree.ts";
@@ -543,6 +543,10 @@ export async function runTui(): Promise<TuiExit> {
     detachErrorCapture();
     throw err;
   }
+  // Frame-side half of the WT_PERF input-latency probe (the keypress
+  // side is `markKeypress()` in App's keyboard dispatch). No-op pair
+  // when the env var is unset.
+  const detachInputLatency = attachInputLatencyProbe(renderer);
   const root = createRoot(renderer);
   // A dying terminal (tmux kill-session/-server, window close, SSH drop)
   // delivers SIGHUP — without an explicit handler this process SURVIVES
@@ -603,6 +607,7 @@ export async function runTui(): Promise<TuiExit> {
     invalidations.dispose();
     clearInterval(fetchOriginTimer);
     stopLoopLagProbe();
+    detachInputLatency();
     disposeDiffPool();
     stopRegistryWatch();
     stopRefsWatch();
