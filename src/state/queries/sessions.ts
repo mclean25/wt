@@ -15,34 +15,6 @@ export type { ClaudeSessionEntry };
 import { qk } from "../keys.ts";
 import { STALE } from "./shared.ts";
 
-/**
- * Selection should paint before session discovery touches disk. Codex in
- * particular walks its date-partitioned rollout tree synchronously; starting
- * that scan in the same turn as a j/k cursor move makes navigation feel
- * blocked. A short abortable debounce lets React commit the cursor first and
- * cancels rows merely passed over during key repeat.
- */
-const SESSION_DISCOVERY_DEFER_MS = 100;
-const SESSION_DISCOVERY_STALE_MS = 30_000;
-
-function deferSessionDiscovery(signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, SESSION_DISCOVERY_DEFER_MS);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 export type TmuxSessionsData = {
   /**
    * Every live claude session, including primary and named. Multiple
@@ -136,15 +108,11 @@ export const harnessSessionsQuery = (
 ) =>
   queryOptions({
     queryKey: qk.harnessSessions(harnessId, slug),
-    queryFn: async ({ signal }): Promise<HarnessSession[]> => {
-      await deferSessionDiscovery(signal);
+    queryFn: async (): Promise<HarnessSession[]> => {
       const harness = getHarness(harnessId);
       return harness.discoverSessions({ slug, wtPath });
     },
-    // Dead-session history changes slowly and lifecycle operations explicitly
-    // invalidate this key. Live Codex/OpenCode rows still use the 3s interval
-    // below, so a longer cache window only removes selection-driven rescans.
-    staleTime: SESSION_DISCOVERY_STALE_MS,
+    staleTime: STALE.fast,
     // Claude session state is kept fresh by `watchRegistry` invalidation
     // (its status lives in the fs-watched registry). Codex/OpenCode bake
     // their state into discovery and have no such watcher, so a working
