@@ -1,3 +1,4 @@
+import type { MergeEdge } from "../merge-edges.ts";
 import type { WorkStatusRecord } from "../work-status.ts";
 
 /**
@@ -167,4 +168,13 @@ export type WtState = {
    * again is display-filtered by the TUI and cleared by `createWorktree`.
    */
   removed: RemovedWorktree[];
+  /**
+   * Merge edges — pairwise, self-expiring ordering assertions between
+   * worktrees (`wt edge`). Vocabulary and design rules live in
+   * `core/merge-edges.ts`; writers in `wtstate/edges.ts`. Edges with a
+   * dead endpoint are pruned at reap time; stale edges (an endpoint
+   * moved past its recorded anchor) are a RENDER-time derivation,
+   * never written back.
+   */
+  edges: MergeEdge[];
 };

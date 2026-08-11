@@ -306,6 +306,13 @@ export async function run(argv: string[]): Promise<number> {
               merge_state: mergeField(r.pr.mergeStateStatus, r.pr.state),
               mergeable: mergeField(r.pr.mergeable, r.pr.state),
               checks: r.pr.checks,
+              // Open human review threads. A `ready` status with
+              // unresolved threads is a status/reality mismatch of the
+              // same family this surface exists to audit — agents have
+              // been observed replying via `gh pr comment` (a top-level
+              // comment, NOT a thread reply) and leaving every thread
+              // open while believing findings addressed.
+              unresolved_threads: r.pr.unresolvedThreads,
             }
           : null,
         // Distinguishes "no PR" (pr null, pr_note null) from "GitHub

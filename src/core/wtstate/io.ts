@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { config } from "../config.ts";
 import { withFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
+import { parseMergeEdge, type MergeEdge } from "../merge-edges.ts";
 import { parseWorkStatus } from "../work-status.ts";
 import { migrateRawWtState, rawWtStateVersion, WT_STATE_VERSION } from "./migrations.ts";
 import { GROUP_INBOX, STACK_SECTION_PREFIX } from "./types.ts";
@@ -246,6 +247,13 @@ export function parseWtState(raw: unknown): WtState {
       });
     }
   }
+  const edges: MergeEdge[] = [];
+  if (Array.isArray(data?.edges)) {
+    for (const v of data.edges) {
+      const edge = parseMergeEdge(v);
+      if (edge) edges.push(edge);
+    }
+  }
   return {
     version: WT_STATE_VERSION,
     slugs,
@@ -260,6 +268,7 @@ export function parseWtState(raw: unknown): WtState {
         ? data.attentionSeenTs
         : 0,
     removed,
+    edges,
   };
 }
 
@@ -273,6 +282,7 @@ export function emptyWtState(): WtState {
     automationsPaused: false,
     attentionSeenTs: 0,
     removed: [],
+    edges: [],
   };
 }
 

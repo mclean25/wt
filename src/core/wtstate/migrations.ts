@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 2;
+export const WT_STATE_VERSION = 3;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -46,6 +46,13 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     to: 2,
     up: (raw) =>
       "attentionSeenTs" in raw ? raw : { ...raw, attentionSeenTs: 0 },
+  },
+  {
+    // v3: additive — merge edges (`wt edge`, core/merge-edges.ts).
+    // parseWtState defaults a missing array; the entry exists for the
+    // version boundary, same as v2.
+    to: 3,
+    up: (raw) => ("edges" in raw ? raw : { ...raw, edges: [] }),
   },
 ];
 

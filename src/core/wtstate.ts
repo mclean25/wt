@@ -54,3 +54,9 @@ export {
 } from "./wtstate/automations-pause.ts";
 
 export { setAttentionSeen } from "./wtstate/attention.ts";
+
+export {
+  pruneMergeEdges,
+  removeMergeEdge,
+  setMergeEdge,
+} from "./wtstate/edges.ts";

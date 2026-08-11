@@ -123,6 +123,16 @@ snapshot, not a surgical recovery. Backups are one small file per
 version bump (`state.json.bak-v<N>`, overwritten on repeat), so they
 don't meaningfully accumulate.
 
+The same field-dropping applies WITHOUT a rollback during the mixed-
+version window after an additive field ships: a still-running TUI on
+the previous build strips the new field on its next state write (its
+`parseWtState` doesn't know the key), and new-code CLI processes
+re-migrate the file right back — so values written to a brand-new
+field can silently vanish until every long-lived wt process has
+restarted onto the new build (observed live with `edges` at v3).
+Bounded by restart, but worth knowing when a freshly-shipped record
+"didn't stick".
+
 ## Escape hatches
 
 `[update] startup_check = false` disables the daily startup offer;

@@ -502,7 +502,12 @@ export function toggleSectionFolded(sectionKey: string): boolean {
 export function reapWtState(liveSlugs: ReadonlySet<string>): void {
   withWtStateLock(() => {
     const state = readWtState();
-    let changed = false;
+    // Edges with a dead endpoint are satisfied (merged) or moot
+    // (removed) — they disappear rather than dangling.
+    const edges = state.edges.filter(
+      (e) => liveSlugs.has(e.from) && liveSlugs.has(e.to),
+    );
+    let changed = edges.length !== state.edges.length;
     for (const k of Object.keys(state.slugs)) {
       if (!liveSlugs.has(k)) {
         changed = true;
@@ -510,7 +515,7 @@ export function reapWtState(liveSlugs: ReadonlySet<string>): void {
       }
     }
     if (!changed) return;
-    const next: WtState = { ...state, slugs: {} };
+    const next: WtState = { ...state, slugs: {}, edges };
     for (const [k, v] of Object.entries(state.slugs)) {
       if (liveSlugs.has(k)) next.slugs[k] = v;
     }

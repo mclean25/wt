@@ -13,6 +13,7 @@ import * as openCmd from "./commands/open.ts";
 import * as baseCmd from "./commands/base.ts";
 import * as issueCmd from "./commands/issue.ts";
 import * as statusCmd from "./commands/status.ts";
+import * as edgeCmd from "./commands/edge.ts";
 import * as managerCmd from "./commands/manager.ts";
 import * as claudeCmd from "./commands/claude.ts";
 import * as devCmd from "./commands/dev.ts";
@@ -49,6 +50,7 @@ commands:
   remote      enter or run wt on the configured SSH remote
   base        show / set / clear a worktree's recorded fork base
   status      show / assert a worktree's work status (agent-facing)
+  edge        assert / list merge-order edges between worktrees (self-expiring)
   manager     attach the fleet-coordinator session / send it a message / report a result
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
   claude      drive a worktree's Claude Code session (send / ls / kill)
@@ -80,6 +82,7 @@ const RUNNERS: Record<string, Runner> = {
   _session: sessionExecCmd.run,
   base: baseCmd.run,
   status: statusCmd.run,
+  edge: edgeCmd.run,
   manager: managerCmd.run,
   issue: issueCmd.run,
   claude: claudeCmd.run,

@@ -8,6 +8,12 @@ import type { GitActivity } from "../../core/git-activity.ts";
 import { pickPrForWorktree } from "../../core/github.ts";
 import { lockAge, lockLabel } from "../../core/locks.ts";
 import { latestLogFor } from "../../core/logs.ts";
+import {
+  edgeIsStaleByTime,
+  edgeOrders,
+  topoOrderSlugs,
+  type MergeEdge,
+} from "../../core/merge-edges.ts";
 import { buildStackIndex, type SpinePos } from "../../core/stack-layout.ts";
 import { slugLabel } from "../../core/stage.ts";
 import type { LockMeta, MergeQueueEntry, PullRequest, Status, Worktree } from "../../core/types.ts";
@@ -479,6 +485,55 @@ function sortActiveRows(
 }
 
 /**
+ * Post-sort ordering pass for merge edges (`wt edge`): within each
+ * non-stack section bucket, permute rows so every FRESH ordering edge
+ * (before/enables, endpoints both in the bucket) puts `from` above
+ * `to` — rendering order becomes merge order, composing with the
+ * human's sections (they own which batch, edges own order within it).
+ * Stable: rows without applicable edges keep their sorted positions,
+ * and bucket slots themselves never move. Freshness is commit-time
+ * decay (`edgeIsStaleByTime`, the same signal family as the
+ * work-status stale dot): once either endpoint commits past the
+ * assert, the edge quietly stops steering — decay, not diligence.
+ * Stack sections are exempt (spine order IS the layout).
+ */
+function applyMergeEdgeOrder(
+  rows: WorktreeRow[],
+  edges: readonly MergeEdge[],
+): WorktreeRow[] {
+  if (edges.length === 0) return rows;
+  const bySlug = new Map(rows.map((r) => [r.wt.slug, r]));
+  const lastCommitOf = (slug: string): number | null | undefined =>
+    bySlug.get(slug)?.fields.gitActivity.data?.lastCommitMs;
+  const fresh = edges.filter(
+    (e) => edgeOrders(e.kind) && !edgeIsStaleByTime(e, lastCommitOf),
+  );
+  if (fresh.length === 0) return rows;
+  // Bucket rows by section, tracking each bucket's index slots.
+  const buckets = new Map<string, number[]>();
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!;
+    if (r.sectionIsStack) continue;
+    const key = r.section ?? GROUP_INBOX;
+    const list = buckets.get(key);
+    if (list) list.push(i);
+    else buckets.set(key, [i]);
+  }
+  let out: WorktreeRow[] | null = null;
+  for (const slots of buckets.values()) {
+    if (slots.length < 2) continue;
+    const slugs = slots.map((i) => rows[i]!.wt.slug);
+    const ordered = topoOrderSlugs(slugs, fresh);
+    if (ordered.every((s, i) => s === slugs[i])) continue;
+    out ??= [...rows];
+    for (let i = 0; i < slots.length; i++) {
+      out[slots[i]!] = bySlug.get(ordered[i]!)!;
+    }
+  }
+  return out ?? rows;
+}
+
+/**
  * Watch the set of slugs that currently hold a lock. When a slug
  * transitions from held → released, invalidate the worktree list so
  * a destroyed slug drops promptly instead of lingering as a stale
@@ -814,12 +869,15 @@ export function useWorktreeRows(): WorktreeRowsResult {
       listIndexOf.set(unsorted[i]!.wt.slug, i);
     }
     const sectionsOrder = wtState.data?.sectionsOrder ?? [];
-    const active = sortActiveRows(
-      unsorted.filter((r) => !r.archived),
-      listIndexOf,
-      effectiveOrders,
-      sectionsOrder,
-      config.ui.sort === "status",
+    const active = applyMergeEdgeOrder(
+      sortActiveRows(
+        unsorted.filter((r) => !r.archived),
+        listIndexOf,
+        effectiveOrders,
+        sectionsOrder,
+        config.ui.sort === "status",
+      ),
+      wtState.data?.edges ?? [],
     );
     const archived = unsorted.filter((r) => r.archived);
     const nextRows: WorktreeRow[] = [...active, ...archived];
