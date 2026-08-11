@@ -13,7 +13,7 @@ import type { WorkState, WorkStatusRecord } from "../../core/work-status.ts";
 import { WORK_STATES } from "../../core/work-status.ts";
 import type { Modal } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
-import { markSelfStatusWrite } from "../hooks/useWorkStatusEvents.ts";
+import { markSelfStatusWrite } from "../../state/self-writes.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { emptyEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";

@@ -97,6 +97,7 @@ import type { DiffContext } from "../core/diff/index.ts";
 import { gitRun, invalidateMainFirstParents } from "../core/git.ts";
 import { fetchAuthenticatedLogin } from "../core/github.ts";
 import { createLogger } from "../core/logger.ts";
+import { markSelfSectionWrite } from "./self-writes.ts";
 import type { PullRequest, Worktree } from "../core/types.ts";
 import type { WorkStatusRecord } from "../core/work-status.ts";
 import {
@@ -626,16 +627,15 @@ export function useWtActions() {
      * invalidation so cursor-follow can read fresh rows.
      */
     async setSection(slug: string, section: string | null): Promise<void> {
+      // Narration is NOT emitted here. `wt section` writes this same
+      // field from another process, so the only place that sees every
+      // move is the wtstate diff in `useWtStateEvents` — emitting at
+      // the call site too would double-log ours and still miss theirs.
+      // Marking the write first lets that diff tell "the human just
+      // pressed `l`" (firehose) from "something else rearranged their
+      // board" (attention).
+      markSelfSectionWrite(slug, section);
       setSlugSectionOnDisk(slug, section);
-      // Logged because sections are the HUMAN's own grouping intent and
-      // nothing else writes them: without a line here, "why is this row
-      // in Done?" has no answer at all — the record shows where it is,
-      // never how it got there. (A folded section hiding its rows reads
-      // exactly like a row that moved, which is how the question comes
-      // up.) The firehose, not attention: it's a routine act.
-      createLogger(slug).event.info(
-        section ? `moved to section ${section}` : "moved to Inbox",
-      );
       await qc.invalidateQueries({ queryKey: qk.wtState() });
     },
     /**

@@ -9,7 +9,7 @@
  * authenticated user is filtered here — and narrates anything newer
  * than the per-slug mark.
  *
- * Seeding is silent, like `useWorkStatusEvents`: the first observation
+ * Seeding is silent, like `useWtStateEvents`: the first observation
  * is history, not news. Because the github query hydrates from the
  * persisted cache before the live fetch lands, that history is what was
  * on screen last session — so a comment that arrived while wt was down

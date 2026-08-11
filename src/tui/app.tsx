@@ -36,7 +36,7 @@ import { useLogTails } from "./hooks/useLogTails.ts";
 import { usePaste } from "./hooks/usePaste.ts";
 import { usePrCommentEvents } from "./hooks/usePrCommentEvents.ts";
 import { useTerminalFocus } from "./hooks/useTerminalFocus.ts";
-import { useWorkStatusEvents } from "./hooks/useWorkStatusEvents.ts";
+import { useWtStateEvents } from "./hooks/useWtStateEvents.ts";
 import { useManagerReports } from "./hooks/useManagerSignals.ts";
 import { useWorktreeRows } from "./hooks/useWorktreeRows.ts";
 import { useStackSections } from "./hooks/useStackSections.ts";
@@ -250,7 +250,7 @@ export function App({ onExit }: Props) {
 
   // Narrate work-status transitions (from any process) into the
   // attention feed.
-  useWorkStatusEvents(wtStateForStacks.data);
+  useWtStateEvents(wtStateForStacks.data);
   // New PR comments from other people → attention feed.
   usePrCommentEvents(rows, githubData);
   // `wt manager report` spool → attention feed (cross-process watcher).

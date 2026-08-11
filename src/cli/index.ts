@@ -14,6 +14,7 @@ import * as baseCmd from "./commands/base.ts";
 import * as issueCmd from "./commands/issue.ts";
 import * as statusCmd from "./commands/status.ts";
 import * as edgeCmd from "./commands/edge.ts";
+import * as sectionCmd from "./commands/section.ts";
 import * as managerCmd from "./commands/manager.ts";
 import * as claudeCmd from "./commands/claude.ts";
 import * as devCmd from "./commands/dev.ts";
@@ -51,6 +52,7 @@ commands:
   base        show / set / clear a worktree's recorded fork base
   status      show / assert a worktree's work status (agent-facing)
   edge        assert / list merge-order edges between worktrees (self-expiring)
+  section     list / move / rename / drop the fleet's sections (the human's batching)
   manager     attach the fleet-coordinator session / send it a message / report a result
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
   claude      drive a worktree's Claude Code session (send / ls / kill)
@@ -83,6 +85,7 @@ const RUNNERS: Record<string, Runner> = {
   base: baseCmd.run,
   status: statusCmd.run,
   edge: edgeCmd.run,
+  section: sectionCmd.run,
   manager: managerCmd.run,
   issue: issueCmd.run,
   claude: claudeCmd.run,

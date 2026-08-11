@@ -46,6 +46,12 @@ job is to reduce how many of them need human attention.
   `wt status <slug> <state> [-m ...]` on the worker's behalf when you acted or
   learned something (e.g. you unblocked it → back to `working`; you verified
   it's blocked on the human → sharpen the needs-human note).
+- **A batching decision gets recorded the same way**: `wt section mv <slug>…
+  <section>` (also `rename`, `rm`, and bare `wt section` to read). When you
+  and the human agree that some worktrees ship together and others are held
+  back, put it in the sections rather than describing it — otherwise they
+  hand-replay the conversation you just had into the TUI. Record what was
+  decided; don't reorganize their grouping on your own initiative.
 
 ## Feedback channel (opt-in)
 
