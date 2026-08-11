@@ -137,7 +137,13 @@ Tooling inventory:
 - `WT_PERF=1` input-latency probe (same arming) — keypress→painted-
   frame histogram, one `input-latency` INFO line per minute
   (p50/p90/max + liveDutyPct), immediate warn on any >100ms sample.
-  Fixture baseline post-fix: p50 4ms / p90 6ms / duty 0.
+  Samples close on the renderer's post-paint `"frame"` EVENT — a
+  frame CALLBACK runs before layout+paint and would exclude exactly
+  the board-size-dependent cost (an early probe build did; its 4/6ms
+  figures were pre-paint). Fixture baseline, corrected instrument:
+  idle p50 5ms / p90 6ms; under file-touch churn p50 6ms / p90 19ms /
+  max 20ms; duty 0. TUI CPU: idle ~0-1% (was ~13%), churn ~4%
+  (was 81%).
 - `wt-state` skill — read-only cache/tmux/log/lock inspection.
 - `scripts/tui-test.sh` — probe harness for reproducing TUI-side
   behavior without touching the live instance (read-only rules apply).

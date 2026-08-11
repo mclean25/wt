@@ -30,6 +30,18 @@ export type OutputKind = "events" | "action" | "session" | "destroy";
 export type OutputSessionKind = "claude" | "shell" | "codex" | "opencode";
 export type OutputStatus = "live" | "running" | "done" | "failed" | "killed";
 
+/**
+ * INVARIANT (leaned on by `useOutputs`' identity stabilization): its
+ * `outputsEquivalent` compares only `id` / `kind` / `title` / `status`
+ * per position. That is safe today because every OTHER field a
+ * consumer renders or dispatches on is derivable from `id` (`slug`,
+ * `sessionKind`, `sessionName`, and — for actions — `startedAt` are
+ * all baked into the id constructors below), and the timestamps only
+ * surface through sort order (compared positionally) and the picker's
+ * transient age column. If you add a field here that a consumer
+ * renders and that is NOT folded into `id`, add it to
+ * `outputsEquivalent` or the UI will serve it stale.
+ */
 export type Output = {
   id: string;
   kind: OutputKind;

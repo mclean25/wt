@@ -45,6 +45,17 @@ declare var self: Worker;
 
 /** How many trailing bytes of the jsonl to seed from on first ensure. */
 const SEED_TAIL_BYTES = 64 * 1024;
+/**
+ * Hard ceiling on a single delta read. A live delta after the 80ms
+ * debounce is tens of KB at most; a gap wildly beyond that means the
+ * byte cursor is wrong (a seed that never established one — its
+ * internal stat can fail without throwing — or a file swapped back in
+ * larger after a rotation reset). Reading it all would mean an
+ * unbounded parse and one giant postMessage, so past the ceiling we
+ * skip ahead and tail from the end instead — the same trade the seed
+ * window itself makes.
+ */
+const MAX_DELTA_BYTES = 512 * 1024;
 /** Coalesce window for fs.watch bursts. */
 const READ_DEBOUNCE_MS = 80;
 /** Polling backstop for fs.watch silently missing appends on macOS. */
@@ -53,6 +64,8 @@ const POLL_INTERVAL_MS = 3_000;
 type State = {
   slug: string;
   name: string | null;
+  /** Echoed on every result — see the protocol's `gen` doc. */
+  gen: number;
   path: string;
   projectDir: string;
   jsonlName: string;
@@ -86,13 +99,7 @@ self.onmessage = (event: MessageEvent<TailWorkerMessage>) => {
     ensure(msg);
     return;
   }
-  if (msg.type === "stop") {
-    stopByKey(msg.key);
-    return;
-  }
-  if (msg.type === "stop-all") {
-    for (const key of [...tails.keys()]) stopByKey(key);
-  }
+  stopByKey(msg.key);
 };
 
 function ensure(msg: Extract<TailWorkerMessage, { type: "ensure" }>): void {
@@ -100,13 +107,20 @@ function ensure(msg: Extract<TailWorkerMessage, { type: "ensure" }>): void {
   if (existing) {
     // Already tracking — only restart if the resolved path changed
     // (e.g. a destroy+recreate cycle re-pointed the slug at a
-    // different worktree path within the same TUI run).
-    if (existing.path === msg.path) return;
+    // different worktree path within the same TUI run). Same path:
+    // adopt the caller's generation so its results keep passing the
+    // main thread's gen check (a respawned-registry re-ensure lands
+    // here).
+    if (existing.path === msg.path) {
+      existing.gen = msg.gen;
+      return;
+    }
     stopByKey(msg.key);
   }
   const st: State = {
     slug: msg.slug,
     name: msg.name,
+    gen: msg.gen,
     path: msg.path,
     projectDir: msg.projectDir,
     jsonlName: msg.jsonlName,
@@ -203,6 +217,17 @@ function seedAndWatch(key: string): void {
     readSeed(key);
   } catch (err) {
     warn(`seed read failed: ${errMsg(err)}`, key);
+    // Best-effort skip-ahead: with `lastByte` stuck at 0 the first
+    // live delta would read the ENTIRE jsonl from byte 0 — unbounded
+    // parse + one giant postMessage — defeating the seed window. Tail
+    // from the current size instead; history before this moment is
+    // simply not shown (same trade the seed window itself makes).
+    try {
+      st.lastByte = statSync(st.path).size;
+    } catch {
+      // File gone — readDelta's own stat will keep failing benignly
+      // until (if ever) it reappears.
+    }
   }
   try {
     st.watcher = watch(st.path, { persistent: false }, () =>
@@ -257,6 +282,7 @@ function readSeed(key: string): void {
   post({
     type: "seed",
     key,
+    gen: st.gen,
     lines: trimmed,
     hasUsage: usage !== undefined,
     usage: usage ?? null,
@@ -293,11 +319,21 @@ function readDelta(key: string): void {
     st.pending = "";
     return;
   }
-  const body = readFileSlice(st.path, st.lastByte, size - st.lastByte);
+  let start = st.lastByte;
+  let skippedAhead = false;
+  if (size - start > MAX_DELTA_BYTES) {
+    start = size - SEED_TAIL_BYTES;
+    skippedAhead = true;
+    st.pending = "";
+  }
+  const body = readFileSlice(st.path, start, size - start);
   st.lastByte = size;
   const combined = st.pending + body;
   const lines = combined.split("\n");
   st.pending = lines.pop() ?? "";
+  // A skip-ahead lands mid-line; the first fragment is garbage (same
+  // drop-first rule as the seed).
+  if (skippedAhead) lines.shift();
   const nextId = () => st.nextLineId++;
   const emits: MessageEmit[] = [];
   // See the matching comment in `readSeed`: `undefined` = no signal
@@ -320,6 +356,7 @@ function readDelta(key: string): void {
   post({
     type: "delta",
     key,
+    gen: st.gen,
     slug: st.slug,
     emits,
     hasUsage: usage !== undefined,

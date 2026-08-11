@@ -35,15 +35,21 @@ const PANE_CHROME = 5;
  * The window is invisible in normal use: an exact-height spacer stands
  * in for the hidden events (1 row each, or the cached wrap count on the
  * wrapping feed), so the scrollbar geometry and scroll positions are
- * identical to rendering everything — and a slow check expands the
- * window in chunks as the reader scrolls up toward it, well before
- * they reach it. Back at the bottom, the window snaps back to the
- * tail. The full record is never further than the daily log anyway.
+ * identical to rendering everything — and a periodic check expands the
+ * window as the reader scrolls up toward it. The expansion CATCHES UP
+ * in one step (sized from the row deficit, not a fixed chunk): a
+ * mouse-wheel fling can cover many rows between ticks, and a
+ * chunk-per-tick cadence would leave the reader parked on blank spacer
+ * rows while it ground through the gap. Back at the bottom, the window
+ * snaps back to the tail. The full record is never further than the
+ * daily log anyway.
  */
 const TAIL_WINDOW = 120;
+/** Headroom beyond the computed catch-up, so the very next wheel tick
+ *  doesn't immediately re-trigger expansion. */
 const EXPAND_CHUNK = 150;
 /** Grow when the viewport gets within one screen of the hidden region. */
-const EXPAND_CHECK_MS = 400;
+const EXPAND_CHECK_MS = 200;
 
 /**
  * Wrapped-lines cache. Events are immutable and identity-stable in the
@@ -204,7 +210,19 @@ function EventsList({
       const viewH = box.viewport.height;
       const maxScroll = Math.max(0, box.scrollHeight - viewH);
       if (g.windowStart > 0 && box.scrollTop < g.spacerRows + viewH) {
-        setWindowSize(Math.min(g.windowSize + EXPAND_CHUNK, Math.max(g.total, TAIL_WINDOW)));
+        // One-step catch-up: enough events to cover the row gap between
+        // the viewport and the window boundary (rows/event averaged for
+        // the wrapping feed; a slight over/under-shoot self-corrects on
+        // the next tick), plus headroom.
+        const rowDeficit = g.spacerRows + viewH - box.scrollTop;
+        const rowsPerEvent = Math.max(1, g.spacerRows / g.windowStart);
+        const growEvents = Math.ceil(rowDeficit / rowsPerEvent);
+        setWindowSize(
+          Math.min(
+            g.windowSize + growEvents + EXPAND_CHUNK,
+            Math.max(g.total, TAIL_WINDOW),
+          ),
+        );
       } else if (g.windowSize > TAIL_WINDOW && box.scrollTop >= maxScroll - 1) {
         setWindowSize(TAIL_WINDOW);
       }
@@ -301,6 +319,10 @@ export function ActivityContent({
   const seenTs = useAttentionSeenTs();
   return (
     <EventsList
+      // Keyed by feed: the two feeds are different buffers, and an
+      // unkeyed switch would carry one feed's expanded window state
+      // (and scroll history posture) into the other.
+      key={feed}
       events={feed === "attention" ? attention : all}
       emptyText={feed === "attention" ? "(nothing needs you)" : "(no events yet)"}
       // 0 = never marked. Attention-only: the firehose is the record

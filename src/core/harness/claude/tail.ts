@@ -183,8 +183,13 @@ class SessionTailRegistry {
   // primary, `<slug>~<name>` for named. Multiple sessions per slug
   // coexist as separate entries.
   private runs: ReadonlyMap<string, SessionRun> = new Map();
-  /** Resolved jsonl path per tracked key, for ensure idempotence. */
-  private tracked = new Map<string, string>();
+  /** Resolved jsonl path + current generation per tracked key. The
+   *  path drives ensure idempotence; the generation gates results (see
+   *  the protocol's `gen` doc — a stale in-flight delta for a
+   *  same-key-different-path predecessor must not land on the fresh
+   *  buffer). */
+  private tracked = new Map<string, { path: string; gen: number }>();
+  private nextGen = 1;
   private listeners = new Set<Listener>();
   private worker: Worker | null = null;
 
@@ -204,15 +209,25 @@ class SessionTailRegistry {
       // Already tracking — only restart if the resolved path changed
       // (e.g. a destroy+recreate cycle re-pointed the slug at a
       // different worktree path within the same TUI run).
-      if (existing === path) return;
+      if (existing.path === path) return;
       this.stopByKey(key);
     }
-    this.tracked.set(key, path);
+    const gen = this.nextGen++;
+    this.tracked.set(key, { path, gen });
     const startedAt = Date.now();
     this.commit((m) =>
       m.set(key, { slug, name, startedAt, lines: [], lastUsage: null }),
     );
-    this.post({ type: "ensure", key, slug, name, path, projectDir, jsonlName });
+    this.post({
+      type: "ensure",
+      key,
+      gen,
+      slug,
+      name,
+      path,
+      projectDir,
+      jsonlName,
+    });
   }
 
   stop(slug: string, name: string | null = null): void {
@@ -238,7 +253,11 @@ class SessionTailRegistry {
 
   /** Stop every tailer + the worker. Used on TUI shutdown. */
   stopAll(): void {
-    for (const key of [...this.tracked.keys()]) this.stopByKey(key);
+    // No per-key "stop" posts here: the worker is being terminated in
+    // the next statement, and thread death reclaims its watchers and
+    // timers wholesale — messages posted now would never be dequeued.
+    this.tracked.clear();
+    this.commit((m) => m.clear());
     if (this.worker) {
       try {
         this.worker.terminate();
@@ -308,21 +327,22 @@ class SessionTailRegistry {
     });
     worker.addEventListener("close", () => {
       // Deliberate teardown nulls `worker` first (stopAll); anything
-      // else is a crash. Dropping the handle lets the next ensure/
-      // reconcile pass spawn a fresh worker and re-seed its tails.
+      // else is a crash. Clearing `tracked` makes the next reconcile's
+      // ensure() calls miss the idempotence check, spawn a fresh
+      // worker, and re-seed every live tail — and that reconcile is
+      // never far away: the effect driving it re-fires whenever the
+      // row pipeline re-derives, which the per-field polls (isFetching
+      // flips) cause within seconds even on a quiet board. Until the
+      // re-seed lands, ensure() resets each buffer to empty — a brief
+      // blank pane, then full history again.
       if (this.worker === worker) {
         log.warn("tail worker exited; will respawn on next reconcile");
         this.worker = null;
-        const tracked = [...this.tracked.keys()];
         this.tracked.clear();
-        // Keep runs visible (stale-but-painted beats blank); the next
-        // reconcile re-ensures every live key and the re-seed replaces
-        // the buffers wholesale.
-        void tracked;
       }
     });
     // Idle worker must not keep wt alive during shutdown.
-    (worker as Worker & { unref?: () => void }).unref?.();
+    worker.unref();
     this.worker = worker;
     return worker;
   }
@@ -332,9 +352,11 @@ class SessionTailRegistry {
       log.warn("tail worker", { message: msg.message, key: msg.key });
       return;
     }
-    // A result for a key stopped while the worker had it in flight —
-    // drop it rather than resurrecting a deleted entry.
-    if (!this.tracked.has(msg.key)) return;
+    // Drop results whose key was stopped while the worker had them in
+    // flight, and results from a superseded generation (same key
+    // re-ensured with a new path) — either would land stale content on
+    // a buffer that no longer describes that file.
+    if (this.tracked.get(msg.key)?.gen !== msg.gen) return;
     if (msg.type === "seed") {
       this.update(msg.key, (r) => ({
         ...r,

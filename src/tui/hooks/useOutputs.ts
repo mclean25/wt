@@ -59,12 +59,16 @@ function pruneDestroyStamps(live: readonly string[]): void {
  * Two outputs lists are equivalent for rendering purposes when they
  * agree on membership, order, and every display-relevant field. The
  * deliberate exclusions are `startedAt`/`lastActivity`: they advance on
- * every tail append, they only matter through the sort order (already
- * covered by comparing order) and the picker's age column (transient,
- * and a picker whose rows don't jump under the cursor mid-stream is a
- * feature) — and comparing them would put the App-level caller back on
- * a re-render-per-append cadence, which is what this check exists to
- * prevent.
+ * every tail append and only matter through the sort order (covered by
+ * comparing order) and the picker's age column (transient). Honest
+ * scope note: `sortOutputs` orders live entries by `lastActivity`
+ * desc, so TWO OR MORE concurrently-streaming sessions swap positions
+ * on most appends and defeat this check while that's happening — the
+ * stabilization pays off for the common single-stream and steady
+ * states, not for simultaneous multi-session streaming. Safety of the
+ * excluded fields rests on the invariant documented next to `Output`
+ * in `core/outputs.ts`: every field a consumer renders is either
+ * compared here or derivable from `id`.
  */
 function outputsEquivalent(
   a: readonly Output[],

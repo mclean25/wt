@@ -9,11 +9,16 @@
  * Wiring (both ends live behind the same env gate and cost nothing
  * when off):
  *  - `markKeypress()` — first line of the TUI's keyboard dispatch.
- *  - `attachInputLatencyProbe(renderer)` — registers a frame callback;
- *    the first frame completing after a marked keypress closes the
- *    sample. Marks older than a second are dropped (a key that painted
- *    nothing — cursor at a boundary, swallowed key — must not pin the
- *    next unrelated frame on itself).
+ *  - `attachInputLatencyProbe(renderer)` — subscribes to the
+ *    renderer's `"frame"` event, which fires AFTER the tree walk and
+ *    the native paint; the first such event after a marked keypress
+ *    closes the sample. NOT a frame callback: those run at the TOP of
+ *    the render loop, before layout and paint, so closing there would
+ *    exclude exactly the dominant, board-size-dependent cost this
+ *    probe exists to catch (`useScrollbarNoFlash` documents the same
+ *    ordering). Marks older than a second are dropped (a key that
+ *    painted nothing — cursor at a boundary, swallowed key — must not
+ *    pin the next unrelated frame on itself).
  *
  * Samples log as a rolled-up histogram line every `SUMMARY_MS` (grep
  * `input-latency`), plus an immediate warn for any single sample over
@@ -54,8 +59,9 @@ function pct(sorted: readonly number[], p: number): number {
 }
 
 type FrameProbeRenderer = {
-  setFrameCallback: (cb: (deltaMs: number) => Promise<void>) => void;
-  removeFrameCallback?: (cb: (deltaMs: number) => Promise<void>) => void;
+  /** EventEmitter surface; `"frame"` fires after the native paint. */
+  on: (event: "frame", cb: () => void) => unknown;
+  off: (event: "frame", cb: () => void) => unknown;
   readonly isRunning?: boolean;
 };
 
@@ -67,7 +73,7 @@ export function attachInputLatencyProbe(
   renderer: FrameProbeRenderer,
 ): () => void {
   if (!armed()) return () => {};
-  const onFrame = async (): Promise<void> => {
+  const onFrame = (): void => {
     if (pendingMarkMs === null) return;
     const latency = performance.now() - pendingMarkMs;
     pendingMarkMs = null;
@@ -77,7 +83,7 @@ export function attachInputLatencyProbe(
       log.warn("slow input frame", { latencyMs: Math.round(latency) });
     }
   };
-  renderer.setFrameCallback(onFrame);
+  renderer.on("frame", onFrame);
   const summaryTimer = setInterval(() => {
     // Live-mode duty: sampled on the summary cadence AND every check
     // tick below; isRunning true means something re-armed continuous
@@ -107,7 +113,7 @@ export function attachInputLatencyProbe(
   }, SUMMARY_MS);
   return () => {
     clearInterval(summaryTimer);
-    renderer.removeFrameCallback?.(onFrame);
+    renderer.off("frame", onFrame);
     pendingMarkMs = null;
     samples = [];
   };
