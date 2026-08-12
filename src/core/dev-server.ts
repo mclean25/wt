@@ -362,9 +362,13 @@ export async function stopDevServer(slug: string): Promise<void> {
   // server the user is still browsing.
   const port = readWtState().slugs[slug]?.devPort;
   if (port !== undefined) {
-    const closed = await closeDevServerBrowserSessions(slug, port);
-    if (closed.length > 0) {
-      log.event.info(`closed browser session ${closed.join(", ")} (${slug})`);
+    const browser = await closeDevServerBrowserSessions(slug, port);
+    if (browser.sessions.length > 0) {
+      log.event.info(`closed browser session ${browser.sessions.join(", ")} (${slug})`);
+    }
+    if (browser.tabs > 0) {
+      const s = browser.tabs === 1 ? "" : "s";
+      log.event.info(`closed ${browser.tabs} browser tab${s} on port ${port} (${slug})`);
     }
   }
 }

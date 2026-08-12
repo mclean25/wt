@@ -17,7 +17,7 @@ The design principle behind all of it: **the human does only the work only a hum
 - [Bun](https://bun.sh) — runtime.
 - `git` — worktree mechanics.
 - A [Nerd Font](https://www.nerdfonts.com/) — the TUI uses Nerd Font glyphs for status, PRs, checks, merge-queue position, etc. Without one, those cells render as tofu.
-- macOS — `open` and `pbcopy` are assumed for URL/clipboard handling; the webhook daemon installs as a launchd agent.
+- macOS — `open` and `pbcopy` are assumed for URL/clipboard handling; the webhook daemon installs as a launchd agent; closing a worktree's browser tabs drives Chromium browsers over `osascript` (first use prompts for Automation permission).
 
 **Optional, per integration**
 

@@ -566,12 +566,15 @@ export async function removeWorktree(
     // bailed above leaves a worktree the user is still working in, and
     // closing its tabs would be pure loss. Best-effort and silent when
     // there was nothing to close, which is the common case.
-    const closedTabs = await closeWorktreeBrowserSessions(
+    const browser = await closeWorktreeBrowserSessions(
       wt.slug,
       readWtState().slugs[wt.slug]?.devPort ?? null,
     );
-    if (closedTabs.length > 0) {
-      opts.onLog?.(`closed browser session ${closedTabs.join(", ")}`);
+    if (browser.sessions.length > 0) {
+      opts.onLog?.(`closed browser session ${browser.sessions.join(", ")}`);
+    }
+    if (browser.tabs > 0) {
+      opts.onLog?.(`closed ${browser.tabs} browser tab${browser.tabs === 1 ? "" : "s"}`);
     }
 
     if (wt.branch && backend.id === "rift") {

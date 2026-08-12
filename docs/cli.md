@@ -55,7 +55,9 @@ Remove a worktree (with dirty/unpushed guards, optional SST stage destroy, optio
 - `--delete-branch` / `--keep-branch` — default deletes the branch.
 - `--background` / `-b` — dispatch as a background job (watch with `wt logs <slug>`).
 
-Removal also closes the browser tabs the worktree's agents opened, by deleting its `browser-control` session (`wt-<slug>`, the `BROWSER_CONTROL_SESSION` every harness session inherits — see [fleet.md](fleet.md#the-design-responses)). Best-effort and silent: no `browser-control`, no relay running, or no browsing done means nothing happens. Tabs the human attached by hand are released, never closed.
+Removal also closes the browser tabs the worktree's agents opened, two ways. It deletes the worktree's `browser-control` session (`wt-<slug>`, the `BROWSER_CONTROL_SESSION` every harness session inherits — see [fleet.md](fleet.md#the-design-responses)), which closes that session's page while the relay still holds a live target for it; and it closes every browser tab parked on the worktree's dev port, by driving the running Chromium browsers over AppleScript. The second pass exists because the first silently stops closing anything once the debugger detaches from the tab (DevTools opened on it, "Cancel" on the debugging banner, a browser restart) — `session delete` still succeeds and still reports the id, but the tab lives on. Best-effort and silent: no `browser-control`, no relay, no browsing, or no Chromium browser open all mean nothing happens.
+
+Tabs the human attached by hand are released rather than closed — except on the dev port, which is wt's own allocation and whose server is going away regardless, so everything on it goes. A detached tab that is NOT on the dev port (a staging URL, a PR page) has no handle left and survives; `browser-control` offers no way to reach a tab it isn't attached to, and wt won't close one by guessing at its URL.
 
 And it reaps hand-started servers: any process holding a **listening TCP socket** whose cwd is inside the worktree (an agent's backgrounded `pnpm preview`, a stray vite) is SIGTERM'd — SIGKILL'd if it lingers — before the checkout is removed, with a `reaped …` line in the destroy log per kill. The listening-socket filter is the safety boundary: an editor or shell sitting in the directory holds no socket and is never touched. This is the cleanup half of the process contract — the managed half (`wt dev`) covers the one process meant to *outlive* an agent's session; everything else may run unmanaged precisely because destroy guarantees it can't outlive the worktree. Best-effort and silent when nothing is listening, which is the common case.
 
@@ -92,7 +94,7 @@ List SST stages in the configured state bucket and flag orphans (no matching liv
 
 Manage the worktree's `[dev_server]` (see [configuration.md](configuration.md#dev_server--optional-per-worktree-dev-server)). `start` is also restart; `stop` keeps the slug's port reserved; `logs` prints the supervisor pane's recent output. The slug defaults to the worktree containing the current directory.
 
-`stop` also closes the browser tabs that were on the server, matched by the dev port (not by session name, so the login-script sessions actually holding the app open are covered). Stopping the server strands those tabs on a refused port, so they go with it. The worktree's other browser sessions are deliberately untouched — an agent's reference tabs are not the dev server's.
+`stop` also closes the browser tabs that were on the server, matched by the dev port (not by session name, so the login-script sessions actually holding the app open are covered) — both the `browser-control` sessions sitting on that port and, over AppleScript, the browser's own tabs on it. Stopping the server strands those tabs on a refused port, so they go with it. The worktree's other browser sessions are deliberately untouched: an agent's reference tabs are not the dev server's.
 
 ### `wt logs [<slug>]`
 

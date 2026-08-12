@@ -28,6 +28,11 @@
 # public CLI commands only — when a command's contract changes this
 # breaks loudly instead of drifting into a lie.
 #
+# It also configures a real [dev_server] (a `python3 -m http.server` on
+# ports 8700+), so `wt dev start/stop`, port allocation, the row's URL and
+# the browser-tab cleanup hanging off the port can all be exercised for
+# real without touching a project's dev command.
+#
 # Known gaps (things a local fixture can't fabricate): PR / check /
 # merge-queue badges need GitHub, fold state is TUI-only (press Tab on a
 # section header), and a stale work status needs a stale timestamp.
@@ -129,6 +134,15 @@ base   = "main"
 
 [ui]
 rows = ["branch", "base", "path", "status", "git"]
+
+# A real, supervised, per-worktree dev server — enough to exercise
+# \`wt dev start/stop\`, the row's URL, port allocation, and the browser-tab
+# cleanup that hangs off the allocated port. Ports sit well clear of any
+# real project's range so a fixture server can never be mistaken for one.
+[dev_server]
+command    = "python3 -m http.server {{port}} --bind 127.0.0.1"
+port_base  = 8700
+port_range = 50
 
 [skills]
 # Never answer the machine-global skills prompt on the human's behalf.
