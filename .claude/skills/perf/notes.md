@@ -40,6 +40,16 @@ Failure signatures (check these first):
   wt-category process pinned at ~100% while functionally idle. Applies
   to any `_`-prefixed entrypoint meant to just sit there (also a
   CLAUDE.md trap).
+- **Loop stalls corrupt DATA, not just latency.** A blocked event loop
+  makes any timeout-vs-IO race resolve the wrong way (libuv runs timers
+  before poll), so a stall shows up as a wrong answer somewhere else
+  entirely. The dev-server bolt vanishing off rows "when lots is
+  happening" was this: a 400ms socket timeout beating a `connect` that
+  had already succeeded, reporting a live server as dead. Signature: a
+  correctness symptom that only appears under load and clears on `r`.
+  When you get one, look for a deadline racing an IO callback before
+  looking for a logic bug — and check `grep 'event-loop blocked'` for
+  whether stalls exceed that deadline (574ms is on record).
 - **Leaked headless wt instances.** A dead terminal can orphan the TUI
   to launchd (pre-SIGHUP-handler builds, wedged teardowns); each orphan
   keeps polling GitHub and duplicating attention lines. One sweep found

@@ -100,21 +100,61 @@ export function devUrl(port: number): string {
 }
 
 /**
- * True when something accepts TCP connections on the port (loopback —
- * the server may bind wider, but loopback is always reachable when it
- * is up). Connection refused/timeout ⇒ free.
+ * Outcome of a loopback port probe. `unknown` is a real third answer,
+ * not a synonym for `free`: see `probePort`.
  */
-function portInUse(port: number, timeoutMs = 400): Promise<boolean> {
+export type PortProbe = "listening" | "free" | "unknown";
+
+/**
+ * One loopback connect attempt. `ECONNREFUSED` is the only definitive
+ * "nothing is listening" — on loopback a live server accepts and a dead
+ * one refuses, both essentially instantly, so a *timeout* says nothing
+ * about the port and everything about us.
+ *
+ * Specifically: the deadline is a timer on OUR event loop, and libuv
+ * runs the timers phase before the poll phase. Block the loop past
+ * `timeoutMs` (a heavy render, a big sync parse) and the timeout
+ * callback fires ahead of a `connect` event that already landed — the
+ * probe reports "free" for a port that is demonstrably listening.
+ * Reproduced at a 500ms stall; wt has a 574ms loop block on record.
+ * Hence `unknown`, never `free`.
+ */
+function probePortOnce(port: number, timeoutMs: number): Promise<PortProbe> {
   return new Promise((resolve) => {
     const sock = net.connect({ host: "127.0.0.1", port });
-    const done = (used: boolean) => {
+    const done = (result: PortProbe) => {
       sock.destroy();
-      resolve(used);
+      resolve(result);
     };
-    sock.setTimeout(timeoutMs, () => done(false));
-    sock.once("connect", () => done(true));
-    sock.once("error", () => done(false));
+    sock.setTimeout(timeoutMs, () => done("unknown"));
+    sock.once("connect", () => done("listening"));
+    sock.once("error", (err) =>
+      done((err as NodeJS.ErrnoException).code === "ECONNREFUSED" ? "free" : "unknown"),
+    );
   });
+}
+
+/**
+ * Whether something accepts TCP connections on the port (loopback — the
+ * server may bind wider, but loopback is always reachable when it is
+ * up). An inconclusive first attempt is retried once: the usual cause
+ * is our own loop having been blocked past the deadline, and by the
+ * time we get here it is running again, so the second look almost
+ * always resolves. Only twice-inconclusive is reported as `unknown`.
+ */
+export async function probePort(port: number, timeoutMs = 400): Promise<PortProbe> {
+  const first = await probePortOnce(port, timeoutMs);
+  if (first !== "unknown") return first;
+  return probePortOnce(port, timeoutMs);
+}
+
+/**
+ * Port-allocation view of the probe: anything but a definitive `free`
+ * counts as taken. Handing out a port we merely failed to read would
+ * collide with whatever is actually on it.
+ */
+async function portInUse(port: number): Promise<boolean> {
+  return (await probePort(port)) !== "free";
 }
 
 /**
@@ -405,11 +445,19 @@ export async function devServerStatus(
     }
     return { ...DEV_SERVER_STOPPED, port };
   }
-  const listening = port !== null && (await portInUse(port));
-  if (listening) {
+  const probe = port !== null ? await probePort(port) : "free";
+  if (probe === "listening") {
     return { running: true, starting: false, crashed: false, port, url: devUrl(port!) };
   }
   const marker = readMarker(slug);
+  if (probe === "unknown" && marker === "running") {
+    // Live session, supervisor's last word was "running", and the probe
+    // came back with no answer at all. That is not evidence the server
+    // went away — reporting it as stopped drops the bolt off the row and
+    // makes `s` refuse to open a URL that works. Keep the last known
+    // truth; the next pass re-probes.
+    return { running: true, starting: false, crashed: false, port, url: devUrl(port!) };
+  }
   if (marker === "crashed") {
     return { running: false, starting: false, crashed: true, port, url: null };
   }

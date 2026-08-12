@@ -37,7 +37,22 @@ export async function listAllSessionsRaw(): Promise<Set<string>> {
     "-F",
     "#{session_name}",
   ]);
-  if (r.exitCode !== 0) return new Set();
+  if (r.exitCode !== 0) {
+    // "No server running" is the honest empty — nobody has entered a
+    // session yet. Any OTHER failure (spawn refused under fork
+    // pressure, a socket we can't reach) returns the same empty set,
+    // which every caller reads as "no sessions of any kind exist": the
+    // session glyphs and the dev badge blank out fleet-wide off one bad
+    // shell-out. Can't fix that here without turning ~8 callers'
+    // fallbacks into unhandled rejections, so make it diagnosable.
+    if (!/no server running|error connecting/i.test(r.stderr)) {
+      log.warn("tmux list-sessions failed; reporting no sessions", {
+        code: r.exitCode,
+        stderr: r.stderr.trim() || null,
+      });
+    }
+    return new Set();
+  }
   const names = r.stdout
     .split("\n")
     .map((l) => l.trim())
