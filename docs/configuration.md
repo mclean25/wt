@@ -58,12 +58,31 @@ The source of truth for the schema is [`src/core/config.ts`](../src/core/config.
 | `lock_dir` | no | `<cache root>/locks` | Per-slug operation locks (what drives the "setting up…" busy state). |
 | `cache_db` | no | `~/.cache/wt/cache.sqlite` | SQLite blob persisting the TanStack Query cache between runs. Its directory (the **cache root**) anchors every other cross-process file wt writes — `state.json`, `archive.json`, session-name registries, the automations ledger, manager reports, shell logs, the generated `tmux.conf`. Point `cache_db` into a fresh directory and that instance shares no state with any other. |
 | `wezterm_cli` | no | macOS: `/Applications/WezTerm.app/Contents/MacOS/wezterm`; elsewhere: `wezterm` from `PATH` | WezTerm CLI executable used to set the tab title to `wt` when `WEZTERM_PANE` is present. Supports `~` expansion. |
+| `dotfiles` | no | `~/.dotfiles` | Repo behind the general-purpose config session (`/` and its `\` palette). **The slot hides itself entirely when the directory doesn't exist** — no footer button, and `/` / `\` fall through — so a machine without a dotfiles repo isn't offered a key that can only cold-start a harness in a missing directory. |
 
 > **Upgrade note (Aug 2026):** wt used to keep all of this cross-process state at a fixed `~/.cache/wt` no matter where `cache_db` pointed. If you had `cache_db` at a custom location before the cache-root change, wt now looks for `state.json` & co. next to it and will start fresh — move the files from `~/.cache/wt` into `cache_db`'s directory (or drop your `cache_db` override) before upgrading. With the default `cache_db` nothing changes.
 
 ### Running a second isolated instance
 
-Two wt instances (another repo, a test setup) stay fully independent when they differ on two knobs: a relocated `cache_db` (own cache root → own state universe) and the `WT_TMUX_SOCKET` environment variable (own tmux server — session names are only slug-scoped, so sharing a socket would cross-wire same-named sessions, most dangerously the singleton `manager`). Pick the config with `WT_CONFIG=/path/to/config.toml`. Both env vars propagate into every session the tmux server spawns, so `wt` CLI calls made inside agent sessions resolve the same instance.
+Two wt instances (another repo, a test setup) stay fully independent when they differ on two knobs: a relocated `cache_db` (own cache root → own state universe) and a distinct tmux socket (own tmux server — session names are only slug-scoped, so sharing a socket would cross-wire same-named sessions, most dangerously the singleton `manager`). Both can live in the same config file:
+
+```toml
+[paths]
+main_clone    = "~/Code/other-repo"
+worktree_root = "~/Code/other-repo-wt"
+cache_db      = "~/.cache/wt-other/cache.sqlite"
+
+[tmux]
+socket = "wt-other"
+```
+
+Pick it with `WT_CONFIG=/path/to/config.toml` (or let a repo `.wt.toml` supply the same keys). `WT_TMUX_SOCKET` still overrides `[tmux] socket` and still propagates into every session the tmux server spawns — that precedence is deliberate, since a `wt` call made *inside* an already-running session must resolve the socket it was started under regardless of what config it later reads. Putting the socket in config is what removes the need to wrap every entry point in a shell function that exports the variable.
+
+## `[tmux]`
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `socket` | no | `"wt"` | Socket name (`tmux -L <socket>`) for the wt-private tmux server that hosts every agent, shell, diff, dev-server and action session. Change it only to isolate a second instance (above). `WT_TMUX_SOCKET` wins when set. |
 
 ## `[branch]`
 
@@ -291,8 +310,17 @@ rerun_command  = "/codex-review"
 | `login` | checklist: **yes** | `"coderabbitai"` | The bot's comment/thread author login. A trailing `[bot]` is ignored when matching (GraphQL reports app logins without it). Required in checklist mode — the CodeRabbit default would silently match nothing. |
 | `check_contexts` | no | threads: `["CodeRabbit"]`, checklist: `[]` | Glob patterns for the bot's check contexts / workflow job names. Drive pending-vs-done detection and are auto-excluded from the CI rollup — set them whenever the bot runs as checks/jobs so an advisory run can't flip the CI badge. |
 | `unresolved_via` | no | `"threads"` | `"threads"` or `"checklist"` (see above). |
-| `summary_marker` | checklist: **yes** | — | Body prefix identifying the bot's summary comment. |
-| `pending_marker` | no | *(unset)* | Body prefix of the bot's "review started" ack comment. An ack newer than the latest summary shows as *pending* — needed for comment-triggered re-runs, whose check runs never attach to the PR head. |
+| `summary_marker` | checklist: **yes** | — | String identifying the bot's summary comment. Matched at the start of any of the comment's **first three lines** (see below). |
+| `pending_marker` | no | *(unset)* | Same matching, for the bot's "review started" ack comment. An ack newer than the latest summary shows as *pending* — needed for comment-triggered re-runs, whose check runs never attach to the PR head. |
+
+**Marker matching.** Both markers match at the start of any of the comment's first three lines, not strictly at the start of the body. The reason is that the conventional way to make a comment machine-identifiable is an HTML comment on its own first line, with the visible heading below it:
+
+```markdown
+<!-- codex-review-summary -->
+### 🤖 Codex review
+```
+
+Under a strict prefix test, `summary_marker = "### 🤖 Codex review"` matches nothing there and the badge sits blank with no error to chase — two repos running variants of one reviewer workflow differed on exactly this. The three-line window is deliberate rather than a substring search: a human (or the bot) quoting the heading further down a long comment must not promote that comment to "the summary". Either line works as the marker; prefer the HTML comment when the workflow emits one, since it's the half that exists to be matched.
 | `rerun_command` | no | *(unset)* | PR comment body that re-triggers a review. When set, a built-in "Re-run *name* review" action appears in the `!` picker (it posts the comment via `gh`). |
 
 Checklist-mode bots typically don't re-run on push, so a review can lag the branch head. wt detects this (the latest summary comment predates the head commit) and marks the state **stale**: the details row shows `(old head)`. The badge colour does *not* change, because for a bot that only reviews on `opened` stale is the steady state rather than a transient, and dimming it would make clean-green a colour you'd essentially never see. Badge states: pending (running / re-run acked), unresolved (with count), clean, none — unresolved wins over a concurrent re-run, since old findings still need addressing. Checkbox counting skips fenced code blocks, so a suggestion block quoting checkbox syntax doesn't inflate the count. One sizing note: the summary comment is found within the PR's most recent 30 comments — on an extremely chatty PR whose last 30 comments postdate the bot's summary, the badge reads as if the bot never ran.
@@ -318,6 +346,21 @@ Omit for classic poll-only behavior. When present, the `wt events` daemon accept
 | key | required | default | meaning |
 |---|---|---|---|
 | `command` | no | `"revdiff --vim-motion --compact {{base}}"` | Shell command F11 launches inside the selected worktree (via `$SHELL -lc`, so pipes and aliases work). `{{base}}` substitutes the worktree's resolved diff base: `origin/<trunk>` normally, the parent branch for stacked worktrees. Swap in `gitu`, `lazygit`, `tig status`, a `delta` pipe, or any script. Commands using `{{base}}` get their session killed when the resolved base changes (PR base flip, stack reroot) so the next F11 reopens against the right ref. |
+
+## `[editor]`
+
+Which editor `wt open`, the TUI's `o` / `O`, the slot palettes' `z` row, and `wt new --open` launch.
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `command` | no | *(unset — the built-in Zed integration)* | Shell command run via `$SHELL -lc`. `{{path}}` substitutes the checkout path, shell-quoted; a command that never mentions it gets the path appended (also quoted), so a bare `cursor` works. |
+
+```toml
+[editor]
+command = "cursor {{path}}"      # or: "code -n", "idea", "zed -n {{path}}", "open -a Emacs {{path}}"
+```
+
+Leaving the section out keeps the behavior wt had before it existed: **Zed**, with focus-if-already-open (tracked through yabai, so an open window is raised rather than a second one spawned) and the frontmost terminal hidden. Setting `command` replaces that whole path — wt then holds no window handle, and focus-if-open becomes the editor's own business, which every mainstream editor gets right for a directory it already has open. The terminal is hidden either way; that's about the terminal wt runs in, not about the editor.
 
 ## `[ui]`
 

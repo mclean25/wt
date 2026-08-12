@@ -2,7 +2,7 @@ import type { KeyEvent } from "@opentui/core";
 
 import { recentValues } from "../../core/actions.ts";
 import { createLogger } from "../../core/logger.ts";
-import { openInZed } from "../../core/zed.ts";
+import { openInEditor } from "../../core/editor.ts";
 import { printableMultiline } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import { SESSION_SLOTS } from "../sessions/slots.ts";
@@ -53,18 +53,18 @@ export function handleActionPickerKey(
         void doAutoMerge(ap.slug, item.armed ? "disable" : "enable");
         return;
       }
-      if (item.kind === "openZed") {
+      if (item.kind === "openEditor") {
         // Local flow like autoMerge — nothing injected. ap.slug is the
         // slot slug (the row only exists on the slot surface).
         setModal(null);
         const slot = SESSION_SLOTS.find((s) => s.slug === ap.slug);
         if (!slot) return;
-        const zedLog = createLogger(slot.label);
-        void openInZed(slot.path)
-          .then(() => zedLog.event.info(`opened ${slot.path}`))
+        const editorLog = createLogger(slot.label);
+        void openInEditor(slot.path)
+          .then(() => editorLog.event.info(`opened ${slot.path}`))
           .catch((err: unknown) =>
-            zedLog.event.err(
-              `zed open failed: ${err instanceof Error ? err.message : String(err)}`,
+            editorLog.event.err(
+              `editor open failed: ${err instanceof Error ? err.message : String(err)}`,
             ),
           );
         return;

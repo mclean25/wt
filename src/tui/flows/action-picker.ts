@@ -20,8 +20,8 @@ import { theme } from "../theme.ts";
 
 /** Quick-pick letter for the `!` picker's auto-merge toggle row. */
 const AUTO_MERGE_KEY = "m";
-/** Quick-pick letter for the slot palettes' open-in-Zed row. */
-const OPEN_ZED_KEY = "z";
+/** Quick-pick letter for the slot palettes' open-in-editor row. */
+const OPEN_EDITOR_KEY = "z";
 
 type ActionPickerFlowsCtx = {
   rows: WorktreeRow[];
@@ -122,12 +122,12 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
 
   /**
    * A slot palette (`<` / `>` / `\`): the shared slot builtins
-   * (continue, compact), the local open-in-Zed row, and the custom
+   * (continue, compact), the local open-in-editor row, and the custom
    * free-text entry. Uniform across slots — nothing here is row- or
    * slot-specific, so no availability gating.
    */
   function buildSlotPickerItems(): PickerItem[] {
-    const keyById = assignActionKeys(SLOT_BUILTIN_ACTIONS, [OPEN_ZED_KEY]);
+    const keyById = assignActionKeys(SLOT_BUILTIN_ACTIONS, [OPEN_EDITOR_KEY]);
     return [
       ...SLOT_BUILTIN_ACTIONS.map((def) => ({
         kind: "action" as const,
@@ -135,7 +135,7 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
         key: keyById.get(def.id) ?? "",
         availability: { ok: true as const },
       })),
-      { kind: "openZed" as const, key: OPEN_ZED_KEY, availability: { ok: true as const } },
+      { kind: "openEditor" as const, key: OPEN_EDITOR_KEY, availability: { ok: true as const } },
       { kind: "custom" as const },
     ];
   }
@@ -155,7 +155,7 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
         ? item.def.name
         : item.kind === "autoMerge"
           ? "auto-merge"
-          : "open in zed";
+          : "open in editor";
     toast(`${name}: ${item.availability.reason}`, theme.warn, 2500);
     return false;
   }

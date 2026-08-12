@@ -1,16 +1,23 @@
+import { config } from "../config.ts";
 import type { HarnessId } from "../harness/index.ts";
 
 /**
- * Socket name (`-L`) for the wt-private tmux server. `WT_TMUX_SOCKET`
- * overrides it so a second isolated wt instance (another repo's
- * config, a test/dogfood setup) gets its own tmux universe — session
- * names are only slug-scoped, so two instances on one socket would
- * cross-wire same-named sessions (most dangerously the singleton
- * `manager`). Pair it with a relocated `paths.cache_db`; the env var
- * propagates into every session the server spawns, so `wt` CLI calls
- * made inside them land on the same socket.
+ * Socket name (`-L`) for the wt-private tmux server. A second isolated
+ * wt instance (another repo's config, a test/dogfood setup) needs its
+ * own tmux universe — session names are only slug-scoped, so two
+ * instances on one socket cross-wire same-named sessions (most
+ * dangerously the singleton `manager`). Pair it with a relocated
+ * `paths.cache_db`, which owns the rest of the state universe.
+ *
+ * Resolution is `WT_TMUX_SOCKET` → `[tmux] socket` → `"wt"`, and the
+ * env var wins because it is the half that propagates into every
+ * session the server spawns: a `wt` call made inside an already-running
+ * session must resolve the socket it was started under regardless of
+ * what any config later says. `[tmux] socket` exists so the recipe is
+ * expressible in a repo's `.wt.toml` rather than requiring every entry
+ * point to be wrapped in a shell function that exports the var.
  */
-export const TMUX_SOCKET = process.env.WT_TMUX_SOCKET?.trim() || "wt";
+export const TMUX_SOCKET = config.tmux.socket;
 
 /**
  * Exit statuses used by the tmux client's `detach-client -E` bindings to

@@ -42,10 +42,10 @@ export type PickerItem =
     }
   | {
       /**
-       * Slot-palette row: open the slot's directory in Zed. A local TS
+       * Slot-palette row: open the slot's directory in the configured editor. A local TS
        * flow like `autoMerge`, not an ActionDef — nothing is injected.
        */
-      kind: "openZed";
+      kind: "openEditor";
       key: string;
       availability: ActionAvailability;
     }
@@ -164,7 +164,7 @@ type Props = {
 
 /** Group label for header clustering; autoMerge sits in "github". */
 function itemGroup(item: PickerItem): string | null {
-  if (item.kind === "custom" || item.kind === "openZed") return null;
+  if (item.kind === "custom" || item.kind === "openEditor") return null;
   if (item.kind === "autoMerge") return "github";
   return item.def.group ?? null;
 }
@@ -178,8 +178,8 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
       ? "action:__custom__"
       : item.kind === "autoMerge"
         ? "action:__auto-merge__"
-        : item.kind === "openZed"
-          ? "action:__open-zed__"
+        : item.kind === "openEditor"
+          ? "action:__open-editor__"
           : `action:${item.def.id}`;
   const selectedId = items[selectedIndex]
     ? rowId(items[selectedIndex]!)
@@ -251,8 +251,8 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
             ? item.armed
               ? "Disarm auto-merge"
               : "Arm auto-merge (merge when ready)"
-            : item.kind === "openZed"
-              ? "Open in Zed"
+            : item.kind === "openEditor"
+              ? "Open in editor"
               : item.def.name;
         // Trailing hint: a kind/target marker plus the action id. `$` for
         // shell commands; the Claude robot glyph for claude prompts (two
@@ -267,7 +267,7 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
             ? `(${(item.availability as { reason: string }).reason})`
             : item.kind === "autoMerge"
               ? "gh · merge queue aware"
-              : item.kind === "openZed"
+              : item.kind === "openEditor"
                 ? "local"
                 : item.def.kind === "shell"
                   ? `$ ${item.def.id}`

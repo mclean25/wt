@@ -52,7 +52,7 @@ import { REVIEW_SECTION } from "../flows/new-worktree.ts";
 import type { makeSectionFlows } from "../flows/sections.ts";
 import type { makeSessionFlows } from "../flows/sessions.ts";
 import { openUrlHidingTerminal } from "../../core/macos.ts";
-import { openInZed } from "../../core/zed.ts";
+import { openInEditor } from "../../core/editor.ts";
 import {
   isSyntheticLiveSessionId,
   type useHarnessSessions,
@@ -353,7 +353,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       return;
     }
     // App-level keys shared with the removed-worktrees view (help,
-    // quit, refresh, ^R, n, c, Shift+A, Shift+Tab, slot sessions, zed).
+    // quit, refresh, ^R, n, c, Shift+A, Shift+Tab, slot sessions, editor).
     if (handleGlobalKey(k)) return;
     // Ctrl+A — toggle automations for the row under the cursor
     // (persisted in wtstate, survives restarts). A stack member
@@ -941,11 +941,11 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     if (!current) return;
     const rowLog = createLogger(current.wt.slug);
     if (isPlainLetter(k, "o")) {
-      void openInZed(current.wt.path)
-        .then(() => rowLog.event.info("opened in zed"))
+      void openInEditor(current.wt.path)
+        .then(() => rowLog.event.info("opened in the editor"))
         .catch((err: unknown) =>
           rowLog.event.err(
-            `zed open failed: ${err instanceof Error ? err.message : String(err)}`,
+            `editor open failed: ${err instanceof Error ? err.message : String(err)}`,
           ),
         );
       return;

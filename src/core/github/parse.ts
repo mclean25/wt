@@ -214,6 +214,28 @@ export function countUntickedBoxes(body: string): number {
  * that updates its summary in place — or a human ticking boxes — counts
  * as fresher than an earlier ack.
  */
+/**
+ * Number of leading lines a `summary_marker` / `pending_marker` may
+ * appear on. Not a prefix test, because the standard way to make a
+ * comment machine-identifiable is an HTML comment on its own first
+ * line (`<!-- codex-review-summary -->`) followed by the visible
+ * heading — a shape a strict prefix match rejects, silently, leaving a
+ * blank badge with nothing to debug. Two repos running variants of the
+ * same reviewer workflow differed on exactly this.
+ *
+ * Bounded to the opening lines rather than the whole body so a human
+ * (or the bot) quoting the heading deep in a long comment can't
+ * promote that comment to "the summary".
+ */
+const MARKER_SCAN_LINES = 3;
+
+export function hasMarker(body: string, marker: string): boolean {
+  if (body.startsWith(marker)) return true;
+  return body
+    .split("\n", MARKER_SCAN_LINES)
+    .some((line) => line.trimStart().startsWith(marker));
+}
+
 function rollupChecklist(
   contexts: RawCheck[] | null | undefined,
   comments: GqlPrNode["comments"],
@@ -224,9 +246,9 @@ function rollupChecklist(
   let ack: BotComment | null = null;
   for (const c of comments?.nodes ?? []) {
     if (!c?.body || !isBotLogin(c.author?.login)) continue;
-    if (BOT.summaryMarker && c.body.startsWith(BOT.summaryMarker)) {
+    if (BOT.summaryMarker && hasMarker(c.body, BOT.summaryMarker)) {
       if (!summary || c.createdAt > summary.createdAt) summary = c;
-    } else if (BOT.pendingMarker && c.body.startsWith(BOT.pendingMarker)) {
+    } else if (BOT.pendingMarker && hasMarker(c.body, BOT.pendingMarker)) {
       if (!ack || c.createdAt > ack.createdAt) ack = c;
     }
   }

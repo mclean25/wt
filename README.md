@@ -16,6 +16,7 @@ The design principle behind all of it: **the human does only the work only a hum
 
 - [Bun](https://bun.sh) — runtime.
 - `git` — worktree mechanics.
+- `tmux` — every session wt owns (coding agent, shell, diff, dev server, action runner) lives on a wt-private tmux server, which is what makes them survive wt restarts.
 - A [Nerd Font](https://www.nerdfonts.com/) — the TUI uses Nerd Font glyphs for status, PRs, checks, merge-queue position, etc. Without one, those cells render as tofu.
 - macOS — `open` and `pbcopy` are assumed for URL/clipboard handling; the webhook daemon installs as a launchd agent; closing a worktree's browser tabs drives Chromium browsers over `osascript` (first use prompts for Automation permission).
 
@@ -23,8 +24,8 @@ The design principle behind all of it: **the human does only the work only a hum
 
 - `gh` (GitHub CLI, authenticated) — the PR row and every in-TUI PR action (auto-merge, mark ready, reviewers, CI log tails).
 - `aws` CLI with a profile that can read your SST state bucket — when `[deploy.sst]` is configured (stage row + `wt stages`).
-- `zed` CLI — `wt open` and the `o`/`O` keybindings (the editor is not currently configurable).
-- [`revdiff`](https://github.com/umputun/revdiff) — the default F11 diff command. Override `[diff].command` to use `gitu`, `lazygit`, `tig`, a `delta` pipe, etc. instead.
+- An editor — `wt open` and the `o`/`O` keybindings. `[editor] command` takes any launcher (`cursor {{path}}`, `code -n`, …); with the section omitted it drives `zed`, which additionally raises an already-open window rather than spawning a second one.
+- [`revdiff`](https://github.com/umputun/revdiff) — what `[diff].command` defaults to, so F11 needs it installed unless you override the command. `gitu`, `lazygit`, `tig status`, a `delta` pipe or any script work equally well.
 - Issue tracker — no CLI or token; the issue id is parsed from branch slugs and linked via a URL template (`[issue_tracker]`, with a Linear preset), and PRs can open in Linear Reviews.
 - Dev server — one supervised `npm run dev`-style process per worktree (`[dev_server]`): wt-owned ports, crash restarts with give-up, tmux-backed so it survives wt restarts.
 - Review bot — the CodeRabbit badge/automation track, retargetable at any PR-review bot (`[review_bot]`), including checklist-style GitHub Actions reviewers.

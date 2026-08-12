@@ -248,6 +248,29 @@ export type DiffConfig = {
   command: string;
 };
 
+/**
+ * Optional editor integration (`[editor]`). `wt open` and the `o` / `O`
+ * keys open a checkout in an editor; the built-in path drives **Zed**
+ * (focus-if-already-open via yabai, plus hiding the terminal), which is
+ * what wt did unconditionally before this section existed. Absent ⇒
+ * exactly that behavior.
+ *
+ * Setting `command` replaces the whole Zed path with a shell command,
+ * so any editor works (`cursor {{path}}`, `code -n {{path}}`, `idea
+ * {{path}}`). wt then has no window handle, so focus-if-open is the
+ * editor's own business — every editor listed does the right thing with
+ * a directory it already has open.
+ */
+export type EditorConfig = {
+  /**
+   * Shell command run via `$SHELL -lc` to open a checkout. `{{path}}`
+   * substitutes the worktree path, shell-quoted; a command without the
+   * placeholder gets the path appended (also quoted), so `cursor` alone
+   * works. Null = the built-in Zed integration.
+   */
+  command: string | null;
+};
+
 export type AiProvider = "openai" | "gemini";
 
 type BaseAiConfig = {
@@ -556,7 +579,24 @@ export type Config = {
     cacheRoot: string;
     /** WezTerm CLI used for tab naming; null falls back to PATH lookup. */
     weztermCli: string | null;
+    /**
+     * Repo backing the general-purpose config session (`/` keybind and
+     * its `\` palette). Defaults to `~/.dotfiles`; the slot hides
+     * itself entirely when the directory doesn't exist, so a machine
+     * without one simply has no `/` key rather than a session that
+     * cold-starts in a missing directory.
+     */
+    dotfiles: string;
   };
+  /**
+   * tmux server the whole instance uses (`tmux -L <socket>`). Session
+   * names are only slug-scoped, so two wt instances sharing a socket
+   * cross-wire same-named sessions — most damagingly the singleton
+   * manager. `WT_TMUX_SOCKET` still wins (it's what propagates into
+   * child processes); this makes the second-instance recipe expressible
+   * in config instead of requiring a shell wrapper.
+   */
+  tmux: { socket: string };
   branch: {
     prefix: string;
     base: string;
@@ -602,6 +642,7 @@ export type Config = {
   remote: RemoteConfig | null;
   ai: AiConfig | null;
   diff: DiffConfig;
+  editor: EditorConfig;
   github: GithubConfig;
   actions: readonly ActionDef[];
   automations: readonly AutomationDef[];
@@ -692,6 +733,7 @@ const GENERIC_DEFAULTS = {
   },
   paths: {
     cacheDb: join(HOME, ".cache", "wt", "cache.sqlite"),
+    dotfiles: join(HOME, ".dotfiles"),
     weztermCli:
       process.platform === "darwin"
         ? "/Applications/WezTerm.app/Contents/MacOS/wezterm"
@@ -936,6 +978,9 @@ function build(raw: Raw, errs: Errors): Config {
   const weztermCliRaw =
     errs.optStrOrNull(paths, "wezterm_cli") ?? GENERIC_DEFAULTS.paths.weztermCli;
   const weztermCli = weztermCliRaw ? expandHome(weztermCliRaw) : null;
+  const dotfiles = expandHome(
+    errs.optStr(paths, "dotfiles", GENERIC_DEFAULTS.paths.dotfiles),
+  );
 
   // Stage prefix derives from branch.prefix when omitted — the
   // overwhelmingly common shape is `<branch.prefix>-<stage>`. Same
@@ -1124,6 +1169,16 @@ function build(raw: Raw, errs: Errors): Config {
     command: errs.optStr(diffRaw, "command", GENERIC_DEFAULTS.diff.command),
   };
 
+  const editor: EditorConfig = {
+    command: errs.optStrOrNull(obj(raw.editor), "command"),
+  };
+
+  // `WT_TMUX_SOCKET` wins: it is the knob that propagates into every
+  // child process, so a session already spawned under it must keep
+  // resolving the same server no matter what the config says.
+  const tmuxSocket = process.env.WT_TMUX_SOCKET?.trim() ||
+    errs.optStr(obj(raw.tmux), "socket", "wt");
+
   const rows = strArr(ui?.rows, GENERIC_DEFAULTS.ui.rows);
   const hiddenBadges = new Set<BadgeSlot>();
   for (const id of strArr(ui?.hidden_badges, [])) {
@@ -1220,7 +1275,9 @@ function build(raw: Raw, errs: Errors): Config {
       cacheDb,
       cacheRoot,
       weztermCli,
+      dotfiles,
     },
+    tmux: { socket: tmuxSocket },
     branch: { prefix: branchPrefix, base: branchBase, idPattern, slugMaxLen },
     stage: { prefix: stagePrefix, defaultPersonal: stageDefault, domain: stageDomain },
     lifecycle: { envFilesToCopy: envFiles, copyGlobs, installCommand },
@@ -1232,6 +1289,7 @@ function build(raw: Raw, errs: Errors): Config {
     remote,
     ai,
     diff,
+    editor,
     github,
     actions,
     automations,

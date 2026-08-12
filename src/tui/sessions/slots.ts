@@ -30,8 +30,8 @@
  *  - `tui/hooks/useSessionTailReconcile.ts` — adds slot paths to
  *    `pathBySlug` so a slot's live claude session gets a tailer.
  */
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { config } from "../../core/config.ts";
 import { MANAGER_CLAUDE_NAME, MANAGER_SLUG } from "../../core/manager.ts";
@@ -108,18 +108,38 @@ export const MAIN_CLONE_SLOT: SessionSlot = {
 
 /**
  * Slot for the user's dotfiles. Backs the `/` keybind. General-purpose
- * config-editing session; `~/.dotfiles` is the actual git repo, so the
- * slot's harness lands in a versioned tree (cwd doesn't fence the
- * harness in — it can still touch `~/.config/...` by absolute path).
+ * config-editing session; the point of pointing it at a repo rather
+ * than `~/.config` is that the harness lands in a versioned tree (cwd
+ * doesn't fence the harness in — it can still touch `~/.config/...` by
+ * absolute path).
+ *
+ * The path is `[paths] dotfiles`, defaulting to `~/.dotfiles`. Plenty
+ * of machines have no such repo, which is why this is the one slot
+ * that can be absent: see `SLOT_BUTTONS` / `dotfilesSlotAvailable`.
  */
 export const DOTFILES_SLOT: SessionSlot = {
   slug: "dotfiles",
-  path: join(homedir(), ".dotfiles"),
+  path: config.paths.dotfiles,
   label: "dotfiles",
   key: "/",
   paletteKey: "\\",
   claudeName: null,
 };
+
+/**
+ * Whether the dotfiles slot is offered at all. Resolved once at module
+ * load (the directory doesn't appear mid-session, and every consumer is
+ * a hot render path).
+ *
+ * A slot whose directory doesn't exist is worse than a missing one: the
+ * harness cold-starts in a nonexistent cwd, and the footer advertises a
+ * key that can only fail. Hiding it frees `/` and `\` to do nothing
+ * visible, which is the honest behavior on a machine with no dotfiles
+ * repo. Bookkeeping consumers (`SESSION_SLOTS`, `SLOT_SLUGS`, the
+ * orphan-reaper whitelist) deliberately keep the entry regardless, so
+ * a session that IS somehow live still gets tailed and protected.
+ */
+export const dotfilesSlotAvailable: boolean = existsSync(DOTFILES_SLOT.path);
 
 /**
  * The manager — a singleton fleet-coordinator session (`m` keybind,
@@ -156,3 +176,12 @@ export const SESSION_SLOTS: readonly SessionSlot[] = [
 
 /** Convenience projection — just the slugs, for set membership tests. */
 export const SLOT_SLUGS: readonly string[] = SESSION_SLOTS.map((s) => s.slug);
+
+/**
+ * The slots that actually have a key and a footer button on this
+ * machine. Differs from `SESSION_SLOTS` only by dropping dotfiles when
+ * there's no dotfiles repo — see `dotfilesSlotAvailable`.
+ */
+export const OFFERED_SLOTS: readonly SessionSlot[] = SESSION_SLOTS.filter(
+  (s) => s.slug !== DOTFILES_SLOT.slug || dotfilesSlotAvailable,
+);

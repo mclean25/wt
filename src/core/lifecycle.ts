@@ -163,7 +163,12 @@ export async function parseInput(
           `Multiple branches for ${id}: ${found.join(", ")}. Pass the branch explicitly.`,
         );
       }
-      throw new Error(`No existing branch for ${id} to attach to.`);
+      throw new Error(
+        opts.anyAuthor
+          ? `No existing branch for ${id} to attach to.`
+          : `No ${config.branch.prefix}/ branch for ${id} to attach to. ` +
+            `Add --any to search every author's branches.`,
+      );
     }
     // Minting a new branch: the primary id must carry the configured
     // tracker prefix. A GitHub issue is a SECONDARY id (`--gh <n>`),

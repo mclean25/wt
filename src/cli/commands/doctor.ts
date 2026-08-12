@@ -81,7 +81,8 @@ async function checkSync(wt: Worktree): Promise<Check> {
     ["git", "rev-list", "--left-right", "--count", `origin/${config.branch.base}...HEAD`],
     { cwd: wt.path },
   );
-  if (r.exitCode !== 0) return mkCheck("sync", "warn", "cannot compare to origin/main");
+  const trunk = `origin/${config.branch.base}`;
+  if (r.exitCode !== 0) return mkCheck("sync", "warn", `cannot compare to ${trunk}`);
   const parts = r.stdout.trim().split(/\s+/);
   const behind = parseInt(parts[0] ?? "0", 10);
   const ahead = parseInt(parts[1] ?? "0", 10);
@@ -111,8 +112,8 @@ async function checkSync(wt: Worktree): Promise<Check> {
   }
 
   const bits: string[] = [];
-  if (ahead) bits.push(`${ahead} ahead of origin/main`);
-  if (behind) bits.push(`${behind} behind origin/main`);
+  if (ahead) bits.push(`${ahead} ahead of ${trunk}`);
+  if (behind) bits.push(`${behind} behind ${trunk}`);
   if (unpushed) bits.push(`${unpushed} unpushed`);
   if (bits.length === 0) return mkCheck("sync", "ok", "up to date");
   const status: CheckStatus = behind || unpushed ? "warn" : "info";
@@ -144,11 +145,39 @@ async function checkSstDeploy(wt: Worktree): Promise<Check> {
   }
 }
 
+/**
+ * Lockfile → the install command that produced it. Same detection the
+ * `[lifecycle] install_command` default uses, so the advice doctor
+ * prints matches what wt would actually run. Ordered most-specific
+ * first; `null` means the checkout has no JS package manager at all
+ * and the whole check is inapplicable.
+ */
+function detectPackageManager(path: string): { install: string; store: string | null } | null {
+  const lockfiles: [file: string, install: string, store: string | null][] = [
+    // pnpm's store is the one layout where node_modules can exist and
+    // still be unusable (a bare symlink tree with no .pnpm behind it),
+    // so it gets a second existence probe; the others don't.
+    ["pnpm-lock.yaml", "pnpm install", ".pnpm"],
+    ["bun.lock", "bun install", null],
+    ["bun.lockb", "bun install", null],
+    ["yarn.lock", "yarn install", null],
+    ["package-lock.json", "npm install", null],
+    ["npm-shrinkwrap.json", "npm install", null],
+  ];
+  for (const [file, install, store] of lockfiles) {
+    if (existsSync(join(path, file))) return { install, store };
+  }
+  return existsSync(join(path, "package.json")) ? { install: "npm install", store: null } : null;
+}
+
 async function checkNodeModules(wt: Worktree): Promise<Check> {
+  const pm = detectPackageManager(wt.path);
+  if (!pm) return mkCheck("node_modules", "info", "no JS package manager");
   const nm = join(wt.path, "node_modules");
-  const store = join(nm, ".pnpm");
-  if (!existsSync(nm) || !existsSync(store)) {
-    return mkCheck("node_modules", "warn", "not installed — run `pnpm install`");
+  const missing = !existsSync(nm) ||
+    (pm.store !== null && !existsSync(join(nm, pm.store)));
+  if (missing) {
+    return mkCheck("node_modules", "warn", `not installed — run \`${pm.install}\``);
   }
   return mkCheck("node_modules", "ok", "installed");
 }
@@ -194,9 +223,10 @@ async function checkGhMergeBase(wt: Worktree): Promise<Check> {
 
 async function checkMerged(wt: Worktree): Promise<Check> {
   if (!wt.branch) return mkCheck("merged", "info", "no branch");
+  const trunk = `origin/${config.branch.base}`;
   if (await branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path }))
-    return mkCheck("merged", "info", "merged into origin/main");
-  return mkCheck("merged", "ok", "not merged into origin/main");
+    return mkCheck("merged", "info", `merged into ${trunk}`);
+  return mkCheck("merged", "ok", `not merged into ${trunk}`);
 }
 
 async function checkPr(wt: Worktree): Promise<Check> {
@@ -342,8 +372,12 @@ async function runAllChecks(wt: Worktree, includePr: boolean): Promise<Check[]> 
   const tasks: Promise<Check>[] = [
     checkWorkingTree(wt),
     checkSync(wt),
-    checkSstStage(wt),
-    checkSstDeploy(wt),
+    // Gated on the integration, not merely on `.sst/stage` being
+    // present: without `[deploy.sst]` there is no stage to pin, so an
+    // ungated check warns forever on every row of every setup that
+    // doesn't deploy previews — noise that reads as a real problem on
+    // the first command a new user runs.
+    ...(config.sst ? [checkSstStage(wt), checkSstDeploy(wt)] : []),
     checkNodeModules(wt),
     checkLock(wt),
     checkGhMergeBase(wt),
@@ -397,7 +431,10 @@ async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
   console.log();
   console.log(`  ${MARKERS[overall]}  overall: ${bold(overall)}`);
   console.log(`     ${dim(`path:  ${wt.path}`)}`);
-  console.log(`     ${dim(`stage: ${wt.stage}`)}`);
+  // A stage name is computed for every worktree, but it only NAMES
+  // anything when `[deploy.sst]` is configured. Printing it otherwise
+  // advertises a preview environment that does not exist.
+  if (config.sst) console.log(`     ${dim(`stage: ${wt.stage}`)}`);
 }
 
 async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
@@ -422,7 +459,9 @@ async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
   const rows: Row[] = wts.map((wt, i) => ({ wt, checks: allChecks[i]! }));
   const table = renderTable(rows, [
     { header: "slug", getter: (r) => renderSlugCell((r as Row).wt) },
-    { header: "stage", getter: (r) => renderStageCell((r as Row).wt) },
+    ...(config.sst
+      ? [{ header: "stage", getter: (r: unknown) => renderStageCell((r as Row).wt) }]
+      : []),
     { header: "pr", getter: (r) => renderPrCell((r as Row).wt, prs) },
     {
       header: "highlights",

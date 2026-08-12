@@ -38,7 +38,7 @@ Issue-id input resolves like this:
 - `--attach` — attach to an existing branch for the id instead of minting a new one.
 - `--base <ref>` — fork base to branch from (recorded; see `wt base`).
 - `--any` — with `--attach`, match branches by any author, not just your `branch.prefix`.
-- `--open` / `--no-open` — open in Zed after creation (default: open when interactive).
+- `--open` / `--no-open` — open in the configured editor after creation (default: open when interactive).
 - `--no-install` — skip the package-install step. Ignored under the `rift` backend, which copies packages via its clone.
 
 If the branch already has a worktree, prints its path instead of erroring. A dirty main clone never blocks creation: the `rift` backend's CoW clone copies the main clone's uncommitted changes, and the post-clone branch switch discards them in the copy (`--discard-changes` — the main clone itself is never touched). Any create failure surfaces its reason on the CLI and the TUI attention feed instead of a row silently vanishing.
@@ -71,14 +71,19 @@ Remove every worktree that is merged or whose remote branch is gone. "Gone" is o
 
 ### `wt doctor [<slug>]`
 
-Health report: working tree, sync vs trunk, SST stage pin + deploy state, node_modules, locks, `gh-merge-base` branch config (must match the recorded fork base / trunk, or a bare `gh pr create` targets the repo default branch — see `wt new`), merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, pending agent-skill updates (`wt skills`), and **`wt` not being reachable on `PATH`** — a shell alias satisfies interactive use but doesn't exist inside a script file, so anything that scripts wt (an agent looping over worktrees) dies partway with `wt: command not found` and leaves the fleet half-updated. The check resolves `PATH` itself rather than shelling out, since this process's own shell may carry the alias and answer misleadingly; it also warns when a `wt` on `PATH` resolves to a *different* clone, which is worse than none.
+Health report: working tree, sync vs trunk, node_modules, locks, `gh-merge-base` branch config (must match the recorded fork base / trunk, or a bare `gh pr create` targets the repo default branch — see `wt new`), merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, pending agent-skill updates (`wt skills`), and **`wt` not being reachable on `PATH`** — a shell alias satisfies interactive use but doesn't exist inside a script file, so anything that scripts wt (an agent looping over worktrees) dies partway with `wt: command not found` and leaves the fleet half-updated. The check resolves `PATH` itself rather than shelling out, since this process's own shell may carry the alias and answer misleadingly; it also warns when a `wt` on `PATH` resolves to a *different* clone, which is worse than none.
 
 - `--all` / `-a` — force the full summary table.
 - `--json` — machine-readable.
 
+Two checks are conditional rather than universal, because a check that can only ever warn is noise on the first command a new user runs:
+
+- **SST stage pin + deploy state** (and the summary table's `stage` column) appear only when `[deploy.sst]` is configured. Without the integration there is no stage to pin, so the check would warn forever on every row.
+- **node_modules** detects the package manager from the checkout's lockfile — the same detection `[lifecycle] install_command` defaults to — so the advice it prints (`run \`pnpm install\``, `run \`bun install\``, …) is the command wt would actually run. A checkout with no `package.json` reports the check as inapplicable instead of missing. Only pnpm gets a second probe for its store directory (`node_modules/.pnpm`), the one layout where `node_modules` can exist and still be unusable.
+
 ### `wt open [<slug-or-query>]`
 
-Open a worktree in Zed. Exact slug or case-insensitive substring; no query ⇒ interactive picker.
+Open a worktree in your editor (`[editor] command`; the default is Zed, with focus-if-already-open). Exact slug or case-insensitive substring; no query ⇒ interactive picker.
 
 ## Inspection & maintenance
 

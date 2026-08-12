@@ -2,12 +2,12 @@ import { listWorktrees } from "../../core/worktree.ts";
 import { hasHelpFlag } from "../args.ts";
 import { red, yellow } from "../colors.ts";
 import { isInteractive, pickIndex } from "../prompt.ts";
-import { openInZed } from "../../core/zed.ts";
+import { openInEditor } from "../../core/editor.ts";
 
 const USAGE = `usage: wt open [<slug-or-query>]
 
-Open a worktree in Zed. Exact slug or case-insensitive substring; no
-query ⇒ interactive picker.`;
+Open a worktree in your editor ([editor] command; default is Zed).
+Exact slug or case-insensitive substring; no query ⇒ interactive picker.`;
 
 export async function run(argv: string[]): Promise<number> {
   if (hasHelpFlag(argv)) {
@@ -41,7 +41,7 @@ export async function run(argv: string[]): Promise<number> {
     return 1;
   }
   try {
-    await openInZed(target.path);
+    await openInEditor(target.path);
   } catch (err) {
     console.error(red(err instanceof Error ? err.message : String(err)));
     return 1;

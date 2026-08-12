@@ -4,19 +4,20 @@
  * selected row / section / PR stays in the normal-mode handler; this is
  * only the stuff with no per-row context: help, quit, refresh, cache
  * clear, new/clean, the global automations pause, the primary-harness
- * cycle, and the slot sessions / zed opens. Extracted from `app.tsx`.
+ * cycle, and the slot sessions / editor opens. Extracted from `app.tsx`.
  */
 import type { KeyEvent } from "@opentui/core";
 
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { createLogger } from "../../core/logger.ts";
 import { isPlainLetter, isShiftedLetter } from "../app-helpers.ts";
-import { openInZed } from "../../core/zed.ts";
+import { openInEditor } from "../../core/editor.ts";
 import type { Modal } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { emptyEdit } from "../text-edit.tsx";
 import {
   DOTFILES_SLOT,
+  dotfilesSlotAvailable,
   MAIN_CLONE_SLOT,
   MANAGER_SLOT,
   WT_SOURCE_SLOT,
@@ -188,7 +189,9 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       doEnterSlotSession(MAIN_CLONE_SLOT);
       return true;
     }
-    if (k.sequence === "/") {
+    // Falls through to the normal-key handlers when there's no dotfiles
+    // repo, so `/` stays free on machines that never had this slot.
+    if (k.sequence === "/" && dotfilesSlotAvailable) {
       doEnterSlotSession(DOTFILES_SLOT);
       return true;
     }
@@ -206,7 +209,7 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
     // Slot command palettes — the shift analog of each slot's attach
     // key (`<` for `,`, `>` for `.`), except dotfiles: shift+`/` is
     // `?` (help), so it rides `\` — the other slash, same key family.
-    // `>` used to open the wt source in zed; that moved into the wt
+    // `>` used to open the wt source in the editor; that moved into the wt
     // palette's `z` row (`O` still opens the main clone directly).
     if (k.sequence === "<") {
       openSlotPalette(WT_SOURCE_SLOT.slug);
@@ -216,17 +219,17 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       openSlotPalette(MAIN_CLONE_SLOT.slug);
       return true;
     }
-    if (k.sequence === "\\") {
+    if (k.sequence === "\\" && dotfilesSlotAvailable) {
       openSlotPalette(DOTFILES_SLOT.slug);
       return true;
     }
     if (k.sequence === "O") {
       const slotLog = createLogger(MAIN_CLONE_SLOT.label);
-      void openInZed(MAIN_CLONE_SLOT.path)
+      void openInEditor(MAIN_CLONE_SLOT.path)
         .then(() => slotLog.event.info(`opened ${MAIN_CLONE_SLOT.path}`))
         .catch((err: unknown) =>
           slotLog.event.err(
-            `zed open failed: ${err instanceof Error ? err.message : String(err)}`,
+            `editor open failed: ${err instanceof Error ? err.message : String(err)}`,
           ),
         );
       return true;

@@ -42,7 +42,7 @@ commands:
   stages      list SST stages, optionally clean orphans
   logs        tail a destroy log
   perf        one-shot perf snapshot: wt-downstream vs the rest of the machine
-  open        open a worktree in Zed
+  open        open a worktree in your editor
   restack     rebase a stack of worktrees onto its updated parents
   skills      keep wt's agent skills + instructions installed and current
   update      update wt itself (fast-forward the source clone; \`update log\` for history)

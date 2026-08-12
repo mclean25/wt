@@ -16,6 +16,7 @@ import {
   DOTFILES_SLOT,
   MAIN_CLONE_SLOT,
   MANAGER_SLOT,
+  OFFERED_SLOTS,
   SESSION_SLOTS,
   WT_SOURCE_SLOT,
   type SessionSlot,
@@ -72,14 +73,16 @@ function SlotButton({
 /**
  * Buttons in checking order. `[m]` leads the group so the manager's
  * context-% readout can sit immediately to its left without visually
- * belonging to another slot's button.
+ * belonging to another slot's button. Filtered through `OFFERED_SLOTS`
+ * so a machine with no dotfiles repo doesn't advertise a `/` key that
+ * can only fail.
  */
 const BUTTON_SLOTS: readonly SessionSlot[] = [
   MANAGER_SLOT,
   MAIN_CLONE_SLOT,
   WT_SOURCE_SLOT,
   DOTFILES_SLOT,
-];
+].filter((s) => OFFERED_SLOTS.includes(s));
 
 const getManagerUsage = () =>
   sessionTailRegistry

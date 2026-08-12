@@ -41,7 +41,7 @@ export function resolveDiffBase(row: WorktreeRow): string {
  * the parser lowercases letter names and exposes `k.shift` separately,
  * so without this guard `Shift+L` (and modified variants like Hyper+L)
  * fire the lowercase action, which is almost always wrong. Action
- * bindings (open-zed, archive, …) should always go through here.
+ * bindings (open-editor, archive, …) should always go through here.
  * Navigation arrows are checked separately upstream where Shift+arrow
  * scrolling is intentional.
  */
