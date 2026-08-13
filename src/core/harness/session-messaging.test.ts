@@ -2,8 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import {
   createSessionMessenger,
+  fallbackAdvice,
   senderTag,
   stampSender,
+  type FallbackCause,
   type SessionMessageTarget,
 } from "./session-messaging.ts";
 import type { InjectFailureKind, InjectOutcome } from "./claude/inject.ts";
@@ -181,25 +183,76 @@ describe("the claude transport ladder", () => {
     const fake = fakes({ deliverFails: "absent" });
     const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({ ok: true, transport: "terminal" });
+    expect(await send(target)).toMatchObject({
+      ok: true,
+      transport: "terminal",
+      fallback: { kind: "absent" },
+    });
     expect(fake.calls.terminal).toBe(1);
-    expect(fake.warnings[0]).toContain("restart it from wt");
+    expect(fake.warnings[0]).toContain("has no inspector socket");
   });
 
   test("a stale socket falls back to typing, with restart advice", async () => {
     const fake = fakes({ deliverFails: "stale" });
     const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({ ok: true, transport: "terminal" });
-    expect(fake.warnings[0]).toContain("restart the session to rebind it");
+    expect(await send(target)).toMatchObject({
+      ok: true,
+      transport: "terminal",
+      fallback: { kind: "stale" },
+    });
+    expect(fake.warnings[0]).toContain("died with a restart");
   });
 
   test("a prompt UI that never mounts is typed at, blaming the anchors", async () => {
     const fake = fakes({ deliverFails: "not-ready" });
     const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({ ok: true, transport: "terminal" });
+    expect(await send(target)).toMatchObject({
+      ok: true,
+      transport: "terminal",
+      fallback: { kind: "not-ready" },
+    });
     expect(fake.warnings[0]).toContain("moved the injector's anchors");
+  });
+
+  test("no fallback advice orders the reader to restart a session", () => {
+    // The reader is usually an agent messaging a peer that is mid-turn,
+    // and the message it is attached to was DELIVERED. An imperative
+    // here reads as "kill that conversation to fix this", which costs
+    // the peer its in-flight work and fixes nothing that was broken.
+    const causes: FallbackCause[] = [
+      { kind: "disabled" },
+      { kind: "unsupported", harnessId: "codex" },
+      { kind: "absent", reason: "no socket" },
+      { kind: "stale", reason: "econnrefused" },
+      { kind: "not-ready", reason: "prompt not found" },
+      { kind: "blocked", reason: "waiting" },
+      { kind: "submitted-unknown", reason: "no answer" },
+      { kind: "failed", reason: "submit threw" },
+    ];
+    for (const cause of causes) {
+      const advice = fallbackAdvice(cause);
+      expect(advice.length).toBeGreaterThan(0);
+      expect(advice).not.toMatch(/\brestart (it|the session|that session)\b/);
+    }
+  });
+
+  test("the sender's own off switch is not reported as a broken session", async () => {
+    // WT_INSPECT=off degrades every send here by choice. Nothing about
+    // the TARGET is wrong, and nothing about it needs fixing.
+    const fake = fakes();
+    const send = createSessionMessenger({ ...fake.deps, inspectorEnabled: () => false });
+
+    const res = await send(target);
+    expect(res).toMatchObject({
+      ok: true,
+      transport: "terminal",
+      fallback: { kind: "disabled" },
+    });
+    expect(fake.calls.deliver).toBe(0);
+    // Not a degradation worth an attention line: it was asked for.
+    expect(fake.warnings).toEqual([]);
   });
 
   test("a session waiting on a human is never typed at", async () => {
@@ -357,6 +410,8 @@ describe("the claude transport ladder", () => {
     expect(await send({ ...target, harnessId: "codex" })).toMatchObject({
       ok: true,
       transport: "terminal",
+      // Not a fallback from a broken injector — codex never had one.
+      fallback: { kind: "unsupported", harnessId: "codex" },
     });
     expect(fake.calls.ensure).toBe(0);
   });

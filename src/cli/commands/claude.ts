@@ -10,7 +10,7 @@ import {
 } from "../../core/harness/claude/inject.ts";
 import { wtSessionUuid } from "../../core/harness/claude/jsonl.ts";
 import { claudeSessions } from "../../core/harness/claude/sessions.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
+import { fallbackAdvice, sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import {
   ensureManagerClaudeName,
   MANAGER_CLAUDE_NAME,
@@ -166,7 +166,7 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
         ? res.delivered === null
           ? "submitted at the session's own prompt, where a slash command runs — a command leaves no prompt entry to confirm against; attach via the wt TUI (F12) to watch"
           : "submitted at the session's own prompt, as an ordinary turn — fire-and-forget from here; attach via the wt TUI (F12) to watch"
-        : "typed into the session's pane (it has no injectable prompt — restart it from wt to fix) — attach via the wt TUI (F12) to watch",
+        : `typed into the session's pane — ${fallbackAdvice(res.fallback)}; attach via the wt TUI (F12) to watch`,
     ),
   );
   return 0;

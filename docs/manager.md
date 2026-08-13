@@ -90,6 +90,11 @@ The mechanism is ported from [unseamless-coop](https://github.com/micthiesen/uns
 
 **Fallback.** If the session has no socket (started outside wt, or before this feature), the socket is stale (the session restarted), or the prompt isn't reachable, wt falls back to typing into the pane — bracketed paste plus the submit keys — and raises an attention line naming which failure it was, because the remedies differ. `WT_INSPECT=off` forces the fallback for A/B-ing a suspected regression.
 
+The cause rides on the send result (`fallback` on a `terminal` result) rather than living only in the log, and one function — `fallbackAdvice` — renders it for both. Two rules hold there:
+
+- **Nothing that merely degraded is reported as broken.** `WT_INSPECT=off` and a harness with no injector at all are fallbacks by construction; they raise no attention line and their advice names no remedy, because nothing is wrong.
+- **The advice is never an imperative.** Whoever reads it is usually not the target's owner — an agent messaging a peer, the manager fanning out a briefing — and the target is usually mid-turn, and the message it is attached to was *delivered*. "Restart it from wt to fix" read as an instruction to kill a live conversation to repair something that hadn't failed. Each line states the condition under which direct delivery returns and leaves the restart to whoever owns that session.
+
 Two cases have **no** fallback, because typing would be worse than failing:
 
 - The session is blocked on a human (`waiting`, e.g. a permission prompt): the submit key would answer that dialog, deciding on the human's behalf. Checked before the attempt and re-checked throughout the wait, since a dialog that appears mid-wait looks to the probe exactly like a prompt that hasn't mounted yet.

@@ -58,21 +58,36 @@ import type { HarnessId } from "./types.ts";
 
 export type MessageTransport = "inspector" | "terminal";
 
+/**
+ * Why a message went out over the terminal instead of the injector.
+ *
+ * Two of these mean nothing is wrong: `disabled` is the sender's own
+ * switch, and `unsupported` is a harness that never had an injector.
+ * The rest are real degradations with genuinely different remedies.
+ * The distinction rides on the RESULT rather than only in the log
+ * because the caller is what a human or an agent actually reads.
+ */
+export type FallbackCause =
+  | { kind: "disabled" }
+  | { kind: "unsupported"; harnessId: HarnessId }
+  | { kind: InjectFailureKind; reason: string };
+
+type SessionMessageOk = {
+  /** The session wasn't running and was started for this message. */
+  coldStarted: boolean;
+  /**
+   * Did the prompt reach the conversation? `null` = nothing durable
+   * can witness it (a slash command leaves no prompt entry), so
+   * delivery is UNKNOWN — report it that way, never as success.
+   */
+  delivered: boolean | null;
+  /** A first attempt was swallowed and the prompt was sent again. */
+  resent: boolean;
+};
+
 export type SessionMessageResult =
-  | {
-      ok: true;
-      /** The session wasn't running and was started for this message. */
-      coldStarted: boolean;
-      /**
-       * Did the prompt reach the conversation? `null` = nothing durable
-       * can witness it (a slash command leaves no prompt entry), so
-       * delivery is UNKNOWN — report it that way, never as success.
-       */
-      delivered: boolean | null;
-      /** A first attempt was swallowed and the prompt was sent again. */
-      resent: boolean;
-      transport: MessageTransport;
-    }
+  | (SessionMessageOk & { ok: true; transport: "inspector"; fallback?: never })
+  | (SessionMessageOk & { ok: true; transport: "terminal"; fallback: FallbackCause })
   | { ok: false; reason: string };
 
 export type SessionMessageTarget = {
@@ -177,34 +192,56 @@ const defaults: Dependencies = {
   lock: withAsyncFileLock,
 };
 
-const FALLBACK_ADVICE: Record<InjectFailureKind, string> = {
-  absent:
-    "started outside wt (or before this version) — restart it from wt to restore direct delivery",
-  stale: "its inspector socket died with a restart — restart the session to rebind it",
-  "not-ready":
-    "its prompt UI wasn't reachable — if this persists, Claude Code moved the injector's anchors",
-  blocked: "it is waiting on a human",
-  "submitted-unknown": "the submit was sent but went unacknowledged",
-  failed: "the injector reached it but the submit failed",
-};
+/**
+ * One line naming why direct delivery didn't happen and what, if
+ * anything, brings it back.
+ *
+ * DELIBERATELY NOT IMPERATIVE. Whoever reads this is usually not the
+ * target's owner — an agent messaging a peer, the manager fanning a
+ * briefing out — and the target is usually mid-turn. "Restart it from
+ * wt to fix" reads as an instruction to kill a live conversation, for
+ * a message that was just delivered successfully by typing. So each
+ * line states the CONDITION under which the injector comes back and
+ * leaves the restart to whoever owns that session, who will do it on
+ * their own schedule anyway.
+ *
+ * Nothing here is urgent by construction: the message got through, or
+ * the caller was told it didn't.
+ */
+export function fallbackAdvice(cause: FallbackCause): string {
+  switch (cause.kind) {
+    case "disabled":
+      return "direct delivery is switched off here (WT_INSPECT=off)";
+    case "unsupported":
+      return `${cause.harnessId} has no prompt injector, so typing is its only transport`;
+    case "absent":
+      return "it has no inspector socket (started outside wt, or before this version); direct delivery resumes the next time that session is started from wt";
+    case "stale":
+      return "its inspector socket died with a restart; direct delivery resumes the next time that session is started from wt";
+    case "not-ready":
+      return "its prompt UI wasn't reachable in time — if this keeps happening, Claude Code moved the injector's anchors (wt claude selftest)";
+    case "blocked":
+      return "it is waiting on a human";
+    case "submitted-unknown":
+      return "the submit was sent but went unacknowledged";
+    case "failed":
+      return "the injector reached it but the submit failed";
+  }
+}
 
 export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
   const deps: Dependencies = { ...defaults, ...overrides };
   /** One attention line per session per failure kind per process. */
   const warned = new Set<string>();
 
-  function warnFallback(
-    slug: string,
-    tmuxName: string,
-    kind: InjectFailureKind,
-    reason: string,
-  ): void {
-    const key = `${tmuxName}\0${kind}`;
+  function warnFallback(slug: string, tmuxName: string, cause: FallbackCause): void {
+    const key = `${tmuxName}\0${cause.kind}`;
     if (warned.has(key)) return;
     warned.add(key);
+    const detail = "reason" in cause ? ` (${cause.reason})` : "";
     deps.warn(
       slug,
-      `${tmuxName}: fell back to typing into the pane — ${FALLBACK_ADVICE[kind]} (${reason})`,
+      `${tmuxName}: fell back to typing into the pane — ${fallbackAdvice(cause)}${detail}`,
     );
   }
 
@@ -248,12 +285,12 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     const managedName = target.managedName ?? null;
     const tmuxName = claudeTmuxName(slug, managedName);
     const identity = { slug, cwd, managedName };
-    const typeIt = async (): Promise<SessionMessageResult> => {
+    const typeIt = async (cause: FallbackCause): Promise<SessionMessageResult> => {
       const res = await deps.terminal({ ...target, managedName, text });
-      return res.ok ? { ...res, transport: "terminal" } : res;
+      return res.ok ? { ...res, transport: "terminal", fallback: cause } : res;
     };
 
-    if (!deps.inspectorEnabled()) return await typeIt();
+    if (!deps.inspectorEnabled()) return await typeIt({ kind: "disabled" });
 
     let coldStarted = false;
     let idleAtSubmit = false;
@@ -307,8 +344,9 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
       };
     }
 
-    warnFallback(slug, tmuxName, delivery.kind, delivery.reason);
-    return await typeIt();
+    const cause: FallbackCause = { kind: delivery.kind, reason: delivery.reason };
+    warnFallback(slug, tmuxName, cause);
+    return await typeIt(cause);
   }
 
   /**
@@ -320,7 +358,13 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     if (!text.trim()) return { ok: false, reason: "message is empty" };
     if (target.harnessId !== "claude") {
       const res = await deps.terminal({ ...target, text });
-      return res.ok ? { ...res, transport: "terminal" } : res;
+      return res.ok
+        ? {
+            ...res,
+            transport: "terminal",
+            fallback: { kind: "unsupported", harnessId: target.harnessId },
+          }
+        : res;
     }
     // Serialize per target conversation. The manager slot is a genuine
     // multi-writer singleton (TUI automations, `wt manager send` from N
