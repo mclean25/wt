@@ -159,12 +159,54 @@ export async function injectIntoSession(opts: {
 }): Promise<InjectResult> {
   // Keep a runtime tripwire as well as the TerminalHarnessId type. Callers
   // outside TypeScript must never be able to turn this into a Claude fallback.
+  // The ONE exception is `injectSlashCommand` below, which does not come
+  // through here.
   if ((opts.harnessId as HarnessId) === "claude") {
     return {
       ok: false,
       reason: "Claude terminal messaging is disabled; use claudeSessions.send",
     };
   }
+  return lockedInject(opts);
+}
+
+/**
+ * The single sanctioned pane path for Claude, and only for a slash
+ * command.
+ *
+ * Claude's native socket delivers a *message*: the receiver frames it as
+ * peer text ("Another Claude session sent a message: …") and a leading
+ * `/compact` arrives as something to read about, not something to run.
+ * Slash commands execute only when submitted at the input, which is what
+ * a paste + Enter is. So the palettes' `m` (and any `[[actions]]` whose
+ * prompt is itself a command) has to type.
+ *
+ * That is a deliberate, narrow hole in "never use Claude's pane as
+ * input" — see `sendSessionMessage`, which is the only caller and
+ * decides via `isSlashCommand`. The invariant's real concern is
+ * colliding with half-typed human input, and the affordance this exists
+ * for is pressed from wt's own TUI, i.e. while the human is demonstrably
+ * not in that pane. Nothing else may widen it: arbitrary text keeps
+ * going over the socket, where delivery is confirmed and nothing can be
+ * mistaken for a keystroke.
+ */
+export async function injectSlashCommand(opts: {
+  slug: string;
+  cwd: string;
+  harnessId: HarnessId;
+  managedName?: string | null;
+  text: string;
+}): Promise<InjectResult> {
+  return lockedInject(opts);
+}
+
+function lockedInject(opts: {
+  slug: string;
+  cwd: string;
+  harnessId: HarnessId;
+  managedName?: string | null;
+  text: string;
+}): Promise<InjectResult> {
   // Cross-process serialization per target session. Historically every
   // terminal-message target was single-writer, but the manager slot is a genuine
   // multi-writer singleton (TUI automations, `wt manager send` from N
@@ -181,7 +223,7 @@ export async function injectIntoSession(opts: {
 async function injectIntoSessionUnlocked(opts: {
   slug: string;
   cwd: string;
-  harnessId: TerminalHarnessId;
+  harnessId: HarnessId;
   managedName?: string | null;
   text: string;
 }): Promise<InjectResult> {
@@ -251,7 +293,7 @@ async function injectIntoSessionUnlocked(opts: {
 async function confirmDelivery(opts: {
   slug: string;
   cwd: string;
-  harnessId: TerminalHarnessId;
+  harnessId: HarnessId;
   managedName: string | null;
   text: string;
   sinceMs: number;
@@ -278,7 +320,7 @@ async function confirmDelivery(opts: {
 /** Paste `text` into a ready pane and press the harness's submit keys. */
 async function pasteAndSubmit(
   name: string,
-  harnessId: TerminalHarnessId,
+  harnessId: HarnessId,
   text: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
