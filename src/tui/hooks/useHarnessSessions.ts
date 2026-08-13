@@ -19,6 +19,7 @@
  */
 import { useMemo } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
+import type { NotifyOnChangeProps } from "@tanstack/react-query";
 
 import {
   getHarness,
@@ -84,6 +85,18 @@ export type UseHarnessSessionsResult = {
 };
 
 const EMPTY: readonly HarnessSession[] = [];
+
+/**
+ * The only result prop `combineSessionData` reads. Declaring it turns
+ * OFF TanStack's tracked-props proxy for these batches: without it,
+ * every property read inside `combine` fans out a `trackProp` call to
+ * EVERY observer in the batch, making each combine O(queries²) — and a
+ * combine runs on every query update. Harmless at three queries, not at
+ * `worktrees × harnesses` (see the same declaration in
+ * `useWorktreeRows`, where it was worth seconds of blocked render
+ * thread per clean sweep).
+ */
+const SESSION_DATA_PROPS: NotifyOnChangeProps = ["data"];
 
 /**
  * The single source of truth for "which session is active" — turning raw
@@ -240,14 +253,15 @@ export function useHarnessSessions(
   // the combined data array IS structurally shared by TanStack, making
   // the memos below real.
   const rawData = useQueries({
-    queries: HARNESSES.map((h) =>
-      harnessSessionsQuery(
+    queries: HARNESSES.map((h) => ({
+      ...harnessSessionsQuery(
         h.id,
         slug,
         wtPath,
         (tmux.data?.slugsByHarness[h.id] ?? []).includes(slug),
       ),
-    ),
+      notifyOnChangeProps: SESSION_DATA_PROPS,
+    })),
     combine: combineSessionData,
   });
   const rawByHarness = useMemo(() => {
@@ -341,14 +355,15 @@ export function useActiveSessionsBySlug(
   // array is structurally shared, so the memo below actually holds.
   const rawData = useQueries({
     queries: liveWorktrees.flatMap((w) =>
-      harnessIds.map((id) =>
-        harnessSessionsQuery(
+      harnessIds.map((id) => ({
+        ...harnessSessionsQuery(
           id,
           w.slug,
           w.path,
           (slugsByHarness?.[id] ?? []).includes(w.slug),
         ),
-      ),
+        notifyOnChangeProps: SESSION_DATA_PROPS,
+      })),
     ),
     combine: combineSessionData,
   });

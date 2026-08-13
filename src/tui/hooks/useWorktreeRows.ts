@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { NotifyOnChangeProps } from "@tanstack/react-query";
 
 import type { ClaudeStatus } from "../../core/harness/claude/jsonl.ts";
 import { config } from "../../core/config.ts";
@@ -230,6 +231,21 @@ type QuerySnapshot<T = unknown> = {
   isLoading: boolean;
   error: Error | null;
 };
+
+/**
+ * The exact result props `combineQuerySnapshots` / `combineQueryData`
+ * read. Declaring them turns OFF TanStack's tracked-props proxy for
+ * these batches — see the comment at the `useQueries` call.
+ */
+const SNAPSHOT_PROPS: NotifyOnChangeProps = [
+  "data",
+  "isStale",
+  "isFetching",
+  "isLoading",
+  "error",
+];
+
+const DATA_PROPS: NotifyOnChangeProps = ["data"];
 
 function combineQuerySnapshots(
   results: readonly QuerySnapshot[],
@@ -681,7 +697,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
     wtClaudeQuery(wt),
     wtGitActivityQuery(wt, rowLayout.bases[i]!),
     wtConflictQuery(wt, rowLayout.bases[i]!),
-  ]);
+  ].map((q) => ({ ...q, notifyOnChangeProps: SNAPSHOT_PROPS })));
 
   // `combine` projects each query observer to the exact fields row
   // derivation consumes. TanStack structurally shares this combined
@@ -721,6 +737,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
     queries: worktrees.map((wt, i) => ({
       ...wtDiffContextQuery(wt, rowLayout.bases[i]!),
       enabled: aiEnabled && !busyByIndex[i],
+      notifyOnChangeProps: DATA_PROPS,
     })),
     combine: combineQueryData,
   });
@@ -736,6 +753,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         ...aiSummaryQuery(wt.slug, ctx),
         enabled: aiEnabled && !busyByIndex[i] && !!ctx,
         placeholderData: keepPreviousData,
+        notifyOnChangeProps: DATA_PROPS,
       };
     }),
     combine: combineQueryData,
@@ -748,6 +766,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
     queries: worktrees.map((wt, i) => ({
       ...wtFirstCommitQuery(wt, stateSlugs[wt.slug]?.baseBranch ?? null),
       enabled: !busyByIndex[i],
+      notifyOnChangeProps: DATA_PROPS,
     })),
     combine: combineQueryData,
   });

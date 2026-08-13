@@ -24,6 +24,17 @@ should be idle is a bug, not load (see bare-promise signature below).
 
 ## Open issues
 
+- **Post-sweep stall (`c`), diagnosed 2026-08-13, fix in review.** After a
+  clean sweep the render thread blocks in multi-SECOND chunks (measured on
+  a sealed fixture: 4104ms / 4209ms / 2650ms back to back, ~12s of a 14s
+  window; the input-latency probe logged n=2 samples for that minute
+  because keypresses never reached a painted frame). Cause is in the query
+  layer, not rendering — see the `trackProp` signature below. A one-line
+  fix (`notifyOnChangeProps` on the `useQueries` batches in
+  `useWorktreeRows`) takes the worst block to 507ms; the residue is
+  subprocess spawns on the main thread plus `refreshAll`'s
+  `invalidateQueries(["wt"])` refetching every field of every row.
+
 - **Destroy dispatch double-fetches GitHub** — two concurrent
   `fetching GitHub...` ~40ms apart (double invalidation while the first
   is in flight). Harmless, minor quota waste. Found in dogfood sweep
@@ -85,6 +96,44 @@ Failure signatures (check these first):
 - Upstream opentui #1339 (per-frame O(tree) walk) is still open even
   at 0.5.1 — renderable-tree size stays a per-frame tax regardless of
   version; window unbounded buffers.
+
+- **`useQueries` + `combine` is O(N²) per query update.** query-core's
+  `QueriesObserver.#trackResult` wraps every result in a tracked-props
+  Proxy whose `onPropTracked` callback loops over ALL observers in the
+  batch — so one property read inside `combine` costs N `trackProp`
+  calls, and a combine reading P props over N queries costs N×P×N. It
+  re-runs on EVERY query update in the batch. `useWorktreeRows` puts
+  worktrees × 10 fields in one batch: at 28 rows that's 280 queries ×
+  5 props × 280 = 392k `trackProp` calls per update, and a `c` sweep
+  fires hundreds of updates. Signature: a `bun:jsc` sampling profile
+  where `trackProp @ queryObserver.js` is >50% SELF time, under
+  `#combineResult` → `performProxyObjectGet`. The escape hatch is
+  declaring `notifyOnChangeProps` on the queries — query-core then skips
+  the proxy entirely (`!match.defaultedQueryOptions.notifyOnChangeProps`
+  is the branch). It is quadratic in BOARD SIZE, so it degrades as the
+  fleet grows and is invisible on a small one.
+- **React was not the culprit and a React Profiler proved it in one
+  run.** Wrapping the root in `<Profiler onRender>` during a 3.6s block
+  showed 21 commits totaling 59ms. Do this before chasing render cost —
+  it separates "the tree is expensive" from "something else owns the
+  thread" for the price of five lines.
+- **`sample <pid>` can't symbolicate JIT frames; `bun:jsc` can.**
+  `sample` shows the main thread deep in unnamed `??? (in bun)` frames,
+  which is only enough to rule out native work. `import {
+  startSamplingProfiler, samplingProfilerStackTraces } from "bun:jsc"`,
+  dump on SIGUSR2, and you get named JS frames with source URLs —
+  that is what named `trackProp` above. Works on a live TUI, unlike
+  `--cpu-prof`.
+- **fs.watch on macOS coalesces deletes; it is not a storm.** Deleting a
+  20k-file tree under a `recursive: true` watch delivered 233 events and
+  3.4ms of callback time total. Rule out the watcher hypothesis with a
+  10-line standalone script before designing around it.
+- **A heavy sealed fixture reproduces this in ~2 minutes.**
+  `scripts/fixture.sh build`, then add landed rows carrying an
+  APFS-cloned (`cp -c -R`) 30k-file `node_modules` (gitignore it via
+  `main-clone/.git/info/exclude`, or the rows read dirty and the sweep
+  keeps them), arm `WT_PERF` on the probe server
+  (`tmux -L wt-tui-test set-environment -g WT_PERF 1`) and press `c`.
 
 Measurement traps:
 
