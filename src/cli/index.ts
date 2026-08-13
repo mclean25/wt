@@ -1,35 +1,3 @@
-// Static imports so the TS project includes all command modules in
-// type-checking. Runtime dispatch is still keyed by command name below.
-import * as lsCmd from "./commands/ls.ts";
-import * as fleetCmd from "./commands/fleet.ts";
-import * as newCmd from "./commands/new.ts";
-import * as rmCmd from "./commands/rm.ts";
-import * as cleanCmd from "./commands/clean.ts";
-import * as doctorCmd from "./commands/doctor.ts";
-import * as stagesCmd from "./commands/stages.ts";
-import * as logsCmd from "./commands/logs.ts";
-import * as perfCmd from "./commands/perf.ts";
-import * as openCmd from "./commands/open.ts";
-import * as baseCmd from "./commands/base.ts";
-import * as issueCmd from "./commands/issue.ts";
-import * as statusCmd from "./commands/status.ts";
-import * as edgeCmd from "./commands/edge.ts";
-import * as sectionCmd from "./commands/section.ts";
-import * as managerCmd from "./commands/manager.ts";
-import * as claudeCmd from "./commands/claude.ts";
-import * as devCmd from "./commands/dev.ts";
-import * as restackCmd from "./commands/restack.ts";
-import * as skillsCmd from "./commands/skills.ts";
-import * as updateCmd from "./commands/update.ts";
-import * as rollbackCmd from "./commands/rollback.ts";
-import * as versionCmd from "./commands/version.ts";
-import * as eventsCmd from "./commands/events.ts";
-import * as remoteCmd from "./commands/remote.ts";
-import * as remoteExecCmd from "./commands/_remote.ts";
-import * as sessionExecCmd from "./commands/_session.ts";
-import * as destroyCmd from "./commands/_destroy.ts";
-import * as claudeHookCmd from "./commands/_claude-hook.ts";
-
 const HELP = `usage: wt <command> [options]
 
 commands:
@@ -62,37 +30,51 @@ commands:
 Run \`wt <command> --help\` for per-command options where available.`;
 
 type Runner = (argv: string[]) => Promise<number>;
+type Loader = () => Promise<{ run: Runner }>;
 
-const RUNNERS: Record<string, Runner> = {
-  ls: lsCmd.run,
-  fleet: fleetCmd.run,
-  new: newCmd.run,
-  rm: rmCmd.run,
-  clean: cleanCmd.run,
-  doctor: doctorCmd.run,
-  stages: stagesCmd.run,
-  logs: logsCmd.run,
-  perf: perfCmd.run,
-  open: openCmd.run,
-  restack: restackCmd.run,
-  skills: skillsCmd.run,
-  update: updateCmd.run,
-  rollback: rollbackCmd.run,
-  version: versionCmd.run,
-  events: eventsCmd.run,
-  remote: remoteCmd.run,
-  _remote: remoteExecCmd.run,
-  _session: sessionExecCmd.run,
-  base: baseCmd.run,
-  status: statusCmd.run,
-  edge: edgeCmd.run,
-  section: sectionCmd.run,
-  manager: managerCmd.run,
-  issue: issueCmd.run,
-  claude: claudeCmd.run,
-  dev: devCmd.run,
-  _destroy: destroyCmd.run,
-  "_claude-hook": claudeHookCmd.run,
+/**
+ * One lazy loader per command, so running `wt <cmd>` imports that
+ * command's module graph and nothing else. This is a blast-radius rule,
+ * not a micro-optimization: static imports here meant a broken module
+ * anywhere under any command took out EVERY command, including the
+ * `wt status` that agents use to report they're stuck. It also drops
+ * ~60-100ms off the common commands (35 modules for `wt status` vs 153
+ * for the whole barrel).
+ *
+ * Nothing is lost by not importing statically: tsconfig has no `include`,
+ * so `tsc --noEmit` type-checks every module here whether or not this
+ * file names it.
+ */
+const RUNNERS: Record<string, Loader> = {
+  ls: () => import("./commands/ls.ts"),
+  fleet: () => import("./commands/fleet.ts"),
+  new: () => import("./commands/new.ts"),
+  rm: () => import("./commands/rm.ts"),
+  clean: () => import("./commands/clean.ts"),
+  doctor: () => import("./commands/doctor.ts"),
+  stages: () => import("./commands/stages.ts"),
+  logs: () => import("./commands/logs.ts"),
+  perf: () => import("./commands/perf.ts"),
+  open: () => import("./commands/open.ts"),
+  restack: () => import("./commands/restack.ts"),
+  skills: () => import("./commands/skills.ts"),
+  update: () => import("./commands/update.ts"),
+  rollback: () => import("./commands/rollback.ts"),
+  version: () => import("./commands/version.ts"),
+  events: () => import("./commands/events.ts"),
+  remote: () => import("./commands/remote.ts"),
+  _remote: () => import("./commands/_remote.ts"),
+  _session: () => import("./commands/_session.ts"),
+  base: () => import("./commands/base.ts"),
+  status: () => import("./commands/status.ts"),
+  edge: () => import("./commands/edge.ts"),
+  section: () => import("./commands/section.ts"),
+  manager: () => import("./commands/manager.ts"),
+  issue: () => import("./commands/issue.ts"),
+  claude: () => import("./commands/claude.ts"),
+  dev: () => import("./commands/dev.ts"),
+  _destroy: () => import("./commands/_destroy.ts"),
+  "_claude-hook": () => import("./commands/_claude-hook.ts"),
 };
 
 export async function dispatch(argv: string[]): Promise<number> {
@@ -102,13 +84,13 @@ export async function dispatch(argv: string[]): Promise<number> {
     return 0;
   }
   if (cmd === "--version" || cmd === "-v") {
-    return versionCmd.run(rest);
+    return (await import("./commands/version.ts")).run(rest);
   }
-  const run = cmd ? RUNNERS[cmd] : undefined;
-  if (!run) {
+  const load = cmd ? RUNNERS[cmd] : undefined;
+  if (!load) {
     console.error(`unknown command: ${cmd ?? ""}\n`);
     console.error(HELP);
     return 2;
   }
-  return run(rest);
+  return (await load()).run(rest);
 }

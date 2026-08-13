@@ -13,10 +13,12 @@
  * fire-and-forget in both directions, nothing is returned to the
  * caller; `[[actions]]` with `target = "manager"` and automations
  * brief it through the same message-delivery path.
+ *
+ * Messages sent from inside a wt harness session are stamped with that
+ * session's slug automatically (see `stampSender`), so the manager can
+ * always tell who is asking without agents having to remember to say.
  */
 import { config } from "../../core/config.ts";
-import { readPrimaryHarness } from "../../core/harness/primary.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import {
   appendManagerReport,
   ensureManagerClaudeName,
@@ -24,9 +26,14 @@ import {
   MANAGER_SLUG,
   type ManagerReportLevel,
 } from "../../core/manager.ts";
-import { attachOrCreate } from "../../core/tmux.ts";
 import { hasHelpFlag } from "../args.ts";
 import { dim, green, red } from "../colors.ts";
+
+// The session machinery (tmux, the harness registry, message delivery) is
+// imported per-branch rather than at module load, so `wt manager report`
+// keeps working when something under it is broken. It writes a spool file
+// and needs none of it — and "the fleet can still say what broke" is
+// exactly the property worth protecting when delivery is what broke.
 
 export async function run(argv: string[]): Promise<number> {
   const [sub, ...rest] = argv;
@@ -84,6 +91,8 @@ export async function run(argv: string[]): Promise<number> {
       return 2;
     }
     ensureManagerClaudeName();
+    const { sendSessionMessage } = await import("../../core/harness/session-messaging.ts");
+    const { readPrimaryHarness } = await import("../../core/harness/primary.ts");
     const res = await sendSessionMessage({
       slug: MANAGER_SLUG,
       cwd: config.paths.mainClone,
@@ -96,8 +105,8 @@ export async function run(argv: string[]): Promise<number> {
       return 1;
     }
     // A papercut report that never arrived is worse than one that failed
-    // loudly. Claude's native transport confirms delivery; other harnesses
-    // preserve their existing delivery checks here.
+    // loudly. Both transports confirm against the manager's own
+    // transcript before this reports success.
     if (res.delivered === false) {
       console.error(red("✗ the manager session did not receive the message"));
       console.error(
@@ -129,6 +138,8 @@ export async function run(argv: string[]): Promise<number> {
     return 2;
   }
   ensureManagerClaudeName();
+  const { attachOrCreate } = await import("../../core/tmux.ts");
+  const { readPrimaryHarness } = await import("../../core/harness/primary.ts");
   const result = await attachOrCreate({
     slug: MANAGER_SLUG,
     cwd: config.paths.mainClone,

@@ -54,6 +54,15 @@ that version (so the daily check skips it until origin moves), and
 leaves the user on what they had. A broken push therefore usually
 costs its author a red X, not a user a broken install.
 
+**Lazy command dispatch.** For the pushes that do get through, the CLI
+limits how far one broken module reaches: `cli/index.ts` imports each
+subcommand's module graph on demand, so `wt status` doesn't load the
+message transport and survives a break in it. It matters most for the
+commands agents depend on to report trouble — a fleet that can't run
+`wt status` or `wt manager report` can't tell anyone the update went
+bad. `scripts/broken-module-check.sh` asserts the containment; see
+[architecture.md](architecture.md#module-layout-conventions).
+
 ## Detect: the boot sentinel
 
 Starting the TUI writes `booting: {sha, at}` to the memory; the sha is

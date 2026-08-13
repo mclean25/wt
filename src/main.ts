@@ -15,10 +15,10 @@ async function main(): Promise<number> {
   const argv = process.argv.slice(2);
 
   // Args given → dispatch to CLI. The self-update family routes AROUND
-  // cli/index.ts: that module statically imports every command, which
-  // pulls the fail-fast config loader in before dispatch — and these
-  // commands must work when the config is exactly what a broken update
-  // can't load (`wt rollback` is the documented recovery path then).
+  // cli/index.ts even though that module now imports commands lazily:
+  // these three must work when a bad update broke *anything* else, and
+  // the dispatcher itself is one more module that can fail to parse
+  // (`wt rollback` is the documented recovery path then).
   if (argv.length > 0) {
     const [cmd, ...rest] = argv;
     if (cmd === "update") return (await import("./cli/commands/update.ts")).run(rest);
