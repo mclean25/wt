@@ -29,7 +29,7 @@ PR-driven conditions additionally require a **live GitHub fetch this session** �
 `run` names either an `[[actions]]` id or a built-in flow:
 
 - `builtin:restack` — the squash-safe stack replay (requires `on = "stack.parent_merged"`).
-- `builtin:clean` — destroy one landed worktree (the `c` sweep for a single row).
+- `builtin:clean` — destroy one landed worktree (the `c` sweep for a single row). Inherits the sweep's refusal to force: a worktree holding uncommitted changes or unpushed commits is kept and narrated on the attention feed instead of destroyed. That guard matters most here, where nothing prompts and nobody is watching — "the branch landed" is a fact about the branch, and this deletes a directory.
 - `builtin:notify` — a macOS `display notification` banner titled `wt · <slug>` carrying the trigger detail (for status triggers: state, risk, note). Notifications never touch the worktree, so they bypass the quiescence gate — a `status.needs_human` fire happens exactly while the session is busy asking. Pairs with any trigger; the canonical use:
 
 ```toml

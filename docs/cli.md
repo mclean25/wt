@@ -65,6 +65,8 @@ And it reaps hand-started servers: any process holding a **listening TCP socket*
 
 Remove every worktree that is merged or whose remote branch is gone. "Gone" is only auto-cleaned when a merged PR confirms the content actually landed; anything riskier is left for an explicit `wt rm`.
 
+**Never forces, and has no `--force`.** A candidate holding uncommitted changes is listed under "Skipping" and kept, however thoroughly its branch landed: "merged" is a claim about the branch, and the working tree answers a different question — a merged worktree collects new edits the moment anyone reopens a session in it. Discarding work stays deliberate and one worktree at a time (`wt rm <slug> --force`). This guard lives here rather than in the backend because no backend supplies it: `rift remove` trashes a dirty checkout, and a rift worktree is an independent clone, so its objects, branch and reflog go with the directory (see [backends.md](backends.md)).
+
 - `--yes` / `-y` — skip confirmation (required non-interactively).
 - `--destroy-stage` / `--no-destroy-stage` — apply to all candidates (default: per-worktree, destroy iff its stage is live).
 - `--foreground` — run removals synchronously (background dispatch is the default here, unlike `rm`).

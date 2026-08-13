@@ -23,7 +23,11 @@ import {
   type RemovedWorktree,
 } from "../../core/wtstate.ts";
 
-import { isCleanCandidate } from "../app-helpers.ts";
+import {
+  destroyHazard,
+  destroyHazardLabel,
+  isCleanCandidate,
+} from "../app-helpers.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
 
@@ -161,26 +165,16 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       // branch with -D — treating that window as clean could drop
       // uncommitted files or unpushed commits. Force skips this, and the
       // `d` prompt offers the force variant whenever state is unknown.
-      if (
-        row.fields.dirty.data === undefined ||
-        row.fields.sync.data === undefined
-      ) {
-        log.event.warn("refused: dirty/unpushed state still loading, retry in a moment");
-        toast(`${slug} state still loading, retry in a moment`, theme.warn, 2500);
-        return;
-      }
-      if ((row.fields.dirty.data?.length ?? 0) > 0) {
-        log.event.err("refused: uncommitted changes, press d again to force");
-        toast(`${slug} has uncommitted changes`, theme.err, 3000);
-        return;
-      }
-      const unpushed = row.fields.sync.data?.remote?.ahead ?? 0;
-      if (unpushed > 0) {
-        const plural = unpushed === 1 ? "" : "s";
-        log.event.err(
-          `refused: ${unpushed} unpushed commit${plural}, press d again to force`,
-        );
-        toast(`${slug} has ${unpushed} unpushed commit${plural}`, theme.err, 3000);
+      const hazard = destroyHazard(row);
+      if (hazard) {
+        const label = destroyHazardLabel(hazard);
+        if (hazard.kind === "unknown") {
+          log.event.warn(`refused: ${label}, retry in a moment`);
+          toast(`${slug} state still loading, retry in a moment`, theme.warn, 2500);
+        } else {
+          log.event.err(`refused: ${label}, press d again to force`);
+          toast(`${slug} has ${label}`, theme.err, 3000);
+        }
         return;
       }
     } else {
@@ -277,6 +271,22 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
         createLogger(r.wt.slug).event.dim(`clean: skip — already ${lockLabel(lock)}`);
         return false;
       }
+      // The sweep NEVER forces. `isCleanCandidate` only says the branch
+      // landed; the checkout can still hold work nobody committed, and a
+      // merged worktree is exactly the kind someone re-opens a session in
+      // ("just one more fix") after the PR went green. Unlike `d`, there
+      // is no per-row prompt here to fall back on and — for `builtin:clean`
+      // — no human in the loop at all, so a hazard means the row survives
+      // the sweep and stays on the board. Attention-level because the
+      // whole point of pressing `c` is that rows disappear: a silent
+      // skip reads as a completed sweep.
+      const hazard = destroyHazard(r);
+      if (hazard) {
+        createLogger(r.wt.slug).attention.warn(
+          `clean: kept — ${destroyHazardLabel(hazard)} (destroy it with d to force)`,
+        );
+        return false;
+      }
       return true;
     });
     if (candidates.length === 0) return;
@@ -304,7 +314,10 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
         destroyStage: row.fields.deploy.data ?? false,
         deleteBranch: true,
       });
-      createLogger(row.wt.slug).event.info("dispatched destroy (clean)");
+      // "via clean sweep", not "verified clean" — the earlier "(clean)"
+      // wording read as a per-row cleanliness assertion and sent a real
+      // data-loss investigation chasing a wrong-row bug that wasn't there.
+      createLogger(row.wt.slug).event.info("dispatched destroy (via clean sweep)");
     }
     // Cleaning a merged stack member reparents its children's fork-base
     // records inside the background remove itself (the branch delete

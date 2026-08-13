@@ -36,7 +36,7 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `Ctrl+N` | create on `[remote]`; the worktree appears under the server-named remote section with normal status glyphs, and F10/F11/F12 route that row's sessions over SSH |
 | `o` | open the worktree in your editor (`[editor] command`; default Zed) |
 | `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning when dirty/unpushed) |
-| `c` | clean all merged/gone worktrees (confirm) |
+| `c` | clean all merged/gone worktrees (confirm). Never forces: a candidate holding uncommitted changes or unpushed commits is shown as `kept` in the confirm list and survives the sweep — use `d` on it deliberately. Same for the `builtin:clean` automation, which has no human in the loop at all |
 | `a` | archive / restore the row, local or remote; archive placement belongs to this TUI's local fleet ledger, while a remote checkout remains untouched on its host |
 | `i` | open the most specific issue — the attached GitHub issue (`wt issue --gh`) when present, else the primary tracker issue |
 | `I` | open the primary tracker issue (needs `[issue_tracker]` with a URL template, or a `gh-`prefixed slug id) |

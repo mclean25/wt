@@ -6,6 +6,7 @@ import { StatusKind } from "../../core/types.ts";
 import {
   fetchOrigin,
   listWorktrees,
+  worktreeIsDirty,
   worktreeStatus,
 } from "../../core/worktree.ts";
 import { hasHelpFlag } from "../args.ts";
@@ -17,6 +18,11 @@ const USAGE = `usage: wt clean [options]
 Remove every worktree that is merged or whose remote branch is gone
 ("gone" only auto-cleans when a merged PR confirms the content
 actually landed; anything riskier is left for an explicit \`wt rm\`).
+
+Never forces: a candidate holding uncommitted changes is listed and
+kept, however thoroughly its branch landed. There is no --force here
+on purpose — discard work deliberately, one worktree at a time, with
+\`wt rm <slug> --force\`.
 
   --yes, -y               skip confirmation (required non-interactively)
   --destroy-stage / --no-destroy-stage
@@ -65,6 +71,7 @@ export async function run(argv: string[]): Promise<number> {
   const candidates: [Worktree, Status][] = [];
   const skipped: [Worktree, Status][] = [];
   const risky: Worktree[] = [];
+  const dirtyRows: Worktree[] = [];
   for (const w of wts) {
     const st = await worktreeStatus(w);
     if (st.kind === StatusKind.Busy) skipped.push([w, st]);
@@ -82,12 +89,40 @@ export async function run(argv: string[]): Promise<number> {
     }
   }
 
+  // A landed branch says nothing about the working tree, and the two
+  // drift apart the moment anyone re-opens a session in a merged
+  // worktree. `clean` never forces, but no backend enforces that for us:
+  // `rift remove` trashes a dirty checkout, and a rift worktree is an
+  // independent clone, so its objects, branch and reflog go with the
+  // directory. Filtered AFTER classification so the report only names
+  // worktrees this command would otherwise have destroyed.
+  //
+  // Unpushed commits are deliberately not a hazard here: every candidate
+  // is merged-or-landed, and a squash-merge leaves pre-squash commits
+  // locally that read as unpushed without being unsaved work.
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const [w] = candidates[i]!;
+    if (await worktreeIsDirty(w.path)) {
+      candidates.splice(i, 1);
+      dirtyRows.unshift(w);
+    }
+  }
+
   if (skipped.length) {
     console.log(dim("Skipping (already in progress):"));
     for (const [w, st] of skipped) {
       const age = st.age ? dim(` (${st.age})`) : "";
       console.log(
         `  ${cyan(w.slug)} — ${yellow(st.label)}${age}  ${dim(`wt logs ${w.slug}`)}`,
+      );
+    }
+  }
+
+  if (dirtyRows.length) {
+    console.log(dim("Skipping (uncommitted changes — clean never forces):"));
+    for (const w of dirtyRows) {
+      console.log(
+        `  ${cyan(w.slug)}  ${dim(`commit them, or discard with: wt rm ${w.slug} --force`)}`,
       );
     }
   }

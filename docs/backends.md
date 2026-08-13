@@ -91,6 +91,19 @@ and it drives the rest of the design:
   it. Branch deletion is moot — the branch vanishes with the clone. The
   fork-base reparenting of *dependents* is backend-agnostic (it edits
   wtstate) and still runs.
+  **`force` is advisory here, so callers own the dirty guard.** wt passes
+  `--force` through for symmetry with the git backend, but rift trashes a
+  dirty checkout with or without it — there is no refusal to rely on. That
+  makes the asymmetry between the backends dangerous rather than merely
+  untidy: `git worktree remove` refuses a dirty tree on its own, so a
+  caller that forgot the guard still fails safe under `git-worktree` and
+  destroys data under `rift`. And rift loses strictly more: a linked git
+  worktree's branch and objects live in the shared main-clone database and
+  survive the directory, while a rift clone owns its own, so removal takes
+  the branch, the objects and the reflog with it — there is nothing to
+  recover from. Every destroy path checks dirtiness itself before calling
+  `remove` (`destroyHazard` for the TUI, the `worktreeIsDirty` filters in
+  `cli/commands/{rm,clean}.ts`); a new one must too.
 - **Restacking.** `R` / `wt restack` replays each slice in its own
   worktree. A rift slice can't see a sibling slice's branch as a LOCAL ref
   (separate object stores), so the engine resolves a parent through the

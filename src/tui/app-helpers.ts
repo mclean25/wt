@@ -256,6 +256,53 @@ export function isCleanCandidate(row: WorktreeRow): boolean {
 }
 
 /**
+ * What a destroy of this row would DESTROY rather than merely remove.
+ * Null means the checkout holds nothing a `-D` branch delete and a
+ * directory removal wouldn't be able to reconstruct.
+ *
+ * `isCleanCandidate` is a claim about the BRANCH (it landed upstream);
+ * this is a claim about the WORKING TREE, and the two are independent —
+ * a merged branch accumulates new uncommitted work the moment anyone
+ * opens a session in it again. Every destroy path must consult this,
+ * because no backend enforces it for us: `git worktree remove` refuses a
+ * dirty checkout only by luck of its own default, and `rift remove`
+ * trashes one outright (see `core/backend/rift.ts`). A rift worktree is
+ * an independent clone, so its removal takes the objects, the branch and
+ * the reflog with it — there is no dangling-object recovery.
+ *
+ * "Still loading" is a hazard, not an absence of one: both fields read
+ * `undefined` while their queries load or after an error, and treating
+ * that window as clean is how a sweep deletes unsaved work.
+ */
+export type DestroyHazard =
+  | { kind: "unknown" }
+  | { kind: "dirty"; count: number }
+  | { kind: "unpushed"; count: number };
+
+export function destroyHazard(row: WorktreeRow): DestroyHazard | null {
+  if (row.fields.dirty.data === undefined || row.fields.sync.data === undefined) {
+    return { kind: "unknown" };
+  }
+  const dirty = row.fields.dirty.data.length;
+  if (dirty > 0) return { kind: "dirty", count: dirty };
+  const unpushed = row.fields.sync.data.remote?.ahead ?? 0;
+  if (unpushed > 0) return { kind: "unpushed", count: unpushed };
+  return null;
+}
+
+/** Human phrasing for a hazard, shared by every refusal message. */
+export function destroyHazardLabel(hazard: DestroyHazard): string {
+  switch (hazard.kind) {
+    case "unknown":
+      return "dirty/unpushed state still loading";
+    case "dirty":
+      return `${hazard.count} uncommitted change${hazard.count === 1 ? "" : "s"}`;
+    case "unpushed":
+      return `${hazard.count} unpushed commit${hazard.count === 1 ? "" : "s"}`;
+  }
+}
+
+/**
  * Reason a worktree can't accept a new action right now, or null when it's
  * free. Checks the archived flag (a clean
  * / destroy tucks the row into the archived section the instant it

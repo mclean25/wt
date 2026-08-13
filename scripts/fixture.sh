@@ -82,6 +82,24 @@ commit_in() { # slug subject
   )
 }
 
+land_in_trunk() { # slug — merge the worktree's branch into origin/main
+  # Makes the row read `merged`, which is what `isCleanCandidate` keys on
+  # and the only way to put a clean-sweep candidate on a GitHub-less
+  # board. Merged locally into the main clone, then pushed, so both the
+  # containment check and `origin/main` agree.
+  #
+  # `--no-ff` is load-bearing: a fast-forward leaves the branch tip ON
+  # main's first-parent chain, which `branchIsMerged` deliberately reads
+  # as "an older main SHA, not landed work". A merge commit attaches the
+  # branch as a second parent, which is the shape GitHub produces.
+  (
+    cd "$FX/main-clone"
+    git fetch -q "$FX/wts/$1" HEAD
+    git merge -q --no-ff --no-edit FETCH_HEAD -m "Merge $1"
+    git push -q origin main
+  )
+}
+
 build() {
   # Refuse to rm -rf a path that isn't ours. "Ours" is judged per entry
   # rather than by origin.git alone, because the corpse of a torn-down
@@ -164,6 +182,19 @@ ENV
   echo "scratch" >> "$FX/wts/dirty-task/notes.md"   # leaves it dirty
   new_wt fresh-task   # no commits: the title falls back to the slug
 
+  # --- Clean-sweep candidates, including the one that must NOT be swept -
+  # `c` keys on the BRANCH having landed; whether the checkout still
+  # holds uncommitted work is an independent question, and conflating
+  # the two once destroyed a rift worktree with 16 uncommitted files in
+  # it. Both rows land in trunk; only one is safe to remove.
+  new_wt landed-clean; commit_in landed-clean "Landed work, nothing left behind"
+  land_in_trunk landed-clean
+  new_wt landed-dirty; commit_in landed-dirty "Landed work, then kept going"
+  land_in_trunk landed-dirty
+  echo "uncommitted follow-up" >> "$FX/wts/landed-dirty/notes.md"
+  echo "new file nobody committed" > "$FX/wts/landed-dirty/scratch.md"
+  wtfx section mv landed-clean landed-dirty "Landed" >/dev/null
+
   # --- Every work status, so the dot column shows its whole palette ----
   for s in todo working review needs-testing needs-human ready-low ready-high; do
     new_wt "st-$s"
@@ -220,6 +251,9 @@ UNTESTED: everything, by construction" >/dev/null
 board:
   Inbox                 plain / dirty / no-commit rows, plus the two split
                         children (no rail, "-> Hold: Verify on Dev" reference)
+  Landed                two merged rows = the `c` sweep's candidate set;
+                        landed-dirty holds uncommitted work and must be
+                        KEPT by the sweep, not destroyed
   Statuses              one row per work state, ready at low and high risk
   Chain                 depth 0/1/2 co-located: rail steps right per level,
                         plus a stacked row with zero commits of its own

@@ -1,4 +1,5 @@
 import { StatusKind } from "../../core/types.ts";
+import { destroyHazard, destroyHazardLabel } from "../app-helpers.ts";
 import { NF } from "../icons.ts";
 import { Modal } from "../modal.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
@@ -22,12 +23,18 @@ function reasonFor(row: WorktreeRow): string {
 }
 
 export function CleanConfirmModal({ candidates }: Props) {
-  const count = candidates.length;
-  const stageCount = candidates.filter((r) => r.fields.deploy.data).length;
+  // The sweep refuses to force, so a candidate holding uncommitted work
+  // or unpushed commits survives it (see `doCleanRows`). Count and label
+  // what will ACTUALLY be destroyed — a modal that promises 5 and
+  // delivers 4 is how a kept row gets read as a lost one.
+  const doomed = candidates.filter((r) => destroyHazard(r) === null);
+  const count = doomed.length;
+  const keptCount = candidates.length - count;
+  const stageCount = doomed.filter((r) => r.fields.deploy.data).length;
 
   return (
     <Modal
-      title={`clean · ${count} worktree${count === 1 ? "" : "s"}`}
+      title={`clean · ${count} worktree${count === 1 ? "" : "s"}${keptCount > 0 ? ` · ${keptCount} kept` : ""}`}
       borderColor={theme.warn}
       inset={{ top: "15%", right: "15%", bottom: "15%", left: "15%" }}
       hints={[
@@ -50,25 +57,35 @@ export function CleanConfirmModal({ candidates }: Props) {
             </>
           ) : null}
           . Branches will be deleted.
+          {keptCount > 0 ? (
+            <>
+              {" "}
+              <span fg={theme.warn}>{keptCount}</span> kept — destroy those
+              with d to force.
+            </>
+          ) : null}
         </text>
       </box>
       <ScrollableList>
         {candidates.map((row) => {
           const deployed = row.fields.deploy.data ?? false;
+          const hazard = destroyHazard(row);
           return (
             <box key={row.wt.slug} flexDirection="row">
               <box width={2} flexShrink={0}>
                 <text fg={theme.fgDim}>·</text>
               </box>
               <box flexGrow={1} flexShrink={1} overflow="hidden">
-                <text fg={theme.fg} wrapMode="none" truncate>
+                <text fg={hazard ? theme.fgDim : theme.fg} wrapMode="none" truncate>
                   {row.wt.slug}
                 </text>
               </box>
               <box flexShrink={0} flexDirection="row">
                 <text fg={theme.fgDim}>{"  "}</text>
                 <text fg={theme.fgDim}>{reasonFor(row).padEnd(10)}</text>
-                {deployed ? (
+                {hazard ? (
+                  <text fg={theme.warn}> kept · {destroyHazardLabel(hazard)}</text>
+                ) : deployed ? (
                   // Two spaces after the bolt: opentui's native renderer
                   // treats the PUA codepoint as 1-cell wide so a single
                   // space leaves "destroys" overlapping the icon's right
