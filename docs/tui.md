@@ -35,8 +35,10 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `n` / `N` | new local worktree prompt (accepts an issue id + optional title words, a tracker URL, branch, or slug, plus `--attach`, `--gh <n>`, `--any`, `--base <ref>` — same resolution as [`wt new`](cli.md#wt-new-id-titleurlbranchslug)); `N` pre-fills `--base` with the selected row's branch. On success the cursor lands on the new row; on a resolution failure the prompt reopens with your input intact |
 | `Ctrl+N` | create on `[remote]`; the worktree appears under the server-named remote section with normal status glyphs, and F10/F11/F12 route that row's sessions over SSH |
 | `o` | open the worktree in your editor (`[editor] command`; default Zed) |
-| `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning when dirty/unpushed) |
+| `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning listing every hazard when dirty/unpushed) |
 | `c` | clean all merged/gone worktrees (confirm). Never forces: a candidate holding uncommitted changes or unpushed commits is shown as `kept` in the confirm list and survives the sweep — use `d` on it deliberately. Same for the `builtin:clean` automation, which has no human in the loop at all |
+
+Both read "unpushed" as commits missing from `origin/<branch>` — the `(↑n ↓m)` group, not the `[↑n ↓m]` one. A branch that is fully pushed but ahead of its base is not at risk and neither path treats it as such; a landed branch whose remote ref was pruned isn't either, since a squash merge is what left its local commits behind.
 | `a` | archive / restore the row, local or remote; archive placement belongs to this TUI's local fleet ledger, while a remote checkout remains untouched on its host |
 | `i` | open the most specific issue — the attached GitHub issue (`wt issue --gh`) when present, else the primary tracker issue |
 | `I` | open the primary tracker issue (needs `[issue_tracker]` with a URL template, or a `gh-`prefixed slug id) |

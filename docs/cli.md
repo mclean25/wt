@@ -47,7 +47,9 @@ Creation also sets `branch.<name>.gh-merge-base` to the branch's real merge targ
 
 ### `wt rm [<slug>]`
 
-Remove a worktree (with dirty/unpushed guards, optional SST stage destroy, optional branch delete). No slug ⇒ interactive picker. The unpushed guard is suppressed for a merged/gone branch — a squash-merged worktree keeps its pre-squash commits locally but the work is landed, so it removes without a spurious `--force`.
+Remove a worktree (with dirty/unpushed guards, optional SST stage destroy, optional branch delete). No slug ⇒ interactive picker.
+
+"Unpushed" is measured against `origin/<branch>`, the same `unpushed` field [`wt ls --json`](#wt-ls) reports — never against `@{u}`, which wt points at the BASE and which therefore counts every commit of a fully pushed branch. The guard is suppressed entirely for a merged/gone branch: a squash-merged worktree keeps its pre-squash commits locally but the work is landed, so it removes without a spurious `--force`. The TUI's `d` and `c` apply the same rule through `destroyHazard`.
 
 - `--yes` / `-y` — skip confirmations.
 - `--force` — remove despite uncommitted / unpushed work.

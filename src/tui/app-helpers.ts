@@ -14,6 +14,7 @@ import { lockLabel, lockStatus } from "../core/locks.ts";
 import { canEnterSessionDuringLock } from "../core/session-readiness.ts";
 import { expectedStage } from "../core/stage-safety.ts";
 import { StatusKind } from "../core/types.ts";
+import type { SyncState } from "../core/worktree.ts";
 
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
 
@@ -279,15 +280,43 @@ export type DestroyHazard =
   | { kind: "dirty"; count: number }
   | { kind: "unpushed"; count: number };
 
-export function destroyHazard(row: WorktreeRow): DestroyHazard | null {
-  if (row.fields.dirty.data === undefined || row.fields.sync.data === undefined) {
-    return { kind: "unknown" };
+/**
+ * Commits that exist ONLY in this checkout. `sync.remote` counts against
+ * `origin/<branch>`, so when it's present the answer is exact.
+ *
+ * When there's no such ref the branch is either unpushed (everything
+ * since the base would be lost) or squash-merged and pruned (those same
+ * commits are already on trunk under a different sha). `wt rm` draws
+ * exactly this distinction with its `landed` short-circuit; without it,
+ * every squash-merged row reads as unpushed and the `c` sweep keeps a
+ * board full of rows it was built to clear.
+ */
+function localOnlyCommits(row: WorktreeRow, sync: SyncState): number {
+  if (sync.remote) return sync.remote.ahead;
+  return isCleanCandidate(row) ? 0 : sync.main.ahead;
+}
+
+/**
+ * Every hazard the row carries, worst first. `destroyHazard` takes the
+ * first for a refusal message; the `d` confirm lists them all, since
+ * "1 uncommitted file will be lost" understates a row that also holds
+ * unpushed commits.
+ */
+export function destroyHazards(row: WorktreeRow): DestroyHazard[] {
+  const sync = row.fields.sync.data;
+  if (row.fields.dirty.data === undefined || sync === undefined) {
+    return [{ kind: "unknown" }];
   }
+  const out: DestroyHazard[] = [];
   const dirty = row.fields.dirty.data.length;
-  if (dirty > 0) return { kind: "dirty", count: dirty };
-  const unpushed = row.fields.sync.data.remote?.ahead ?? 0;
-  if (unpushed > 0) return { kind: "unpushed", count: unpushed };
-  return null;
+  if (dirty > 0) out.push({ kind: "dirty", count: dirty });
+  const unpushed = localOnlyCommits(row, sync);
+  if (unpushed > 0) out.push({ kind: "unpushed", count: unpushed });
+  return out;
+}
+
+export function destroyHazard(row: WorktreeRow): DestroyHazard | null {
+  return destroyHazards(row)[0] ?? null;
 }
 
 /** Human phrasing for a hazard, shared by every refusal message. */

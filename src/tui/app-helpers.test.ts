@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 import { StatusKind } from "../core/types.ts";
 
-import { destroyHazard, destroyHazardLabel, isCleanCandidate } from "./app-helpers.ts";
+import {
+  destroyHazard,
+  destroyHazardLabel,
+  destroyHazards,
+  isCleanCandidate,
+} from "./app-helpers.ts";
 import type { FieldState, WorktreeRow } from "./hooks/useWorktreeRows.ts";
 
 function field<T>(data: T | undefined): FieldState<T> {
@@ -18,12 +23,25 @@ type SyncData = NonNullable<WorktreeRow["fields"]["sync"]["data"]>;
  */
 function makeRow(overrides: {
   dirty?: readonly string[] | "loading";
+  /** Commits ahead of `origin/<branch>`. Ignored when `pushed` is false. */
   ahead?: number | "loading";
+  /** Whether `origin/<branch>` exists at all (`sync.remote` non-null). */
+  pushed?: boolean;
+  /** Commits ahead of the base — the fallback when nothing is pushed. */
+  aheadOfBase?: number;
   status?: WorktreeRow["status"];
   pr?: WorktreeRow["pr"];
   archived?: boolean;
 }): WorktreeRow {
-  const { dirty = [], ahead = 0, status, pr, archived = false } = overrides;
+  const {
+    dirty = [],
+    ahead = 0,
+    pushed = true,
+    aheadOfBase = 0,
+    status,
+    pr,
+    archived = false,
+  } = overrides;
   return {
     wt: {
       slug: "s",
@@ -41,7 +59,10 @@ function makeRow(overrides: {
       sync: field(
         ahead === "loading"
           ? undefined
-          : ({ remote: { ahead, behind: 0 } } as unknown as SyncData),
+          : ({
+              main: { ahead: aheadOfBase, behind: 0 },
+              remote: pushed ? { ahead, behind: 0 } : null,
+            } as unknown as SyncData),
       ),
       claude: field(undefined),
       gitActivity: field(undefined),
@@ -103,5 +124,41 @@ describe("destroyHazard", () => {
       kind: "dirty",
       count: 1,
     });
+  });
+
+  test("destroyHazards lists both so the confirm can't understate the loss", () => {
+    expect(destroyHazards(makeRow({ dirty: ["a.ts"], ahead: 4 }))).toEqual([
+      { kind: "dirty", count: 1 },
+      { kind: "unpushed", count: 4 },
+    ]);
+  });
+
+  test("a pushed branch ahead of its base only is NOT unpushed", () => {
+    // The regression this pins: wt points a worktree branch's upstream at
+    // its BASE, so the old @{u}-derived count called every open PR's
+    // commits unpushed and `d`/`c` refused to remove a landed, fully
+    // pushed worktree.
+    expect(destroyHazard(makeRow({ ahead: 0, aheadOfBase: 3 }))).toBeNull();
+  });
+
+  test("nothing on origin: commits since the base are the hazard", () => {
+    expect(destroyHazard(makeRow({ pushed: false, aheadOfBase: 2 }))).toEqual({
+      kind: "unpushed",
+      count: 2,
+    });
+  });
+
+  test("squash-merged and pruned: the same commits are landed, not lost", () => {
+    // Merged + no `origin/<branch>` is the shape a squash merge leaves
+    // behind. Its local commits aren't on trunk by sha, so the fallback
+    // count is non-zero — but the work is upstream, and treating it as a
+    // hazard would make the `c` sweep keep every row it exists to clear.
+    const row = makeRow({
+      pushed: false,
+      aheadOfBase: 2,
+      status: { kind: StatusKind.Merged, label: "merged" },
+    });
+    expect(isCleanCandidate(row)).toBe(true);
+    expect(destroyHazard(row)).toBeNull();
   });
 });

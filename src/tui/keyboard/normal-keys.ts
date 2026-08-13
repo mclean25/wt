@@ -31,6 +31,8 @@ import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 import { worktreeTargetKey } from "../../core/worktree-target.ts";
 import { setAttentionSeen } from "../../core/wtstate.ts";
 import {
+  destroyHazardLabel,
+  destroyHazards,
   isBareKey,
   isBareShiftedKey,
   isPlainLetter,
@@ -1023,26 +1025,20 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         return;
       }
       // Surface the same conditions `doRemove` guards on, at prompt
-      // time. When any of them would refuse the destroy, switch the
-      // confirm to a force-variant so the user can opt into the
-      // destructive path inline instead of bouncing out to the shell.
-      const dirtyData = current.fields.dirty.data;
-      const syncData = current.fields.sync.data;
-      const dirty = dirtyData?.length ?? 0;
-      const ahead = syncData?.remote?.ahead ?? 0;
-      const reasons: string[] = [];
-      if (dirty > 0) {
-        reasons.push(`${dirty} uncommitted file${dirty === 1 ? "" : "s"}`);
-      }
-      if (ahead > 0) {
-        reasons.push(`${ahead} unpushed commit${ahead === 1 ? "" : "s"}`);
-      }
-      // Unknown ≠ clean: while dirty/sync are still loading the checks
-      // above can't clear the row, and doRemove's non-force guard would
-      // refuse anyway — offer the force variant with an honest caveat so
-      // the user can proceed deliberately or wait a beat and re-prompt.
-      const stateUnknown = dirtyData === undefined || syncData === undefined;
-      if (reasons.length > 0 || stateUnknown) {
+      // time — through the SAME helper, so the prompt can't promise a
+      // removal the guard will refuse. When any hazard is present,
+      // switch the confirm to a force-variant so the user can opt into
+      // the destructive path inline instead of bouncing out to the shell.
+      const hazards = destroyHazards(current);
+      // Unknown ≠ clean: while dirty/sync are still loading nothing can
+      // clear the row, and doRemove's non-force guard would refuse
+      // anyway — offer the force variant with an honest caveat so the
+      // user can proceed deliberately or wait a beat and re-prompt.
+      const stateUnknown = hazards.some((h) => h.kind === "unknown");
+      const reasons = hazards
+        .filter((h) => h.kind !== "unknown")
+        .map((h) => destroyHazardLabel(h));
+      if (hazards.length > 0) {
         const lost =
           reasons.length > 0 ? `${reasons.join(", ")} will be lost.` : null;
         const caveat = stateUnknown

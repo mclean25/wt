@@ -220,7 +220,11 @@ export type SyncState = {
    * "behind" reads as "behind your actual base," not "behind trunk."
    */
   main: SyncCounts;
-  /** HEAD vs @{u} — null when the branch has no upstream (never pushed). */
+  /**
+   * HEAD vs `origin/<branch>` — the branch's OWN copy on the remote.
+   * Null when no such ref exists (never pushed, or pushed and since
+   * pruned).
+   */
   remote: SyncCounts | null;
 };
 
@@ -245,17 +249,17 @@ async function countsFor(
 
 /**
  * Ahead/behind of HEAD vs both the effective base and the branch's own
- * upstream. `remote` is null only when the branch has no remote
- * counterpart at all.
+ * copy on origin.
  *
- * No upstream configured does NOT mean never pushed: an explicit-
- * refspec push (`git push origin <branch>` — how agents usually push)
- * sets no tracking, and a restack's force-push keeps whatever tracking
- * existed. When @{u} is missing, fall back to `origin/<branch>` if
- * that ref exists — otherwise unpushed commits are invisible to every
- * consumer of `remote` (most dangerously the `d` destroy escalation,
- * which read a real unpushed commit as "0, safe to remove" during
- * dogfooding).
+ * `remote` deliberately measures against `origin/<branch>` and NEVER
+ * against `@{u}`: wt points a worktree branch's upstream at its BASE
+ * (e.g. `origin/staging`), so an @{u} count answers the same question
+ * `main` already answers. That made the two bracket groups render
+ * identical numbers, and — far worse — made "ahead of base" the input
+ * to every unpushed guard, so a fully pushed branch with an open PR
+ * refused to be removed as "3 unpushed commits". An explicit-refspec
+ * push (`git push origin <branch>`, how agents push) sets no tracking
+ * at all, so the branch's own ref is the only reliable answer anyway.
  *
  * `effectiveBase` defaults to `origin/<config.branch.base>` (trunk).
  * Stacked worktrees pass the parent's branch instead so the brackets
@@ -268,26 +272,18 @@ export async function syncState(
 ): Promise<SyncState> {
   const base = await effectiveBaseOrTrunk(wtPath, effectiveBase);
   const main = await countsFor(wtPath, `${base}...HEAD`);
-  const hasUpstream = await runQuiet(
-    ["git", "rev-parse", "--abbrev-ref", "@{u}"],
+  const branch = (
+    await runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
+  ).trim();
+  // Detached HEAD reports the literal "HEAD" — no branch, no counterpart.
+  if (!branch || branch === "HEAD") return { main, remote: null };
+  const originRef = `origin/${branch}`;
+  const originExists = await runQuiet(
+    ["git", "rev-parse", "--verify", "--quiet", originRef],
     { cwd: wtPath },
   );
-  if (!hasUpstream) {
-    const branch = (
-      await runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
-    ).trim();
-    // Detached HEAD reports the literal "HEAD" — no branch, no counterpart.
-    if (!branch || branch === "HEAD") return { main, remote: null };
-    const originRef = `origin/${branch}`;
-    const originExists = await runQuiet(
-      ["git", "rev-parse", "--verify", "--quiet", originRef],
-      { cwd: wtPath },
-    );
-    if (!originExists) return { main, remote: null };
-    const remote = await countsFor(wtPath, `${originRef}...HEAD`);
-    return { main, remote };
-  }
-  const remote = await countsFor(wtPath, "@{u}...HEAD");
+  if (!originExists) return { main, remote: null };
+  const remote = await countsFor(wtPath, `${originRef}...HEAD`);
   return { main, remote };
 }
 

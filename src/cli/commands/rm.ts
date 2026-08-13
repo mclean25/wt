@@ -10,7 +10,7 @@ import { killAllSessionsFor } from "../../core/tmux.ts";
 import type { Worktree } from "../../core/types.ts";
 import {
   listWorktrees,
-  unpushedCommits,
+  pushCounts,
   worktreeIsDirty,
 } from "../../core/worktree.ts";
 import { hasHelpFlag } from "../args.ts";
@@ -155,16 +155,20 @@ export async function run(argv: string[]): Promise<number> {
   if (!force) {
     const dirty = await worktreeIsDirty(target.path);
     // A squash-merged branch keeps its pre-squash commits locally, which
-    // `unpushedCommits` counts as "unpushed" once origin prunes the branch —
-    // but the work IS landed. Suppress the unpushed guard when the branch
-    // reads as merged/gone (the same classification the row's status uses),
-    // so a landed worktree tears down without a spurious --force.
+    // read as "unpushed" once origin prunes the branch — but the work IS
+    // landed. Suppress the unpushed guard when the branch reads as
+    // merged/gone (the same classification the row's status uses), so a
+    // landed worktree tears down without a spurious --force.
     const landed =
       !dirty && target.branch
         ? (await branchIsMerged({ slug: target.slug, branch: target.branch, path: target.path })) ||
           (await branchIsGone(target.branch, target.path))
         : false;
-    const unpushed = dirty || landed ? 0 : await unpushedCommits(target.path);
+    // `pushCounts`, not `unpushedCommits`: wt points a worktree branch's
+    // upstream at its BASE, so the @{u}-based count measures ahead-of-base
+    // and a fully pushed branch with an open PR refused to be removed as
+    // "3 unpushed commits". `unpushed` counts against `origin/<branch>`.
+    const unpushed = dirty || landed ? 0 : (await pushCounts(target.path)).unpushed;
     // null = git couldn't answer; a data-loss guard fails cautious, so
     // treat unknown like unpushed work rather than like a clean tree.
     if (dirty || unpushed === null || unpushed > 0) {
