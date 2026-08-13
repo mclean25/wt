@@ -309,15 +309,26 @@ export async function createWorktree(
         await gitQuiet(["branch", "--set-upstream-to", `origin/${branch}`], path);
       }
     } else if (baseRef) {
-      // Remember a non-trunk fork base. This record IS the stack
-      // primitive: it drives the TUI's stack grouping, the diff base,
-      // and the restack replay. Stored as a plain branch name so it can
-      // match a sibling worktree; the fork-point sha captured now is
-      // the squash-safe anchor a later restack replays from.
+      // Remember the fork base. This record IS the stack primitive: it
+      // drives the TUI's stack grouping, the diff base, and the restack
+      // replay. Stored as a plain branch name so it can match a sibling
+      // worktree; the fork-point sha captured now is the squash-safe
+      // anchor a later restack replays from.
+      //
+      // Recorded for TRUNK forks too, though they are not stacked on
+      // anything. The sha is what `forkBaseIsVacuous` measures "has this
+      // branch got commits of its own" against, and with no record that
+      // guard answers "not vacuous" — i.e. it fails OPEN, on the one
+      // population it exists to protect. That left it inert for every
+      // unstacked worktree (12 of 13 on the board where this surfaced),
+      // and `merged` closes GitHub issues and feeds the clean sweep.
+      // Every `baseBranch` reader already normalizes trunk to "no
+      // parent" (`stack-layout.ts`, `stack-ops/chain.ts`), so recording
+      // it changes no grouping; it just gives the guard its anchor.
       const baseBranch = baseRef.replace(/^origin\//, "");
+      const sha = await revParse("HEAD", path);
+      setSlugBase(slug, { branch: baseBranch, sha: sha ?? undefined });
       if (baseBranch !== config.branch.base) {
-        const sha = await revParse("HEAD", path);
-        setSlugBase(slug, { branch: baseBranch, sha: sha ?? undefined });
         opts.onLog?.(`recorded fork base ${baseBranch}`);
       }
     }

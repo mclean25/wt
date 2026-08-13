@@ -53,6 +53,27 @@ test("the parent advancing under an unstarted child keeps it empty", async () =>
   expect(await branchIsEmptySince(parentTip, childTip, dir)).toBe(true);
 });
 
+test("an UNSTACKED worktree forked at trunk is empty against its recorded base", async () => {
+  // The population the guard silently missed: `wt new` used to record a
+  // fork base only for non-trunk forks, so `forkBaseIsVacuous` found no
+  // record for an ordinary worktree and answered "not vacuous" — fail
+  // open, on the exact rows it exists to protect. With trunk forks
+  // recorded too, an unstarted one measures empty like a stacked one.
+  const { dir } = repo();
+  git(dir, ["checkout", "-q", "main"]);
+  const trunkTipAtFork = git(dir, ["rev-parse", "HEAD"]).trim();
+  git(dir, ["checkout", "-q", "-b", "solo"]);
+  const soloTip = git(dir, ["rev-parse", "HEAD"]).trim();
+
+  // Trunk moves on via a merge commit, which is what puts the fork point
+  // off trunk's first-parent chain in the real failure and makes the
+  // recorded base the only remaining evidence.
+  git(dir, ["checkout", "-q", "main"]);
+  git(dir, ["merge", "-q", "--no-ff", "--no-edit", "parent", "-m", "Merge parent"]);
+
+  expect(await branchIsEmptySince(trunkTipAtFork, soloTip, dir)).toBe(true);
+});
+
 test("an unresolvable base answers empty, the safe direction", async () => {
   // Unable to prove work exists, the guard must not license closing an
   // issue. A row left on the board is visible and cheap; a closed issue

@@ -36,12 +36,20 @@ The glyph used to come from a node's own CHILD count (`┯` where a stack forked
 
 ## The base record
 
-Every worktree can carry a **fork base**: the branch it's based on, plus the
+Every worktree carries a **fork base**: the branch it's based on, plus the
 fork-point SHA (`baseBranch` / `baseSha` in wt's state file). It's written
 three ways:
 
-- `wt new <input> --base <ref>` — records the parent and the fork point at
-  creation.
+- `wt new` — records the parent and the fork point at creation. Written for
+  **trunk** forks too, not just `--base <ref>` ones. A trunk fork is not
+  stacked on anything and every reader normalizes `baseBranch == trunk` to
+  "no parent", so this changes no grouping — but the SHA has a second
+  consumer outside stacking: the vacuous-containment guard in
+  `branchIsMerged` measures "has this branch got commits of its own"
+  against it, and with no record that guard fails open and calls an
+  unstarted branch merged. `merged` closes GitHub issues and feeds the
+  clean sweep, so an absent anchor there is not a stacking gap, it's a
+  correctness one.
 - `wt base set <slug> <ref>` / the TUI's `b` picker — backfill or change it by
   hand (record only; nothing is rebased).
 - restacks — a reconcile rewrites the parent when it lands; a replay advances

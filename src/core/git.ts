@@ -306,11 +306,18 @@ export async function branchIsMerged(wt: {
  * Measured against the recorded fork base (`baseSha` preferred: it is
  * the exact commit the branch forked at, and it survives the parent
  * branch being deleted because the object stays reachable from trunk).
- * No record means an unstacked worktree, where an empty branch sits ON
- * trunk's first-parent chain and the check above already caught it.
  * An unresolvable base counts as vacuous: unable to prove work exists,
  * the safe answer is "not started" — that leaves a row on the board,
  * which is visible and cheap, rather than closing an issue.
+ *
+ * A MISSING record still answers "not vacuous", which fails open, and
+ * that is a deliberate floor rather than a comfortable one. `wt new`
+ * now records a base for trunk forks too, so the gap is limited to
+ * worktrees created before that; for them the first-parent check above
+ * is the only guard, which is why `fetchOrigin` must keep that set
+ * fresh. The alternative — treating "no record" as vacuous — would stop
+ * every legacy worktree from ever reading as merged, which breaks the
+ * clean sweep for exactly the rows it should handle.
  */
 async function forkBaseIsVacuous(
   wt: { slug: string; path?: string },

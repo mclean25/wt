@@ -3,7 +3,7 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import { listRiftWorktreePaths } from "./backend.ts";
 import { config } from "./config.ts";
-import { git, branchIsGone, branchIsMerged, effectiveBaseOrTrunk, gitQuiet, gitRun, localBranchExists } from "./git.ts";
+import { git, branchIsGone, branchIsMerged, effectiveBaseOrTrunk, gitQuiet, gitRun, invalidateMainFirstParents, localBranchExists } from "./git.ts";
 import { resolveMainSyncInstall } from "./install.ts";
 import { lockAge, lockLabel, lockStatus, tryAcquireLock, type LockHandle } from "./locks.ts";
 import { createLogger } from "./logger.ts";
@@ -521,11 +521,30 @@ async function fetchOriginLocked(opts: { onWarn?: (msg: string) => void } = {}):
   }
 }
 
+/**
+ * The ONE place origin gets fetched, and therefore the one place that
+ * drops the first-parent SHA cache.
+ *
+ * That cache answers "is this branch tip just an older trunk commit?",
+ * which is the only thing standing between an unstarted branch and a
+ * `merged` verdict — and `merged` closes GitHub issues and feeds the
+ * clean sweep. A fetch that advances `origin/<trunk>` without dropping
+ * it leaves a set that cannot contain the new tip, so a worktree forked
+ * at that tip reads as "off the first-parent chain" = landed work.
+ *
+ * It used to be invalidated by the caller, and five of six callers
+ * didn't: `wt new` (which fetches immediately before forking, the exact
+ * race), the restack replay, the webhook daemon, `wt ls` and `wt clean`.
+ * Invalidating here makes forgetting impossible rather than making it a
+ * rule to remember.
+ */
 export async function fetchOrigin(opts: { onWarn?: (msg: string) => void } = {}): Promise<void> {
   if (fetchOriginInFlight) return fetchOriginInFlight;
-  fetchOriginInFlight = fetchOriginLocked(opts).finally(() => {
-    fetchOriginInFlight = null;
-  });
+  fetchOriginInFlight = fetchOriginLocked(opts)
+    .finally(() => {
+      invalidateMainFirstParents();
+      fetchOriginInFlight = null;
+    });
   return fetchOriginInFlight;
 }
 
