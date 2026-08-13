@@ -76,10 +76,13 @@ export const claudeHarness: Harness = {
   singleSlot: false,
   // Claude Code skills are invoked with a `/` prefix (e.g. /restack).
   skillPrefix: "/",
-  // Claude's pane is never a messaging transport. Native socket sends
-  // bypass the prompt editor completely; the generic injector rejects
-  // Claude before consulting this field.
-  injectSubmitKeys: [],
+  // Claude Code receives a bracketed paste as a multi-line input blob;
+  // the first Enter only exits that state, so a second is needed to
+  // actually submit. Ordinary messages go over the native socket and
+  // never reach the prompt editor, but `injectSlashCommand` does — a
+  // slash command only runs if it is submitted at the input — and an
+  // empty sequence there means paste-then-nothing.
+  injectSubmitKeys: ["Enter", "Enter"],
 
   tmuxSessionName(slug, managedName) {
     return claudeTmuxName(slug, managedName);

@@ -5,6 +5,10 @@ import { config } from "../../core/config.ts";
 import { wtSessionUuid } from "../../core/harness/claude/jsonl.ts";
 import { claudeSessions } from "../../core/harness/claude/sessions.ts";
 import {
+  isSlashCommand,
+  sendSessionMessage,
+} from "../../core/harness/session-messaging.ts";
+import {
   ensureManagerClaudeName,
   MANAGER_CLAUDE_NAME,
   MANAGER_SLUG,
@@ -119,14 +123,18 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
   // The manager lives as a named Claude session; discovery needs the
   // name persisted before sending (same setup as `wt manager send`).
   if (slug === MANAGER_SLUG) ensureManagerClaudeName();
-  const res = await claudeSessions.send(
-    {
-      slug,
-      cwd: slot ? slot.cwd : wt!.path,
-      managedName: slot?.managedName ?? null,
-    },
+  // Through the shared choke point, not `claudeSessions.send` directly:
+  // that is where the socket-vs-pane transport rule lives, and a slash
+  // command sent over the socket is a silent no-op (see
+  // `sendSessionMessage`). Agents reach for `wt claude send` exactly as
+  // often as the TUI does.
+  const res = await sendSessionMessage({
+    slug,
+    cwd: slot ? slot.cwd : wt!.path,
+    harnessId: "claude",
+    managedName: slot?.managedName ?? null,
     text,
-  );
+  });
   if (!res.ok) {
     console.error(red(`send failed: ${res.reason}`));
     return 1;
@@ -140,7 +148,9 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
   );
   console.log(
     dim(
-      "delivered through Claude's native session messaging — fire-and-forget from here; attach via the wt TUI (F12) to watch",
+      isSlashCommand(text)
+        ? "submitted at the session's prompt (a slash command has to be typed, not messaged) — attach via the wt TUI (F12) to watch"
+        : "delivered through Claude's native session messaging — fire-and-forget from here; attach via the wt TUI (F12) to watch",
     ),
   );
   return 0;
