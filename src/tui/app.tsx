@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
@@ -40,12 +40,13 @@ import { useWtStateEvents } from "./hooks/useWtStateEvents.ts";
 import { useManagerReports } from "./hooks/useManagerSignals.ts";
 import { useWorktreeRows } from "./hooks/useWorktreeRows.ts";
 import { useStackSections } from "./hooks/useStackSections.ts";
-import { useVisualItems } from "./hooks/useVisualItems.ts";
+import { useVisualItems, visualKey } from "./hooks/useVisualItems.ts";
 import { useAutomations } from "./hooks/useAutomations.ts";
 import { useSectionDetail } from "./hooks/useSectionDetail.ts";
 import { useSessionTailReconcile } from "./hooks/useSessionTailReconcile.ts";
 import { useOutputFocus } from "./hooks/useOutputFocus.ts";
 import {
+  cursorSuccessor,
   isCleanCandidate,
   isPlainLetter,
   printableMultiline,
@@ -290,6 +291,32 @@ export function App({ onExit }: Props) {
     archivedKeys,
   });
 
+  // A row can also leave without any wt-side action behind it — an
+  // external `wt rm`, another wt instance, a branch swept by an
+  // automation in a different process. `useVisualItems` holds the cursor
+  // at the same visual SLOT in that case, which is the right place; this
+  // adopts whatever now occupies it as the real selection. Without it
+  // the selection key stays pointed at a row that no longer exists, and
+  // the cursor drifts with the next re-sort instead of tracking a row.
+  useEffect(() => {
+    if (sel === null || !currentItem) return;
+    const key = visualKey(currentItem);
+    if (key !== sel) setSel(key);
+  }, [sel, currentItem]);
+
+  // Cursor re-aim for actions that take the selected row OUT of its slot
+  // (destroy, clean sweep, archive, section move). No-op unless the
+  // cursor is actually on one of `keys` — the same call is on the path
+  // an automation takes, where the row under the cursor usually isn't
+  // the one leaving. Rule and rationale: `cursorSuccessor`.
+  const advanceCursorPast = useCallback(
+    (keys: readonly string[]): void => {
+      const next = cursorSuccessor(visualItems, cursorIndex, new Set(keys));
+      if (next !== null) setSel(next);
+    },
+    [visualItems, cursorIndex],
+  );
+
   // Set of slugs whose action is in flight RIGHT NOW (no recent-window
   // tail). Drives the leftmost cluster glyph in `WorktreeList` so the
   // user has at-a-glance awareness of what's running on rows they're
@@ -440,6 +467,7 @@ export function App({ onExit }: Props) {
       wtState: wtStateForStacks.data,
       lastMoveTarget,
       setLastMoveTarget,
+      advanceCursorPast,
       setModal,
       setFooter,
       setPendingRename,
@@ -489,6 +517,7 @@ export function App({ onExit }: Props) {
     current,
     toast,
     archive,
+    advanceCursorPast,
     refreshTmuxSessions,
     invalidateWorktree,
     refreshAll,
@@ -695,6 +724,7 @@ export function App({ onExit }: Props) {
           commitSectionPick,
           consumePrTargetChord,
           setLastMoveTarget,
+          advanceCursorPast,
           setSection,
           toast,
           reportActionError,
@@ -783,6 +813,7 @@ export function App({ onExit }: Props) {
       cursorIndex,
       currentSlug,
       setSel,
+      advanceCursorPast,
       setModal,
       setFooter,
       detailsScrollRef,

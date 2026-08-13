@@ -57,6 +57,9 @@ export type SimpleModalContext = {
   consumePrTargetChord: (k: KeyEvent) => boolean;
   setLastMoveTarget: Dispatch<SetStateAction<string | null>>;
   setSection: (slug: string, section: string | null) => Promise<unknown>;
+  /** Re-aim the cursor off rows that are leaving their slot — see
+   *  `cursorSuccessor`. */
+  advanceCursorPast: (keys: readonly string[]) => void;
   toast: (message: string, color?: string, ms?: number) => void;
   reportActionError: (label: string, err: unknown) => void;
   visibleOutputs: readonly Output[];

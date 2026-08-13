@@ -28,6 +28,22 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `Ctrl+Shift+J` / `Ctrl+Shift+K` | scroll the bottom event feed — same 3-row step (also `Ctrl+E`/`Ctrl+Y`, mouse wheel); re-follows at the bottom. Kitty-protocol terminals only: legacy encodings can't express the chord and it degrades to the details scroll, leaving `Ctrl+E`/`Ctrl+Y` for the feed. There is no `Alt+J`/`Alt+K` alias, deliberately: outside the kitty protocol `Alt+<letter>` and `Esc`-then-letter are the same bytes, so such a binding hijacks bare `j`/`k` whenever you navigate right after dismissing a modal (or when a terminal binding emits an Esc-prefixed letter) |
 | `h` | flip to the removed-worktrees history view |
 
+**Where the cursor goes when the row under it leaves.** The cursor is
+anchored to a row, not to a position, so it follows a row that merely
+re-sorts (a status change, `Shift+J`/`K` dragging it, a restack). But
+four actions take the row OUT of the slot you were reading — `d`, the
+`c` sweep, `a`, and filing it elsewhere with `l` — and there the cursor
+holds the PLACE instead: it lands on the next surviving row in the same
+section, or the previous one when the row was last, and only leaves the
+section when the whole section is going. It never lands on a row the
+same sweep is about to destroy, or on one already mid-teardown. This
+matters most for `d` and `c`: those park the row in the archived block
+at the bottom of the board for the seconds their background remove
+takes, so a cursor that followed it would drag you off your section and
+strand you next to the archive. Restoring from the archive with `a` is
+the one that still follows the row — it's coming back to where you can
+work on it.
+
 ### Worktree actions
 
 | key | action |

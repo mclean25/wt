@@ -72,6 +72,13 @@ export type DestroyFlowsCtx = {
   toast: (message: string, color?: string, ms?: number) => void;
   /** Idempotently mark a slug archived (see `useWtActions.archive`). */
   archive: (slug: string) => void;
+  /**
+   * Move the cursor off rows that are leaving, BEFORE they're archived.
+   * A destroy parks the row in the archived block at the bottom of the
+   * board for the length of its teardown, and a key-anchored cursor
+   * rides it down there. See `cursorSuccessor`.
+   */
+  advanceCursorPast: (keys: readonly string[]) => void;
   refreshTmuxSessions: () => Promise<void>;
   invalidateWorktree: (slug: string) => Promise<void>;
   refreshAll: () => Promise<void>;
@@ -99,6 +106,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     rows,
     toast,
     archive,
+    advanceCursorPast,
     refreshTmuxSessions,
     invalidateWorktree,
     refreshAll,
@@ -180,6 +188,9 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     } else {
       log.event.warn("force destroy: skipping dirty + unpushed guards");
     }
+    // The row is leaving this slot: re-aim the cursor at its neighbor
+    // before the archive flag moves it to the bottom of the board.
+    advanceCursorPast([slug]);
     // Tuck the row into the archived section for the duration of the
     // destroy — keeps the active list uncluttered while tail output
     // spills into the activity pane. The archive entry intentionally
@@ -300,6 +311,10 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // Notify the action registry first (synchronous, fast) so the
     // activity pane reads "killed" rather than the "failed" the
     // wrapper's exit code would otherwise produce.
+    //
+    // The whole candidate set goes in as one departing group, so the
+    // cursor can't land on the next row this sweep is about to destroy.
+    advanceCursorPast(candidates.map((r) => r.wt.slug));
     recordRemovedSnapshots(candidates);
     for (const row of candidates) void actionRegistry.kill(row.wt.slug);
     await Promise.allSettled(

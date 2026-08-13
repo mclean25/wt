@@ -16,6 +16,7 @@ export function handleSectionPickerKey(
     consumePrTargetChord,
     setSection,
     setLastMoveTarget,
+    advanceCursorPast,
     toast,
     reportActionError,
     commitSectionPick,
@@ -41,6 +42,9 @@ export function handleSectionPickerKey(
         return true;
       }
       const slug = modal.slug;
+      // Same rule as picking an existing section (`commitSectionPick`):
+      // the cursor holds its place in the section being worked through.
+      advanceCursorPast([slug]);
       setSection(slug, name).then(
         () => toast(`moved to ${name}`, infoColor, 1500),
         (err) => reportActionError("move", err),

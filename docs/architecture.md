@@ -85,6 +85,22 @@ slug/branch/path/stage metadata plus a `local` or endpoint-carrying `remote`
 location. The list/cursor model builds one of these for every selectable
 worktree; feature code should branch only at its I/O boundary.
 
+The cursor itself is a KEY (`sel` in `app.tsx`), resolved to an index by
+`useVisualItems` — so it tracks a row through re-sorts rather than a
+position. Two rules cover the cases where that's the wrong default.
+Actions that take the selected row out of its slot (`d`, the `c` sweep,
+`a`, the `l` section move) call `advanceCursorPast` FIRST, which asks
+`cursorSuccessor` (`tui/app-helpers.ts`) for the nearest survivor in the
+same section — skipping the rest of a sweep's candidate set and anything
+already archived — and re-points `sel` at it; without that step a destroy
+drags the cursor into the archived block at the bottom of the board,
+where the row parks for the length of its teardown. When a row instead
+vanishes with no wt-side action behind it (an external `wt rm`, another
+instance), `useVisualItems` holds the cursor at the same visual index and
+an effect in `app.tsx` adopts whatever now occupies it, so the selection
+is a live key again instead of a dead one that drifts on the next
+re-sort. See [tui.md](tui.md#navigation) for the user-facing statement.
+
 Presentation/coordination state owned by this TUI (currently the archive
 ledger) uses the location-aware key, so remote rows participate like local rows
 without ever making their paths look local. Operations that need the checkout

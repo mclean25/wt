@@ -32,6 +32,9 @@ type SectionFlowsCtx = {
   setPendingRename: (v: string | null) => void;
   toast: (message: string, color?: string, ms?: number) => void;
   reportActionError: (label: string, err: unknown) => void;
+  /** Re-aim the cursor off rows that are leaving their slot — see
+   *  `cursorSuccessor`. */
+  advanceCursorPast: (keys: readonly string[]) => void;
   setSection: (slug: string, section: string | null) => Promise<void>;
   placeSlug: (
     slug: string,
@@ -65,6 +68,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     setPendingRename,
     toast,
     reportActionError,
+    advanceCursorPast,
     setSection,
     placeSlug,
     swapOrder,
@@ -296,6 +300,12 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
   function commitSectionPick(item: SectionPickerItem, slug: string): void {
     const group = stackGroup(slug);
     const suffix = group.length > 1 ? ` (stack of ${group.length})` : "";
+    // Filing a row away is a move the user makes while working THROUGH a
+    // section — the cursor holds its place there rather than chasing the
+    // row into wherever it was filed. (Shift+J/K is the opposite: that's
+    // dragging a row, so the cursor follows it, which the plain key
+    // anchor already does.)
+    if (item.kind !== "create") advanceCursorPast(group);
     if (item.kind === "none") {
       moveSlugs(group, null).then(
         () => toast(`moved to Inbox${suffix}`, theme.info, 1500),

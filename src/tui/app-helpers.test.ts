@@ -3,12 +3,14 @@ import { describe, expect, test } from "bun:test";
 import { StatusKind } from "../core/types.ts";
 
 import {
+  cursorSuccessor,
   destroyHazard,
   destroyHazardLabel,
   destroyHazards,
   isCleanCandidate,
 } from "./app-helpers.ts";
 import type { FieldState, WorktreeRow } from "./hooks/useWorktreeRows.ts";
+import type { VisualItem } from "./hooks/useVisualItems.ts";
 
 function field<T>(data: T | undefined): FieldState<T> {
   return { data, isStale: false, isFetching: false, isLoading: false, error: null };
@@ -160,5 +162,92 @@ describe("destroyHazard", () => {
     });
     expect(isCleanCandidate(row)).toBe(true);
     expect(destroyHazard(row)).toBeNull();
+  });
+});
+
+/**
+ * Minimal visual items for the cursor rule: only `kind`, the identity
+ * `visualKey` reads, the section, and the archived flag matter.
+ */
+function wtItem(
+  slug: string,
+  section: string | null,
+  archived = false,
+): VisualItem {
+  return {
+    kind: "wt",
+    row: { wt: { slug }, section, archived },
+    target: null,
+  } as unknown as VisualItem;
+}
+
+function sectionItem(sectionKey: string): VisualItem {
+  return { kind: "section", sectionKey, label: sectionKey, rows: [] } as unknown as VisualItem;
+}
+
+describe("cursorSuccessor", () => {
+  // A realistic unfolded board: sections are contiguous runs of rows,
+  // NOT header items — `visualItems` only carries a `section` item for a
+  // FOLDED section (the "── Landed ──" divider is drawn by the list
+  // panel, not an item).
+  //   Inbox: a, b · Landed: c, d, e
+  const board: VisualItem[] = [
+    wtItem("a", null),
+    wtItem("b", null),
+    wtItem("c", "Landed"),
+    wtItem("d", "Landed"),
+    wtItem("e", "Landed"),
+  ];
+
+  test("takes the row directly below, in the same section", () => {
+    expect(cursorSuccessor(board, 2, new Set(["c"]))).toBe("d");
+  });
+
+  test("falls back UP when the departing row is last in its section", () => {
+    expect(cursorSuccessor(board, 4, new Set(["e"]))).toBe("d");
+  });
+
+  test("never lands on another row the same sweep is destroying", () => {
+    // c and d both going: the survivor below them is e, not d.
+    expect(cursorSuccessor(board, 2, new Set(["c", "d"]))).toBe("e");
+  });
+
+  test("stays put rather than following the row into another section", () => {
+    // `b` is the last inbox row; the rows below it belong to Landed, so
+    // the constrained scan stops at the boundary and comes back up.
+    expect(cursorSuccessor(board, 1, new Set(["b"]))).toBe("a");
+  });
+
+  test("leaves the section only when the whole section is going", () => {
+    expect(cursorSuccessor(board, 2, new Set(["c", "d", "e"]))).toBe("b");
+  });
+
+  test("a folded section below is a valid landing spot", () => {
+    const folded: VisualItem[] = [
+      wtItem("c", "Landed"),
+      wtItem("d", "Landed"),
+      sectionItem("Statuses"),
+    ];
+    expect(cursorSuccessor(folded, 0, new Set(["c", "d"]))).toBe(
+      "section:Statuses",
+    );
+  });
+
+  test("skips rows already archived by an earlier destroy", () => {
+    const withArchived: VisualItem[] = [
+      wtItem("c", "Landed"),
+      wtItem("d", "Landed", true),
+      wtItem("e", "Landed"),
+    ];
+    expect(cursorSuccessor(withArchived, 0, new Set(["c"]))).toBe("e");
+  });
+
+  test("no move when the cursor isn't on a departing row", () => {
+    // An automation cleaning `c` while the user reads `a`.
+    expect(cursorSuccessor(board, 0, new Set(["c"]))).toBeNull();
+  });
+
+  test("null when nothing survives", () => {
+    expect(cursorSuccessor([wtItem("a", null)], 0, new Set(["a"]))).toBeNull();
   });
 });

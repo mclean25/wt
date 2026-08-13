@@ -16,7 +16,69 @@ import { expectedStage } from "../core/stage-safety.ts";
 import { StatusKind } from "../core/types.ts";
 import type { SyncState } from "../core/worktree.ts";
 
-import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
+import { GROUP_INBOX, type WorktreeRow } from "./hooks/useWorktreeRows.ts";
+import { visualKey, type VisualItem } from "./hooks/useVisualItems.ts";
+
+/**
+ * Where the cursor goes when the row under it LEAVES that slot — a
+ * destroy, a clean sweep, an archive, a move to another section.
+ *
+ * Following the row is wrong for all four, and it's what the plain
+ * key-anchored cursor does: `d` and `c` archive the row before the
+ * background remove starts, so the cursor rides it down to the archived
+ * block at the bottom of the board and sits there for the seconds the
+ * teardown takes; filing a row into another section drags the cursor out
+ * of the section the user is working through. The cursor belongs to the
+ * PLACE, not to the row — it holds the slot and takes whatever moves up
+ * into it.
+ *
+ * `departing` is every visual key leaving in THIS action, so a sweep
+ * can't land the cursor on the next row it is about to destroy. Rows
+ * already archived are skipped for the same reason: they're mid-teardown
+ * from an earlier one. Preference order is down within the group, up
+ * within the group, then the same pair unconstrained for when the whole
+ * section is going. Null means the cursor isn't on a departing row, or
+ * nothing survives to point at — the caller leaves the selection alone
+ * and `useVisualItems`' index fallback takes over.
+ */
+export function cursorSuccessor(
+  items: readonly VisualItem[],
+  cursorIndex: number,
+  departing: ReadonlySet<string>,
+): string | null {
+  const anchor = cursorIndex >= 0 ? items[cursorIndex] : undefined;
+  if (!anchor || !departing.has(visualKey(anchor))) return null;
+  // "Group" only means something for a live worktree row; a departing
+  // remote/PR/section item just takes the nearest survivor.
+  const group =
+    anchor.kind === "wt" && !anchor.row.archived
+      ? anchor.row.section ?? GROUP_INBOX
+      : null;
+  const groupOf = (it: VisualItem): string | null =>
+    it.kind === "wt" && !it.row.archived
+      ? it.row.section ?? GROUP_INBOX
+      : it.kind === "section"
+        ? it.sectionKey
+        : null;
+  const survives = (it: VisualItem): boolean =>
+    !departing.has(visualKey(it)) && !(it.kind === "wt" && it.row.archived);
+  const scan = (dir: 1 | -1, sameGroup: boolean): string | null => {
+    for (let i = cursorIndex + dir; i >= 0 && i < items.length; i += dir) {
+      const it = items[i]!;
+      if (!survives(it)) continue;
+      // Groups are contiguous, so the first survivor outside this one
+      // ends the constrained scan rather than being skipped over.
+      if (sameGroup && groupOf(it) !== group) return null;
+      return visualKey(it);
+    }
+    return null;
+  };
+  if (group !== null) {
+    const inGroup = scan(1, true) ?? scan(-1, true);
+    if (inGroup !== null) return inGroup;
+  }
+  return scan(1, false) ?? scan(-1, false);
+}
 
 /**
  * Resolve the diff base ref for a worktree row. Same priority chain

@@ -92,6 +92,9 @@ export type NormalKeysCtx = {
   cursorIndex: VisualItems["cursorIndex"];
   currentSlug: string | undefined;
   setSel: (key: string | null) => void;
+  /** Re-aim the cursor off rows that are leaving their slot — see
+   *  `cursorSuccessor`. */
+  advanceCursorPast: (keys: readonly string[]) => void;
   // Chrome state
   setModal: (m: Modal | null) => void;
   setFooter: (f: FooterMode) => void;
@@ -155,6 +158,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     cursorIndex,
     currentSlug,
     setSel,
+    advanceCursorPast,
     setModal,
     setFooter,
     detailsScrollRef,
@@ -1150,6 +1154,11 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         );
         return;
       }
+      // Archiving moves the row to the bottom of the board; the cursor
+      // stays where the user was reading. Restoring is the opposite —
+      // the row comes back to the active list and the cursor follows it,
+      // which the plain key anchor already does.
+      if (!current.archived) advanceCursorPast([slug]);
       toggleArchived(currentTarget ? worktreeTargetKey(currentTarget) : slug).then(
         ({ archived }) => {
           rowLog.event.info(archived ? "archived" : "restored from archive");
