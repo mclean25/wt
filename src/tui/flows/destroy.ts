@@ -80,7 +80,11 @@ export type DestroyFlowsCtx = {
    */
   advanceCursorPast: (keys: readonly string[]) => void;
   refreshTmuxSessions: () => Promise<void>;
-  invalidateWorktree: (slug: string) => Promise<void>;
+  /**
+   * Scoped post-removal refresh (worktree list + wtState). Destroys use
+   * this rather than `refreshAll` — see `refreshAfterRemoval`.
+   */
+  refreshAfterRemoval: () => Promise<void>;
   refreshAll: () => Promise<void>;
   refreshGithub: () => Promise<void>;
   optimisticRemoveRemoteWorktree: (
@@ -108,7 +112,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     archive,
     advanceCursorPast,
     refreshTmuxSessions,
-    invalidateWorktree,
+    refreshAfterRemoval,
     refreshAll,
     refreshGithub,
     optimisticRemoveRemoteWorktree,
@@ -239,7 +243,11 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     });
     log.event.info(`dispatched destroy${force ? " (force)" : ""}`);
     toast(`dispatched destroy of ${slug}`, theme.info);
-    setTimeout(() => void invalidateWorktree(slug), 600);
+    // Refresh the LIST, not this slug's fields: the checkout is being
+    // deleted out from under them, so re-running ten git probes in a
+    // vanishing directory buys errors, not freshness. The busy glyph
+    // comes from the lock watcher either way.
+    setTimeout(() => void refreshAfterRemoval(), 600);
   }
 
   async function doClean(): Promise<void> {
@@ -339,7 +347,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // triggers `reparentBaseReferences`, anchors preserved), so no
     // TUI-side bookkeeping is needed here. The actual replay (rebasing
     // commits off the squashed parent) stays an explicit `R`/`/restack`.
-    setTimeout(() => void refreshAll(), 600);
+    setTimeout(() => void refreshAfterRemoval(), 600);
   }
 
   /**

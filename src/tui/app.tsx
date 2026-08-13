@@ -103,6 +103,7 @@ export function App({ onExit }: Props) {
     fetchMe,
     clearAll,
     invalidateWorktree,
+    refreshAfterRemoval,
     refreshStack,
     refreshAiSummary,
     refreshClaudeSummaries,
@@ -519,7 +520,7 @@ export function App({ onExit }: Props) {
     archive,
     advanceCursorPast,
     refreshTmuxSessions,
-    invalidateWorktree,
+    refreshAfterRemoval,
     refreshAll,
     refreshGithub,
     optimisticRemoveRemoteWorktree: (remote, slug, run) =>

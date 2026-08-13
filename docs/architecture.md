@@ -62,6 +62,21 @@ One deliberate exception: `perfSnapshotQuery` (the `P` overlay) polls as its *pr
 
 When adding a new state source or mutation path, wire one of these (or an explicit invalidation at the call site) rather than shortening a staleTime — staleTimes only bound how wrong things can be when a trigger is missed. Watchers live in `src/core/repo-watch.ts` and are wired in `src/tui/runtime.tsx` through a 50ms-coalescing invalidation scheduler.
 
+**A refresh has a size, and the big one is not free.** `invalidateQueries(["wt"])`
+— the per-worktree wave inside `refreshAll`, i.e. what `r` does — refetches every
+field of every row: `worktrees × 10` git probes issued in one burst. `Bun.spawn`
+runs its `posix_spawn` synchronously on the calling thread, so that burst is a
+render-thread stall before it is background work (measured: blocks up to 2.7s on
+a 22-row board). Two things keep it in hand. `run()` in `core/proc.ts` caps
+concurrent subprocesses (`RUN_CONCURRENCY`), which spreads the spawns across
+event-loop turns and took the same refresh to a 185ms worst block. And mutation
+paths reach for the SCOPED refresh that matches what they changed rather than the
+wave: a destroy changes which worktrees exist, not the state of the survivors, so
+`doRemove` / `doCleanRows` call `refreshAfterRemoval` (list + wtState) — the
+github query re-keys itself off the shorter branch list, and the watchers above
+carry the rest. Reach for `refreshAll` when the user asked for "everything", not
+as the tail of an operation you can describe precisely.
+
 Two related invariants:
 
 - The github source is **one GraphQL round-trip** aliasing every per-worktree PR field plus the repo merge-queue block. New PR fields go into `PR_FRAGMENT` in `core/github/fetch.ts`, never a separate query.

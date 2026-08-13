@@ -387,6 +387,34 @@ export function useWtActions() {
       await qc.invalidateQueries({ queryKey: qk.wt(slug).all() });
     },
     /**
+     * Post-removal refresh — deliberately NOT `refreshAll`.
+     *
+     * A destroy changes exactly two things: which worktrees exist, and
+     * the state file the detached child rewrites. Nothing about the
+     * SURVIVING rows moved, and the removed ones are about to stop
+     * existing, so `refreshAll`'s `["wt"]` wave — every field query for
+     * every row on the board — re-derives state nobody touched at the
+     * cost of ~10 git subprocesses per row, fired in one burst. Each
+     * `Bun.spawn` costs the render thread its `posix_spawn`, which is
+     * why the sweep's tail shows up as a stall rather than as
+     * background work (`spawn` was 30% of main-thread self time in the
+     * post-sweep profile).
+     *
+     * The rest arrives on its own: the github query is keyed BY the
+     * branch list, so a shorter list is a different key and refetches
+     * without being asked, and `watchWtStateFiles` covers the child's
+     * writes. This is the belt to the watchers' braces, not the
+     * mechanism — `watchWorktreesAdmin` / `watchWorktreeRoot` / the
+     * lock-release chain all invalidate the list first (see
+     * docs/architecture.md#freshness-model).
+     */
+    async refreshAfterRemoval(): Promise<void> {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: qk.worktrees() }),
+        qc.invalidateQueries({ queryKey: qk.wtState() }),
+      ]);
+    },
+    /**
      * Refresh stack relationships and the per-worktree diff queries.
      * Stack shape lives in the per-slug fork-base records, so
      * re-reading wtState surfaces a reparent or a restacked anchor;
