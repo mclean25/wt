@@ -24,17 +24,6 @@ should be idle is a bug, not load (see bare-promise signature below).
 
 ## Open issues
 
-- **Post-sweep stall (`c`), diagnosed 2026-08-13, fix in review.** After a
-  clean sweep the render thread blocks in multi-SECOND chunks (measured on
-  a sealed fixture: 4104ms / 4209ms / 2650ms back to back, ~12s of a 14s
-  window; the input-latency probe logged n=2 samples for that minute
-  because keypresses never reached a painted frame). Cause is in the query
-  layer, not rendering — see the `trackProp` signature below. A one-line
-  fix (`notifyOnChangeProps` on the `useQueries` batches in
-  `useWorktreeRows`) takes the worst block to 507ms; the residue is
-  subprocess spawns on the main thread plus `refreshAll`'s
-  `invalidateQueries(["wt"])` refetching every field of every row.
-
 - **Destroy dispatch double-fetches GitHub** — two concurrent
   `fetching GitHub...` ~40ms apart (double invalidation while the first
   is in flight). Harmless, minor quota waste. Found in dogfood sweep
@@ -97,6 +86,25 @@ Failure signatures (check these first):
   at 0.5.1 — renderable-tree size stays a per-frame tax regardless of
   version; window unbounded buffers.
 
+- **Post-sweep stall (`c`) — RESOLVED 2026-08-13, three parts.** The
+  render thread blocked in multi-SECOND chunks after a clean sweep
+  (sealed fixture, 28 rows, 7 candidates: 4104 / 4209 / 2650ms back to
+  back, ~12s of a 14s window; the input-latency probe logged n=2 for
+  that minute because keypresses never reached a painted frame). Not
+  rendering — three separate causes stacked, each measured alone:
+  (1) the O(N²) tracked-props combine below → worst block 507ms;
+  (2) `doCleanRows` ending in `refreshAll`, whose `["wt"]` wave refetches
+  every field of every row — replaced with a scoped
+  `refreshAfterRemoval` (list + wtState), since a destroy changes which
+  worktrees exist, not the survivors' state;
+  (3) `RUN_CONCURRENCY` in `core/proc.ts` capping concurrent `run()`
+  subprocesses, because `Bun.spawn`'s `posix_spawn` is synchronous on the
+  calling thread. (2) and (3) address the SAME burst from opposite ends,
+  so (3) shows no gain on the sweep once (2) lands — its win is on the
+  bursts (2) can't remove, i.e. pressing `r`: worst block 2699ms → 185ms
+  on a 22-row board. End state on the sweep: worst block ~400ms with
+  input staying live throughout (p50 8ms, n=99/215 samples per minute vs
+  n=2 before).
 - **`useQueries` + `combine` is O(N²) per query update.** query-core's
   `QueriesObserver.#trackResult` wraps every result in a tracked-props
   Proxy whose `onPropTracked` callback loops over ALL observers in the

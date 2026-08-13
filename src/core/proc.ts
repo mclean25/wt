@@ -47,11 +47,66 @@ export type RunOptions = {
 };
 
 /**
+ * How many `run()` subprocesses may be in flight at once.
+ *
+ * This is a RENDER-THREAD budget, not a machine one. `Bun.spawn` does
+ * its `posix_spawn` synchronously on the calling thread — ~1ms under
+ * load — so a burst that issues N spawns in one turn blocks the TUI for
+ * N milliseconds before any of them has done any work. Bursts of that
+ * size are routine: one `invalidateQueries(["wt"])` fans out to
+ * `worktrees × 10` git probes, which was ~280 spawns (and 30% of
+ * main-thread self time) in the profile behind the post-sweep stall.
+ *
+ * With a cap, a waiter resumes on a microtask when a slot frees, so the
+ * spawns spread across turns instead of landing in one: the worst
+ * synchronous run is the cap, and the render loop gets a turn between
+ * waves. The cost is wall-clock on huge bursts, which is the right
+ * trade — nobody is watching 280 git probes, they're watching the
+ * cursor move. It also stops wt from putting 280 concurrent gits on the
+ * disk, which was never a good idea either.
+ *
+ * There is no deadlock hazard as long as nothing holds a slot while
+ * awaiting another `run()`: a slot is held only INSIDE this function,
+ * and callers that chain probes await them from outside it.
+ */
+const RUN_CONCURRENCY = 8;
+
+let runsInFlight = 0;
+const runWaiters: Array<() => void> = [];
+
+function acquireRunSlot(): Promise<void> | null {
+  if (runsInFlight < RUN_CONCURRENCY) {
+    runsInFlight++;
+    return null;
+  }
+  return new Promise<void>((resolve) => runWaiters.push(resolve));
+}
+
+/** Hand the slot to the next waiter, or give it back to the pool. */
+function releaseRunSlot(): void {
+  const next = runWaiters.shift();
+  if (next) next();
+  else runsInFlight--;
+}
+
+/**
  * Run a subprocess, capture stdout/stderr, never throw. Missing
  * binaries and timeouts surface as `exitCode < 0`.
+ *
+ * Queued behind `RUN_CONCURRENCY`. A call whose signal aborts while it's
+ * still waiting never spawns at all — a superseded query stops costing a
+ * subprocess instead of spawning one just to SIGTERM it.
  */
 export async function run(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
   const { cwd = config.paths.mainClone, input, timeoutMs, env, signal } = opts;
+  const queued = acquireRunSlot();
+  if (queued) {
+    await queued;
+    if (signal?.aborted) {
+      releaseRunSlot();
+      return { stdout: "", stderr: "aborted", exitCode: -1 };
+    }
+  }
   let proc: Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
   try {
     proc = Bun.spawn(argv, {
@@ -66,6 +121,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
     // this async body that becomes a rejected promise, and fire-and-
     // forget callers would die on the unhandled rejection (Bun kills
     // the process). Honor the documented contract instead.
+    releaseRunSlot();
     return {
       stdout: "",
       stderr: err instanceof Error ? err.message : String(err),
@@ -106,6 +162,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
   } finally {
     if (timer) clearTimeout(timer);
     cleanupAbort();
+    releaseRunSlot();
   }
 }
 
@@ -200,6 +257,12 @@ export async function runStreaming(
   argv: string[],
   opts: RunOptions & { onLine?: (line: string) => void } = {},
 ): Promise<number> {
+  // Deliberately NOT behind `RUN_CONCURRENCY` either: these run for
+  // minutes (pnpm install, sst remove), so a slot held here would starve
+  // the short probes the cap exists to keep responsive — the exact
+  // inversion of what it's for. One spawn, once, is not the burst
+  // problem.
+  //
   // Deliberately ignores `timeoutMs`/`signal` from RunOptions: callers
   // are long-running lifecycle ops (pnpm install, sst remove) where a
   // mid-flight kill leaves worse state than waiting. If a future caller
