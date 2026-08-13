@@ -220,15 +220,15 @@ The optional GitHub webhook daemon — see [github-events.md](github-events.md).
 ### `wt claude <sub>`
 
 Drive a worktree's Claude Code tmux session from scripts or other sessions.
-Native delivery requires Claude Code 2.1.228 or newer. This includes the
-cross-session inbox reliability fix shipped after the initial 2.1.224 release;
-older versions fail before wt starts or writes to a session. See Anthropic's
-[cross-session messaging documentation](https://code.claude.com/docs/en/cross-session-messaging).
+Messages are delivered by submitting them at the target session's own prompt —
+see [manager.md](manager.md#how-a-message-reaches-a-session) for the mechanism
+and its fallback.
 
 | sub | what it does |
 |---|---|
-| `send <slug> [text...]` | ensure the target Claude session exists, then deliver the text through Claude Code's native messaging socket; reads stdin when no text args. Accepts a branch name plus `wt` / `main` / `dotfiles` / `manager`. Tmux hosts the process and UI but is never used for Claude message input. Delivery is confirmed against the target transcript before success is reported |
-| `ls [--json]` | list slugs with a live Claude tmux session. `--json` adds `session_id`, `pid`, `cwd`, `socket_path`, `tmux_session`, `status`, `busy`, `last_activity`, and discovery `source`; the messaging token is never exposed |
+| `send <slug> [text...]` | ensure the target Claude session exists, then submit the text at its prompt; reads stdin when no text args. Accepts a branch name plus `wt` / `main` / `dotfiles` / `manager`. Sent from inside a wt harness session, the message is stamped `[<sender slug>]` automatically. Delivery is confirmed against the target transcript before success is reported |
+| `ls [--json]` | list slugs with a live Claude tmux session. `--json` adds `session_id`, `pid`, `cwd`, `socket_path`, `transport`, `tmux_session`, `status`, `waiting_for`, `busy`, and `last_activity` |
+| `selftest [<slug>]` | check that prompt injection still works against live sessions (one line each; nonzero if any fails). This is what tells you a Claude Code update moved the injector's structural anchors — `wt doctor` runs it too |
 | `stop <slug>` | stop the target Claude session without typing into its pane (`kill` remains an alias) |
 
 ---

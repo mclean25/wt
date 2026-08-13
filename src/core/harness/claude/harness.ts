@@ -31,8 +31,8 @@ import {
   buildClaudeSessionEntries,
   reapClaudeNames,
 } from "./names.ts";
+import { reapInspectorSockets } from "./inject.ts";
 import { trustClaudeWorkspace } from "./trust.ts";
-import { claudeMessagingSettings } from "./hooks.ts";
 
 import type {
   Harness,
@@ -78,10 +78,9 @@ export const claudeHarness: Harness = {
   skillPrefix: "/",
   // Claude Code receives a bracketed paste as a multi-line input blob;
   // the first Enter only exits that state, so a second is needed to
-  // actually submit. Ordinary messages go over the native socket and
-  // never reach the prompt editor, but `injectSlashCommand` does — a
-  // slash command only runs if it is submitted at the input — and an
-  // empty sequence there means paste-then-nothing.
+  // actually submit. Only the FALLBACK transport types (see
+  // `harness/session-messaging.ts`); the normal path submits at the
+  // prompt in-process and never touches the pane.
   injectSubmitKeys: ["Enter", "Enter"],
 
   tmuxSessionName(slug, managedName) {
@@ -179,8 +178,6 @@ export const claudeHarness: Harness = {
         name: args.managedName,
         displayName,
       }),
-      "--settings",
-      claudeMessagingSettings(),
     ];
   },
 
@@ -197,6 +194,12 @@ export const claudeHarness: Harness = {
 
   reapState(liveSlugs) {
     reapClaudeNames(liveSlugs);
+    // Inspector sockets are otherwise only ever REPLACED, never
+    // removed: a destroyed worktree's slug is never reused, so its
+    // socket file would sit in the cache root forever. Keyed by tmux
+    // name (`<slug>` / `<slug>~<managed>`), so the slug is everything
+    // before the separator. Slot slugs are in `liveSlugs`.
+    reapInspectorSockets((tmuxName) => liveSlugs.has(tmuxName.split(CLAUDE_NAMED_SEP)[0]!));
   },
 };
 

@@ -1,12 +1,112 @@
+/**
+ * The one place a prompt is handed to a live harness conversation.
+ *
+ * For Claude there are two transports, tried in this order:
+ *
+ *  1. **Prompt injection** through the session's inspector socket
+ *     (`claude/inject.ts`). The message is submitted at that session's
+ *     own prompt, in-process, so it arrives as an ordinary user turn —
+ *     stamped `origin:{kind:"human"}` in the transcript, with none of
+ *     the peer-message framing that makes a receiving agent stop and
+ *     ask the human about a flow the human already approved. Slash
+ *     commands run. Drafts survive. A busy target queues it.
+ *  2. **Terminal input** (`tmux/inject.ts`): bracketed paste + submit
+ *     keys. Strictly worse — it can't preserve a draft, and the pane is
+ *     shared with whoever is attached — but it works against sessions
+ *     wt didn't launch, and against a session whose socket died with a
+ *     restart. It is the automatic fallback, never a choice.
+ *
+ * Every fallback raises an attention line naming which failure it was,
+ * because the remedies differ: a stale socket wants that session
+ * restarted, a failed selftest wants the injector's anchors re-derived
+ * against the new Claude Code.
+ *
+ * TWO FAILURES MUST NOT FALL BACK, and they are the reason the ladder
+ * is a ladder rather than a try/catch:
+ *
+ *  - `blocked` — the session is waiting on a human (a permission
+ *    prompt). Typing there presses the submit key on somebody's dialog,
+ *    answering it on their behalf. Checked before the attempt AND
+ *    re-checked throughout the readiness wait, because a dialog that
+ *    appears mid-wait is indistinguishable, to the probe, from a prompt
+ *    that hasn't mounted yet.
+ *  - `submitted-unknown` — the submit reached the target and we stopped
+ *    waiting for its answer. Closing our socket doesn't cancel it, so
+ *    typing the same text would double-submit. We confirm against the
+ *    transcript instead.
+ *
+ * Other harnesses have only terminal input and always take path 2.
+ */
+import { withAsyncFileLock } from "../locks.ts";
+import { createLogger } from "../logger.ts";
+import { pollUntil } from "../poll.ts";
 import {
+  injectClaudeFallback,
   injectIntoSession,
-  injectSlashCommand,
   type InjectResult,
 } from "../tmux/inject.ts";
-import { claudeSessions, type ClaudeSendResult } from "./claude/sessions.ts";
+import {
+  deliverClaudeMessage,
+  inspectorEnabled,
+  type InjectFailureKind,
+} from "./claude/inject.ts";
+import { claudeTmuxName } from "./claude/harness.ts";
+import { injectedPromptLanded } from "./claude/jsonl.ts";
+import { claudeSessions } from "./claude/sessions.ts";
+import type { RegistryStatus } from "./claude/registry.ts";
 import type { HarnessId } from "./types.ts";
 
-export type SessionMessageResult = InjectResult | ClaudeSendResult;
+export type MessageTransport = "inspector" | "terminal";
+
+export type SessionMessageResult =
+  | {
+      ok: true;
+      /** The session wasn't running and was started for this message. */
+      coldStarted: boolean;
+      /**
+       * Did the prompt reach the conversation? `null` = nothing durable
+       * can witness it (a slash command leaves no prompt entry), so
+       * delivery is UNKNOWN — report it that way, never as success.
+       */
+      delivered: boolean | null;
+      /** A first attempt was swallowed and the prompt was sent again. */
+      resent: boolean;
+      transport: MessageTransport;
+    }
+  | { ok: false; reason: string };
+
+export type SessionMessageTarget = {
+  slug: string;
+  cwd: string;
+  harnessId: HarnessId;
+  managedName?: string | null;
+  text: string;
+};
+
+/** How long to wait for a session's prompt UI to become injectable. */
+const READY_WARM_MS = 4_000;
+const READY_COLD_MS = 20_000;
+/** Transcript-confirmation window for an injected prompt. */
+const CONFIRM_MS = 8_000;
+const CONFIRM_POLL_MS = 250;
+
+/**
+ * The sending agent's identity, from the environment wt stamps on every
+ * harness session (`WT_AGENT`, see `tmux/inner-process.ts`).
+ *
+ * This replaces the convention of telling agents to hand-prefix their
+ * messages: a rule an agent has to remember is a rule that gets
+ * forgotten, and an unattributed fleet message is nearly useless to the
+ * manager. Absent outside a wt harness session — the TUI and a human's
+ * shell send unsigned, which is correct: they aren't agents.
+ *
+ * It is an attribution aid, not a credential: anything running inside a
+ * session can set it. Everything here already trusts the session.
+ */
+export function senderTag(): string | null {
+  const agent = (process.env.WT_AGENT ?? "").trim();
+  return agent.length > 0 ? agent : null;
+}
 
 /**
  * Whether a payload is a slash command rather than a message — i.e.
@@ -18,44 +118,224 @@ export type SessionMessageResult = InjectResult | ClaudeSendResult;
  * path — `/Users/…` fails the lowercase rule and `/tmp/foo` fails the
  * token boundary, while `/compact` and `/compact <args>` match.
  */
-export function isSlashCommand(text: string): boolean {
+function isSlashCommand(text: string): boolean {
   return /^\/[a-z][a-z0-9_-]*(\s|$)/.test(text.trimStart());
 }
 
 /**
- * Deliver a prompt to a live harness conversation, cold-starting its tmux
- * host when needed. Claude uses its native Unix socket; only the other
- * harnesses retain terminal injection for ordinary messages.
+ * Prefix `text` with the sending agent's name.
  *
- * The exception is a slash command. The socket carries a *message*, and
- * the receiver frames peer messages as quoted text, so `/compact` sent
- * that way arrives as a paragraph about compaction and nothing happens —
- * silently, since the message itself does land and delivery confirms.
- * Commands therefore go through the pane, where a submit is a submit.
- * Keep the branch here rather than at the call sites: every session-
- * delivery path in wt funnels through this function, and a second
- * transport rule maintained in more than one place is a transport rule
- * that will disagree with itself.
+ * Two things are deliberately left unstamped. A payload that already
+ * opens with a bracketed tag (`[re: <slug>]` briefings, anything a
+ * caller attributed itself) keeps its own framing instead of collecting
+ * a second bracket. And a slash command is left exactly as it is: the
+ * injector submits it at the prompt, where it RUNS — but only while the
+ * command is the first token, so a sender tag would quietly turn
+ * `/compact` back into a sentence about compaction, which is the
+ * failure this whole transport was meant to end.
  */
-export async function sendSessionMessage(opts: {
-  slug: string;
-  cwd: string;
-  harnessId: HarnessId;
-  managedName?: string | null;
-  text: string;
-}): Promise<SessionMessageResult> {
-  if (isSlashCommand(opts.text)) {
-    return await injectSlashCommand({ ...opts, harnessId: opts.harnessId });
-  }
-  if (opts.harnessId === "claude") {
-    return await claudeSessions.send(
-      {
-        slug: opts.slug,
-        cwd: opts.cwd,
-        managedName: opts.managedName ?? null,
-      },
-      opts.text,
+export function stampSender(text: string): string {
+  const tag = senderTag();
+  if (!tag) return text;
+  if (/^\s*\[/.test(text)) return text;
+  if (isSlashCommand(text)) return text;
+  return `[${tag}] ${text}`;
+}
+
+type SessionSnapshot = { status: RegistryStatus; waitingFor: string | null };
+
+type Dependencies = {
+  inspectorEnabled(): boolean;
+  ensureInfo(target: { slug: string; cwd: string; managedName: string | null }): Promise<{
+    session: SessionSnapshot;
+    coldStarted: boolean;
+  }>;
+  /** Fresh status, re-read during the readiness wait. */
+  statusOf(target: { slug: string; cwd: string; managedName: string | null }): SessionSnapshot | null;
+  deliver: typeof deliverClaudeMessage;
+  terminal(target: SessionMessageTarget): Promise<InjectResult>;
+  landed(cwd: string, managedName: string | null, text: string, sinceMs: number): boolean;
+  warn(slug: string, message: string): void;
+  now(): number;
+  sleep(ms: number): Promise<void>;
+  lock<T>(key: string, body: () => Promise<T>): Promise<T>;
+};
+
+const defaults: Dependencies = {
+  inspectorEnabled,
+  ensureInfo: (target) => claudeSessions.ensureInfo(target),
+  statusOf: (target) => claudeSessions.find(target),
+  deliver: deliverClaudeMessage,
+  terminal: (target) =>
+    target.harnessId === "claude"
+      ? injectClaudeFallback(target)
+      : injectIntoSession({ ...target, harnessId: target.harnessId }),
+  landed: injectedPromptLanded,
+  warn: (slug, message) => createLogger(slug).attention.warn(message),
+  now: Date.now,
+  sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+  lock: withAsyncFileLock,
+};
+
+const FALLBACK_ADVICE: Record<InjectFailureKind, string> = {
+  absent:
+    "started outside wt (or before this version) — restart it from wt to restore direct delivery",
+  stale: "its inspector socket died with a restart — restart the session to rebind it",
+  "not-ready":
+    "its prompt UI wasn't reachable — if this persists, Claude Code moved the injector's anchors",
+  blocked: "it is waiting on a human",
+  "submitted-unknown": "the submit was sent but went unacknowledged",
+  failed: "the injector reached it but the submit failed",
+};
+
+export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
+  const deps: Dependencies = { ...defaults, ...overrides };
+  /** One attention line per session per failure kind per process. */
+  const warned = new Set<string>();
+
+  function warnFallback(
+    slug: string,
+    tmuxName: string,
+    kind: InjectFailureKind,
+    reason: string,
+  ): void {
+    const key = `${tmuxName}\0${kind}`;
+    if (warned.has(key)) return;
+    warned.add(key);
+    deps.warn(
+      slug,
+      `${tmuxName}: fell back to typing into the pane — ${FALLBACK_ADVICE[kind]} (${reason})`,
     );
   }
-  return await injectIntoSession({ ...opts, harnessId: opts.harnessId });
+
+  function blockedReason(snapshot: SessionSnapshot | null, tmuxName: string): string | null {
+    if (!snapshot || snapshot.status !== "waiting") return null;
+    return `${tmuxName} is waiting on a human${
+      snapshot.waitingFor ? ` (${snapshot.waitingFor})` : ""
+    } — answer it first, then resend`;
+  }
+
+  /**
+   * Did the injected prompt reach the conversation?
+   *
+   * A prompt submitted while the target is mid-turn QUEUES — exactly as
+   * typing would — and won't appear in the transcript until that turn
+   * ends, which can be many minutes. So a session that wasn't idle at
+   * submit time and hasn't recorded the prompt yet is reported as
+   * delivered: the submit was accepted, and the alternative is telling
+   * the caller a queued message was lost. Only an IDLE session that
+   * never records it really did swallow it.
+   */
+  async function confirmInjected(opts: {
+    cwd: string;
+    managedName: string | null;
+    text: string;
+    sinceMs: number;
+    idleAtSubmit: boolean;
+  }): Promise<boolean> {
+    const landed = await pollUntil({
+      check: () => deps.landed(opts.cwd, opts.managedName, opts.text, opts.sinceMs),
+      budgetMs: CONFIRM_MS,
+      intervalMs: CONFIRM_POLL_MS,
+      now: deps.now,
+      sleep: deps.sleep,
+    });
+    return landed || !opts.idleAtSubmit;
+  }
+
+  async function sendToClaude(target: SessionMessageTarget): Promise<SessionMessageResult> {
+    const { slug, cwd, text } = target;
+    const managedName = target.managedName ?? null;
+    const tmuxName = claudeTmuxName(slug, managedName);
+    const identity = { slug, cwd, managedName };
+    const typeIt = async (): Promise<SessionMessageResult> => {
+      const res = await deps.terminal({ ...target, managedName, text });
+      return res.ok ? { ...res, transport: "terminal" } : res;
+    };
+
+    if (!deps.inspectorEnabled()) return await typeIt();
+
+    let coldStarted = false;
+    let idleAtSubmit = false;
+    try {
+      // Cold-start under wt, which is what stamps BUN_INSPECT — a
+      // session wt starts is injectable; one started any other way is
+      // not.
+      const ensured = await deps.ensureInfo(identity);
+      coldStarted = ensured.coldStarted;
+      idleAtSubmit = ensured.session.status === "idle";
+      const blocked = blockedReason(ensured.session, tmuxName);
+      if (blocked) return { ok: false, reason: blocked };
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+
+    const sinceMs = deps.now();
+    const delivery = await deps.deliver(tmuxName, text, {
+      readyBudgetMs: coldStarted ? READY_COLD_MS : READY_WARM_MS,
+      abortIfBlocked: () => blockedReason(deps.statusOf(identity), tmuxName),
+    });
+
+    if (delivery.ok) {
+      // A slash command is recorded in the transcript as an EXPANDED
+      // command entry, not as the text that was submitted, so scanning
+      // for the payload can only ever come back empty — `/context` runs
+      // perfectly and confirms as lost. Unknown is the honest answer.
+      const delivered = isSlashCommand(text)
+        ? null
+        : await confirmInjected({ cwd, managedName, text, sinceMs, idleAtSubmit });
+      return { ok: true, coldStarted, delivered, resent: false, transport: "inspector" };
+    }
+
+    if (delivery.kind === "blocked") return { ok: false, reason: delivery.reason };
+
+    if (delivery.kind === "submitted-unknown") {
+      // Retyping could double-submit, so ask the transcript instead.
+      const landed = await confirmInjected({
+        cwd,
+        managedName,
+        text,
+        sinceMs,
+        idleAtSubmit: true,
+      });
+      if (landed) {
+        return { ok: true, coldStarted, delivered: true, resent: false, transport: "inspector" };
+      }
+      return {
+        ok: false,
+        reason: `${tmuxName} did not acknowledge the submit and the message is not in its transcript — resend only if it is still missing (a duplicate is possible)`,
+      };
+    }
+
+    warnFallback(slug, tmuxName, delivery.kind, delivery.reason);
+    return await typeIt();
+  }
+
+  /**
+   * Deliver a prompt to a live harness conversation, cold-starting its
+   * tmux host when needed.
+   */
+  return async function send(target: SessionMessageTarget): Promise<SessionMessageResult> {
+    const text = stampSender(target.text);
+    if (!text.trim()) return { ok: false, reason: "message is empty" };
+    if (target.harnessId !== "claude") {
+      const res = await deps.terminal({ ...target, text });
+      return res.ok ? { ...res, transport: "terminal" } : res;
+    }
+    // Serialize per target conversation. The manager slot is a genuine
+    // multi-writer singleton (TUI automations, `wt manager send` from N
+    // worktree agents, `[[actions]]` with target="manager"), often from
+    // different processes — and two overlapping injections each capture
+    // the target's draft, submit, and re-assert their own snapshot on a
+    // timer, so the later timer wins and stomps the other's draft. The
+    // terminal transport has always taken a lock here for the same
+    // reason; the key is distinct from the ones `ensureInfo` and the
+    // terminal path take, and is always acquired before them.
+    const tmuxName = claudeTmuxName(target.slug, target.managedName ?? null);
+    return await deps.lock(`__claude_send__${tmuxName}`, () => sendToClaude({ ...target, text }));
+  };
 }
+
+export const sendSessionMessage = createSessionMessenger();
+
+export type { InjectResult };

@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { config } from "../../core/config.ts";
 import { branchIsMerged, gitQuiet } from "../../core/git.ts";
 import { fetchPrs } from "../../core/github.ts";
+import { claudeTmuxName } from "../../core/harness/claude/harness.ts";
+import { claudeInjectSelftest } from "../../core/harness/claude/inject.ts";
 import { humanAge, lockAge, lockLabel, lockStatus } from "../../core/locks.ts";
 import { run as sh } from "../../core/proc.ts";
 import {
@@ -15,6 +17,7 @@ import {
 } from "../../core/skills.ts";
 import { computeStage } from "../../core/stage.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
+import { listSessions } from "../../core/tmux.ts";
 import type { Check, CheckStatus, Worktree } from "../../core/types.ts";
 import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import { readWtState } from "../../core/wtstate.ts";
@@ -288,6 +291,65 @@ async function checkSkillsFreshness(): Promise<Check> {
 }
 
 /**
+ * Machine-level banner: can wt still deliver messages by submitting at
+ * a session's own prompt, or has it degraded to typing into panes?
+ *
+ * Two different failures, both silent without this. A session with no
+ * inspector socket was started outside wt (or before wt started opening
+ * one) — it still receives messages, typed, losing draft preservation
+ * and slash commands. A session whose selftest fails while its socket
+ * is fine means Claude Code moved the structural anchors the injector
+ * walks, which degrades the WHOLE fleet at once and is exactly the kind
+ * of regression an update ships quietly.
+ *
+ * One selftest, not one per session: the anchors are a property of the
+ * Claude Code build, so the first live session answers for all of them.
+ */
+async function checkMessageTransport(): Promise<Check> {
+  try {
+    const entries = [...(await listSessions()).claude];
+    if (entries.length === 0) return mkCheck("messaging", "ok", "no live claude sessions");
+    const names = entries.map((e) => claudeTmuxName(e.slug, e.name));
+    // Probe every session, not a representative one: a socket FILE
+    // proves nothing (a restarted session leaves a stale one behind),
+    // so reporting "working across N" off a single probe would vouch
+    // for sessions never connected to.
+    const probes = await Promise.all(
+      names.map(async (name) => ({ name, probe: await claudeInjectSelftest(name) })),
+    );
+    const bad = probes.filter((p) => !p.probe.ok);
+    if (bad.length === 0) {
+      return mkCheck("messaging", "ok", `prompt injection working across ${names.length} sessions`);
+    }
+    // An anchor break is a property of the Claude Code build, so it
+    // takes out EVERY session at once; a restart-shaped failure hits
+    // individual ones. Distinguishing them is the whole diagnostic
+    // value here, and blaming the anchors for one stale socket would
+    // send the reader to rewrite the injector for nothing.
+    const kinds = new Set(bad.map((p) => (p.probe.ok ? "" : p.probe.kind)));
+    if (bad.length === names.length && (kinds.has("not-ready") || kinds.has("failed"))) {
+      const first = bad[0]!;
+      return mkCheck(
+        "messaging",
+        "err",
+        `prompt injection failed on all ${names.length} sessions (${first.name}: ${first.probe.ok ? "" : first.probe.reason}) — Claude Code may have moved the injector's anchors; see \`wt claude selftest\``,
+      );
+    }
+    return mkCheck(
+      "messaging",
+      "warn",
+      `${bad.length} of ${names.length} claude sessions are typed at instead (${bad.map((p) => p.name).join(", ")}) — restart them from wt`,
+    );
+  } catch (err) {
+    return mkCheck(
+      "messaging",
+      "info",
+      `check skipped (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+}
+
+/**
  * Is `wt` reachable as a command, from a SCRIPT?
  *
  * A shell alias satisfies "I can type wt" while failing every
@@ -409,10 +471,11 @@ function renderBanner(c: Check): void {
 }
 
 async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
-  const [mainBanner, skillsBanner, pathBanner, checks] = await Promise.all([
+  const [mainBanner, skillsBanner, pathBanner, msgBanner, checks] = await Promise.all([
     jsonOut ? Promise.resolve(null) : checkMainClone(),
     jsonOut ? Promise.resolve(null) : checkSkillsFreshness(),
     jsonOut ? Promise.resolve(null) : checkWtOnPath(),
+    jsonOut ? Promise.resolve(null) : checkMessageTransport(),
     runAllChecks(wt, true),
   ]);
   if (jsonOut) {
@@ -422,6 +485,7 @@ async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
   if (mainBanner) renderBanner(mainBanner);
   if (skillsBanner) renderBanner(skillsBanner);
   if (pathBanner) renderBanner(pathBanner);
+  if (msgBanner) renderBanner(msgBanner);
   console.log(`${bold("doctor")} · ${cyan(wt.slug)} ${dim(wt.branch)}`);
   for (const c of checks) {
     console.log(`  ${MARKERS[c.status]}  ${bold(c.name.padEnd(14))} ${c.message}`);
@@ -439,11 +503,12 @@ async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
 
 async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
   const skipPrs = jsonOut;
-  const [prs, mainCheck, skillsCheck, pathCheck, allChecks] = await Promise.all([
+  const [prs, mainCheck, skillsCheck, pathCheck, msgCheck, allChecks] = await Promise.all([
     skipPrs ? Promise.resolve(new Map()) : fetchPrs(),
     jsonOut ? Promise.resolve(null) : checkMainClone(),
     jsonOut ? Promise.resolve(null) : checkSkillsFreshness(),
     jsonOut ? Promise.resolve(null) : checkWtOnPath(),
+    jsonOut ? Promise.resolve(null) : checkMessageTransport(),
     Promise.all(wts.map((w) => runAllChecks(w, false))),
   ]);
   if (jsonOut) {
@@ -454,6 +519,7 @@ async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
   if (mainCheck) renderBanner(mainCheck);
   if (skillsCheck) renderBanner(skillsCheck);
   if (pathCheck) renderBanner(pathCheck);
+  if (msgCheck) renderBanner(msgCheck);
 
   type Row = { wt: Worktree; checks: Check[] };
   const rows: Row[] = wts.map((wt, i) => ({ wt, checks: allChecks[i]! }));

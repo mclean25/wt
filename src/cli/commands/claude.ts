@@ -2,12 +2,15 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { config } from "../../core/config.ts";
+import { claudeTmuxName } from "../../core/harness/claude/harness.ts";
+import {
+  claudeInjectSelftest,
+  inspectorSocketExists,
+  inspectorSocketPath,
+} from "../../core/harness/claude/inject.ts";
 import { wtSessionUuid } from "../../core/harness/claude/jsonl.ts";
 import { claudeSessions } from "../../core/harness/claude/sessions.ts";
-import {
-  isSlashCommand,
-  sendSessionMessage,
-} from "../../core/harness/session-messaging.ts";
+import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import {
   ensureManagerClaudeName,
   MANAGER_CLAUDE_NAME,
@@ -27,23 +30,31 @@ import { dim, green, red } from "../colors.ts";
 
 const USAGE = `usage: wt claude send <slug> [text...]   send a prompt to the worktree's claude session
        wt claude ls [--json]             list live claude sessions
+       wt claude selftest [<slug>]       check that prompt injection still works
        wt claude stop <slug>             stop the worktree's primary claude session
 
 \`send\` upserts the worktree's PRIMARY Claude Code session: starts it
 detached in the wt tmux server when absent (waiting for claude to
-finish booting), then delivers the prompt through Claude Code's native
-session messaging transport. The prompt lands in the live conversation
-with its existing context — not a headless \`claude -p\` run. Fire-and-forget:
-there is no completion signal; attach via the TUI (F12) to watch.
+finish booting), then submits the prompt at that session's own prompt,
+in-process. It lands as an ordinary user turn in the live conversation
+with its existing context — not a headless \`claude -p\` run, and not
+peer-framed text the receiver has to decide whether to act on. A slash
+command runs. A draft in the session's input box is preserved. A busy
+session queues it. Fire-and-forget: there is no completion signal;
+attach via the TUI (F12) to watch.
+
+Messages are stamped with the sending agent (\`[<slug>] …\`) when sent
+from inside a wt harness session. Nothing to pass; nothing to remember.
 
 Besides worktree slugs, \`send\` accepts the repo-level session slugs
 that \`wt claude ls\` lists: wt (the wt source repo), main (the main
 clone), dotfiles, and manager (the fleet coordinator — same session
 as \`wt manager send\`).
 
-\`ls --json\` adds the stable session id, pid, cwd, native socket,
-tmux identity, status, and last activity. The messaging token is never
-printed.
+\`ls --json\` adds the stable session id, pid, cwd, tmux identity,
+status, what it is blocked on, last activity, and \`transport\` —
+"inspector" for a session wt can submit into directly, "terminal" for
+one that has to be typed at.
 
 With no [text...], stdin is read instead (heredoc-friendly for
 multiline prompts). <slug> also accepts a branch name
@@ -123,11 +134,9 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
   // The manager lives as a named Claude session; discovery needs the
   // name persisted before sending (same setup as `wt manager send`).
   if (slug === MANAGER_SLUG) ensureManagerClaudeName();
-  // Through the shared choke point, not `claudeSessions.send` directly:
-  // that is where the socket-vs-pane transport rule lives, and a slash
-  // command sent over the socket is a silent no-op (see
-  // `sendSessionMessage`). Agents reach for `wt claude send` exactly as
-  // often as the TUI does.
+  // Through the shared choke point, which owns the transport ladder and
+  // stamps the sending agent. Agents reach for `wt claude send` exactly
+  // as often as the TUI does; neither picks a transport.
   const res = await sendSessionMessage({
     slug,
     cwd: slot ? slot.cwd : wt!.path,
@@ -139,6 +148,11 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
     console.error(red(`send failed: ${res.reason}`));
     return 1;
   }
+  if (res.delivered === false) {
+    console.error(red(`✗ ${slug}'s claude session did not receive the message`));
+    console.error(dim("attach via the wt TUI (F12) and check the session"));
+    return 1;
+  }
   console.log(
     green(
       res.coldStarted
@@ -148,12 +162,69 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
   );
   console.log(
     dim(
-      isSlashCommand(text)
-        ? "submitted at the session's prompt (a slash command has to be typed, not messaged) — attach via the wt TUI (F12) to watch"
-        : "delivered through Claude's native session messaging — fire-and-forget from here; attach via the wt TUI (F12) to watch",
+      res.transport === "inspector"
+        ? res.delivered === null
+          ? "submitted at the session's own prompt, where a slash command runs — a command leaves no prompt entry to confirm against; attach via the wt TUI (F12) to watch"
+          : "submitted at the session's own prompt, as an ordinary turn — fire-and-forget from here; attach via the wt TUI (F12) to watch"
+        : "typed into the session's pane (it has no injectable prompt — restart it from wt to fix) — attach via the wt TUI (F12) to watch",
     ),
   );
   return 0;
+}
+
+/**
+ * `wt claude selftest` — does prompt injection still work?
+ *
+ * The structural anchors the injector uses live in Claude Code's own
+ * React tree, so a Claude Code update is the thing that breaks them.
+ * This is the check that says so out loud, before a fleet-wide nudge
+ * quietly degrades to typing into panes. `wt doctor` runs it too.
+ */
+async function selftest(slugOrBranch: string | undefined): Promise<number> {
+  const sessions = await listSessions();
+  const wanted = slugOrBranch
+    ? slugOrBranch.includes("/")
+      ? dirSlug(slugOrBranch)
+      : slugOrBranch
+    : null;
+  const entries = [...sessions.claude]
+    .filter((e) => wanted === null || e.slug === wanted)
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+  if (entries.length === 0) {
+    console.log(dim(wanted ? `no live claude session for ${wanted}` : "no live claude sessions"));
+    return wanted ? 1 : 0;
+  }
+  // Concurrently: the probes are independent, and each is bounded by a
+  // 12s attempt timeout, so one wedged session would otherwise delay
+  // every session queued behind it.
+  const probes = await Promise.all(
+    entries.map(async (entry) => {
+      const tmuxSession = claudeTmuxName(entry.slug, entry.name);
+      return { tmuxSession, probe: await claudeInjectSelftest(tmuxSession) };
+    }),
+  );
+  let bad = 0;
+  for (const { tmuxSession, probe } of probes) {
+    if (probe.ok) {
+      console.log(
+        `${green("✓")} ${tmuxSession} ${dim(probe.foundCaret ? "prompt + input + caret" : "prompt + input (no caret restore)")}`,
+      );
+      continue;
+    }
+    bad += 1;
+    console.log(`${red("✗")} ${tmuxSession} ${dim(`${probe.kind}: ${probe.reason}`)}`);
+  }
+  if (bad > 0) {
+    console.error(
+      dim(
+        "» messages to the failing sessions are typed into their panes instead.\n" +
+          "» `absent`/`stale`: restart the session from wt. `not-ready`: it may be on a\n" +
+          "» dialog — if every session fails, Claude Code moved the injector's anchors\n" +
+          "» (see src/core/harness/claude/inject/page-routine.ts).",
+      ),
+    );
+  }
+  return bad > 0 ? 1 : 0;
 }
 
 async function ls(json: boolean): Promise<number> {
@@ -166,30 +237,37 @@ async function ls(json: boolean): Promise<number> {
       if (!cwdBySlug.has(slug)) cwdBySlug.set(slug, t.cwd);
     }
     const nativeById = new Map(
-      (await claudeSessions.list()).map((session) => [session.sessionId, session]),
+      claudeSessions.list().map((session) => [session.sessionId, session]),
     );
     const payload = entries.map((e) => {
       const cwd = cwdBySlug.get(e.slug);
       const native = cwd
         ? nativeById.get(wtSessionUuid(cwd, e.name)) ?? null
         : null;
+      const tmuxSession = claudeTmuxName(e.slug, e.name);
+      // `transport` is the actionable field: "terminal" means this
+      // session has no inspector socket, so messages to it are typed
+      // into its pane — worth knowing before wondering why a draft
+      // vanished or a slash command didn't run.
+      const injectable = inspectorSocketExists(tmuxSession);
       return {
         slug: e.slug,
         name: e.name,
         session_id: native?.sessionId ?? null,
         pid: native?.pid ?? null,
         cwd: cwd ?? null,
-        socket_path: native?.socketPath ?? null,
-        tmux_session: e.name === null ? e.slug : `${e.slug}~${e.name}`,
+        socket_path: injectable ? inspectorSocketPath(tmuxSession) : null,
+        transport: injectable ? "inspector" : "terminal",
+        tmux_session: tmuxSession,
         alive: true,
         status: native?.status ?? null,
         busy: native
           ? native.status === "busy" || native.status === "shell"
           : null,
+        waiting_for: native?.waitingFor ?? null,
         last_activity: native && native.updatedAt > 0
             ? new Date(native.updatedAt).toISOString()
             : null,
-        source: native?.source ?? null,
       };
     });
     console.log(JSON.stringify(payload, null, 2));
@@ -245,6 +323,7 @@ export async function run(argv: string[]): Promise<number> {
     return send(slug, text);
   }
   if (first === "ls") return ls(rest.includes("--json"));
+  if (first === "selftest") return selftest(rest[0]);
   if (first === "stop" || first === "kill") {
     const [slug] = rest;
     if (!slug || hasHelpFlag([slug])) {

@@ -8,7 +8,11 @@ import { createLogger } from "../logger.ts";
 import { shellLogPath } from "../shell-tail.ts";
 import { killServer, resolveDiffCommand } from "./admin.ts";
 import { writeConfig } from "./config.ts";
-import { capturesInnerStderr, wrapInnerArgs } from "./inner-process.ts";
+import {
+  capturesInnerStderr,
+  prepareInspectorSocket,
+  wrapInnerArgs,
+} from "./inner-process.ts";
 import {
   harnessIdForKind,
   sessionSwitchTarget,
@@ -354,7 +358,7 @@ export async function attachOrCreate(opts: {
           name,
           "-c",
           cwd,
-          ...wrapInnerArgs(kind, stderrPath, innerArgs, slug),
+          ...wrapInnerArgs({ kind, stderrPath, innerArgs, slug, tmuxName: name }),
           ";",
           ...pipePaneArgs,
         ];
@@ -402,6 +406,10 @@ export async function attachOrCreate(opts: {
   );
   await tag.exited;
 
+  // Only clears a socket left behind by a DEAD session of this name —
+  // `new-session -A` may be about to attach to a live one, whose socket
+  // is in use. See `prepareInspectorSocket`.
+  await prepareInspectorSocket(kind, name);
   let proc: Bun.Subprocess;
   try {
     proc = Bun.spawn(
@@ -422,7 +430,7 @@ export async function attachOrCreate(opts: {
         // and diff redirect stderr to `stderrPath`; shell inherits it
         // through the PTY. `new-session -A` only runs this command on
         // creation, so subsequent re-attaches keep the original routing.
-        ...wrapInnerArgs(kind, stderrPath, innerArgs, slug),
+        ...wrapInnerArgs({ kind, stderrPath, innerArgs, slug, tmuxName: name }),
         ";",
         "set-option",
         "-t",

@@ -46,10 +46,6 @@ export type RegistrySession = {
   entrypoint: string;
   startedAt: number;
   updatedAt: number;
-  /** Native cross-session inbox, present in Claude Code 2.1.224+. */
-  messagingSocketPath: string | null;
-  /** Native peer protocol revision, advisory and forward-compatible. */
-  peerProtocol: number | null;
 };
 
 function asNumber(v: unknown): number | null {
@@ -113,9 +109,6 @@ function parseEntry(path: string): RegistrySession | null {
     entrypoint: typeof obj.entrypoint === "string" ? obj.entrypoint : "",
     startedAt: asNumber(obj.startedAt) ?? 0,
     updatedAt: asNumber(obj.updatedAt) ?? 0,
-    messagingSocketPath:
-      typeof obj.messagingSocketPath === "string" ? obj.messagingSocketPath : null,
-    peerProtocol: asNumber(obj.peerProtocol),
   };
 }
 

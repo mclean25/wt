@@ -1,6 +1,7 @@
 import { getHarness, type HarnessId } from "../harness/index.ts";
 import { withAsyncFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
+import { pollUntil } from "../poll.ts";
 import { startHarnessSessionDetached } from "./lifecycle.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
 import { capturePane, listAllSessionsRaw, paneTarget, runTmux } from "./process.ts";
@@ -136,6 +137,13 @@ async function pasteBuffer(name: string, text: string): Promise<void> {
  * lands in the live conversation — with its existing context and history
  * — rather than a fresh headless action run.
  *
+ * This is the FALLBACK transport, not the preferred one. Claude
+ * sessions are normally reached by submitting at their prompt
+ * in-process (`harness/claude/inject.ts`), which preserves a draft and
+ * cannot be mistaken for a keystroke; typing is what's left when that
+ * is unavailable. `sendSessionMessage` owns the choice — don't call
+ * this directly for claude.
+ *
  * Fire-and-forget as to the RESULT — there's no completion sentinel, so
  * callers can't observe when the harness finishes — but no longer as to
  * the delivery: `delivered` reports whether the prompt actually entered
@@ -157,47 +165,42 @@ export async function injectIntoSession(opts: {
   managedName?: string | null;
   text: string;
 }): Promise<InjectResult> {
-  // Keep a runtime tripwire as well as the TerminalHarnessId type. Callers
-  // outside TypeScript must never be able to turn this into a Claude fallback.
-  // The ONE exception is `injectSlashCommand` below, which does not come
-  // through here.
+  // Type-level AND runtime, as before this became Claude's fallback:
+  // typing into a live Claude pane clobbers a draft and can answer a
+  // dialog, so reaching it must be a deliberate act. `injectIntoSession`
+  // is re-exported from the `core/tmux.ts` barrel, where a prose comment
+  // is not a guard.
   if ((opts.harnessId as HarnessId) === "claude") {
     return {
       ok: false,
-      reason: "Claude terminal messaging is disabled; use claudeSessions.send",
+      reason: "Claude is not typed at by default; route through sendSessionMessage",
     };
   }
   return lockedInject(opts);
 }
 
 /**
- * The single sanctioned pane path for Claude, and only for a slash
- * command.
+ * The one sanctioned way to type into a Claude session's pane.
  *
- * Claude's native socket delivers a *message*: the receiver frames it as
- * peer text ("Another Claude session sent a message: …") and a leading
- * `/compact` arrives as something to read about, not something to run.
- * Slash commands execute only when submitted at the input, which is what
- * a paste + Enter is. So the palettes' `m` (and any `[[actions]]` whose
- * prompt is itself a command) has to type.
+ * Claude is normally reached by submitting at its prompt in-process
+ * (`harness/claude/inject.ts`), which preserves a draft and cannot be
+ * mistaken for a keystroke. This exists for when that is unavailable —
+ * a session wt didn't start, or one whose socket died with a restart —
+ * and `sendSessionMessage` is its only legitimate caller, because only
+ * that function knows the two states in which typing is NOT safe (the
+ * session is waiting on a human; a submit is already in flight).
  *
- * That is a deliberate, narrow hole in "never use Claude's pane as
- * input" — see `sendSessionMessage`, which is the only caller and
- * decides via `isSlashCommand`. The invariant's real concern is
- * colliding with half-typed human input, and the affordance this exists
- * for is pressed from wt's own TUI, i.e. while the human is demonstrably
- * not in that pane. Nothing else may widen it: arbitrary text keeps
- * going over the socket, where delivery is confirmed and nothing can be
- * mistaken for a keystroke.
+ * Named separately rather than relaxing `injectIntoSession`'s type so
+ * that reaching it stays a deliberate act with a place to explain
+ * itself.
  */
-export async function injectSlashCommand(opts: {
+export async function injectClaudeFallback(opts: {
   slug: string;
   cwd: string;
-  harnessId: HarnessId;
   managedName?: string | null;
   text: string;
 }): Promise<InjectResult> {
-  return lockedInject(opts);
+  return lockedInject({ ...opts, harnessId: "claude" });
 }
 
 function lockedInject(opts: {
@@ -301,19 +304,20 @@ async function confirmDelivery(opts: {
   const { cwd, harnessId, managedName, text, sinceMs } = opts;
   const harness = getHarness(harnessId);
   if (!harness.injectionLanded) return null;
-  const deadline = Date.now() + DELIVERY_CONFIRM_MS;
-  for (;;) {
-    try {
-      if (harness.injectionLanded({ cwd, managedName, text, sinceMs })) return true;
-    } catch (err) {
-      log.warn("delivery check failed", {
-        slug: opts.slug,
-        reason: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
-    if (Date.now() >= deadline) return false;
-    await sleep(DELIVERY_POLL_MS);
+  try {
+    return await pollUntil({
+      check: () => harness.injectionLanded!({ cwd, managedName, text, sinceMs }),
+      budgetMs: DELIVERY_CONFIRM_MS,
+      intervalMs: DELIVERY_POLL_MS,
+    });
+  } catch (err) {
+    // A check that THREW can't answer the question — that's unknown,
+    // not "did not arrive", and the caller must report it as such.
+    log.warn("delivery check failed", {
+      slug: opts.slug,
+      reason: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   }
 }
 

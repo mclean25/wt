@@ -29,6 +29,20 @@ export async function killByName(name: string): Promise<void> {
  * regardless of kind.
  */
 export async function listAllSessionsRaw(): Promise<Set<string>> {
+  return (await probeSessionNames()) ?? new Set();
+}
+
+/**
+ * The three-valued form of `listAllSessionsRaw`: `null` means the query
+ * FAILED, as distinct from an empty set meaning no sessions exist.
+ *
+ * Most callers can't act on the difference — they paint glyphs, and a
+ * blank badge for one poll is survivable. A caller that would DESTROY
+ * something on the strength of "no session by that name" cannot: for it,
+ * an unanswerable question must never read as a definite no. That is
+ * `prepareInspectorSocket`, which unlinks a session's message socket.
+ */
+export async function probeSessionNames(): Promise<Set<string> | null> {
   const r = await run([
     "tmux",
     "-L",
@@ -40,16 +54,16 @@ export async function listAllSessionsRaw(): Promise<Set<string>> {
   if (r.exitCode !== 0) {
     // "No server running" is the honest empty — nobody has entered a
     // session yet. Any OTHER failure (spawn refused under fork
-    // pressure, a socket we can't reach) returns the same empty set,
-    // which every caller reads as "no sessions of any kind exist": the
-    // session glyphs and the dev badge blank out fleet-wide off one bad
-    // shell-out. Can't fix that here without turning ~8 callers'
-    // fallbacks into unhandled rejections, so make it diagnosable.
+    // pressure, a socket we can't reach) is unknown, not empty; the
+    // legacy `listAllSessionsRaw` still collapses the two because its
+    // ~8 callers only paint UI off it, and turning that into an
+    // unhandled rejection fleet-wide would be worse.
     if (!/no server running|error connecting/i.test(r.stderr)) {
       log.warn("tmux list-sessions failed; reporting no sessions", {
         code: r.exitCode,
         stderr: r.stderr.trim() || null,
       });
+      return null;
     }
     return new Set();
   }

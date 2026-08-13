@@ -440,19 +440,24 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       text,
     }).then((res) => {
       if (res.ok && res.delivered === false) {
-        // Non-Claude harnesses verify against their transcript. An
-        // unattended handoff that cannot be verified must say so because
-        // the conflict is still sitting there either way.
+        // Delivery is verified against the target's own transcript, for
+        // every harness. An unattended handoff that failed verification
+        // must say so, because the conflict is still sitting there.
         log.attention.warn(
           `${skill} handoff never reached the ${harness.label} session — run it by hand`,
         );
       } else if (res.ok) {
         // Toast: the handoff lands well after the restack's own toast
         // expired, and cold starts take seconds — worth an async ack.
+        // The payload IS a slash command, so `delivered` is null here:
+        // it ran, but a command leaves no prompt entry to confirm
+        // against, and claiming otherwise would overstate it.
         log.event.ok(
-          res.coldStarted
-            ? `started ${harness.label} session and sent ${skill}`
-            : `sent ${skill} to ${harness.label} session`,
+          `${
+            res.coldStarted
+              ? `started ${harness.label} session and sent ${skill}`
+              : `sent ${skill} to ${harness.label} session`
+          }${res.delivered === null ? " (a command's arrival can't be confirmed)" : ""}`,
           { toast: true },
         );
       } else {

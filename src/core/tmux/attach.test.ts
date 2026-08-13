@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { inspectorSocketPath } from "../harness/claude/inject.ts";
 import { wrapInnerArgs } from "./inner-process.ts";
 
 const tempDirs: string[] = [];
@@ -18,13 +19,11 @@ async function runWrapped(kind: "shell" | "claude", message: string) {
   tempDirs.push(dir);
   const stderrPath = join(dir, "session.err");
   const proc = Bun.spawn(
-    wrapInnerArgs(kind, stderrPath, [
-      "bash",
-      "-c",
-      'printf "%s" "$1" >&2',
-      "_inner",
-      message,
-    ]),
+    wrapInnerArgs({
+      kind,
+      stderrPath,
+      innerArgs: ["bash", "-c", 'printf "%s" "$1" >&2', "_inner", message],
+    }),
     { stdout: "pipe", stderr: "pipe" },
   );
   const [exitCode, stderr] = await Promise.all([
@@ -37,16 +36,117 @@ async function runWrapped(kind: "shell" | "claude", message: string) {
 describe("tmux inner-process browser identity", () => {
   test("the harness inherits its worktree's browser session name", async () => {
     const proc = Bun.spawn(
-      wrapInnerArgs("claude", "/dev/null", ["printenv", "BROWSER_CONTROL_SESSION"], "eng-1-slug"),
+      wrapInnerArgs({
+        kind: "claude",
+        stderrPath: "/dev/null",
+        innerArgs: ["printenv", "BROWSER_CONTROL_SESSION"],
+        slug: "eng-1-slug",
+      }),
       { stdout: "pipe", stderr: "ignore" },
     );
     const [, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
     expect(stdout.trim()).toBe("wt-eng-1-slug");
   });
 
+  test("the harness knows which worktree's agent it is", async () => {
+    // `WT_AGENT` is what makes an outgoing `wt manager send` stamp its
+    // own sender — the prefix agents used to have to remember.
+    const proc = Bun.spawn(
+      wrapInnerArgs({
+        kind: "claude",
+        stderrPath: "/dev/null",
+        innerArgs: ["printenv", "WT_AGENT"],
+        slug: "eng-1-slug",
+      }),
+      { stdout: "pipe", stderr: "ignore" },
+    );
+    const [, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+    expect(stdout.trim()).toBe("eng-1-slug");
+  });
+
+  test("a claude session does not inherit the caller's own Claude identity", async () => {
+    // wt is usually run BY an agent, so its environment IS a Claude
+    // session's. `CLAUDE_CODE_CHILD_SESSION` in particular makes the new
+    // session stop writing a transcript — which wt reads for delivery
+    // confirmation, status, summaries and the away feed. Started from a
+    // shell it looked perfect; started by an agent it lost all of it.
+    const proc = Bun.spawn(
+      wrapInnerArgs({
+        kind: "claude",
+        stderrPath: "/dev/null",
+        innerArgs: ["sh", "-c", "printenv CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_MESSAGING_SOCKET"],
+        slug: "eng-1-slug",
+        tmuxName: "eng-1-slug",
+      }),
+      {
+        stdout: "pipe",
+        stderr: "ignore",
+        env: {
+          ...process.env,
+          CLAUDE_CODE_CHILD_SESSION: "1",
+          CLAUDE_CODE_MESSAGING_SOCKET: "/tmp/some-other-session.sock",
+        },
+      },
+    );
+    const [, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+    expect(stdout.trim()).toBe("");
+  });
+
+  test("a human's shell in a worktree is not that worktree's agent", async () => {
+    // Otherwise `wt manager send` typed by hand at an F10 shell would
+    // arrive signed as the agent, and the manager would answer a person
+    // as if it were coordinating a worker.
+    const proc = Bun.spawn(
+      wrapInnerArgs({
+        kind: "shell",
+        stderrPath: "/dev/null",
+        innerArgs: ["printenv", "WT_AGENT"],
+        slug: "eng-1-slug",
+      }),
+      { stdout: "pipe", stderr: "ignore" },
+    );
+    const [, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+    expect(stdout.trim()).toBe("");
+  });
+
+  test("a claude session is launched with its own inspector socket", async () => {
+    const proc = Bun.spawn(
+      wrapInnerArgs({
+        kind: "claude",
+        stderrPath: "/dev/null",
+        innerArgs: ["printenv", "BUN_INSPECT"],
+        slug: "eng-1-slug",
+        tmuxName: "eng-1-slug",
+      }),
+      { stdout: "pipe", stderr: "ignore" },
+    );
+    const [, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+    expect(stdout.trim()).toBe(`ws+unix://${inspectorSocketPath("eng-1-slug")}`);
+  });
+
+  test("no tmux name, no inspector — the session still starts", async () => {
+    // Delivery degrades to the terminal transport; a session that
+    // cannot be addressed is still better than one that won't boot.
+    const proc = Bun.spawn(
+      wrapInnerArgs({
+        kind: "claude",
+        stderrPath: "/dev/null",
+        innerArgs: ["printenv", "BUN_INSPECT"],
+        slug: "eng-1-slug",
+      }),
+      { stdout: "pipe", stderr: "ignore" },
+    );
+    const [, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+    expect(stdout.trim()).toBe("");
+  });
+
   test("no slug, no stamp — nothing inherits a stale identity", async () => {
     const proc = Bun.spawn(
-      wrapInnerArgs("shell", "/dev/null", ["printenv", "BROWSER_CONTROL_SESSION"]),
+      wrapInnerArgs({
+        kind: "shell",
+        stderrPath: "/dev/null",
+        innerArgs: ["printenv", "BROWSER_CONTROL_SESSION"],
+      }),
       { stdout: "pipe", stderr: "ignore" },
     );
     const [, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);

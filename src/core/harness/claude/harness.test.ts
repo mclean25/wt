@@ -38,18 +38,12 @@ describe("claudeHarness.buildArgs naming", () => {
     }
   });
 
-  test("every wt-managed process registers its native inbox", () => {
+  test("wt installs no settings of its own on a session", () => {
+    // wt used to inject `--settings` to opt every session into Claude's
+    // cross-session inbox and register a socket-capturing hook. Messages
+    // now arrive by prompt injection, which needs nothing from the
+    // session's own configuration — so wt stopped editing it.
     const argv = claudeHarness.buildArgs({ ...base, slug: "eng-1-slug", managedName: null });
-    const settingsIndex = argv.indexOf("--settings");
-    expect(settingsIndex).toBeGreaterThanOrEqual(0);
-    const settings = JSON.parse(argv[settingsIndex + 1]!) as {
-      crossSessionInbound?: string;
-      hooks?: { SessionStart?: Array<{ hooks?: Array<{ command?: string }> }> };
-    };
-
-    expect(settings.crossSessionInbound).toBe("accept");
-    expect(settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command).toContain(
-      "_claude-hook register",
-    );
+    expect(argv).not.toContain("--settings");
   });
 });

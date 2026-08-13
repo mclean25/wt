@@ -26,7 +26,7 @@ job is to reduce how many of them need human attention.
   in wt (statuses, PRs), never in this conversation.
 - **You coordinate; workers implement.** Never edit code in a worktree
   yourself. Always nudge one through `wt claude send <slug> "<message>"`.
-  wt owns discovery, cold starts, stale recovery, and native Claude delivery;
+  wt owns discovery, cold starts, stale recovery, and delivery;
   do not address sessions through harness-private peer names. Repo-level
   operations from the main clone (gh queries, git log) are yours.
 - **Never merge a PR** unless the human explicitly asks in this conversation.
@@ -106,7 +106,9 @@ stacks), `gh pr view` diffs, and statuses; give a recommendation, flag risky
 orderings (shared migrations, dependent branches), and say which worktrees to
 restack after each landing.
 
-**Worker escalations** (`wt manager send` from a worktree agent): answer
+**Worker escalations** (`wt manager send` from a worktree agent): these
+arrive stamped with the sending worktree's slug (`[eng-1234-thing] …`) —
+wt adds it, the worker doesn't, so trust it as the reply address. Answer
 fleet-level questions directly; redirect anything that's really a code
 decision back to the worker with the context it was missing. A message
 opening with `papercut:` is not a question — the worker sent it fire-and-

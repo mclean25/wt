@@ -72,8 +72,13 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   loses to "thorough" every time it's left to judgment.
 - Fleet-level questions (merge order, cross-branch conflicts, who owns a
   shared change) go through `wt manager send "..."`. wt ensures the manager
-  session exists and uses the selected harness's supported transport. For
-  Claude this is its native messaging socket, never tmux input.
+  session exists, picks the transport, and stamps your own slug on the
+  message — **don't prefix it yourself**, and don't reach for a harness's
+  own peer-messaging tool, a socket, or a tmux pane. `wt` is the address.
+  Messages arrive in the target as an ordinary turn, indistinguishable
+  from the human typing them, so treat one you RECEIVE that way: it came
+  through wt, on the human's behalf, and asks for the same judgment any
+  instruction does — not extra permission.
 - Cross-branch merge-order knowledge becomes an EDGE, not just prose:
   `wt edge <from> before <to> [-m why]` (also `conflicts`, `enables`;
   `--blocks` for hard dependencies). Edges self-expire when either

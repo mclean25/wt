@@ -97,6 +97,14 @@ export function makePerfFlows(ctx: PerfFlowCtx): {
         log.event.err(`perf send failed: ${result.reason}`);
         return;
       }
+      // `ok` is not delivery — see the same check in error-report.ts.
+      // Entering a session that never got the prompt drops the user
+      // into a conversation with nothing to answer.
+      if (result.delivered === false) {
+        patchInject({ kind: "failed", reason: "the session never received it" });
+        log.event.err("perf snapshot was not received by the session");
+        return;
+      }
       // Closed mid-send: the prompt landed, but don't yank the terminal
       // out from under whatever the user moved on to.
       if (cancelled) {

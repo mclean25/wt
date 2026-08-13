@@ -13,4 +13,11 @@ while [ -L "$launcher" ]; do
 done
 
 launcher_dir=$(CDPATH= cd -P -- "$(dirname -- "$launcher")" && pwd)
-exec bun "$launcher_dir/../src/main.ts" "$@"
+# `env -u BUN_INSPECT`: wt is most often run from INSIDE a Claude session,
+# whose environment binds that session's inspector socket (the transport
+# messages arrive through). bun honors BUN_INSPECT in every child, so an
+# unscrubbed launch would have wt try to bind a socket its parent already
+# owns — a 20-line EADDRINUSE stack on stderr for every `wt` an agent runs.
+# See src/core/harness/claude/inject/shims.ts, which does the same for the
+# other bun binaries an agent invokes.
+exec env -u BUN_INSPECT bun "$launcher_dir/../src/main.ts" "$@"

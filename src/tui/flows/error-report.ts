@@ -81,6 +81,17 @@ export function makeErrorFlows(ctx: ErrorFlowCtx): {
         log.event.err(`error-report send failed: ${result.reason}`);
         return;
       }
+      // `ok` is not delivery. It used to be, for Claude: the old
+      // transport only resolved ok once the prompt was in the
+      // transcript. Now `delivered: false` is a real outcome, and
+      // treating it as success here would ALSO mark the errors seen —
+      // burying a captured crash whose investigation prompt never
+      // arrived.
+      if (result.delivered === false) {
+        patchInject({ kind: "failed", reason: "the session never received it" });
+        log.event.err("error-report send was not received by the session");
+        return;
+      }
       if (cancelled) {
         log.event.info("error report sent (overlay closed — not entering)");
         return;

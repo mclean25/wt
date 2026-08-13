@@ -4,7 +4,7 @@ import { getHarness, type HarnessId } from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
 import { buildInnerArgs, sessionsDir, tmuxClientCwd } from "./attach.ts";
 import { ensureConfig } from "./config.ts";
-import { wrapInnerArgs } from "./inner-process.ts";
+import { prepareInspectorSocket, wrapInnerArgs } from "./inner-process.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
 import { listAllSessionsRaw } from "./process.ts";
 
@@ -43,6 +43,9 @@ export async function startHarnessSessionDetached(
     managedNameNorm: managedName,
     resumeSessionId: null,
   });
+  // Before the spawn, so a leftover socket from a dead session of the
+  // same name can't cost this one its inspector (see the helper).
+  await prepareInspectorSocket(harnessId, name);
   let proc: Bun.Subprocess;
   try {
     proc = Bun.spawn(
@@ -62,7 +65,13 @@ export async function startHarnessSessionDetached(
         "200",
         "-y",
         "50",
-        ...wrapInnerArgs(harnessId, stderrPath, innerArgs, slug),
+        ...wrapInnerArgs({
+          kind: harnessId,
+          stderrPath,
+          innerArgs,
+          slug,
+          tmuxName: name,
+        }),
       ],
       {
         // The pane cwd comes from `-c`; pin the server's birth cwd to

@@ -328,10 +328,10 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       }).then(
         (res) => {
           if (res.ok && res.delivered === false) {
-            // Non-Claude harnesses verify delivery against their
-            // transcript; a failed verification needs attention because
-            // an automation dispatch has no other witness. Claude's native
-            // messaging path reports successful delivery directly.
+            // Delivery is verified against the target's own transcript,
+            // for EVERY harness including Claude — a dispatch that
+            // can't be verified needs attention because an automation
+            // has no other witness.
             sessionLog.attention.warn(
               `${target.label} never received ${def.name} — attach and check its pane`,
             );
@@ -339,10 +339,16 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
             // Toast: the "sending…" ack above has long expired by the
             // time a cold start finishes, and this may be an automation
             // dispatch with no keystroke to acknowledge.
+            // `delivered: null` is UNCONFIRMABLE, not confirmed: a
+            // slash command is recorded as an expanded command entry,
+            // so there is no prompt text to match. Say so rather than
+            // claiming a verified send — but on the event feed, not the
+            // attention feed: it's the expected outcome for a command,
+            // and interrupting a scan for it every time would be noise.
             sessionLog.event.ok(
-              res.coldStarted
-                ? `started ${target.label} and sent ${def.name}`
-                : `sent ${def.name} to ${target.label}`,
+              `${res.coldStarted ? `started ${target.label} and sent` : `sent`} ${def.name}${
+                res.coldStarted ? "" : ` to ${target.label}`
+              }${res.delivered === null ? " (a command's arrival can't be confirmed)" : ""}`,
               { toast: true },
             );
           } else {
@@ -438,18 +444,21 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     }).then(
       (res) => {
         if (res.ok && res.delivered === false) {
-          // See the row path above: non-Claude harnesses confirm against
-          // their transcript, so an unverified briefing stays visible.
+          // See the row path above: an unverified briefing stays visible.
           slotLog.attention.warn(
             `${slot.label} never received ${label} — attach and check its pane`,
           );
         } else if (res.ok) {
           // Toast: the "sending…" ack above has long expired by the time
           // a cold start finishes.
+          // `delivered: null` is unconfirmable, not confirmed — the
+          // manager palette's `M m` (`/compact`) is exactly this case.
           slotLog.event.ok(
-            res.coldStarted
-              ? `started ${slot.label} and sent ${label}`
-              : `sent ${label} to ${slot.label}`,
+            `${
+              res.coldStarted
+                ? `started ${slot.label} and sent ${label}`
+                : `sent ${label} to ${slot.label}`
+            }${res.delivered === null ? " (a command's arrival can't be confirmed)" : ""}`,
             { toast: true },
           );
         } else {

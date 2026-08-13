@@ -153,12 +153,13 @@ export interface Harness {
    */
   readonly skillPrefix: string;
   /**
-   * tmux `send-keys` key sequence submitted after a bracketed paste for
-   * harnesses whose messaging adapter uses terminal input. Claude leaves
-   * this empty because it uses its native messaging socket. Keys are sent
-   * in order with a small gap
-   * between each. Override per harness when a different sequence
-   * (e.g. `C-d`, `C-j`) turns out to fit better.
+   * tmux `send-keys` key sequence submitted after a bracketed paste,
+   * for messages delivered through terminal input. Every harness needs
+   * one: it is the only transport for codex/opencode, and Claude's
+   * fallback when its prompt can't be submitted into directly (see
+   * `harness/session-messaging.ts`). Keys are sent in order with a
+   * small gap between each. Override per harness when a different
+   * sequence (e.g. `C-d`, `C-j`) turns out to fit better.
    */
   readonly injectSubmitKeys: readonly string[];
 

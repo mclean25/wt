@@ -64,6 +64,7 @@ in each one.
   ownership of shared changes), and papercuts worth fixing for everyone
   (`wt manager send "papercut: ..."` — misleading output, a wrong doc, a
   trap that cost you time). Nothing is returned; keep working either way.
+  Your own slug is stamped on automatically — don't prefix the message.
 - `wt edge <from> <before|conflicts|enables> <to> [--blocks|--prefer] [-m why]`
   — record merge-order knowledge as a pairwise edge instead of prose: `before`
   / `enables` order the pair, `conflicts` means same-files-sequence-them.
