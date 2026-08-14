@@ -99,7 +99,12 @@ the human asks.
   and `pr` (number, draft, `merge_state`, `mergeable`, CI rollup `checks`).
   `work.by` is who asserted the status — the slug's own agent, `manager`
   (you, on a previous pass), or null for the human. It is how "already
-  triaged" is readable without remembering that you triaged it.
+  triaged" is readable without remembering that you triaged it. Nested
+  `.work.by` HERE; the same field is flat `.by` on `wt status --all
+  --json`. Querying the wrong path answers `null`, which is also what
+  "nobody stamped it" looks like — so a suspicious all-null column is
+  worth one spot-check against `wt status <slug>` before it becomes a
+  conclusion.
   `pr: null` with a `pr_note` means GitHub was unreachable, NOT "no PR".
   Merge fields read `"computing"` while GitHub lazily calculates
   mergeability — re-run after a few seconds, never loop. Rows destroyed in
