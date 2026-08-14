@@ -1,7 +1,7 @@
 import type { KeyEvent } from "@opentui/core";
 
 import { isShiftedLetter } from "../app-helpers.ts";
-import { yankItemsFor, type Item } from "../panels/yank.tsx";
+import { sectionYankItems, yankItemsFor, type Item } from "../panels/yank.tsx";
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleListPickerKey } from "./list-picker.ts";
@@ -9,14 +9,17 @@ import { handleListPickerKey } from "./list-picker.ts";
 export function handleYankKey(
   k: KeyEvent,
   modal: Extract<Modal, { kind: "yank" }>,
-  { setModal, current, doYank }: SimpleModalContext,
+  { setModal, current, selectedSection, doYank }: SimpleModalContext,
 ): boolean {
-  if (!current) {
+  // Rebuilt from the cursor on every keypress, as the row form always
+  // has: the cursor can't move while the modal is up, so the two can't
+  // disagree, and neither has to be carried in the modal state.
+  if (!current && !selectedSection) {
     setModal(null);
     return true;
   }
-  const items = yankItemsFor(current);
-  const slug = current.wt.slug;
+  const items = selectedSection ? sectionYankItems(selectedSection) : yankItemsFor(current!);
+  const slug = selectedSection ? selectedSection.label : current!.wt.slug;
   const commit = (item: Item | undefined): void => {
     if (!item) return;
     setModal(null);

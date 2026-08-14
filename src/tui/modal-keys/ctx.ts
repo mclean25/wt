@@ -11,6 +11,7 @@ import type { PickerItem } from "../panels/action-picker.tsx";
 import type { PickerRow } from "../panels/sessions-picker.tsx";
 import type { SectionPickerItem } from "../panels/section-picker.tsx";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import type { SelectedSection } from "../hooks/useVisualItems.ts";
 import type { RemoteConfig } from "../../core/config.ts";
 
 export type SimpleModalContext = {
@@ -36,6 +37,9 @@ export type SimpleModalContext = {
     item: { label: string; state: WorkState | null },
     slug: string,
   ) => void;
+  /** Set when the cursor is on a folded section header — `y` yanks the
+   *  batch (name, member slugs) instead of a row. */
+  selectedSection: SelectedSection | undefined;
   doYank: (slug: string, label: string, value: string | null) => void;
   doClean: () => void;
   doRemove: (slug: string, opts?: { force?: boolean }) => Promise<void>;

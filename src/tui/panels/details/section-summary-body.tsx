@@ -373,8 +373,8 @@ export function SectionSummaryBody({
           and offering them reads as a bug the first time you try. */}
       <text fg={theme.fgDim} wrapMode="none" truncate flexShrink={0}>
         {section.sectionKey === GROUP_ARCHIVED
-          ? "TAB expand"
-          : "TAB expand · L rename · J/K move"}
+          ? "TAB expand · y yank"
+          : "TAB expand · y yank · L rename · J/K move"}
       </text>
     </box>
   );

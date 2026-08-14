@@ -708,6 +708,7 @@ export function App({ onExit }: Props) {
         handleSimpleModalKey(k, modal, {
           setModal,
           current,
+          selectedSection,
           refreshTmuxSessions,
           refreshPerf: () => perf.refetch(),
           doPerfInvestigate,
@@ -804,6 +805,7 @@ export function App({ onExit }: Props) {
     }
 
     const normalCtx: NormalKeysCtx = {
+      selectedSection,
       focusedOutputId,
       setFocus,
       visibleOutputs,
@@ -945,6 +947,7 @@ export function App({ onExit }: Props) {
       <PostFooterModals
         modal={modal}
         current={current}
+        selectedSection={selectedSection}
         rows={rows}
         cleanCandidates={cleanCandidates}
         primaryHarness={primaryHarness}

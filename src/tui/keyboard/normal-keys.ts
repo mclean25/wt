@@ -43,7 +43,7 @@ import {
 import { events as activityEvents } from "../activity-log.ts";
 import { activityScroll } from "../panels/activity.tsx";
 import { SCROLL_STEP } from "../scrollbox.tsx";
-import { firstYankIndex, yankItemsFor } from "../panels/yank.tsx";
+import { firstYankIndex, sectionYankItems, yankItemsFor } from "../panels/yank.tsx";
 import { enterDiffSession } from "../sessions/diff.ts";
 import { enterShellSession } from "../sessions/shell.ts";
 import type { HarnessRoute } from "../sessions/worktree.ts";
@@ -85,6 +85,7 @@ export type NormalKeysCtx = {
   currentItem: VisualItems["currentItem"];
   selectedPr: VisualItems["selectedPr"];
   selectedRemote: VisualItems["selectedRemote"];
+  selectedSection: VisualItems["selectedSection"];
   currentTarget: VisualItems["currentTarget"];
   /** True when the selected remote's host is known-unreachable. */
   remoteUnavailable: boolean;
@@ -152,6 +153,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     currentItem,
     selectedPr,
     selectedRemote,
+    selectedSection,
     currentTarget,
     remoteUnavailable,
     visualItems,
@@ -840,6 +842,13 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         return;
       }
       toast("no section here to fold", theme.fgDim, 1500);
+      return;
+    }
+    // `y` on a folded section header yanks the BATCH — its name, its
+    // member slugs — which is the vocabulary the manager conversation
+    // uses. The row form lives further down, guarded on `current`.
+    if (selectedSection && k.sequence === "y") {
+      setModal({ kind: "yank", index: firstYankIndex(sectionYankItems(selectedSection)) });
       return;
     }
     // Remote rows use the shared navigation keys and the F10/F11/F12 session

@@ -95,6 +95,10 @@ const KEY_BLOCKS: Block[] = [
       { key: "I", label: "open primary tracker issue" },
       { key: "s", label: "open deployed app / dev server" },
       { key: "y", label: "yank picker (direct letters b/s/S/d/p/n/i/I/r · j/k + y/⏎ + 1-9 too)" },
+      {
+        key: "y",
+        label: "on a folded section: yank the batch — name (n), slugs (s), branches (b), list (l)",
+      },
       { key: "t", label: "regenerate AI summary" },
       { key: "a", label: "archive / restore" },
       { key: "d", label: "remove worktree" },

@@ -347,16 +347,31 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
    * rename in those contexts.
    */
   function openSectionRename(): void {
-    if (!current || current.archived) return;
-    if (current.section === null) {
-      toast("the Inbox can't be renamed", theme.fgDim, 1500);
+    // A FOLDED section is the cursor stop that most obviously means
+    // "this section", and it read `current` — which is undefined
+    // there — so `L` silently did nothing on the one row whose own
+    // footer advertises it. The header's key IS the section name.
+    const name = selectedSection
+      ? selectedSection.sectionKey
+      : current && !current.archived
+        ? current.section
+        : undefined;
+    if (name === undefined) return;
+    // Sentinel-keyed groups are named by wt, not by the human: the
+    // inbox, and the archived block.
+    if (name === null || name.startsWith("\0")) {
+      toast(
+        `${name === GROUP_ARCHIVED ? "Archived" : "the Inbox"} can't be renamed`,
+        theme.fgDim,
+        1500,
+      );
       return;
     }
-    setPendingRename(current.section);
+    setPendingRename(name);
     setFooter({
       kind: "input",
-      prompt: `rename "${current.section}":`,
-      edit: makeEdit(current.section),
+      prompt: `rename "${name}":`,
+      edit: makeEdit(name),
       purpose: "rename-section",
     });
   }

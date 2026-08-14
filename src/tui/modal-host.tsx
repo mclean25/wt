@@ -35,7 +35,8 @@ import {
   SessionsPickerNew,
   type PickerRow,
 } from "./panels/sessions-picker.tsx";
-import { YankModal } from "./panels/yank.tsx";
+import { sectionYankItems, YankModal, yankItemsFor } from "./panels/yank.tsx";
+import type { SelectedSection } from "./hooks/useVisualItems.ts";
 import type { useOutputFocus } from "./hooks/useOutputFocus.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
 
@@ -117,6 +118,7 @@ export function PreFooterModals({
 export function PostFooterModals({
   modal,
   current,
+  selectedSection,
   rows,
   cleanCandidates,
   primaryHarness,
@@ -128,6 +130,8 @@ export function PostFooterModals({
 }: {
   modal: Modal | null;
   current: WorktreeRow | undefined;
+  /** Folded section under the cursor, when that's what `y` is yanking. */
+  selectedSection: SelectedSection | undefined;
   rows: WorktreeRow[];
   cleanCandidates: WorktreeRow[];
   primaryHarness: HarnessId;
@@ -155,8 +159,11 @@ export function PostFooterModals({
       {modal?.kind === "cleanConfirm" ? (
         <CleanConfirmModal candidates={cleanCandidates} />
       ) : null}
-      {modal?.kind === "yank" && current ? (
-        <YankModal row={current} selectedIndex={modal.index} />
+      {modal?.kind === "yank" && (selectedSection || current) ? (
+        <YankModal
+          items={selectedSection ? sectionYankItems(selectedSection) : yankItemsFor(current!)}
+          selectedIndex={modal.index}
+        />
       ) : null}
       {modal?.kind === "branchPicker" ? (
         <PickerModal

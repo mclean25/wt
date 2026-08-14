@@ -8,10 +8,11 @@ import { Modal } from "../modal.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import type { SelectedSection } from "../hooks/useVisualItems.ts";
 
 export type Item = { key: string; label: string; value: string | null };
 
-type Props = { row: WorktreeRow; selectedIndex: number };
+type Props = { items: readonly Item[]; selectedIndex: number };
 
 /**
  * `padEnd` budget for the label column, one char past the longest
@@ -56,14 +57,47 @@ export function yankItemsFor(row: WorktreeRow): Item[] {
   ];
 }
 
+/**
+ * What the `y` chord can yank off a SECTION header — the batch, not a
+ * row. These exist because a section is how the human talks about work
+ * to the manager ("Blocked: Real Dev Env is waiting on you"), and
+ * naming its members meant reading them off the screen and retyping
+ * slugs by hand.
+ *
+ * `slugs` and `branches` are space-joined so they paste straight into a
+ * command line; `list` is the prose form, name first, one member per
+ * line. An empty section yields nulls rather than an empty string, so
+ * committing one toasts "nothing to yank" instead of silently clearing
+ * the clipboard.
+ */
+export function sectionYankItems(section: SelectedSection): Item[] {
+  const rows = section.rows;
+  const join = (values: readonly (string | null)[]): string | null => {
+    const present = values.filter((v): v is string => Boolean(v));
+    return present.length > 0 ? present.join(" ") : null;
+  };
+  const list =
+    rows.length > 0
+      ? [
+          `${section.label} (${rows.length})`,
+          ...rows.map((r) => `- ${r.wt.slug}: ${r.title}`),
+        ].join("\n")
+      : null;
+  return [
+    { key: "n", label: "name", value: section.label || null },
+    { key: "s", label: "slugs", value: join(rows.map((r) => r.wt.slug)) },
+    { key: "b", label: "branches", value: join(rows.map((r) => r.wt.branch || null)) },
+    { key: "l", label: "list", value: list },
+  ];
+}
+
 /** Index of the first row with a real value, for the modal's initial cursor. */
 export function firstYankIndex(items: readonly Item[]): number {
   const i = items.findIndex((it) => it.value !== null);
   return i === -1 ? 0 : i;
 }
 
-export function YankModal({ row, selectedIndex }: Props) {
-  const items = yankItemsFor(row);
+export function YankModal({ items, selectedIndex }: Props) {
   return (
     <Modal
       title="yank · pick what to copy"
@@ -115,8 +149,13 @@ export function YankModal({ row, selectedIndex }: Props) {
                 </text>
               </box>
               <box flexShrink={1} overflow="hidden">
+                {/* Preview only: a multi-line value (the section's
+                    member list) is flattened, because a real newline
+                    in a `wrapMode="none"` text grows the row and
+                    collides with the one below it. The clipboard gets
+                    the unflattened value. */}
                 <text fg={theme.fgDim} wrapMode="none" truncate>
-                  {it.value ?? "—"}
+                  {it.value?.replace(/\n/g, " · ") ?? "—"}
                 </text>
               </box>
             </box>

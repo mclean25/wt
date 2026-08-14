@@ -60,7 +60,7 @@ Both read "unpushed" as commits missing from `origin/<branch>` — the `(↑n �
 | `I` | open the primary tracker issue (needs `[issue_tracker]` with a URL template, or a `gh-`prefixed slug id) |
 | `s` | open the deployed stage URL, or the running `[dev_server]` URL when no stage is deployed |
 | `t` | regenerate the AI summary |
-| `y` | yank picker — copy branch (`b`), stage (`s`), stage URL (`S`), dev-server URL (`d`), path (`p`), slug (`n`), most-specific issue (`i`), primary tracker issue (`I`), PR URL (`r`); a full picker since the rebuild: `j`/`k` move, `1`–`9` quick-pick, `y`/`Enter` confirm the highlight, direct letters still fire immediately |
+| `y` | yank picker — copy branch (`b`), stage (`s`), stage URL (`S`), dev-server URL (`d`), path (`p`), slug (`n`), most-specific issue (`i`), primary tracker issue (`I`), PR URL (`r`); a full picker since the rebuild: `j`/`k` move, `1`–`9` quick-pick, `y`/`Enter` confirm the highlight, direct letters still fire immediately. On a folded section header the same key yanks the BATCH instead: name (`n`), member slugs (`s`), member branches (`b`), and a pasteable list (`l` — the name, then one `- <slug>: <title>` line per member). Slugs and branches are space-joined so they drop straight into a command; the list is the form a message to the manager wants, which is why it exists |
 | `r` / `Ctrl+R` | refresh / hard refresh (clear caches, confirm) |
 
 When the SSH host is sleeping or offline, its last-known worktrees remain in
