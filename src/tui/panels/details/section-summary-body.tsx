@@ -102,11 +102,12 @@ function WorkRollup({ members }: { members: SectionMember[] }) {
           <span fg={s === "none" ? theme.fgDim : workStateColor(s)}>
             {s === "none" ? NF.dotOutline : workStateGlyph(s)}
           </span>
-          {/* The space is the icon's second cell, not a gap: these
-              glyphs measure 1 cell to Bun and paint 2 in the terminal,
-              so without it the dot lands on top of the count. Same
-              reason the list gutter boxes them at width 2. */}
-          <span fg={theme.fgDim}>{` ${counts.get(s)} ${s === "none" ? "unset" : s}`}</span>
+          {/* Two spaces, one of which is never seen: these glyphs
+              measure 1 cell to Bun and paint 2 in the terminal, so the
+              first is the icon's own second cell (without it the dot
+              lands on the count) and the second is the gap you actually
+              read. Same pair the picker and the rebase block use. */}
+          <span fg={theme.fgDim}>{`  ${counts.get(s)} ${s === "none" ? "unset" : s}`}</span>
         </text>
       ))}
     </box>
