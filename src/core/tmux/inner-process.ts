@@ -157,7 +157,13 @@ export function wrapInnerArgs(opts: {
 }): string[] {
   const { kind, stderrPath, innerArgs, slug, tmuxName } = opts;
   const extraEnv: string[] = [];
-  const unset: string[] = ["TMUX", "TMUX_PANE"];
+  // Both identity stamps are unset FIRST and re-added below only when
+  // this session earns them. Adding without unsetting looked equivalent
+  // and wasn't: wt almost always runs inside a Claude session, so the
+  // "no stamp" branches silently inherited the CALLER's identity — a
+  // human's F10 shell sending mail signed as whichever agent opened it,
+  // and its browser tabs closing with that agent's worktree.
+  const unset: string[] = ["TMUX", "TMUX_PANE", "WT_AGENT", "BROWSER_CONTROL_SESSION"];
   if (slug && harnessIdForKind(kind) !== null) extraEnv.push(`WT_AGENT=${slug}`);
   if (kind === "claude") {
     unset.push(...CLAUDE_INHERITED_ENV);

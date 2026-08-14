@@ -354,8 +354,13 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
    * tmux host when needed.
    */
   return async function send(target: SessionMessageTarget): Promise<SessionMessageResult> {
+    // Emptiness is a question about what the CALLER sent, so it is
+    // asked before stamping: from inside a wt session `stampSender`
+    // turns "" into "[slug] ", which passed this guard and delivered a
+    // bare sender tag to somebody's prompt. The guard only worked at
+    // all where WT_AGENT was absent, which is nowhere that matters.
+    if (!target.text.trim()) return { ok: false, reason: "message is empty" };
     const text = stampSender(target.text);
-    if (!text.trim()) return { ok: false, reason: "message is empty" };
     if (target.harnessId !== "claude") {
       const res = await deps.terminal({ ...target, text });
       return res.ok
