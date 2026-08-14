@@ -94,6 +94,27 @@ export function wrapText(s: string, width: number, firstWidth = width): string[]
   return out;
 }
 
+/**
+ * Wrap `s` to `width`, keep at most `maxLines`, and mark the cut.
+ *
+ * The mark is the whole point. A clipped note that simply stops reads
+ * as a rendering fault, and — worse — reads as the WHOLE note to
+ * anyone who doesn't know a cap exists. `...` costs three cells and
+ * turns both misreadings into "there is more, go look".
+ *
+ * The suffix is appended to the last kept line and re-truncated, so a
+ * line already filling the width gives up its tail to make room rather
+ * than pushing past the budget.
+ */
+export function clipLines(s: string, width: number, maxLines: number): string[] {
+  const lines = wrapText(s, width);
+  if (lines.length <= maxLines) return lines;
+  const kept = lines.slice(0, maxLines);
+  const last = kept[kept.length - 1] ?? "";
+  kept[kept.length - 1] = truncateEnd(`${last}${ELLIPSIS}`, width);
+  return kept;
+}
+
 export function truncateEnd(s: string, maxWidth: number): string {
   if (maxWidth <= 0) return "";
   if (Bun.stringWidth(s) <= maxWidth) return s;

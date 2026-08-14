@@ -351,6 +351,10 @@ export function App({ onExit }: Props) {
   // budget split between middle and activity.
   const middleMax = 20;
   const activityHeight = Math.max(7, height - 2 - middleMax);
+  // What's left for the list/details row. The details pane needs it as
+  // a number, not just as `flexGrow` — the folded-section body sizes a
+  // block against the rows it actually has.
+  const middleHeight = Math.max(1, height - 2 - activityHeight);
 
   // Action runtime state for the *selected* worktree. `currentRun`
   // drives the activity-pane swap (showing the streamed claude output
@@ -920,6 +924,7 @@ export function App({ onExit }: Props) {
           section={removedView ? undefined : sectionDetail}
           removed={currentRemoved}
           width={Math.max(0, width - listWidth)}
+          height={middleHeight}
           scrollRef={detailsScrollRef}
           sessionState={
             current

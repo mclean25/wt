@@ -23,7 +23,7 @@ import {
 } from "../../row-gutter.tsx";
 import type { SpineCell } from "../../../core/stack-layout.ts";
 import { WtScrollbox } from "../../scrollbox.tsx";
-import { wrapText } from "../../text.ts";
+import { clipLines } from "../../text.ts";
 import { theme } from "../../theme.ts";
 
 /**
@@ -116,7 +116,10 @@ function WorkRollup({ members }: { members: SectionMember[] }) {
  * whose automations someone parked. Absent lines mean absent facts —
  * a quiet row here is the point, not a gap.
  */
-function BatchFacts({ members, pausedCount }: { members: SectionMember[]; pausedCount: number }) {
+function batchFactParts(
+  members: SectionMember[],
+  pausedCount: number,
+): { text: string; fg: string }[] {
   const prs = members.filter((m) => m.row.pr?.state === "OPEN");
   const drafts = prs.filter((m) => m.row.pr?.isDraft);
   const failing = members.filter((m) => m.row.pr?.checks === "fail");
@@ -135,6 +138,10 @@ function BatchFacts({ members, pausedCount }: { members: SectionMember[]; paused
   }
   if (dirty.length > 0) parts.push({ text: `${dirty.length} dirty`, fg: theme.warn });
   if (pausedCount > 0) parts.push({ text: `${pausedCount} paused`, fg: theme.warn });
+  return parts;
+}
+
+function BatchFacts({ parts }: { parts: { text: string; fg: string }[] }) {
   if (parts.length === 0) return null;
   return (
     <box flexShrink={0} flexDirection="row" overflow="hidden">
@@ -192,14 +199,56 @@ function MemberRow({
 }
 
 /**
+ * Note lines every blocked member gets even when the pane has no room,
+ * and the most any one of them gets when it has room to spare.
+ *
+ * The floor is what makes the block degrade into a scroll region
+ * rather than into nothing on a short terminal; the ceiling stops a
+ * single 400-character note from pushing the member list off a tall
+ * one, which is the thing this pane exists to show.
+ */
+const NOTE_MIN = 2;
+const NOTE_MAX = 8;
+
+/**
+ * How many note lines each blocked member may spend, given the rows
+ * the rest of the body has already claimed.
+ *
+ * Measured against the pane rather than fixed, because a fixed cap is
+ * wrong in both directions at once: 2 lines cut a lone note off
+ * mid-clause with half the pane empty, and any cap generous enough for
+ * that case pushes a five-member section into a scroll region the
+ * reader has no reason to suspect. `viewport` is the scrollable area,
+ * so what this really spends is "the room actually on screen".
+ */
+function noteBudget(viewport: number, fixedRows: number, blockedCount: number): number {
+  if (blockedCount === 0) return 0;
+  const spare = Math.floor((viewport - fixedRows) / blockedCount);
+  return Math.max(NOTE_MIN, Math.min(NOTE_MAX, spare));
+}
+
+/**
  * The notes of members blocked on the human, verbatim. `needs-human`
  * requires a note saying what is needed, and that sentence is the
  * single most actionable thing in the section — without it the human
  * has to unfold, select the row, and read the detail pane to find out
  * that a batch of eight is waiting on one credential.
+ *
+ * Clipped notes end in `...`. A note that simply stopped mid-sentence
+ * read as a rendering bug rather than as a summary, and worse, read as
+ * a COMPLETE note to anyone who didn't know the cap existed — the one
+ * misreading this pane must not cause, since the whole point of the
+ * block is telling the human what is being asked of them.
  */
-function BlockedNotes({ members, width }: { members: SectionMember[]; width: number }) {
-  const blocked = members.filter((m) => memberState(m) === "needs-human" && m.row.work?.note);
+function BlockedNotes({
+  blocked,
+  width,
+  perNote,
+}: {
+  blocked: SectionMember[];
+  width: number;
+  perNote: number;
+}) {
   if (blocked.length === 0) return null;
   return (
     <>
@@ -215,13 +264,11 @@ function BlockedNotes({ members, width }: { members: SectionMember[]; width: num
           {/* Capped: a section can hold several blocked members and the
               pane is not the place to read a full note — enough to know
               whether it is your turn, then TAB in. */}
-          {wrapText(m.row.work?.note ?? "", Math.max(10, width - 4))
-            .slice(0, 2)
-            .map((line, i) => (
-              <text key={i} fg={theme.fg} wrapMode="none">
-                {`    ${line}`}
-              </text>
-            ))}
+          {clipLines(m.row.work?.note ?? "", Math.max(10, width - 4), perNote).map((line, i) => (
+            <text key={i} fg={theme.fg} wrapMode="none">
+              {`    ${line}`}
+            </text>
+          ))}
         </box>
       ))}
     </>
@@ -241,10 +288,14 @@ function BlockedNotes({ members, width }: { members: SectionMember[]; width: num
 export function SectionSummaryBody({
   section,
   width,
+  height,
   scrollRef,
 }: {
   section: SectionDetail;
   width: number;
+  /** The pane's own rows. Only the notes need it — everything else
+   *  here is either fixed or free to scroll. */
+  height: number;
   scrollRef?: RefObject<ScrollBoxRenderable | null>;
 }) {
   // The members are one contiguous run here, so they lay out as one
@@ -254,6 +305,23 @@ export function SectionSummaryBody({
   // Border (2) + padding (2) + the scrollbox's reserved scrollbar
   // column — the text budget inside the scroll region.
   const inner = Math.max(10, width - 5);
+  const facts = batchFactParts(section.members, section.pausedCount);
+  const blocked = section.members.filter(
+    (m) => memberState(m) === "needs-human" && m.row.work?.note,
+  );
+  // Everything the body draws before the first note line: label, the
+  // rollup, the facts line when there is one, a blank, the member rows
+  // (or the empty-section line), then the blocked block's own blank,
+  // header and one label per member. Counted here rather than guessed,
+  // so the notes get exactly the room left on screen.
+  const fixedRows =
+    3 +
+    (facts.length > 0 ? 1 : 0) +
+    Math.max(1, section.members.length) +
+    (blocked.length > 0 ? 2 + blocked.length : 0);
+  // Border (2), padding (2) and the pinned footer (1) are outside the
+  // scroll region.
+  const perNote = noteBudget(Math.max(1, height - 5), fixedRows, blocked.length);
   return (
     <box
       flexGrow={1}
@@ -275,7 +343,7 @@ export function SectionSummaryBody({
           </text>
         </box>
         <WorkRollup members={section.members} />
-        <BatchFacts members={section.members} pausedCount={section.pausedCount} />
+        <BatchFacts parts={facts} />
         <box height={1} flexShrink={0} />
         {section.members.length === 0 ? (
           <text fg={theme.fgDim}>no worktrees</text>
@@ -289,7 +357,7 @@ export function SectionSummaryBody({
             />
           ))
         )}
-        <BlockedNotes members={section.members} width={inner} />
+        <BlockedNotes blocked={blocked} width={inner} perNote={perNote} />
       </WtScrollbox>
       {/* Outside the scroll region: the keys stay on screen however far
           down a long section the reader has scrolled. */}

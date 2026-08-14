@@ -79,6 +79,12 @@ type Props = {
   remoteError?: string | null;
   width: number;
   /**
+   * Rows the pane occupies. Only the section summary reads it, to size
+   * a block it would otherwise have to guess at; every other body here
+   * lays out top-down and scrolls whatever doesn't fit.
+   */
+  height: number;
+  /**
    * Ref to the inner scrollbox of whichever body is mounted, so the
    * app's global key handler can page it on PageUp/PageDown. Only one
    * body mounts at a time, so a single ref covers both the worktree and
@@ -575,6 +581,7 @@ export const Details = memo(function Details({
   remoteUnavailable = false,
   remoteError = null,
   width,
+  height,
   scrollRef,
   sessionState,
 }: Props) {
@@ -591,6 +598,7 @@ export const Details = memo(function Details({
         key={`section:${section.sectionKey}`}
         section={section}
         width={width}
+        height={height}
         scrollRef={scrollRef}
       />
     );

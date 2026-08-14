@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { wrapText } from "./text.ts";
+import { clipLines, wrapText } from "./text.ts";
 
 describe("wrapText", () => {
   test("wraps on word boundaries within the budget", () => {
@@ -58,5 +58,33 @@ describe("wrapText", () => {
   test("degenerate widths return nothing rather than looping", () => {
     expect(wrapText("anything", 0)).toEqual([]);
     expect(wrapText("anything", 10, 0)).toEqual([]);
+  });
+});
+
+describe("clipLines", () => {
+  test("a note that fits is returned whole and unmarked", () => {
+    // The mark has to mean something, so it can't appear when nothing
+    // was dropped.
+    expect(clipLines("the quick brown fox", 10, 3)).toEqual(["the quick", "brown fox"]);
+  });
+
+  test("a clipped note says so on its last line", () => {
+    // Without this the note reads as complete — the one misreading the
+    // block must not cause, since it is what the human is being asked.
+    const lines = clipLines("the quick brown fox jumps over the lazy dog", 10, 2);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]?.endsWith("...")).toBe(true);
+  });
+
+  test("the mark never pushes a line past its width", () => {
+    // A last line already filling the budget gives up its tail rather
+    // than overflowing the pane it was measured for.
+    const lines = clipLines("aaaaaaaaaa bbbbbbbbbb cccccccccc", 10, 2);
+    for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(10);
+    expect(lines[1]?.endsWith("...")).toBe(true);
+  });
+
+  test("an exact fit is not marked off-by-one", () => {
+    expect(clipLines("the quick brown fox", 10, 2)).toEqual(["the quick", "brown fox"]);
   });
 });
