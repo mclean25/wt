@@ -14,6 +14,7 @@ import {
 } from "../../core/worktree-target.ts";
 import { remoteEntryKey } from "../remote-creation.ts";
 import {
+  GROUP_ARCHIVED,
   GROUP_INBOX,
   type WorktreeRow,
 } from "./useWorktreeRows.ts";
@@ -21,7 +22,9 @@ import {
 export type VisualItem = ListActiveItem | { kind: "pr"; pr: ReviewRequestPr };
 export type ArchivedItem =
   | { kind: "wt"; row: WorktreeRow; target: WorktreeTarget }
-  | { kind: "remote"; entry: RemoteWorktreeSummary; target: WorktreeTarget };
+  | { kind: "remote"; entry: RemoteWorktreeSummary; target: WorktreeTarget }
+  /** The whole block, folded to one header line (`GROUP_ARCHIVED`). */
+  | SelectedSection;
 export type SelectedSection = Extract<ListActiveItem, { kind: "section" }>;
 
 export function visualKey(item: VisualItem): string {
@@ -111,8 +114,8 @@ export function useVisualItems({
     archivedKeys,
   ]);
 
-  const archivedItems = useMemo<ArchivedItem[]>(
-    () => [
+  const archivedItems = useMemo<ArchivedItem[]>(() => {
+    const members: ArchivedItem[] = [
       ...archivedRows.map((row) => ({
         kind: "wt" as const,
         row,
@@ -123,9 +126,25 @@ export function useVisualItems({
         entry,
         target: remoteWorktreeTarget(entry),
       })),
-    ],
-    [archivedRows, archivedRemoteRows],
-  );
+    ];
+    // Folded, the whole block collapses to one header — here rather
+    // than in the list, because the cursor model is built from this:
+    // painting one line over N cursor stops would leave j/k walking
+    // through rows nobody can see.
+    if (members.length === 0 || !foldedSections.has(GROUP_ARCHIVED)) return members;
+    return [
+      {
+        kind: "section",
+        sectionKey: GROUP_ARCHIVED,
+        label: "Archived",
+        rows: archivedRows,
+        // Remote members aren't worktree rows, so the count is passed
+        // rather than taken from `rows` — a header that says ×02 over
+        // three hidden things is a small lie with no upside.
+        count: members.length,
+      },
+    ];
+  }, [archivedRows, archivedRemoteRows, foldedSections]);
 
   const visualItems = useMemo<VisualItem[]>(() => {
     const prs: VisualItem[] = reviewRequestRows.map((pr) => ({ kind: "pr", pr }));

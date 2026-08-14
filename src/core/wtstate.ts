@@ -7,6 +7,7 @@
  */
 
 export {
+  GROUP_ARCHIVED,
   GROUP_INBOX,
   STACK_SECTION_PREFIX,
   stackIdFromSectionKey,

@@ -32,6 +32,15 @@ export function stackIdFromSectionKey(key: string): string | null {
  */
 export const GROUP_INBOX = "\0inbox";
 
+/**
+ * Sentinel for the archived block's fold state. NUL-prefixed for the
+ * same reason as the inbox, and deliberately NOT a member of
+ * `sectionsOrder`: the archived block is pinned to the bottom of the
+ * list and holds no manual ordering. It appears in `foldedSections`
+ * and nowhere else, which is why nothing had to change to persist it.
+ */
+export const GROUP_ARCHIVED = "\0archived";
+
 export type WtSlugState = {
   /** Section name. `null` = unsectioned (rendered at top, no header). */
   section: string | null;

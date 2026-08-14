@@ -12,6 +12,7 @@ import type { SectionPickerItem } from "../panels/section-picker.tsx";
 import type { Modal } from "../modal-state.ts";
 import { config } from "../../core/config.ts";
 import {
+  GROUP_ARCHIVED,
   GROUP_INBOX,
   STACK_SECTION_PREFIX,
   rowWorkRank,
@@ -160,6 +161,14 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
    */
   function doShiftMove(dir: -1 | 1): void {
     if (selectedSection) {
+      // The archived block is pinned to the bottom and isn't in
+      // `sectionsOrder` at all, so the move would find no slot and
+      // no-op in silence. Say so instead, with the same words the
+      // archived ROWS get.
+      if (selectedSection.sectionKey === GROUP_ARCHIVED) {
+        toast("archived rows don't reorder, use `a` to restore", theme.fgDim, 1500);
+        return;
+      }
       doMoveGroup(selectedSection.sectionKey, dir, "section");
       return;
     }

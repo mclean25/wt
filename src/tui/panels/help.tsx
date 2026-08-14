@@ -79,7 +79,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "g", label: "top" },
       { key: "G", label: "bottom" },
       { key: "space", label: "jump to next row needing attention (needs-human / needs-testing / ready), wraps" },
-      { key: "TAB", label: "fold / unfold the section under the cursor (Inbox too)" },
+      { key: "TAB", label: "fold / unfold the section under the cursor (Inbox and Archived too)" },
       { key: "ctrl+j / ctrl+k", label: "scroll details pane" },
     ],
   },

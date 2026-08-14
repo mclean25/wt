@@ -301,7 +301,12 @@ function statusEq(a: Status, b: Status): boolean {
 // Synthetic stack section keys + the inbox sentinel live in
 // `core/wtstate.ts` (the owner of the unified group order); re-exported
 // here so the TUI keeps one import site for row/section plumbing.
-export { GROUP_INBOX, STACK_SECTION_PREFIX, stackSectionKey } from "../../core/wtstate.ts";
+export {
+  GROUP_ARCHIVED,
+  GROUP_INBOX,
+  STACK_SECTION_PREFIX,
+  stackSectionKey,
+} from "../../core/wtstate.ts";
 
 function stackedOnEq(a: StackedOn | null, b: StackedOn | null): boolean {
   if (a === b) return true;

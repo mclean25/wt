@@ -71,6 +71,12 @@ export type ListActiveItem =
       label: string;
       /** The collapsed member rows (for the count + the detail-pane summary). */
       rows: WorktreeRow[];
+      /**
+       * Members hidden by the fold, when that isn't `rows.length` —
+       * only the archived block, whose members can also be remote
+       * entries (not worktree rows, so never in `rows`).
+       */
+      count?: number;
     };
 
 /**
@@ -368,7 +374,7 @@ const FoldedSectionHeader = memo(function FoldedSectionHeader({
   item: Extract<ListActiveItem, { kind: "section" }>;
   selected: boolean;
 }) {
-  const count = `[×${String(item.rows.length).padStart(2, "0")}]`;
+  const count = `[×${String(item.count ?? item.rows.length).padStart(2, "0")}]`;
   const labelFg = selected ? theme.fgBright : theme.fgDim;
   const attrs = selected ? TextAttributes.BOLD : 0;
   return (
@@ -532,6 +538,7 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
     return m;
   }, [allRows]);
   const hasArchived = archivedItems.length > 0;
+  const archivedFolded = archivedItems[0]?.kind === "section";
   const hasReviewRequests = reviewRequests.length > 0;
   const hasActive = items.length > 0;
   // An empty list says WHY it's empty when the removed history shows
@@ -574,11 +581,12 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
         ? reviewRequests[selectedIndex - reviewOffset]?.url
         : (() => {
             const archived = archivedItems[selectedIndex - archivedOffset];
-            return archived?.kind === "wt"
+            if (!archived) return undefined;
+            return archived.kind === "wt"
               ? archived.row.wt.slug
-              : archived
-                ? `remote:${remoteEntryKey(archived.entry)}`
-                : undefined;
+              : archived.kind === "section"
+                ? `section:${archived.sectionKey}`
+                : `remote:${remoteEntryKey(archived.entry)}`;
           })();
   // Depend on `items`/`reviewRequests`/`archivedItems` (identity-stable per
   // render of the parent) as well as the selected id, so a reflow under a
@@ -777,9 +785,21 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                 // it owns the flex spacer (see the review-requests block).
                 <box flexGrow={1} flexShrink={0} minHeight={1} />
               ) : null}
-              <Divider label="Archived" width={width} />
+              {archivedFolded ? null : <Divider label="Archived" width={width} />}
               {archivedItems.map((item, i) => {
                 const globalIndex = archivedOffset + i;
+                // Folded, the block IS its header — the `[×NN]` chip
+                // replaces the divider, exactly as a folded section
+                // does up in the active list.
+                if (item.kind === "section") {
+                  return (
+                    <FoldedSectionHeader
+                      key={`section:${item.sectionKey}`}
+                      item={item}
+                      selected={globalIndex === selectedIndex}
+                    />
+                  );
+                }
                 if (item.kind === "remote") {
                   return (
                     <RemoteRowView

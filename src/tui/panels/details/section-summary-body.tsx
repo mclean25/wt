@@ -3,6 +3,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import type { RefObject } from "react";
 
 import { StatusKind } from "../../../core/types.ts";
+import { GROUP_ARCHIVED } from "../../../core/wtstate.ts";
 import type { HarnessId } from "../../../core/harness/index.ts";
 import type { DerivedState } from "../../../core/harness/status.ts";
 import {
@@ -366,9 +367,14 @@ export function SectionSummaryBody({
         <BlockedNotes blocked={blocked} width={inner} perNote={perNote} />
       </WtScrollbox>
       {/* Outside the scroll region: the keys stay on screen however far
-          down a long section the reader has scrolled. */}
+          down a long section the reader has scrolled. The archived
+          block advertises only the key it HAS — it is pinned to the
+          bottom and named by wt, so rename and move do nothing there
+          and offering them reads as a bug the first time you try. */}
       <text fg={theme.fgDim} wrapMode="none" truncate flexShrink={0}>
-        TAB expand · L rename · J/K move
+        {section.sectionKey === GROUP_ARCHIVED
+          ? "TAB expand"
+          : "TAB expand · L rename · J/K move"}
       </text>
     </box>
   );

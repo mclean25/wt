@@ -60,7 +60,7 @@ import {
   type useHarnessSessions,
 } from "../hooks/useHarnessSessions.ts";
 import type { useOutputFocus } from "../hooks/useOutputFocus.ts";
-import { GROUP_INBOX } from "../hooks/useWorktreeRows.ts";
+import { GROUP_ARCHIVED, GROUP_INBOX } from "../hooks/useWorktreeRows.ts";
 import { visualKey, type useVisualItems } from "../hooks/useVisualItems.ts";
 import type { Modal } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
@@ -822,8 +822,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // in the detail pane. (Shift+Tab cycles the primary harness, below.)
     if (isBareKey(k, "tab")) {
       // Land the cursor sensibly across the async reflow: unfolding → the
-      // section's first row; folding → the new header line. Only active
-      // (non-archived) sections fold — the archived block stays flat.
+      // section's first row; folding → the new header line.
       const item = currentItem;
       if (item?.kind === "section") {
         const first = item.rows[0];
@@ -831,10 +830,11 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         void toggleSectionFold(item.sectionKey);
         return;
       }
-      if (item?.kind === "wt" && !item.row.archived) {
+      if (item?.kind === "wt") {
         // Inbox rows fold too — under the sentinel key, mirroring the
-        // activeItems builder.
-        const key = item.row.section ?? GROUP_INBOX;
+        // activeItems builder — and so does the archived block, which is
+        // the one group nobody chose to have and everybody accumulates.
+        const key = item.row.archived ? GROUP_ARCHIVED : item.row.section ?? GROUP_INBOX;
         setSel(`section:${key}`);
         void toggleSectionFold(key);
         return;
