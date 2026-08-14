@@ -287,6 +287,13 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     if (a === "-m" || a === "--note" || a === "--risk" || a === "--note-only") {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("-")) {
+        // `--note-only -m "..."` is the natural mistake, because -m is
+        // how every OTHER status form carries a note. Naming the fix
+        // costs one branch; "requires a value (got \"-m\")" states the
+        // symptom and leaves the reader to guess the form.
+        if (a === "--note-only" && (value === "-m" || value === "--note")) {
+          return err(`--note-only takes the note itself — drop the ${value} (wt status --note-only "...")`);
+        }
         return err(`${a} requires a value${value !== undefined ? ` (got "${value}")` : ""}`);
       }
       i++;
@@ -519,6 +526,15 @@ export async function run(argv: string[]): Promise<number> {
             ...entries.map(({ w, record, headSha }) => ({
               slug: w.slug,
               branch: w.branch,
+              // Positive discriminator, so branching on it doesn't come
+              // out as "kind is absent". Live and archived rows carry
+              // different keys — only live ones have `state`/`risk`/
+              // `note` — and with live rows unlabelled the only way to
+              // pick them out was a negative test, which reads like a
+              // missing field rather than a deliberate one. A consumer
+              // that iterated and read `.state` threw on the first
+              // archived row instead.
+              kind: "live" as const,
               // Manual TUI section (human grouping intent); null = inbox.
               section: state.slugs[w.slug]?.section ?? null,
               state: record?.state ?? null,

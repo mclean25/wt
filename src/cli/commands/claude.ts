@@ -123,9 +123,23 @@ async function send(slugOrBranch: string, textArgs: string[]): Promise<number> {
     explainMissingTarget(slugOrBranch);
     return 1;
   }
-  const text = (
-    textArgs.length > 0 ? textArgs.join(" ") : await Bun.stdin.text()
-  ).trim();
+  // `wt claude send <slug> /dev/stdin <<'MSG'` reads as "take the body
+  // from stdin" and is not: stdin is only read when there are NO text
+  // args, so the whole message became the literal string "/dev/stdin"
+  // and wt reported a successful send of it. Delivering a body that is
+  // visibly a handle to the input being ignored is never what anyone
+  // meant, and the receiving agent is the one who pays. Refusing costs
+  // a retype; guessing cost two worktrees a wasted round each.
+  const STDIN_SENTINELS = new Set(["-", "/dev/stdin", "/dev/fd/0"]);
+  const joined = textArgs.join(" ").trim();
+  if (textArgs.length === 1 && STDIN_SENTINELS.has(joined)) {
+    console.error(
+      red(`"${joined}" is not a message body — wt reads stdin only when no text is given.`),
+    );
+    console.error(dim(`  drop the argument to pipe: wt claude send ${slugOrBranch} <<'MSG' ...`));
+    return 2;
+  }
+  const text = (textArgs.length > 0 ? joined : await Bun.stdin.text()).trim();
   if (!text) {
     console.error(red("nothing to send — pass text args or pipe stdin"));
     return 2;
