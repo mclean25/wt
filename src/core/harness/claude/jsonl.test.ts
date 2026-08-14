@@ -1,9 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   currentSessionSummary,
   promptLandedIn,
   promptNeedle,
+  __testing,
   type Entry,
 } from "./jsonl.ts";
 
@@ -171,5 +175,69 @@ describe("promptLandedIn", () => {
 
   test("empty text never matches", () => {
     expect(promptLandedIn([userEntry("anything", 100)], promptNeedle("   "), T0)).toBe(false);
+  });
+});
+
+describe("the delivery-confirmation read window", () => {
+  const { readTailCovering, TAIL_BYTES } = __testing;
+  const T0 = Date.parse("2026-08-11T12:00:00.000Z");
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A transcript with the landed prompt buried under `filler` bytes of later output. */
+  function transcript(fillerBytes: number): string {
+    const dir = mkdtempSync(join(tmpdir(), "wt-jsonl-tail-"));
+    dirs.push(dir);
+    const path = join(dir, "session.jsonl");
+    const lines = [
+      JSON.stringify({
+        type: "user",
+        timestamp: new Date(T0 + 500).toISOString(),
+        message: { role: "user", content: "the landed prompt" },
+      }),
+    ];
+    // Large tool results are what actually push it out on a real session.
+    let written = 0;
+    while (written < fillerBytes) {
+      const line = JSON.stringify({
+        type: "assistant",
+        timestamp: new Date(T0 + 1_000).toISOString(),
+        message: { role: "assistant", content: "y".repeat(4_000) },
+      });
+      lines.push(line);
+      written += line.length + 1;
+    }
+    writeFileSync(path, `${lines.join("\n")}\n`);
+    return path;
+  }
+
+  test("finds a prompt buried far deeper than the summary tail", () => {
+    // The regression: on a live transcript the landed record fell out of
+    // a 64 KiB tail 124ms after being written, so confirmation reported
+    // "not in its transcript" and the sender resent a message that had
+    // in fact arrived. 40x the old window, to be nowhere near the edge.
+    const path = transcript(TAIL_BYTES * 40);
+    const size = statSync(path).size;
+    const entries = readTailCovering(path, size, T0);
+    expect(promptLandedIn(entries, promptNeedle("the landed prompt"), T0)).toBe(true);
+  });
+
+  test("still finds it when nothing followed", () => {
+    const path = transcript(0);
+    const size = statSync(path).size;
+    const entries = readTailCovering(path, size, T0);
+    expect(promptLandedIn(entries, promptNeedle("the landed prompt"), T0)).toBe(true);
+  });
+
+  test("stops reading once the transcript predates the send", () => {
+    // Bounded by TIME, not by reading the whole file: a send whose
+    // window is already covered must not drag megabytes off disk.
+    const path = transcript(TAIL_BYTES * 40);
+    const size = statSync(path).size;
+    const entries = readTailCovering(path, size, T0 + 900);
+    expect(entries.length * 4_000).toBeLessThan(size);
   });
 });

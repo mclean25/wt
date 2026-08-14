@@ -263,7 +263,7 @@ export function promptLandedForSession(
   if (size === 0) return false;
   let entries: Entry[];
   try {
-    entries = parseTailLines(readTail(path, size), size <= TAIL_BYTES);
+    entries = readTailCovering(path, size, sinceMs);
   } catch {
     return false;
   }
@@ -300,6 +300,50 @@ export function promptNeedle(text: string): string {
 function readTail(filePath: string, size: number): string {
   const start = Math.max(0, size - TAIL_BYTES);
   return readFileSlice(filePath, start, size - start);
+}
+
+/** Exported for unit tests — the read window is the whole fix. */
+export const __testing = { readTailCovering, TAIL_BYTES };
+
+/**
+ * Ceiling on the delivery-confirmation read. Reached only by a session
+ * appending this much inside one send's confirmation wait, where the
+ * honest answer is "unknown" anyway.
+ */
+const CONFIRM_MAX_TAIL_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Read back far enough to cover everything written since `sinceMs`.
+ *
+ * Delivery confirmation is bounded in TIME — `promptLandedIn` stops at
+ * the first entry older than the send — but the read was bounded in
+ * BYTES, at the 64 KiB sized for the summary tail. Those are not the
+ * same bound, and on a busy session they are not even close: measured
+ * on a live transcript, the landed user record fell outside a 64 KiB
+ * tail 124 MILLISECONDS after it was written, because the next record
+ * was a large tool result. Confirmation could not have succeeded.
+ *
+ * The cost lands on someone else. wt does not resend on its own (a
+ * retype could double-submit), so it reports "not in its transcript"
+ * and tells the SENDER a resend may duplicate. The sender resends, the
+ * receiving agent gets the same instruction twice, and for anything
+ * that acts rather than reports that is a double execution. Observed:
+ * one manager report delivered twice, 34s apart.
+ *
+ * Grows by 8x so a very busy session costs 4 reads at most.
+ */
+function readTailCovering(filePath: string, size: number, sinceMs: number): Entry[] {
+  let window = TAIL_BYTES;
+  for (;;) {
+    const start = Math.max(0, size - window);
+    const entries = parseTailLines(readFileSlice(filePath, start, size - start), start === 0);
+    if (start === 0 || window >= CONFIRM_MAX_TAIL_BYTES) return entries;
+    // Far enough back once the oldest entry we can see predates the
+    // send: everything the match could care about is now in hand.
+    const oldest = entries.map((e) => entryTimestampMs(e.raw)).find((ts) => ts !== null);
+    if (oldest !== undefined && oldest !== null && oldest < sinceMs) return entries;
+    window = Math.min(window * 8, CONFIRM_MAX_TAIL_BYTES);
+  }
 }
 
 /** Exported so `extractPendingContext` is unit-testable on hand-built arrays without going through jsonl text. */
