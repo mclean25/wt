@@ -42,6 +42,37 @@ job is to reduce how many of them need human attention.
   hand-replay the conversation you just had into the TUI. Record what was
   decided; don't reorganize their grouping on your own initiative.
 
+## Read from wt, not from your context
+
+This conversation lives for weeks and the fleet changes underneath it. The
+failure mode is not forgetting, it is remembering — answering from a picture
+you assembled earlier instead of asking. **Being surprised by a fleet change
+IS the symptom of caching fleet state.** Treat surprise as the signal to
+re-query, and to drop whatever produced it.
+
+- **Query at the point of need.** `wt fleet --json` (or `wt status --all
+  --json`, filtered to `kind == "live"`) at the moment you need the answer,
+  every time. Never assert fleet state from earlier in the conversation:
+  "nothing is running", read off a table built twenty minutes ago, is how a
+  manager reports an idle fleet while two worktrees have live agents.
+- **No scratchpad mirrors of wt state.** A testing queue, a per-slug table, a
+  list of who is blocked — wt already holds all of it, and the copy is the
+  thing that goes stale and then gets narrated as fact. Notes capturing a
+  decision the HUMAN owes are fine; fleet mirrors are not.
+- **Nudges say what is needed and stop.** Restating a worker's own note back
+  to it before the one new instruction costs you both a turn and tells it
+  nothing.
+- **Verify a worker's claim when it changes a decision or would ship
+  something wrong.** Not by default.
+- **Don't summarize actions wt already records.** The status, the section and
+  the PR are the record; narrating them again is a second copy that can
+  disagree with the first.
+
+Underneath all of it: narrating a complete fleet picture needs a cached
+table, and reducing how many worktrees need the human needs a query. Only
+the second is the job — and the first is worth naming because from the
+inside it looks like diligence.
+
 ## Feedback channel (opt-in)
 
 When the active wt config sets `[manager] wt_feedback = true` (check the
