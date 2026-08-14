@@ -48,6 +48,8 @@ import {
 import {
   deliverClaudeMessage,
   inspectorEnabled,
+  shimDir,
+  staleShims,
   type InjectFailureKind,
 } from "./claude/inject.ts";
 import { claudeTmuxName } from "./claude/harness.ts";
@@ -214,8 +216,18 @@ export function fallbackAdvice(cause: FallbackCause): string {
       return "direct delivery is switched off here (WT_INSPECT=off)";
     case "unsupported":
       return `${cause.harnessId} has no prompt injector, so typing is its only transport`;
-    case "absent":
+    case "absent": {
+      // Check the machine-level cause before blaming this session's
+      // age. A leftover shim strips BUN_INSPECT from every session wt
+      // launches, so no session ever binds a socket and restarting is
+      // the one remedy that cannot work — which is exactly what the
+      // old unconditional text advised, 374 times.
+      const stale = staleShims();
+      if (stale.length > 0) {
+        return `no session on this machine can bind an inspector socket: a stale ${stale.join(", ")} shim in ${shimDir()} is stripping BUN_INSPECT at launch. Delete it (wt regenerates this directory on the next session spawn); restarting sessions alone will not help`;
+      }
       return "it has no inspector socket (started outside wt, or before this version); direct delivery resumes the next time that session is started from wt";
+    }
     case "stale":
       return "its inspector socket died with a restart; direct delivery resumes the next time that session is started from wt";
     case "not-ready":

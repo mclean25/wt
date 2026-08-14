@@ -32,8 +32,14 @@
  * failing with "no inspector socket" to see it.) The cost is that a
  * nested `claude -p` an agent runs still prints the EADDRINUSE splat;
  * that is rare, and loud rather than silent.
+ *
+ * `SHIMMED` is therefore a SET, not a floor, and the directory is
+ * pruned to match it on every spawn. Removing `claude` from the list
+ * did not remove it from disk, PATH resolves the directory rather than
+ * the list, and so the fix was inert on every machine that had already
+ * run the broken version — which was all of them.
  */
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { config } from "../../../config.ts";
@@ -41,6 +47,9 @@ import { shQuote } from "../../../tmux/naming.ts";
 
 /** Commands that would try to bind an inherited `BUN_INSPECT` path. */
 const SHIMMED = ["bun"] as const;
+
+/** Exported for unit tests — the pruning pass is the load-bearing part. */
+export const __testing = { pruneUnknownShims, SHIMMED };
 
 export function shimDir(): string {
   return join(config.paths.cacheRoot, "shims");
@@ -118,8 +127,69 @@ export function ensureInspectShims(): void {
         chmodSync(target, 0o700);
       }
     }
+    pruneUnknownShims(dir);
   } catch {
     // Sessions still work, just noisily.
+  }
+}
+
+/**
+ * Delete anything in the shim directory that is not in `SHIMMED`.
+ *
+ * Writing without pruning made this set append-only ON DISK while the
+ * source treated it as a list, and PATH resolution reads the DIRECTORY,
+ * not the list — so a shim dropped from `SHIMMED` kept being used
+ * forever. That is not hypothetical: `claude` was shimmed, then removed
+ * in 4eda658 precisely because it stripped `BUN_INSPECT` from the
+ * session wt had just set it for. The source fix could not heal a
+ * machine that had already run the broken version, so every session on
+ * this machine kept losing its transport for another day — 374 logged
+ * fallbacks — and restarting a session (the advice every diagnostic
+ * gave) hit the same stale file.
+ *
+ * Generic rather than a one-off `unlink("claude")`: the trap returns
+ * for any future removal, and only the general form is self-correcting.
+ * wt owns this directory exclusively and regenerates it on every spawn,
+ * so deleting unknown entries costs nothing.
+ */
+/**
+ * Shims on disk that `SHIMMED` no longer claims.
+ *
+ * Non-empty means the transport is broken for EVERY session on this
+ * machine, present and future, and no per-session remedy touches it.
+ * The diagnostics ask because both of them used to assert a
+ * per-session cause they had never checked ("started outside wt, or
+ * before this version"; "restart them from wt"), which for a whole day
+ * pointed at the one remedy guaranteed not to work. `pruneUnknownShims`
+ * makes this self-healing on the next spawn, so a non-empty result
+ * should now only ever be seen by a wt that has not spawned since
+ * updating.
+ */
+export function staleShims(): string[] {
+  const keep = new Set<string>(SHIMMED);
+  try {
+    return readdirSync(shimDir()).filter((entry) => !keep.has(entry));
+  } catch {
+    return [];
+  }
+}
+
+function pruneUnknownShims(dir: string): void {
+  const keep = new Set<string>(SHIMMED);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (keep.has(entry)) continue;
+    try {
+      unlinkSync(join(dir, entry));
+    } catch {
+      // A stale shim we cannot remove is worth neither a throw nor a
+      // failed launch; the next spawn tries again.
+    }
   }
 }
 

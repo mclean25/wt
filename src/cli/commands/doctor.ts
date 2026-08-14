@@ -6,7 +6,7 @@ import { config } from "../../core/config.ts";
 import { branchIsMerged, gitQuiet } from "../../core/git.ts";
 import { fetchPrs } from "../../core/github.ts";
 import { claudeTmuxName } from "../../core/harness/claude/harness.ts";
-import { claudeInjectSelftest } from "../../core/harness/claude/inject.ts";
+import { claudeInjectSelftest, shimDir, staleShims } from "../../core/harness/claude/inject.ts";
 import { humanAge, lockAge, lockLabel, lockStatus } from "../../core/locks.ts";
 import { run as sh } from "../../core/proc.ts";
 import {
@@ -321,6 +321,21 @@ async function checkMessageTransport(): Promise<Check> {
     if (bad.length === 0) {
       return mkCheck("messaging", "ok", `prompt injection working across ${names.length} sessions`);
     }
+    // Machine-level causes first: they explain 100% of sessions, and
+    // every per-session remedy below is wasted breath while one holds.
+    // A leftover shim strips BUN_INSPECT at launch, so a fresh session
+    // fails exactly like an old one and "restart them from wt" — what
+    // this check used to say unconditionally — is guaranteed not to
+    // work. That is not a hypothetical: it went unnoticed for a day
+    // because "6 of 6" was reported as six per-session problems.
+    const stale = staleShims();
+    if (stale.length > 0) {
+      return mkCheck(
+        "messaging",
+        "err",
+        `no session can bind an inspector socket: a stale ${stale.join(", ")} shim in ${shimDir()} strips BUN_INSPECT at launch — delete it (wt regenerates this directory on the next session spawn). Restarting sessions will not help.`,
+      );
+    }
     // An anchor break is a property of the Claude Code build, so it
     // takes out EVERY session at once; a restart-shaped failure hits
     // individual ones. Distinguishing them is the whole diagnostic
@@ -335,10 +350,17 @@ async function checkMessageTransport(): Promise<Check> {
         `prompt injection failed on all ${names.length} sessions (${first.name}: ${first.probe.ok ? "" : first.probe.reason}) — Claude Code may have moved the injector's anchors; see \`wt claude selftest\``,
       );
     }
+    // Only reached with no machine-level cause standing, so a restart
+    // is genuinely the remedy — except when it covers EVERY session,
+    // where "all of them, independently" is the weaker explanation and
+    // saying so beats sending the reader round the restart loop again.
+    const all = bad.length === names.length;
     return mkCheck(
       "messaging",
       "warn",
-      `${bad.length} of ${names.length} claude sessions are typed at instead (${bad.map((p) => p.name).join(", ")}) — restart them from wt`,
+      `${bad.length} of ${names.length} claude sessions are typed at instead (${bad.map((p) => p.name).join(", ")}) — restart them from wt${
+        all ? ", and if a fresh session still fails, the cause is not per-session: check `wt doctor` again after it starts" : ""
+      }`,
     );
   } catch (err) {
     return mkCheck(

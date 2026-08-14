@@ -18,4 +18,4 @@ export {
   type InjectOutcome,
   type SelftestOutcome,
 } from "./inject/transport.ts";
-export { ensureInspectShims, pathWithShims, shimDir } from "./inject/shims.ts";
+export { ensureInspectShims, pathWithShims, shimDir, staleShims } from "./inject/shims.ts";
