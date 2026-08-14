@@ -110,6 +110,20 @@ export async function connectInspector(socketPath: string): Promise<InspectorCli
   /** Held from `open` so a failed upgrade can still be torn down. */
   let rawSocket: Sock | null = null;
   let dead: Error | null = null;
+  /**
+   * Bytes handed to `write` that the kernel would not take yet.
+   *
+   * `Socket.write` is NOT all-or-nothing: it returns how much it
+   * actually wrote and the remainder is the caller's problem. Measured
+   * on a unix socket with a peer busy in JS, a 4500-byte buffer goes
+   * whole, 5000 writes 2692, and anything larger returns 0 — so
+   * ignoring the return value truncated every frame past ~4.5KB
+   * mid-payload. The inspector then sat waiting for the rest of a
+   * message that never came, the reply never arrived, and the send
+   * surfaced as "did not acknowledge the submit": a size-only failure
+   * with no bad content anywhere near it.
+   */
+  let pending: Buffer | null = null;
 
   const key = randomBytes(16).toString("base64");
 
@@ -122,6 +136,35 @@ export async function connectInspector(socketPath: string): Promise<InspectorCli
     dead = err;
     for (const waiter of waiters.values()) waiter.reject(err);
     waiters.clear();
+  }
+
+  /**
+   * Write `data`, keeping whatever the socket refused for the next
+   * `drain`.
+   *
+   * Queuing is strictly FIFO and a new frame NEVER jumps an unwritten
+   * tail: a frame written into the middle of another one's payload
+   * corrupts the stream for every message after it, which is a far
+   * worse failure than the truncation this fixes.
+   */
+  function sendRaw(data: Buffer): void {
+    const s = socket ?? rawSocket;
+    if (!s) throw new Error("inspector socket is not open");
+    if (pending) {
+      pending = Buffer.concat([pending, data]);
+      flushPending();
+      return;
+    }
+    const wrote = s.write(data);
+    if (wrote < data.length) pending = data.subarray(Math.max(0, wrote));
+  }
+
+  /** Resume a partial write. Called on `drain` and after queuing. */
+  function flushPending(): void {
+    const s = socket ?? rawSocket;
+    if (!pending || !s) return;
+    const wrote = s.write(pending);
+    pending = wrote >= pending.length ? null : pending.subarray(Math.max(0, wrote));
   }
 
   function* frames(): Generator<string> {
@@ -148,7 +191,7 @@ export async function connectInspector(socketPath: string): Promise<InspectorCli
         // Close: answer it so the peer can tear down cleanly, then fail
         // anything still waiting rather than leaving it to time out.
         try {
-          socket?.write(maskFrame("", 0x8));
+          sendRaw(maskFrame("", 0x8));
         } catch {
           // The peer is already gone; nothing to acknowledge.
         }
@@ -160,7 +203,7 @@ export async function connectInspector(socketPath: string): Promise<InspectorCli
       // the frame is already parsed, so answering costs one line.
       if (opcode === 0x9) {
         try {
-          socket?.write(maskFrame(payload.toString("utf8"), 0xa));
+          sendRaw(maskFrame(payload.toString("utf8"), 0xa));
         } catch {
           // Best effort; a failed pong is not worth failing the call.
         }
@@ -212,12 +255,15 @@ export async function connectInspector(socketPath: string): Promise<InspectorCli
       socket: {
         open(s) {
           rawSocket = s;
-          s.write(
+          sendRaw(
             Buffer.from(
               "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
                 `Sec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
             ),
           );
+        },
+        drain() {
+          flushPending();
         },
         data(s, d) {
           if (!upgraded) {
@@ -295,7 +341,7 @@ export async function connectInspector(socketPath: string): Promise<InspectorCli
       return new Promise<InspectorResult>((resolve, reject) => {
         waiters.set(id, { resolve, reject });
         try {
-          socket!.write(maskFrame(JSON.stringify({ id, method, params: params ?? {} })));
+          sendRaw(maskFrame(JSON.stringify({ id, method, params: params ?? {} })));
         } catch (err) {
           waiters.delete(id);
           reject(err instanceof Error ? err : new Error(String(err)));

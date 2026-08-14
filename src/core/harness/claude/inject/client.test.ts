@@ -89,6 +89,7 @@ type StubOpts = {
 
 function stubInspector(path: string, opts: StubOpts = {}) {
   const pongs: string[] = [];
+  const received: string[] = [];
   const server = Bun.listen<{ buf: Buffer; up: boolean }>({
     unix: path,
     socket: {
@@ -126,6 +127,7 @@ function stubInspector(path: string, opts: StubOpts = {}) {
           let msg: { id?: number; method?: string };
           try {
             msg = JSON.parse(frame.text);
+            received.push(frame.text);
           } catch {
             // A pong (or a close) carries no JSON — record and move on.
             pongs.push(frame.text);
@@ -152,7 +154,7 @@ function stubInspector(path: string, opts: StubOpts = {}) {
     },
   });
   servers.push(server);
-  return { pongs };
+  return { pongs, received };
 }
 
 describe("websocket framing", () => {
@@ -180,6 +182,34 @@ describe("websocket framing", () => {
 });
 
 describe("the inspector client", () => {
+  // The regression this pins: `Socket.write` short-writes past roughly
+  // 4.5KB on a unix socket, and the old code ignored its return value,
+  // so the tail of every larger frame was dropped on the floor. The
+  // peer then waited forever for the rest of a message that never came
+  // and the send failed as "did not acknowledge the submit" — purely as
+  // a function of SIZE, which is why it read like an escaping bug and
+  // sent everyone hunting through the payload for bad characters.
+  //
+  // The size here is deliberately far above the ~5KB seen in the field.
+  // How much `write` accepts depends on how promptly the PEER reads,
+  // and this stub reads eagerly, so 5000 bytes still goes through whole
+  // against it — a 5000-byte case would pass with the bug reintroduced
+  // and guard nothing. 200_000 is past the point where `write` accepts
+  // anything at all, so it fails deterministically without the fix.
+  test("delivers a payload larger than the socket's write buffer, whole", async () => {
+    const path = socketPath();
+    const stub = stubInspector(path, { reply: () => ({ result: { value: "ok" } }) });
+    const client = await connectInspector(path);
+    const body = "x".repeat(200_000);
+    expect(await client.call("Runtime.callFunctionOn", { body })).toEqual({
+      result: { value: "ok" },
+    });
+    // Not just "a reply arrived": the point is that every byte did.
+    const sent = JSON.parse(stub.received[0]!) as { params: { body: string } };
+    expect(sent.params.body).toBe(body);
+    client.close();
+  });
+
   test("completes a call over a real socket", async () => {
     const path = socketPath();
     stubInspector(path, { reply: () => ({ result: { value: "pong" } }) });
