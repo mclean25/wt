@@ -37,6 +37,7 @@
  *
  * Other harnesses have only terminal input and always take path 2.
  */
+import { agentIdentity } from "../agent-identity.ts";
 import { withAsyncFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
 import { pollUntil } from "../poll.ts";
@@ -108,21 +109,16 @@ const CONFIRM_MS = 8_000;
 const CONFIRM_POLL_MS = 250;
 
 /**
- * The sending agent's identity, from the environment wt stamps on every
- * harness session (`WT_AGENT`, see `tmux/inner-process.ts`).
+ * The sending agent's identity (`core/agent-identity.ts`).
  *
  * This replaces the convention of telling agents to hand-prefix their
  * messages: a rule an agent has to remember is a rule that gets
  * forgotten, and an unattributed fleet message is nearly useless to the
  * manager. Absent outside a wt harness session — the TUI and a human's
  * shell send unsigned, which is correct: they aren't agents.
- *
- * It is an attribution aid, not a credential: anything running inside a
- * session can set it. Everything here already trusts the session.
  */
 export function senderTag(): string | null {
-  const agent = (process.env.WT_AGENT ?? "").trim();
-  return agent.length > 0 ? agent : null;
+  return agentIdentity();
 }
 
 /**

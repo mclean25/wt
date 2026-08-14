@@ -50,6 +50,7 @@ import {
   evaluateActionRequirements,
   type ActionDef,
 } from "../../core/actions.ts";
+import type { AutomationDef } from "../../core/config.ts";
 import {
   BREAKER_LIMIT,
   breakerState,
@@ -79,6 +80,7 @@ import {
   isEligible,
   statusTriggerState,
   type AutomationFire,
+  type FireAudience,
 } from "../automation-rules.ts";
 import { isCleanCandidate } from "../app-helpers.ts";
 import { useGithubFresh } from "./useGithubFresh.ts";
@@ -179,6 +181,20 @@ function resolveActionDef(runId: string): ActionDef | null {
     ALL_BUILTIN_ACTIONS.find((d) => d.id === runId) ??
     null
   );
+}
+
+/**
+ * Which live conversation a rule's dispatch lands in — the config half
+ * of the echo guard in `automation-rules.ts`. Only a prompt action
+ * aimed at a persistent session has one: `headless` spawns a fresh run
+ * that wrote nothing, and every builtin (notify, clean, restack,
+ * close-issue) talks to the human or to git, neither of which asserts a
+ * work status.
+ */
+function audienceOf(rule: AutomationDef): FireAudience {
+  const def = resolveActionDef(rule.run);
+  if (!def || def.kind !== "claude") return null;
+  return def.target === "manager" || def.target === "session" ? def.target : null;
 }
 
 export function useAutomations(opts: AutomationsOpts): AutomationsState {
@@ -487,6 +503,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     const evalCtx = {
       githubFresh: ctx.githubFresh,
       isPausedSlug: (slug: string) => ctx.pausedSlugs.has(slug),
+      audienceOf,
     };
     const fires = evaluateAutomations(rules, ctx.rows, evalCtx);
     const byId = new Map(fires.map((f) => [fireIdentity(f), f] as const));

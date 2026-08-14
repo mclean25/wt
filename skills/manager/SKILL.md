@@ -97,6 +97,9 @@ the human asks.
   asserted status (`work`: state/note/risk/at, `stale` when commits landed
   after the assertion) with reality — `session` (alive/busy/last_activity)
   and `pr` (number, draft, `merge_state`, `mergeable`, CI rollup `checks`).
+  `work.by` is who asserted the status — the slug's own agent, `manager`
+  (you, on a previous pass), or null for the human. It is how "already
+  triaged" is readable without remembering that you triaged it.
   `pr: null` with a `pr_note` means GitHub was unreachable, NOT "no PR".
   Merge fields read `"computing"` while GitHub lazily calculates
   mergeability — re-run after a few seconds, never loop. Rows destroyed in
@@ -131,7 +134,10 @@ the human sees it. Can you unblock it yourself — a gh operation, answering the
 worker's question from fleet knowledge, kicking CI? Do it, message the worker
 (`wt claude send`), update the status, and reply here with one line. If it
 genuinely needs the human, distill EXACTLY what they must do into one short
-numbered ask.
+numbered ask. Sharpening the needs-human note is the LAST step of triage and
+does not brief you again — wt records who asserted a status and won't hand you
+back your own write. A second briefing for the same slug is therefore always
+real news: the worker re-escalated.
 
 **Stalled worktree** (working/review status but idle session, or stale status
 with commits since): nudge the worker with a concrete question — "status says

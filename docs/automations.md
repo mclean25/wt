@@ -20,9 +20,19 @@ Fire keys embed the PR's head SHA where relevant: a new push produces a new key 
 | `pr.conflict` | the merge-tree probe says the branch conflicts with its effective base |
 | `wt.merged` | a non-stacked worktree's branch landed (merged / upstream gone / PR merged — the same set the `c` clean sweep uses). A branch with no commits of its own never counts as landed, however contained it looks — see the vacuous-containment guard in `branchIsMerged`. Rules running `builtin:close-issue` also evaluate stack members — that run never touches the worktree, so the clean-vs-restack race the exclusion protects against doesn't apply |
 | `stack.parent_merged` | a stack (worktrees chained by their recorded fork bases — see [stacked-prs.md](stacked-prs.md)) has a merged member with open members stacked on it |
-| `status.needs_human` / `status.needs_testing` / `status.ready` | the worktree's asserted [work status](cli.md#wt-status-slug-state--m-note---risk-r) is that state. Local (wtstate), so no GitHub-freshness gate; the fire key carries the assertion timestamp, so one assertion fires once and re-asserting fires again — unless the re-assert is identical (same state/note/risk/sha), in which case `setSlugWorkStatus` is a no-op that keeps the original `at`, so it doesn't refire. Hyphenated spellings (`status.needs-human`) are accepted aliases. Settle defaults to 0 — an assertion is a deliberate write, not flappy derived state |
+| `status.needs_human` / `status.needs_testing` / `status.ready` | the worktree's asserted [work status](cli.md#wt-status-slug-state--m-note---risk-r) is that state. Local (wtstate), so no GitHub-freshness gate; the fire key carries the assertion timestamp, so one assertion fires once and re-asserting fires again — unless the re-assert is identical (same state/note/risk/sha), in which case `setSlugWorkStatus` is a no-op that keeps the original `at`, so it doesn't refire, or the asserter is the session the rule would brief (below). Hyphenated spellings (`status.needs-human`) are accepted aliases. Settle defaults to 0 — an assertion is a deliberate write, not flappy derived state |
 
 PR-driven conditions additionally require a **live GitHub fetch this session** — data restored from the persisted cache never fires a rule — and a known `pr.headRefOid` to key the fire against.
+
+## A briefing never echoes its own audience
+
+A `status.*` rule whose run is a prompt action aimed at a live session (`target = "manager"` or `"session"`) does not fire when the record's `by` says that same session asserted it. Everything else is unaffected: `builtin:notify` talks to the human, `builtin:clean` and `builtin:restack` talk to git, and a `headless` run is a fresh conversation that wrote nothing, so none of them has an audience to echo back at.
+
+This exists because the manager's *last* triage step is sharpening the `needs-human` note it was briefed about. That re-asserts the state, which mints a new timestamp, which mints a new fire key, which briefs the manager again — quoting its own words back and asking it to triage them. Observed three times for one slug, and the honest answer to the third was "nothing changed".
+
+The wasted turn is not the cost. A briefing whose correct answer is usually "nothing changed" stops getting read, and that spends the one channel that exists for "a worktree is blocked on the human". Note that only `status.*` triggers can loop this way — every other condition is derived from git or GitHub, which no session can write by asserting.
+
+The guard is deliberately narrow in the other direction too: an **unattributed** record (the human's `u` picker, a `wt status` typed in a plain shell, or any record written before `by` existed) is not the audience, so it still fires. A guard keyed on stored state has to decide what a missing value means, and here "unknown" must mean "brief it" — the alternative silently swallows real escalations on exactly the rows that have no stamp.
 
 ## Built-in runs
 

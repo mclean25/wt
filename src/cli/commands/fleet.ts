@@ -288,6 +288,10 @@ export async function run(argv: string[]): Promise<number> {
               note: r.work.note ?? null,
               risk: r.work.risk ?? null,
               at: r.work.at,
+              // Agent identity that asserted it — the worktree's own
+              // slug normally, `manager` when triage did, null for the
+              // human. "Already triaged" is otherwise unreadable.
+              by: r.work.by ?? null,
               stale: r.work.stale,
             }
           : null,

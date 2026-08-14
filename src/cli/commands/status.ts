@@ -13,6 +13,7 @@
  * flag/positional/validation matrix is unit-testable without spawning
  * git (see status.test.ts); `run` only resolves worktrees and does IO.
  */
+import { agentIdentity } from "../../core/agent-identity.ts";
 import { revParse } from "../../core/git.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Worktree } from "../../core/types.ts";
@@ -475,6 +476,11 @@ function describe(
   if (record.sha && headSha && record.sha !== headSha) {
     parts.push(yellow("(stale: commits since)"));
   }
+  // Only when someone OTHER than this worktree's own agent asserted it —
+  // the common case carries no information, and the interesting one
+  // ("the manager triaged this and confirmed it needs you") is invisible
+  // without it.
+  if (record.by && record.by !== slug) parts.push(dim(`via ${record.by}`));
   let out = parts.join("  ");
   if (record.note) out += `\n  ${dim("note:")} ${record.note}`;
   return out;
@@ -541,6 +547,9 @@ export async function run(argv: string[]): Promise<number> {
               note: record?.note ?? null,
               risk: record?.risk ?? null,
               at: record?.at ?? null,
+              // Agent identity that asserted it (`manager` when triage
+              // did); null = the human, or a plain shell.
+              by: record?.by ?? null,
               stale: !!(record?.sha && headSha && record.sha !== headSha),
             })),
             ...removed.map(removedJsonEntry),
@@ -619,9 +628,10 @@ export async function run(argv: string[]): Promise<number> {
       );
       return 2;
     }
-    // Spread keeps state/at/sha byte-identical: the record still
+    // Spread keeps state/at/sha/by byte-identical: the record still
     // describes the same assertion, just better judged — so no timestamp
-    // bump, no re-narration of an unchanged state.
+    // bump, no re-narration of an unchanged state, and no re-attribution
+    // (`by` names who ASSERTED, and amending is not asserting).
     const next: WorkStatusRecord = { ...prev };
     if (args.risk) next.risk = args.risk;
     if (note) next.note = note;
@@ -667,6 +677,12 @@ export async function run(argv: string[]): Promise<number> {
   };
   if (note) record.note = note;
   if (args.risk) record.risk = args.risk;
+  // Who is claiming this. Usually the worktree's own agent; the manager
+  // playbook also has it assert on a worker's behalf after triage, and
+  // that difference is what keeps a `status.*` automation from briefing
+  // the session that just wrote the record.
+  const by = agentIdentity();
+  if (by) record.by = by;
   const sha = await revParse("HEAD", target.path);
   if (sha) record.sha = sha;
   setSlugWorkStatus(target.slug, record);

@@ -23,6 +23,7 @@
  */
 import type { AutomationDef, AutomationTrigger } from "../core/config.ts";
 import { githubIssueNumberFromSlug } from "../core/issue-tracker.ts";
+import { MANAGER_SLUG } from "../core/manager.ts";
 import { pluralize } from "../core/text.ts";
 import { REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
 import { workStatusSuffix, type WorkState } from "../core/work-status.ts";
@@ -82,6 +83,14 @@ export function statusTriggerState(trigger: AutomationTrigger): WorkState | null
   }
 }
 
+/**
+ * Which live conversation a rule's dispatch lands in: the singleton
+ * manager session, the target worktree's own session, or nobody
+ * durable (`headless` runs, and every builtin — a notification, a
+ * clean, a restack has no audience to echo back at).
+ */
+export type FireAudience = "manager" | "session" | null;
+
 export type AutomationEvalCtx = {
   /**
    * True once the github query has completed a live fetch this session
@@ -90,7 +99,39 @@ export type AutomationEvalCtx = {
   githubFresh: boolean;
   /** Per-worktree pause flag (Ctrl+A), read from wtstate. */
   isPausedSlug: (slug: string) => boolean;
+  /**
+   * Where this rule's run would be delivered — resolved from the
+   * `[[actions]]` def's `target` by the hook, which owns the config.
+   */
+  audienceOf: (rule: AutomationDef) => FireAudience;
 };
+
+/**
+ * True when the session a fire would brief is the same one that wrote
+ * the status triggering it. That is not a briefing, it is an echo: the
+ * manager's last triage step is sharpening the needs-human note it was
+ * briefed about, which re-asserts the state and — with the fire key
+ * carrying the assertion timestamp — briefs it again, quoting its own
+ * words back and asking it to triage them. Observed three times for one
+ * slug, and the honest answer to the third was "nothing changed".
+ *
+ * The cost is not the wasted turn. A briefing whose correct answer is
+ * usually "nothing changed" stops getting read, which spends the one
+ * channel that exists for "a worktree is blocked on the human".
+ *
+ * Only status triggers can loop this way: every other condition is
+ * derived from git/GitHub, which no session writes by asserting.
+ */
+function writerIsAudience(
+  by: string | null,
+  slug: string,
+  audience: FireAudience,
+): boolean {
+  if (!by) return false;
+  if (audience === "manager") return by === MANAGER_SLUG;
+  if (audience === "session") return by === slug;
+  return false;
+}
 
 /**
  * A row the engine may evaluate at all: live (not archived — archived
@@ -260,10 +301,13 @@ function evaluateRowTrigger(
     case "status.ready": {
       // Work-status assertions are local (wtstate) — no freshness gate.
       // The fire key carries the assertion timestamp: one fire per
-      // assertion, and re-asserting (new `at`) legitimately re-fires.
+      // assertion, and re-asserting (new `at`) legitimately re-fires —
+      // unless the asserter is the session this rule would brief, which
+      // is an echo rather than news (see `writerIsAudience`).
       const want = statusTriggerState(trigger)!;
       const work = row.work;
       if (!work || work.state !== want) return null;
+      if (writerIsAudience(work.by ?? null, slug, ctx.audienceOf(rule))) return null;
       return singleRowFire(
         rule,
         row,

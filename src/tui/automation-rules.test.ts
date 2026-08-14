@@ -96,7 +96,11 @@ function rule(overrides: Partial<AutomationDef>): AutomationDef {
   };
 }
 
-const FRESH: AutomationEvalCtx = { githubFresh: true, isPausedSlug: () => false };
+const FRESH: AutomationEvalCtx = {
+  githubFresh: true,
+  isPausedSlug: () => false,
+  audienceOf: () => null,
+};
 
 describe("pr.checks.failed", () => {
   const r = rule({ id: "fix-ci", on: "pr.checks.failed" });
@@ -247,7 +251,11 @@ describe("wt.merged → builtin:close-issue", () => {
 });
 
 describe("status.* (work-status triggers)", () => {
-  const STALE: AutomationEvalCtx = { githubFresh: false, isPausedSlug: () => false };
+  const STALE: AutomationEvalCtx = {
+    githubFresh: false,
+    isPausedSlug: () => false,
+    audienceOf: () => null,
+  };
 
   test("fires on the matching asserted state, keyed by assertion time", () => {
     const r = rule({ id: "ping", on: "status.needs_human" });
@@ -291,6 +299,41 @@ describe("status.* (work-status triggers)", () => {
     expect(fires[0]!.detail).toBe("needs-testing — verify email copy");
     const other = makeRow("a", { work: { state: "needs-human", note: "x", at: "t" } });
     expect(evaluateAutomations([r], [other], STALE)).toHaveLength(0);
+  });
+
+  // The manager's last triage step is sharpening the needs-human note
+  // it was briefed about — a re-assertion, so a new `at`, so a new fire
+  // key, so another briefing quoting its own words back at it. Observed
+  // three times for one slug before the guard existed.
+  describe("a briefing never echoes its own audience's write", () => {
+    const brief: AutomationEvalCtx = { ...STALE, audienceOf: () => "manager" };
+    const r = rule({ id: "brief", on: "status.needs_human" });
+    const escalated = (by: string | undefined) =>
+      makeRow("a", {
+        work: { state: "needs-human", note: "log me in", at: "t1", ...(by ? { by } : {}) },
+      });
+
+    test("the manager's own assertion does not brief the manager", () => {
+      expect(evaluateAutomations([r], [escalated("manager")], brief)).toHaveLength(0);
+    });
+
+    test("the worker's assertion still does", () => {
+      expect(evaluateAutomations([r], [escalated("a")], brief)).toHaveLength(1);
+      // Pre-`by` records, and the human at the `u` picker: unattributed
+      // is not "the audience", so it must still fire. A guard that keys
+      // on stored state fails OPEN on rows that have none.
+      expect(evaluateAutomations([r], [escalated(undefined)], brief)).toHaveLength(1);
+    });
+
+    test("a rule aimed at the worktree's own session is the same loop", () => {
+      const own: AutomationEvalCtx = { ...STALE, audienceOf: () => "session" };
+      expect(evaluateAutomations([r], [escalated("a")], own)).toHaveLength(0);
+      expect(evaluateAutomations([r], [escalated("manager")], own)).toHaveLength(1);
+    });
+
+    test("an audience-less run (notify, clean, headless) is never suppressed", () => {
+      expect(evaluateAutomations([r], [escalated("manager")], STALE)).toHaveLength(1);
+    });
   });
 
   test("ready detail carries the risk", () => {

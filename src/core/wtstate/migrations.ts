@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 3;
+export const WT_STATE_VERSION = 4;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -53,6 +53,14 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // version boundary, same as v2.
     to: 3,
     up: (raw) => ("edges" in raw ? raw : { ...raw, edges: [] }),
+  },
+  {
+    // v4: additive — `by` on a work-status record (who asserted it).
+    // Nothing to backfill: an existing record's asserter is genuinely
+    // unknown, and "unknown" is exactly what an absent `by` means. The
+    // entry exists for the version boundary, same as v2 and v3.
+    to: 4,
+    up: (raw) => raw,
   },
 ];
 

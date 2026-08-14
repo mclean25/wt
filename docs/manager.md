@@ -28,6 +28,8 @@ run = "brief-manager-needs-human"
 
 Manager briefings (like `builtin:notify`) bypass the automation quiescence gate — they don't touch the worktree, and the interesting fires happen exactly while the worktree's session is busy.
 
+They also never fire on the manager's *own* status writes. Triage ends by sharpening the `needs-human` note, which re-asserts the state and would otherwise brief the manager about itself; the work-status record stamps who asserted it (`by`) precisely so the engine can tell an escalation from an echo. Details in [automations.md](automations.md#a-briefing-never-echoes-its-own-audience).
+
 ## The command palette (`M`)
 
 `M` opens a picker of manager plays, built from the same two-screen machinery as the `!` action picker (letter quick-picks, an extras screen before launch, `M` re-press / Enter confirms). Builtins, in order:
@@ -60,7 +62,7 @@ The report lands on the TUI's **attention feed** (source `manager`, with a toast
 
 Everything is ordinary CLI surface, so any harness can drive it:
 
-- `wt fleet --json` — **the primary sense**: one audit command joining each worktree's asserted status with reality — session liveness (`busy`/`last_activity`) and PR truth (number, draft, merge state, mergeability, CI rollup) — from a single batched GitHub query, recently-removed rows appended ([cli.md](cli.md#wt-fleet)). Rows also carry `section`, the human's manual TUI grouping — treat a name like "Merge after Release" as asserted merge-ordering intent, on par with a status note. Merge fields read `"computing"` while GitHub lazily calculates; re-run, never poll.
+- `wt fleet --json` — **the primary sense**: one audit command joining each worktree's asserted status with reality — session liveness (`busy`/`last_activity`) and PR truth (number, draft, merge state, mergeability, CI rollup) — from a single batched GitHub query, recently-removed rows appended ([cli.md](cli.md#wt-fleet)). Rows also carry `section`, the human's manual TUI grouping — treat a name like "Merge after Release" as asserted merge-ordering intent, on par with a status note. `work.by` names who asserted the status: the worktree's own slug normally, `manager` when triage did, `null` for the human — which is how "already triaged" is readable at all. Merge fields read `"computing"` while GitHub lazily calculates; re-run, never poll.
 - `wt status --all --json` — the status-only view (state, risk, note, staleness per worktree), plus recently-removed rows (`kind: "merged"|"removed"`, ≤48h) so an all-merged fleet doesn't read as an empty one. Every row carries `kind`; only `kind: "live"` rows have `state`/`risk`/`note`, so branch on it before reading them.
 - `wt status <slug> <state> …` — assert on a worktree's behalf after acting on it (`--note-only` sharpens a note without touching state or timestamp).
 - `wt edge <from> <before|conflicts|enables> <to> [--blocks|--prefer] [-m why]` — record merge sequencing as structured state instead of prose ([cli.md](cli.md#wt-edge-from-kind-to)); `wt edge --json` reads it back with staleness computed. Edges self-expire when either branch moves — re-assert what still matters, never audit the list. Worktrees assert their own first-hand dependencies; cross-branch edges are yours to assert.

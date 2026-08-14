@@ -98,6 +98,19 @@ export type WorkRisk = (typeof WORK_RISKS)[number];
  * only meaningful on `ready`; `note` is required by the CLI for
  * `needs-human` (what exactly is needed) and for medium/high-risk
  * `ready` (the notable impacts).
+ *
+ * `by` is the agent identity that made the assertion (`WT_AGENT` — a
+ * worktree slug, or `manager`), absent when nobody was stamped: the
+ * human at the `u` picker, or a `wt status` typed in a plain shell.
+ * Statuses are routinely asserted ON a worktree's behalf — the manager
+ * playbook has it sharpen a needs-human note after triage — and without
+ * this the record cannot say whether the claim came from the worker who
+ * hit the blocker or from the coordinator who confirmed it. That
+ * distinction is what stops a `status.*` automation from briefing the
+ * session whose own write triggered it (see `automation-rules.ts`).
+ * Write-once per assertion and replaced by the next one, so it can't
+ * drift; an amend leaves it alone, because an amend re-judges an
+ * existing assertion rather than making a new one.
  */
 export type WorkStatusRecord = {
   state: WorkState;
@@ -105,6 +118,7 @@ export type WorkStatusRecord = {
   risk?: WorkRisk;
   at: string;
   sha?: string;
+  by?: string;
 };
 
 /**
@@ -276,5 +290,6 @@ export function parseWorkStatus(raw: unknown): WorkStatusRecord | null {
     out.risk = rec.risk as WorkRisk;
   }
   if (typeof rec.sha === "string" && rec.sha.trim() !== "") out.sha = rec.sha;
+  if (typeof rec.by === "string" && rec.by.trim() !== "") out.by = rec.by.trim();
   return out;
 }
