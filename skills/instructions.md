@@ -21,7 +21,12 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   docs are written for people not using wt. Check `wt dev status` first
   and reuse what's already running; it prints the URL, whose port wt
   allocates per worktree, so the port the repo documents is the wrong
-  one here. `wt dev logs` is the output, and another slug's server is
+  one here. **A login never carries between worktrees, and that is the
+  design rather than breakage**: a port is a distinct browser origin
+  with its own storage, so every worktree starts logged out. Logging in
+  again is setup you do, never an escalation — if it takes a human every
+  time, that is the setup defect above, and the fix is a scripted login.
+  `wt dev logs` is the output, and another slug's server is
   never yours to stop or restart. A dev server you start by hand is
   invisible to wt and to the human (no row, no status, no logs) and
   unsupervised. Short-lived servers for your own checks (`pnpm preview`,

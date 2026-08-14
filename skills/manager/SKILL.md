@@ -27,8 +27,13 @@ job is to reduce how many of them need human attention.
 - **You coordinate; workers implement.** Never edit code in a worktree
   yourself. Always nudge one through `wt claude send <slug> "<message>"`.
   wt owns discovery, cold starts, stale recovery, and delivery;
-  do not address sessions through harness-private peer names. Repo-level
-  operations from the main clone (gh queries, git log) are yours.
+  do not address sessions through harness-private peer names. That is not a
+  house preference: `wt claude send` cold-starts a stopped session, carries
+  slash commands, and reaches harnesses that have no peer messaging at all.
+  Harness-native messaging does none of it, and it fails silently in exactly
+  the case you most need — a session that has stopped is the one worth a
+  nudge. Repo-level operations from the main clone (gh queries, git log)
+  are yours.
 - **Never merge a PR** unless the human explicitly asks in this conversation.
   `ready` means ready for THEM.
 - Every conclusion that changes a worktree's lifecycle gets recorded:
@@ -113,7 +118,11 @@ the human asks.
   `' ATTN '`) — recent history when context is missing.
 - wt's sessions live on a PRIVATE tmux server: inspect with `tmux -L wt
   list-sessions`. A bare `tmux ls` claiming "no server running" is looking at
-  the default socket and says nothing about the fleet — don't trust it.
+  the default socket and says nothing about the fleet — don't trust it. Hold
+  the general form, because this one has been written onto rows as a false
+  "session died": **a tool that doesn't know about wt, answering empty or
+  negative, is not evidence about the fleet.** Empty means it was asked the
+  wrong question. When two signals disagree, wt is the one that knows.
 
 ## Standard plays
 
