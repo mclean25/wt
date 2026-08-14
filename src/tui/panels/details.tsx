@@ -203,23 +203,46 @@ function RenderedRow({ module: m, ctx }: { module: RowModule; ctx: RowContext })
 }
 
 /**
- * Border title for the details pane: the worktree's TITLE (best
- * available source), not its slug — the slug is already the list-pane
- * row and the `path` row, while the title used to cost two body lines
- * right at the top of a vertically tight pane. The muted `(source)`
- * tag stays so stale PR titles vs. fresh LLM ones remain spottable at
- * a glance; the whole thing renders in the border color (a border
- * title is chrome, not content). End-truncated by hand, with margin:
- * opentui's native drawBox DROPS a title that doesn't fit between the
- * corner chrome rather than clipping it, so an over-budget title
- * blanks the whole bar — observed at 110 cols, where titles within 3
- * cells of the pane width vanished under the old
- * `width - PANE_CHROME_WIDTH` budget while shorter ones rendered.
+ * Border title for the details pane: the worktree's SLUG.
+ *
+ * The slug is the fleet's identifier — what `wt status`, a manager
+ * message and a log line all name a worktree by — and it used to
+ * appear in this pane only inside the `path` row, four lines down,
+ * spelled as the tail of a directory. The title lived here instead,
+ * but the title is also on the highlighted list row a few cells to the
+ * left, so the border was spending wt's most identity-shaped chrome on
+ * the one string already on screen. Lowercase, like every other pane's
+ * border (` worktrees `, ` section `, ` attention `).
+ *
+ * End-truncated by hand, with margin: opentui's native drawBox DROPS a
+ * title that doesn't fit between the corner chrome rather than
+ * clipping it, so an over-budget title blanks the whole bar — observed
+ * at 110 cols, where titles within 3 cells of the pane width vanished
+ * under the old `width - PANE_CHROME_WIDTH` budget while shorter ones
+ * rendered.
  */
-function paneTitle(title: string, source: TitleSource, width: number): string {
-  const suffix = ` (${source})`;
-  const budget = Math.max(0, width - 8 - Bun.stringWidth(suffix));
-  return ` ${truncateEnd(title, budget)}${suffix} `;
+function paneTitle(slug: string, width: number): string {
+  return ` ${truncateEnd(slug, Math.max(0, width - 8))} `;
+}
+
+/**
+ * The worktree's title, back in the body where it can use the pane's
+ * full width. The muted `(source)` tag stays so a stale PR title vs. a
+ * fresh LLM one is spottable at a glance.
+ *
+ * No bottom margin: the status banner below owns its own, and when
+ * there's no status the definition rows read fine directly under it —
+ * one row, and the pane is vertically tight.
+ */
+function TitleLine({ title, source }: { title: string; source: TitleSource }) {
+  return (
+    <box flexShrink={0} overflow="hidden">
+      <text fg={theme.fgBright} wrapMode="none" truncate>
+        {title}
+        <span fg={theme.fgDim}>{` (${source})`}</span>
+      </text>
+    </box>
+  );
 }
 
 /**
@@ -472,12 +495,13 @@ const DetailsBody = memo(function DetailsBody({
       border
       borderStyle="single"
       borderColor={theme.border}
-      title={paneTitle(row.title, row.titleSource, width)}
+      title={paneTitle(row.wt.slug, width)}
       titleAlignment="left"
       padding={1}
       flexDirection="column"
     >
       <WtScrollbox scrollRef={scrollRef}>
+        <TitleLine title={row.title} source={row.titleSource} />
         {/* Asserted work status, full width — the note is the payload
             (merge impacts, needs-human asks) and must never truncate. */}
         <WorkStatusBlock row={row} contentWidth={Math.max(0, width - PANE_CHROME_WIDTH)} />

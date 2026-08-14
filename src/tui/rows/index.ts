@@ -6,7 +6,6 @@
  * to `REGISTRY`. The default order in `config.ts` decides where it
  * sits when the user hasn't customized `ui.rows`.
  */
-import { baseRow } from "./base.tsx";
 import { branchRow } from "./branch.tsx";
 import { claudeRow } from "./claude.tsx";
 import { devRow } from "./dev.tsx";
@@ -22,10 +21,12 @@ import type { RowModule } from "./types.ts";
 // the one-line definition format, so it renders as a dedicated block
 // below the rows (`panels/details/rebase-block.tsx`). A configured
 // "conflict" id from an older config resolves to nothing (unknown ids
-// drop silently below).
+// drop silently below) — and so does "base", whose content moved into
+// the branch row (`<branch> → <base>`) to buy back a line for the
+// title. Same precedent: a config that listed it still loads, it just
+// renders one row fewer.
 const REGISTRY: readonly RowModule[] = [
   branchRow,
-  baseRow,
   pathRow,
   issueRow,
   stageRow,
