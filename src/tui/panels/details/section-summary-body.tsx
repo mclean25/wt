@@ -102,7 +102,11 @@ function WorkRollup({ members }: { members: SectionMember[] }) {
           <span fg={s === "none" ? theme.fgDim : workStateColor(s)}>
             {s === "none" ? NF.dotOutline : workStateGlyph(s)}
           </span>
-          <span fg={theme.fgDim}>{`${counts.get(s)} ${s === "none" ? "unset" : s}`}</span>
+          {/* The space is the icon's second cell, not a gap: these
+              glyphs measure 1 cell to Bun and paint 2 in the terminal,
+              so without it the dot lands on top of the count. Same
+              reason the list gutter boxes them at width 2. */}
+          <span fg={theme.fgDim}>{` ${counts.get(s)} ${s === "none" ? "unset" : s}`}</span>
         </text>
       ))}
     </box>
@@ -254,7 +258,8 @@ function BlockedNotes({
     <>
       <box height={1} flexShrink={0} />
       <text fg={theme.err} wrapMode="none" flexShrink={0}>
-        {`${NF.conflict} blocked on you`}
+        {/* Two spaces: the first is the warning glyph's second cell. */}
+        {`${NF.conflict}  blocked on you`}
       </text>
       {blocked.map((m) => (
         <box key={m.row.wt.slug} flexDirection="column" flexShrink={0}>
