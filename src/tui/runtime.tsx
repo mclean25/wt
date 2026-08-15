@@ -12,6 +12,7 @@ import { lockStatus } from "../core/locks.ts";
 import { watchGithubEvents } from "../core/events/store.ts";
 import { closeOpencodeDb, HARNESSES } from "../core/harness/index.ts";
 import { startCodexEventPolling } from "../core/harness/codex/events.ts";
+import { disposeCodexDiscoveryWorker } from "../core/harness/codex/discovery.ts";
 import { harnessTailRegistry } from "../core/harness/tail.ts";
 import { startOpencodeEventPolling } from "../core/harness/opencode/events.ts";
 import { createLogger, flushLogger, setEventSink } from "../core/logger.ts";
@@ -609,6 +610,7 @@ export async function runTui(): Promise<TuiExit> {
     stopLoopLagProbe();
     detachInputLatency();
     disposeDiffPool();
+    disposeCodexDiscoveryWorker();
     stopRegistryWatch();
     stopRefsWatch();
     stopGithubEventsWatch?.();

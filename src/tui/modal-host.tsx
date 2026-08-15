@@ -39,6 +39,7 @@ import { sectionYankItems, YankModal, yankItemsFor } from "./panels/yank.tsx";
 import type { SelectedSection } from "./hooks/useVisualItems.ts";
 import type { useOutputFocus } from "./hooks/useOutputFocus.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
+import type { CleanCandidate } from "./clean-candidate.ts";
 
 /** Bottom-pane pickers rendered between the OutputViewer and the Footer. */
 export function PreFooterModals({
@@ -133,7 +134,7 @@ export function PostFooterModals({
   /** Folded section under the cursor, when that's what `y` is yanking. */
   selectedSection: SelectedSection | undefined;
   rows: WorktreeRow[];
-  cleanCandidates: WorktreeRow[];
+  cleanCandidates: readonly CleanCandidate[];
   primaryHarness: HarnessId;
   buildActionPickerItems: (slug: string) => PickerItem[];
   buildManagerPickerItems: (rowSlug: string | null) => PickerItem[];

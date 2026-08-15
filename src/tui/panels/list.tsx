@@ -672,7 +672,7 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
             if (item.kind === "remote") {
               const sectionKey = remoteSectionKey(item.entry);
               return (
-                <Fragment key={`remote:${remoteEntryKey(item.entry)}`}>
+                <Fragment key={`active:remote:${remoteEntryKey(item.entry)}`}>
                   {prevSection !== sectionKey ? (
                     <>
                       <box height={1} flexShrink={0} />
@@ -719,8 +719,12 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
             // with breathing room rather than butting it to the border.
             const row = item.row;
             const showDivider = prevSection !== row.section;
+            // A row crossing the archive divider changes layout parents.
+            // Give each side a distinct reconciliation identity so OpenTUI
+            // creates a fresh render node instead of trying to reparent the
+            // archived node (which can leave it detached and invisible).
             return (
-              <Fragment key={row.wt.slug}>
+              <Fragment key={`active:local:${row.wt.slug}`}>
                 {showDivider ? (
                   <>
                     <box height={1} flexShrink={0} />
@@ -803,7 +807,7 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                 if (item.kind === "remote") {
                   return (
                     <RemoteRowView
-                      key={`remote:${remoteEntryKey(item.entry)}`}
+                      key={`archived:remote:${remoteEntryKey(item.entry)}`}
                       entry={item.entry}
                       selected={globalIndex === selectedIndex}
                       panelWidth={width}
@@ -817,8 +821,8 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                   <RowView
                     gutterCells={gutterCells}
                     spineCell={spine.get(row.wt.slug) ?? null}
-                  splitParentSection={splitParentSections.get(row.wt.slug) ?? null}
-                    key={row.wt.slug}
+                    splitParentSection={splitParentSections.get(row.wt.slug) ?? null}
+                    key={`archived:local:${row.wt.slug}`}
                     row={row}
                     selected={globalIndex === selectedIndex}
                     isTailing={activeTails.has(row.wt.slug)}

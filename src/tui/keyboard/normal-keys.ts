@@ -65,7 +65,7 @@ import { visualKey, type useVisualItems } from "../hooks/useVisualItems.ts";
 import type { Modal } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import type { ListScrollHandle } from "../panels/list.tsx";
-import { isRemoteSummary } from "../remote-creation.ts";
+import { isRemoteSummary, remoteEntryKey } from "../remote-creation.ts";
 import { theme } from "../theme.ts";
 
 const appLog = createLogger("[app]");
@@ -87,8 +87,6 @@ export type NormalKeysCtx = {
   selectedRemote: VisualItems["selectedRemote"];
   selectedSection: VisualItems["selectedSection"];
   currentTarget: VisualItems["currentTarget"];
-  /** True when the selected remote's host is known-unreachable. */
-  remoteUnavailable: boolean;
   visualItems: VisualItems["visualItems"];
   cursorIndex: VisualItems["cursorIndex"];
   currentSlug: string | undefined;
@@ -135,6 +133,7 @@ export type NormalKeysCtx = {
   toggleStackAutomationsPaused: (stackId: string, memberSlugs: readonly string[]) => Promise<boolean>;
   // Actions on the row
   toggleArchived: (key: string) => Promise<{ archived: boolean }>;
+  setSection: (slug: string, section: string | null) => Promise<void>;
   toggleSectionFold: (key: string) => Promise<boolean>;
   refreshAiSummary: (slug: string) => Promise<boolean>;
   refreshTmuxSessions: () => Promise<void>;
@@ -155,7 +154,6 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     selectedRemote,
     selectedSection,
     currentTarget,
-    remoteUnavailable,
     visualItems,
     cursorIndex,
     currentSlug,
@@ -189,6 +187,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     toggleAutomationsPaused,
     toggleStackAutomationsPaused,
     toggleArchived,
+    setSection,
     toggleSectionFold,
     refreshAiSummary,
     refreshTmuxSessions,
@@ -868,6 +867,9 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toggleArchived(key).then(
           ({ archived }) => {
             const log = createLogger(`[remote:${selectedRemote.hostLabel}]`);
+            if (!archived) {
+              setSel(`remote:${remoteEntryKey(selectedRemote)}`);
+            }
             log.event.info(`${archived ? "archived" : "restored from archive"} ${slug}`);
             toast(
               archived ? `archived ${slug}` : `restored ${slug}`,
@@ -884,20 +886,10 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           toast("remote worktree is still being created", theme.warn, 1800);
           return;
         }
-        if (remoteUnavailable) {
-          // Match the session path: skip the doomed SSH round-trip and
-          // the confusing "remove failed: <ssh error>" toast.
-          toast(`${selectedRemote.hostLabel} is unavailable`, theme.warn, 2200);
-          return;
-        }
-        if (selectedRemote.status === StatusKind.Busy) {
-          toast(
-            `${selectedRemote.slug} is ${selectedRemote.statusLabel}`,
-            theme.warn,
-            2200,
-          );
-          return;
-        }
+        // Do not gate a mutation on the inventory query's error state or its
+        // cached busy flag. The host may have recovered since that read, and
+        // remote `wt rm` performs the authoritative live lock check with a
+        // bounded SSH timeout. A real refusal is surfaced by doRemoteRemove.
         const force = selectedRemote.dirty || selectedRemote.unpushed > 0;
         const forceDetail = selectedRemote.dirty
           ? "Uncommitted changes will be lost. The remote branch will also be deleted."
@@ -1165,16 +1157,31 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       }
       // Archiving moves the row to the bottom of the board; the cursor
       // stays where the user was reading. Restoring is the opposite —
-      // the row comes back to the active list and the cursor follows it,
-      // which the plain key anchor already does.
+      // the row comes back to the Inbox and the cursor follows it.
       if (!current.archived) advanceCursorPast([slug]);
-      toggleArchived(currentTarget ? worktreeTargetKey(currentTarget) : slug).then(
-        ({ archived }) => {
-          rowLog.event.info(archived ? "archived" : "restored from archive");
-          toast(archived ? `archived ${slug}` : `restored ${slug}`, theme.info, 2000);
-        },
-        (err) => reportActionError("archive", err),
-      );
+      const key = currentTarget ? worktreeTargetKey(currentTarget) : slug;
+      // Archived rows deliberately render without section context. Restore
+      // them into the Inbox explicitly instead of reviving a stale manual
+      // section assignment (which may now be folded or off-screen). Do the
+      // section write first so the first active render already has its final
+      // placement rather than flashing in the old section for one frame.
+      const prepareRestore = current.archived
+        ? setSection(slug, null)
+        : Promise.resolve();
+      prepareRestore
+        .then(() => toggleArchived(key))
+        .then(
+          ({ archived }) => {
+            if (!archived) setSel(slug);
+            rowLog.event.info(archived ? "archived" : "restored to Inbox");
+            toast(
+              archived ? `archived ${slug}` : `restored ${slug} to Inbox`,
+              theme.info,
+              2000,
+            );
+          },
+          (err) => reportActionError("archive", err),
+        );
       return;
     }
     if (isPlainLetter(k, "l")) {

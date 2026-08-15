@@ -24,7 +24,7 @@ import {
   type SessionSlot,
 } from "../sessions/slots.ts";
 import { theme } from "../theme.ts";
-import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import type { CleanCandidate } from "../clean-candidate.ts";
 import { config } from "../../core/config.ts";
 
 const appLog = createLogger("[app]");
@@ -35,7 +35,7 @@ export type GlobalKeysCtx = {
   quit: () => void;
   refreshAll: () => Promise<void>;
   setFooter: (f: FooterMode) => void;
-  cleanCandidates: WorktreeRow[];
+  cleanCandidates: readonly CleanCandidate[];
   toast: (message: string, color?: string, ms?: number) => void;
   reportActionError: (label: string, err: unknown) => void;
   automations: { configured: boolean; togglePaused: () => Promise<boolean> };

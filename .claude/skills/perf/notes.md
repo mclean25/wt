@@ -60,6 +60,16 @@ Failure signatures (check these first):
   61634bc (`core/harness/codex-events-worker.ts`). If the loop-lag
   probe shows blocks correlated with a data source, suspect synchronous
   parsing and reach for the same worker pattern.
+  Codex historical-session discovery follows the same rule: selecting a
+  row starts discovery for F12, and its 30-day rollout walk must stay in
+  `core/harness/codex/discovery-worker.ts`. The main-side client serializes
+  scans and drops cancelled queued destinations during rapid j/k input.
+  The detailed live-output tail is also worker-owned
+  (`core/harness/codex/tail-worker.ts`): its 2.5s poll used to perform the
+  same tree walk on the UI thread, producing intermittent input stalls.
+  2026-08-15 real-fleet probe: one discovery scan took 106.2ms wall time
+  while the main-thread 5ms timer saw only 0.8ms max lag; the old direct
+  rollout lookup measured 25–107ms per worktree / 355ms over ten rows.
 
 - **Permanent live-mode rendering (RESOLVED 2026-08-11, f54910e…0094b27).**
   OpenTUI Timelines held a renderer-wide live request: continuous

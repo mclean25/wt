@@ -4,10 +4,14 @@ import { NF } from "../icons.ts";
 import { Modal } from "../modal.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
-import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import {
+  remoteCleanHazardLabel,
+  type CleanCandidate,
+} from "../clean-candidate.ts";
+import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 
 type Props = {
-  candidates: WorktreeRow[];
+  candidates: readonly CleanCandidate[];
 };
 
 /**
@@ -15,11 +19,23 @@ type Props = {
  * merged (git-level), gone (branch deleted upstream), PR merged (GitHub
  * says so even if local git hasn't caught up yet).
  */
-function reasonFor(row: WorktreeRow): string {
-  if (row.status.kind === StatusKind.Merged) return "merged";
-  if (row.status.kind === StatusKind.Gone) return "gone";
-  if (row.pr?.state === "MERGED") return "PR merged";
+function reasonFor(candidate: CleanCandidate): string {
+  const status =
+    candidate.kind === "local" ? candidate.row.status.kind : candidate.entry.status;
+  if (status === StatusKind.Merged) return "merged";
+  if (status === StatusKind.Gone) return "gone";
+  if (candidate.kind === "local" && candidate.row.pr?.state === "MERGED") {
+    return "PR merged";
+  }
   return "—";
+}
+
+function hazardFor(candidate: CleanCandidate): string | null {
+  if (candidate.kind === "remote") {
+    return remoteCleanHazardLabel(candidate.entry);
+  }
+  const hazard = destroyHazard(candidate.row);
+  return hazard ? destroyHazardLabel(hazard) : null;
 }
 
 export function CleanConfirmModal({ candidates }: Props) {
@@ -27,10 +43,13 @@ export function CleanConfirmModal({ candidates }: Props) {
   // or unpushed commits survives it (see `doCleanRows`). Count and label
   // what will ACTUALLY be destroyed — a modal that promises 5 and
   // delivers 4 is how a kept row gets read as a lost one.
-  const doomed = candidates.filter((r) => destroyHazard(r) === null);
+  const doomed = candidates.filter((candidate) => hazardFor(candidate) === null);
   const count = doomed.length;
   const keptCount = candidates.length - count;
-  const stageCount = doomed.filter((r) => r.fields.deploy.data).length;
+  const stageCount = doomed.filter(
+    (candidate) =>
+      candidate.kind === "local" && candidate.row.fields.deploy.data,
+  ).length;
 
   return (
     <Modal
@@ -67,24 +86,32 @@ export function CleanConfirmModal({ candidates }: Props) {
         </text>
       </box>
       <ScrollableList>
-        {candidates.map((row) => {
-          const deployed = row.fields.deploy.data ?? false;
-          const hazard = destroyHazard(row);
+        {candidates.map((candidate) => {
+          const row = candidate.kind === "local" ? candidate.row : null;
+          const remote = candidate.kind === "remote" ? candidate.entry : null;
+          const deployed = row?.fields.deploy.data ?? false;
+          const hazard = hazardFor(candidate);
+          const key = row
+            ? `local:${row.wt.slug}`
+            : `remote:${remoteWorktreeLedgerKey(remote!.hostKey, remote!.slug)}`;
+          const label = row ? row.wt.slug : `${remote!.slug} @ ${remote!.hostLabel}`;
           return (
-            <box key={row.wt.slug} flexDirection="row">
+            <box key={key} flexDirection="row">
               <box width={2} flexShrink={0}>
                 <text fg={theme.fgDim}>·</text>
               </box>
               <box flexGrow={1} flexShrink={1} overflow="hidden">
                 <text fg={hazard ? theme.fgDim : theme.fg} wrapMode="none" truncate>
-                  {row.wt.slug}
+                  {label}
                 </text>
               </box>
               <box flexShrink={0} flexDirection="row">
                 <text fg={theme.fgDim}>{"  "}</text>
-                <text fg={theme.fgDim}>{reasonFor(row).padEnd(10)}</text>
+                <text fg={theme.fgDim}>{reasonFor(candidate).padEnd(10)}</text>
                 {hazard ? (
-                  <text fg={theme.warn}> kept · {destroyHazardLabel(hazard)}</text>
+                  <text fg={theme.warn}> kept · {hazard}</text>
+                ) : remote ? (
+                  <text fg={theme.fgDim}> remote</text>
                 ) : deployed ? (
                   // Two spaces after the bolt: opentui's native renderer
                   // treats the PUA codepoint as 1-cell wide so a single

@@ -8,10 +8,12 @@
  * Claude gets a purpose-built fs.watch tailer over its stream-json
  * jsonl. Codex and OpenCode persist elsewhere — Codex in a rollout
  * jsonl under `~/.codex/sessions/`, OpenCode in a SQLite DB — and have
- * no per-line push signal, so this registry just polls each live slot
- * on a shared interval, seeding history on first sight and appending
- * deltas after. The event-pane pollers (`codex/events.ts` /
- * `opencode/events.ts`) stay as-is: they emit terse global one-liners
+ * no per-line push signal, so this registry polls each live slot on a
+ * shared interval, seeding history on first sight and appending deltas
+ * after. Codex's filesystem walk + JSONL parse run in
+ * `codex/tail-worker.ts`; the main thread only applies its ActionLine
+ * batches. The event-pane pollers (`codex/events.ts` / `opencode/events.ts`)
+ * stay as-is: they emit terse global one-liners
  * and skip history, which is a different job from this detailed,
  * history-seeded per-session trail.
  *
@@ -32,6 +34,11 @@ import { createLogger } from "../logger.ts";
 import { jsonlTimestamp, prepareTailQuery, readFileSlice } from "../tail-util.ts";
 
 import { latestRolloutForCwd } from "./codex/harness.ts";
+import type {
+  CodexTailSlot,
+  CodexTailWorkerMessage,
+  CodexTailWorkerResult,
+} from "./codex/tail-protocol.ts";
 import { openDb } from "./opencode/harness.ts";
 import type { HarnessId } from "./types.ts";
 
@@ -76,7 +83,7 @@ const OPENCODE_SEED_PARTS = 120;
 // Per-entry tail state
 // ---------------------------------------------------------------------------
 
-type CodexCursor = {
+export type CodexCursor = {
   /** Rollout path currently tracked, or null until first found. */
   path: string | null;
   /** Byte offset already consumed. */
@@ -103,9 +110,25 @@ type Entry = {
   nextLineId: number;
   /** True once the history seed has run. */
   seeded: boolean;
-  codex: CodexCursor;
   opencode: OpencodeCursor;
 };
+
+/** Minimal mutable state owned by the Codex tail worker for one live slot. */
+export type CodexTailPumpState = {
+  wtPath: string;
+  nextLineId: number;
+  seeded: boolean;
+  codex: CodexCursor;
+};
+
+export function createCodexTailPumpState(wtPath: string): CodexTailPumpState {
+  return {
+    wtPath,
+    nextLineId: 1,
+    seeded: false,
+    codex: { path: null, offset: 0, pending: "", seedDrop: false },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Small line helpers
@@ -245,7 +268,7 @@ function extractCodexCmd(args: unknown): string {
  * Partial trailing lines are held in `cur.pending` across ticks so the
  * offset always advances to EOF without ever re-reading or losing bytes.
  */
-function codexPump(entry: Entry): ActionLine[] {
+export function pumpCodexTail(entry: CodexTailPumpState): ActionLine[] {
   const rollout = latestRolloutForCwd(entry.wtPath);
   if (!rollout) return [];
   const cur = entry.codex;
@@ -470,11 +493,32 @@ function opencodePump(entry: Entry): ActionLine[] {
 
 type Listener = () => void;
 
-class HarnessTailRegistry {
+/** Structural worker boundary for deterministic registry lifecycle tests. */
+export type CodexTailWorker = {
+  postMessage(message: CodexTailWorkerMessage): void;
+  addEventListener(type: "message", listener: (event: MessageEvent) => void): void;
+  addEventListener(type: "error", listener: (event: ErrorEvent) => void): void;
+  addEventListener(type: "close", listener: (event: Event) => void): void;
+  terminate(): unknown;
+  unref?(): void;
+};
+
+export type CodexTailWorkerFactory = () => CodexTailWorker;
+
+export class HarnessTailRegistry {
   private runs: ReadonlyMap<string, HarnessRun> = new Map();
   private state = new Map<string, Entry>();
   private listeners = new Set<Listener>();
   private poller: ReturnType<typeof setInterval> | null = null;
+  private codexWorker: CodexTailWorker | null = null;
+  private codexInFlight: number | null = null;
+  private codexPumpAgain = false;
+  private nextCodexPumpId = 1;
+
+  constructor(
+    private readonly codexWorkerFactory: CodexTailWorkerFactory = () =>
+      new Worker(new URL("./codex/tail-worker.ts", import.meta.url).href),
+  ) {}
 
   ensure(slug: string, wtPath: string, harnessId: TailHarnessId): void {
     const key = harnessTailKey(slug, harnessId);
@@ -491,15 +535,16 @@ class HarnessTailRegistry {
       startedAt: Date.now(),
       nextLineId: 1,
       seeded: false,
-      codex: { path: null, offset: 0, pending: "", seedDrop: false },
       opencode: { sessionId: null, afterMs: 0 },
     };
     this.state.set(key, entry);
     this.commit((m) =>
       m.set(key, { slug, harnessId, startedAt: entry.startedAt, lines: [] }),
     );
-    // Seed synchronously so the pane shows history the moment it opens.
-    this.pump(key);
+    // OpenCode's indexed SQLite seed is cheap. Codex history discovery walks
+    // date-partitioned rollout files, so seed it asynchronously in the worker.
+    if (harnessId === "codex") this.requestCodexPump();
+    else this.pumpOpencode(key);
     this.ensurePoller();
   }
 
@@ -508,7 +553,11 @@ class HarnessTailRegistry {
   }
 
   private stopByKey(key: string): void {
-    if (!this.state.delete(key)) return;
+    const entry = this.state.get(key);
+    if (!entry || !this.state.delete(key)) return;
+    if (entry.harnessId === "codex" && this.codexWorker) {
+      this.postCodex(this.codexWorker, { type: "stop", key });
+    }
     this.commit((m) => {
       m.delete(key);
     });
@@ -530,6 +579,7 @@ class HarnessTailRegistry {
   stopAll(): void {
     for (const key of [...this.state.keys()]) this.stopByKey(key);
     this.stopPoller();
+    this.disposeCodexWorker();
   }
 
   getSnapshot = (): ReadonlyMap<string, HarnessRun> => this.runs;
@@ -546,7 +596,10 @@ class HarnessTailRegistry {
   private ensurePoller(): void {
     if (this.poller) return;
     this.poller = setInterval(() => {
-      for (const key of this.state.keys()) this.pump(key);
+      this.requestCodexPump();
+      for (const [key, entry] of this.state) {
+        if (entry.harnessId === "opencode") this.pumpOpencode(key);
+      }
     }, POLL_INTERVAL_MS);
   }
 
@@ -556,25 +609,27 @@ class HarnessTailRegistry {
     this.poller = null;
   }
 
-  private pump(key: string): void {
+  private pumpOpencode(key: string): void {
     const entry = this.state.get(key);
-    if (!entry) return;
+    if (!entry || entry.harnessId !== "opencode") return;
     let appended: ActionLine[];
     try {
-      appended =
-        entry.harnessId === "codex" ? codexPump(entry) : opencodePump(entry);
+      appended = opencodePump(entry);
     } catch (err) {
       log.warn("harness tail pump failed", {
         slug: entry.slug,
         harness: entry.harnessId,
         err: String(err),
       });
-      // Leave `seeded` untouched: a throw before the cursor baselined
-      // must not count as a completed seed, or the retry would treat
-      // the whole rollout/part history as fresh delta (or skip it).
+      // Leave `seeded` untouched: a failed initial SQLite read must not
+      // count as a completed seed, or the retry could skip history.
       return;
     }
     entry.seeded = true;
+    this.append(key, appended);
+  }
+
+  private append(key: string, appended: readonly ActionLine[]): void {
     if (appended.length === 0) return;
     const cur = this.runs.get(key);
     if (!cur) return;
@@ -582,6 +637,89 @@ class HarnessTailRegistry {
     const trimmed =
       next.length > MAX_BUFFERED_LINES ? next.slice(-MAX_BUFFERED_LINES) : next;
     this.commit((m) => m.set(key, { ...cur, lines: trimmed }));
+  }
+
+  private postCodex(
+    worker: CodexTailWorker,
+    message: CodexTailWorkerMessage,
+  ): void {
+    worker.postMessage(message);
+  }
+
+  private ensureCodexWorker(): CodexTailWorker {
+    if (this.codexWorker) return this.codexWorker;
+    const worker = this.codexWorkerFactory();
+    worker.addEventListener("message", (event: MessageEvent) => {
+      if (worker !== this.codexWorker) return;
+      const result = event.data as CodexTailWorkerResult;
+      if (result.id !== this.codexInFlight) return;
+      this.codexInFlight = null;
+      for (const update of result.updates) this.append(update.key, update.lines);
+      for (const error of result.errors) {
+        const entry = this.state.get(error.key);
+        log.warn("codex tail worker pump failed", {
+          slug: entry?.slug ?? error.key,
+          err: error.message,
+        });
+      }
+      if (this.codexPumpAgain) {
+        this.codexPumpAgain = false;
+        this.requestCodexPump();
+      }
+    });
+    const failed = (reason: string) => {
+      if (worker !== this.codexWorker) return;
+      this.codexWorker = null;
+      this.codexInFlight = null;
+      this.codexPumpAgain = false;
+      log.warn("codex tail worker died", { err: reason });
+      try {
+        worker.terminate();
+      } catch {
+        // already gone
+      }
+    };
+    worker.addEventListener("error", (event) => failed(event.message || "error"));
+    worker.addEventListener("close", () => failed("exited"));
+    worker.unref?.();
+    this.codexWorker = worker;
+    return worker;
+  }
+
+  private requestCodexPump(): void {
+    const slots: CodexTailSlot[] = [];
+    for (const [key, entry] of this.state) {
+      if (entry.harnessId === "codex") {
+        slots.push({ key, slug: entry.slug, wtPath: entry.wtPath });
+      }
+    }
+    if (slots.length === 0) return;
+    if (this.codexInFlight !== null) {
+      this.codexPumpAgain = true;
+      return;
+    }
+    const id = this.nextCodexPumpId++;
+    this.codexInFlight = id;
+    try {
+      this.postCodex(this.ensureCodexWorker(), { type: "pump", id, slots });
+    } catch (err) {
+      this.codexInFlight = null;
+      log.warn("codex tail worker dispatch failed", { err: String(err) });
+      this.disposeCodexWorker();
+    }
+  }
+
+  private disposeCodexWorker(): void {
+    const worker = this.codexWorker;
+    this.codexWorker = null;
+    this.codexInFlight = null;
+    this.codexPumpAgain = false;
+    if (!worker) return;
+    try {
+      worker.terminate();
+    } catch {
+      // already gone
+    }
   }
 
   private commit(mut: (m: Map<string, HarnessRun>) => void): void {

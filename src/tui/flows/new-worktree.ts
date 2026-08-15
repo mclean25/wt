@@ -8,10 +8,11 @@ import { config } from "../../core/config.ts";
 import { createWorktree, parseInput } from "../../core/lifecycle.ts";
 import { createLogger } from "../../core/logger.ts";
 import { runRemoteWt } from "../../core/remote.ts";
+import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import { setSlugGithubIssue, type RemovedWorktree } from "../../core/wtstate.ts";
 import { parseNewInput } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
-import type { RemoteCreation } from "../remote-creation.ts";
+import { remoteEntryKey, type RemoteCreation } from "../remote-creation.ts";
 import { theme } from "../theme.ts";
 
 const newLog = createLogger("[new]");
@@ -25,8 +26,9 @@ type WorktreeCreateFlowsCtx = {
   setSel: (key: string | null) => void;
   setRemovedView: (v: boolean) => void;
   setRemoteCreation: (creation: RemoteCreation | null) => void;
+  remoteWorktrees: readonly RemoteWorktreeSummary[];
   refreshAll: () => Promise<void>;
-  refreshRemoteWorktrees: () => Promise<void>;
+  refreshRemoteWorktrees: () => Promise<readonly RemoteWorktreeSummary[]>;
   toast: (message: string, color?: string, ms?: number) => void;
 };
 
@@ -37,6 +39,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     setSel,
     setRemovedView,
     setRemoteCreation,
+    remoteWorktrees,
     refreshAll,
     refreshRemoteWorktrees,
     toast,
@@ -129,13 +132,16 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     if (parsed.base) args.push("--base", parsed.base);
 
     const remoteLog = createLogger(`[remote:${remote.label}]`);
-    setRemoteCreation({
+    const creation: RemoteCreation = {
       remote,
       hostKey: remote.host,
       hostLabel: remote.label,
       input: parsed.input,
       status: "creating",
-    });
+    };
+    const previousKeys = new Set(remoteWorktrees.map(remoteEntryKey));
+    setRemoteCreation(creation);
+    setSel(`remote:${remoteEntryKey(creation)}`);
     remoteLog.event.info(`creating ${parsed.input}`);
     // The normal remote inventory interval is 15s while no busy row is known.
     // Probe eagerly during creation so the authoritative row replaces the
@@ -173,7 +179,15 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     }
     remoteLog.event.ok(`ready on ${remote.label}`);
     try {
-      await refreshRemoteWorktrees();
+      const refreshed = await refreshRemoteWorktrees();
+      // The CLI input may be an issue id or title rather than the final slug,
+      // so transfer focus from the optimistic placeholder to the newly
+      // discovered authoritative row by fleet identity, not input spelling.
+      const created = refreshed.find(
+        (row) =>
+          row.hostKey === remote.host && !previousKeys.has(remoteEntryKey(row)),
+      );
+      if (created) setSel(`remote:${remoteEntryKey(created)}`);
       toast(`ready on ${remote.label}`, theme.ok, 1800);
     } finally {
       setRemoteCreation(null);

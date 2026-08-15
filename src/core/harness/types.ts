@@ -204,6 +204,8 @@ export interface Harness {
   discoverSessions(opts: {
     slug: string;
     wtPath: string;
+    /** Cancel superseded UI discovery before it can build queued work. */
+    signal?: AbortSignal;
   }): Promise<HarnessSession[]>;
 
   /** Inner argv to launch (or resume) a session. Spliced into tmux new-session. */

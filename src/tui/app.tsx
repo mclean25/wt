@@ -76,8 +76,13 @@ import { writeClipboard } from "../core/macos.ts";
 import { theme } from "./theme.ts";
 import { showToast } from "./toast.ts";
 import { type RemoteCreation } from "./remote-creation.ts";
+import {
+  isRemoteCleanCandidate,
+  type CleanCandidate,
+} from "./clean-candidate.ts";
 
 const appLog = createLogger("[app]");
+const EMPTY_REMOTE_ROWS: readonly RemoteWorktreeSummary[] = [];
 
 export type TuiExit = { kind: "quit" };
 
@@ -90,6 +95,7 @@ export function App({ onExit }: Props) {
   const renderer = useRenderer();
   const { rows, githubData, archivedKeys, isLoading } = useWorktreeRows();
   const remoteWorktreeList = useQuery(remoteWorktreesQuery());
+  const remoteRows = remoteWorktreeList.data ?? EMPTY_REMOTE_ROWS;
   const remoteUnavailable = remoteWorktreeList.isError;
   const remoteError = remoteWorktreeList.error?.message ?? null;
   const {
@@ -256,9 +262,21 @@ export function App({ onExit }: Props) {
   // `wt manager report` spool → attention feed (cross-process watcher).
   useManagerReports();
 
-  const cleanCandidates = useMemo(
-    () => rows.filter((r) => isCleanCandidate(r)),
-    [rows],
+  const cleanCandidates = useMemo<CleanCandidate[]>(
+    () => [
+      ...rows
+        .filter((row) => isCleanCandidate(row))
+        .map((row) => ({ kind: "local" as const, row })),
+      ...remoteRows
+        .filter((entry) =>
+          isRemoteCleanCandidate(
+            entry,
+            archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug)),
+          ),
+        )
+        .map((entry) => ({ kind: "remote" as const, entry })),
+    ],
+    [rows, remoteRows, archivedKeys],
   );
 
   // Removed-worktrees history view (`h` toggles the left pane into it).
@@ -288,7 +306,7 @@ export function App({ onExit }: Props) {
     foldedSections,
     selectedKey: sel,
     remoteCreation,
-    remoteWorktrees: remoteWorktreeList.data ?? [],
+    remoteWorktrees: remoteRows,
     archivedKeys,
   });
 
@@ -519,6 +537,8 @@ export function App({ onExit }: Props) {
     isRestackBusy,
   } = makeDestroyFlows({
     rows,
+    remoteWorktrees: remoteRows,
+    archivedKeys,
     current,
     toast,
     archive,
@@ -659,9 +679,11 @@ export function App({ onExit }: Props) {
     setSel,
     setRemovedView,
     setRemoteCreation,
+    remoteWorktrees: remoteRows,
     refreshAll,
     refreshRemoteWorktrees: async () => {
-      await remoteWorktreeList.refetch();
+      const result = await remoteWorktreeList.refetch();
+      return result.data ?? [];
     },
     toast,
   });
@@ -815,7 +837,6 @@ export function App({ onExit }: Props) {
       selectedPr,
       selectedRemote,
       currentTarget,
-      remoteUnavailable,
       visualItems,
       cursorIndex,
       currentSlug,
@@ -849,6 +870,7 @@ export function App({ onExit }: Props) {
       toggleAutomationsPaused,
       toggleStackAutomationsPaused,
       toggleArchived,
+      setSection,
       toggleSectionFold,
       refreshAiSummary,
       refreshTmuxSessions,
@@ -859,7 +881,6 @@ export function App({ onExit }: Props) {
     handleNormalKey(k, normalCtx);
   });
 
-  const remoteRows = remoteWorktreeList.data ?? [];
   const pendingRemoteCount =
     remoteCreation && !remoteRows.some((row) => row.slug === remoteCreation.input)
       ? 1

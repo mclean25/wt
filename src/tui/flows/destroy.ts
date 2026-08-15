@@ -9,6 +9,7 @@ import { existsSync } from "node:fs";
 
 import { actionRegistry } from "../../core/actions.ts";
 import type { RemoteConfig } from "../../core/config.ts";
+import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { spawnBackgroundRemove } from "../../core/lifecycle.ts";
@@ -28,8 +29,13 @@ import {
   destroyHazardLabel,
   isCleanCandidate,
 } from "../app-helpers.ts";
+import {
+  isRemoteCleanCandidate,
+  remoteCleanHazardLabel,
+} from "../clean-candidate.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
+import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 
 const appLog = createLogger("[app]");
 
@@ -67,6 +73,8 @@ function recordRemovedSnapshots(rows: readonly WorktreeRow[]): void {
 
 export type DestroyFlowsCtx = {
   rows: readonly WorktreeRow[];
+  remoteWorktrees: readonly RemoteWorktreeSummary[];
+  archivedKeys: ReadonlySet<string>;
   /** Currently-selected row (for `doReplayStack`'s stack resolution). */
   current: WorktreeRow | undefined;
   toast: (message: string, color?: string, ms?: number) => void;
@@ -108,6 +116,8 @@ export type DestroyFlowsCtx = {
 export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
   const {
     rows,
+    remoteWorktrees,
+    archivedKeys,
     toast,
     archive,
     advanceCursorPast,
@@ -251,13 +261,32 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
   }
 
   async function doClean(): Promise<void> {
-    const candidates = rows.filter((r) => isCleanCandidate(r));
-    if (candidates.length === 0) {
+    const localCandidates = rows.filter((r) => isCleanCandidate(r));
+    const remoteCandidates = remoteWorktrees.filter((entry) =>
+      isRemoteCleanCandidate(
+        entry,
+        archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug)),
+      ),
+    );
+    if (localCandidates.length + remoteCandidates.length === 0) {
       appLog.event.dim("clean: nothing to clean");
       toast("nothing to clean", theme.fgDim, 1500);
       return;
     }
-    await doCleanRows(candidates);
+    const safeRemoteCandidates = remoteCandidates.filter((entry) => {
+      const hazard = remoteCleanHazardLabel(entry);
+      if (!hazard) return true;
+      createLogger(`[remote:${entry.hostLabel}]`).attention.warn(
+        `clean: kept ${entry.slug} — ${hazard} (destroy it with d to force)`,
+      );
+      return false;
+    });
+    await Promise.all([
+      doCleanRows(localCandidates),
+      ...safeRemoteCandidates.map((entry) =>
+        doRemoteRemove(entry.remote, entry.slug),
+      ),
+    ]);
   }
 
   /**

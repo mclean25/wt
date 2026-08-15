@@ -52,7 +52,7 @@ work on it.
 | `Ctrl+N` | create on `[remote]`; the worktree appears under the server-named remote section with normal status glyphs, and F10/F11/F12 route that row's sessions over SSH |
 | `o` | open the worktree in your editor (`[editor] command`; default Zed) |
 | `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning listing every hazard when dirty/unpushed) |
-| `c` | clean all merged/gone worktrees (confirm). Never forces: a candidate holding uncommitted changes or unpushed commits is shown as `kept` in the confirm list and survives the sweep — use `d` on it deliberately. Same for the `builtin:clean` automation, which has no human in the loop at all |
+| `c` | clean all merged/gone worktrees across the local and configured remote fleets (one combined confirmation). Never forces: a candidate holding uncommitted changes or unpushed commits is shown as `kept` in the confirm list and survives the sweep — use `d` on it deliberately. Same for the `builtin:clean` automation, which has no human in the loop at all |
 
 Both read "unpushed" as commits missing from `origin/<branch>` — the `(↑n ↓m)` group, not the `[↑n ↓m]` one. A branch that is fully pushed but ahead of its base is not at risk and neither path treats it as such; a landed branch whose remote ref was pruned isn't either, since a squash merge is what left its local commits behind.
 | `a` | archive / restore the row, local or remote; archive placement belongs to this TUI's local fleet ledger, while a remote checkout remains untouched on its host |

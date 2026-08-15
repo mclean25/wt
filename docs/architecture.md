@@ -137,9 +137,13 @@ Cachy runs that one worktree's tmux session while `renderer-handoff.ts`
 suspends the Mac renderer. Detaching returns to the same Mac Inbox.
 `a` writes the location-aware key to the Mac's archive ledger; it is a view of
 this fleet, not a mutation of the remote checkout. `d` forwards the normal
-`wt rm` command after confirmation, preserving the
-remote installation's lock and dirty-work safeguards while explicitly leaving
-any SST stage intact.
+`wt rm` command after confirmation, preserving the remote installation's lock
+and dirty-work safeguards while explicitly leaving any SST stage intact. The
+dispatch is not gated by cached inventory health or busy state: those can be
+stale, while the bounded SSH call and remote lock are authoritative. `c` builds
+one confirmation from location-tagged local and remote candidates, then routes
+each removal at its I/O boundary; candidate identity already includes the host,
+so the flow remains valid when multiple remotes are added.
 
 ## Modal UX rules
 
@@ -173,7 +177,7 @@ The render loop is **on-demand**: a React commit requests a frame, the frame wal
 - **No OpenTUI Timelines, no `requestAnimationFrame`.** Any playing timeline holds a renderer-wide "live" request: the loop goes continuous (full tree walk + full repaint per tick) and `requestRender()` becomes a no-op, so a keypress commit can't pull a frame forward. All chrome animation rides the shared refcounted ticker in `tui/spinner.tsx` (`useAnimationTick`) — ~10fps, only while an animated component is mounted and visible, one batched commit per tick.
 - **Renderable count is a per-commit cost** — every commit's frame walks the whole tree, and scrollbox children pay a layout readback even when culled offscreen. Anything that maps an unbounded buffer renders a window: the events feed (`panels/activity.tsx`) draws a bottom-anchored `TAIL_WINDOW` slice behind an exact-height spacer, expanded ahead of the reader by a slow geometry check and snapped back at the bottom. New unbounded surfaces follow that pattern.
 - **App never observes per-event churn.** `useIsFetching` lives in `panels/title-bar.tsx` (a memoized leaf), NEVER in App — it re-renders its component on every fetch start/finish anywhere. The registries (session/shell/harness tails, actions) replace only the touched entry per update, and their hooks subscribe with per-key selector snapshots (`useSessionRun` et al.), so a pane tailing one session doesn't re-render when another streams. Aggregations that App does need are identity-stabilized: `useActiveActions` returns the previous Set when membership is unchanged, `useOutputs` returns the previous list when membership/order/status are unchanged (timestamps deliberately excluded). `WorktreeList` and `Details` are `React.memo`'d on the back of all this — new props into either must stay identity-stable across unrelated renders.
-- **Parsing stays off the render thread.** The claude session-jsonl tailer (`core/harness/claude/tail-worker.ts`) and the codex events poller both do their file reads + JSON parsing in workers; the main thread applies parsed deltas. A new tail-shaped data source follows the same seam.
+- **Parsing stays off the render thread.** The claude session-jsonl tailer (`core/harness/claude/tail-worker.ts`), Codex event poller, detailed Codex output tail (`core/harness/codex/tail-worker.ts`), and Codex historical-session discovery (`core/harness/codex/discovery-worker.ts`) do their directory walks, file reads, and JSON parsing in workers; the main thread applies parsed results. Discovery is serialized and abort-aware so rapid cursor movement retains only the current queued destination instead of building an obsolete scan backlog; tail polls allow only one in-flight batch. A new tail-shaped data source follows the same seam.
 - **`WT_PERF=1` measures all of it**: the loop-lag probe logs any >20ms sync block, and the input-latency probe logs a p50/p90/max keypress→painted-frame histogram every 60s plus the renderer's live-mode duty cycle — nonzero duty means something re-armed continuous rendering and is a regression. Healthy figures: p50 under ~10ms, live duty 0.
 
 ## Work status

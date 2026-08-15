@@ -108,9 +108,9 @@ export const harnessSessionsQuery = (
 ) =>
   queryOptions({
     queryKey: qk.harnessSessions(harnessId, slug),
-    queryFn: async (): Promise<HarnessSession[]> => {
+    queryFn: async ({ signal }): Promise<HarnessSession[]> => {
       const harness = getHarness(harnessId);
-      return harness.discoverSessions({ slug, wtPath });
+      return harness.discoverSessions({ slug, wtPath, signal });
     },
     staleTime: STALE.fast,
     // Claude session state is kept fresh by `watchRegistry` invalidation

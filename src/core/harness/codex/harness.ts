@@ -31,6 +31,7 @@ import {
   reconcileCodexNames,
 } from "./names.ts";
 import { trustCodexWorkspace } from "./trust.ts";
+import { discoverCodexSessionsInWorker } from "./discovery.ts";
 
 import type { Harness, HarnessSession, HarnessSpawnArgs } from "../types.ts";
 
@@ -76,48 +77,8 @@ export const codexHarness: Harness = {
     return `${slug}${CODEX_TMUX_INFIX}`;
   },
 
-  async discoverSessions({ slug, wtPath }) {
-    const titles = readSessionIndex();
-    const rollouts = scanRollouts(wtPath).sort((a, b) => b.mtimeMs - a.mtimeMs);
-    const friendlyNames = reconcileCodexNames(
-      slug,
-      rollouts.map((r) => r.sessionId),
-    );
-    // Single-tmux-per-slug for v1: every codex session reports the
-    // bare `<slug>-codex` tmux name. `useHarnessSessions` re-annotates
-    // `isLive` against the current tmux name set; here we set false.
-    const tmuxName = `${slug}${CODEX_TMUX_INFIX}`;
-    // Track the most-recent rollout path per session so the event poller
-    // can find the right file without its own scan.
-    const out: HarnessSession[] = [];
-    for (const r of rollouts) {
-      // A Codex-native `/rename` title wins when present. Otherwise use
-      // wt's stable friendly name; UUID prefixes are only a defensive
-      // fallback if persistence fails.
-      const title =
-        titles.get(r.sessionId) ??
-        friendlyNames[r.sessionId] ??
-        r.sessionId.slice(0, 8);
-      const tail = readCodexTail(r.path, r.mtimeMs, r.size);
-      out.push({
-        displayName: title,
-        sessionId: r.sessionId,
-        tmuxSessionName: tmuxName,
-        lastActiveMs: r.mtimeMs,
-        isLive: false,
-        extras: {
-          managedName: null,
-          // Liveness-independent best guess; `useHarnessSessions`
-          // finalizes it against the live tmux set (dead cleanly → idle,
-          // dead mid-turn → abandoned, live slot keeps working/waiting).
-          derivedState: tail ? deriveCodexState(tail) : null,
-          queued: 0,
-          // Stash last-event time for displays that care about message age.
-          tailEndedAt: tail?.lastEventMs ?? null,
-        },
-      });
-    }
-    return out;
+  discoverSessions({ slug, wtPath, signal }) {
+    return discoverCodexSessionsInWorker(slug, wtPath, signal);
   },
 
   buildArgs(args: HarnessSpawnArgs) {
@@ -138,6 +99,59 @@ export const codexHarness: Harness = {
     reapCodexNames(liveSlugs);
   },
 };
+
+/**
+ * Synchronous discovery implementation used only by discovery-worker.ts.
+ * Keeping it beside the existing rollout/tail parsers avoids a second copy of
+ * Codex's filtering and state-derivation rules without putting sync I/O back
+ * on the TUI thread.
+ */
+export function discoverCodexSessionsSync(
+  slug: string,
+  wtPath: string,
+): HarnessSession[] {
+  const titles = readSessionIndex();
+  const rollouts = scanRollouts(wtPath).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const friendlyNames = reconcileCodexNames(
+    slug,
+    rollouts.map((r) => r.sessionId),
+  );
+  // Single-tmux-per-slug for v1: every codex session reports the
+  // bare `<slug>-codex` tmux name. `useHarnessSessions` re-annotates
+  // `isLive` against the current tmux name set; here we set false.
+  const tmuxName = `${slug}${CODEX_TMUX_INFIX}`;
+  // Track the most-recent rollout path per session so the event poller
+  // can find the right file without its own scan.
+  const out: HarnessSession[] = [];
+  for (const r of rollouts) {
+    // A Codex-native `/rename` title wins when present. Otherwise use
+    // wt's stable friendly name; UUID prefixes are only a defensive
+    // fallback if persistence fails.
+    const title =
+      titles.get(r.sessionId) ??
+      friendlyNames[r.sessionId] ??
+      r.sessionId.slice(0, 8);
+    const tail = readCodexTail(r.path, r.mtimeMs, r.size);
+    out.push({
+      displayName: title,
+      sessionId: r.sessionId,
+      tmuxSessionName: tmuxName,
+      lastActiveMs: r.mtimeMs,
+      isLive: false,
+      extras: {
+        managedName: null,
+        // Liveness-independent best guess; `useHarnessSessions`
+        // finalizes it against the live tmux set (dead cleanly → idle,
+        // dead mid-turn → abandoned, live slot keeps working/waiting).
+        derivedState: tail ? deriveCodexState(tail) : null,
+        queued: 0,
+        // Stash last-event time for displays that care about message age.
+        tailEndedAt: tail?.lastEventMs ?? null,
+      },
+    });
+  }
+  return out;
+}
 
 type RolloutMeta = {
   sessionId: string;
