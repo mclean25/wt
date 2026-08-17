@@ -32,9 +32,12 @@ describe("runStreaming killAfterMs", () => {
   // Every caller but the destroy hook omits killAfterMs and must keep
   // the original wait-forever behavior — the timer is opt-in, and an
   // always-armed one would put a ceiling on `pnpm install`.
+  // Deliberately `sh`, not a nested `bun`: this file already runs
+  // alongside reaper.test.ts, which races real subprocess startup
+  // against lsof and gets flaky when the box is loaded.
   test("omitting killAfterMs leaves the child unbounded", async () => {
     const lines: string[] = [];
-    const exit = await runStreaming([process.execPath, "-e", "await Bun.sleep(400); console.log('slow')"], {
+    const exit = await runStreaming(["sh", "-c", "sleep 0.4; echo slow"], {
       onLine: (line) => lines.push(line),
     });
     expect(exit).toBe(0);

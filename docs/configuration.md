@@ -163,8 +163,11 @@ The failure that follows is indirect enough to be hard to read. A stack left run
 
 ```toml
 [lifecycle]
-destroy_command = "docker ps -aq --filter name={{slug}} | xargs -r docker rm -f"
+# Containers named <something>_<slug>. Note the anchors — see below.
+destroy_command = "docker ps -aq --filter name=_{{slug}}$ | xargs -r docker rm -f"
 ```
+
+**Anchor whatever matches `{{slug}}`, and test the pattern before you run it destructively.** Docker's `--filter name=` is an *unanchored regex*, so a bare `name={{slug}}` also matches every container whose name merely *contains* the slug — which includes every longer slug that starts with it. Slugs are routinely prefixes of each other, because worktrees derived from the same issue lead with the same id, so destroying `coz-1691` with an unanchored filter tears down the live stack of `coz-1691-domestic-bovid`. Measured on a real board: unanchored `coz-1691` matched 12 containers, all of them the *other* worktree's; `_coz-1691$` matched 0; `_coz-1691-domestic-bovid$` matched exactly its own 12. The failure is silent and lands on a worktree nobody asked to touch, so confirm with a read-only `docker ps -a --filter … --format '{{.Names}}'` first. The same caution applies to any tool whose name filter is a substring or regex match rather than an equality test.
 
 Two behaviors worth knowing. It **never fails a destroy** — a broken teardown script leaving a worktree undeletable would be a worse leak than the one this fixes, so a non-zero exit is logged and removal continues, and a command still running after 120s is killed. And a template that mentions `{{port}}` is **skipped entirely** when the slug has no recorded dev port, since that means no dev server ever ran there and the resources it would tear down were never created; templates that don't mention the port always run.
 

@@ -7,6 +7,26 @@ import { createLogger } from "./logger.ts";
 const log = createLogger("[logs]");
 
 /**
+ * The slug a destroy-log filename belongs to, or null if the name isn't
+ * one. `<slug>-<iso>.log`, where the stamp is `YYYY-MM-DDTHH-MM-SS-mmmZ`
+ * per `spawnBackgroundRemove`, so the slug is everything before the
+ * first `-YYYY-…` chunk.
+ *
+ * Matching the stamp explicitly is what makes this EXACT, and exact is
+ * required rather than tidy: `-` is legal inside a slug and separates
+ * the slug from the stamp, so a `startsWith(`${slug}-`)` test also
+ * matches every longer slug beginning with this one. That is not a
+ * hypothetical population — slugs derived from the same issue id are
+ * routinely prefixes of each other (`coz-1691` and
+ * `coz-1691-domestic-bovid`), and the reader can't tell it got a
+ * neighbour's log.
+ */
+export function destroyLogSlug(name: string): string | null {
+  if (!name.endsWith(".log")) return null;
+  return /^(.+)-\d{4}-\d{2}-\d{2}T/.exec(name)?.[1] ?? null;
+}
+
+/**
  * Newest `<slug>-*.log` under `config.paths.logDir` by mtime, or null
  * if none. Used to find the tail target for a worktree without needing
  * the lock meta to record the log path — the log file may outlive the
@@ -15,10 +35,9 @@ const log = createLogger("[logs]");
 export function latestLogFor(slug: string): string | null {
   const dir = config.paths.logDir;
   if (!existsSync(dir)) return null;
-  const prefix = `${slug}-`;
   let best: { path: string; mtime: number } | null = null;
   for (const name of readdirSync(dir)) {
-    if (!name.startsWith(prefix) || !name.endsWith(".log")) continue;
+    if (destroyLogSlug(name) !== slug) continue;
     const path = join(dir, name);
     // The file can vanish between readdir and stat (startup reap, manual
     // cleanup) — this runs on a polling path, so skip rather than throw.
@@ -55,16 +74,8 @@ export function reapDestroyLogs(liveSlugs: ReadonlySet<string>): void {
   }
   let removed = 0;
   for (const name of names) {
-    if (!name.endsWith(".log")) continue;
-    // `<slug>-<iso>.log` — split on the last `-` that precedes the
-    // timestamp. The iso stamp is `YYYY-MM-DDTHH-MM-SS-mmmZ` per
-    // `spawnBackgroundRemove`, so the slug is everything before the
-    // first `-YYYY-…` chunk. Match that explicitly to avoid
-    // misclassifying a slug that itself contains `-` (most do).
-    const m = /^(.+)-\d{4}-\d{2}-\d{2}T/.exec(name);
-    if (!m) continue;
-    const slug = m[1]!;
-    if (liveSlugs.has(slug)) continue;
+    const slug = destroyLogSlug(name);
+    if (slug === null || liveSlugs.has(slug)) continue;
     const path = join(dir, name);
     try {
       rmSync(path, { force: true });
