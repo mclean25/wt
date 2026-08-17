@@ -58,7 +58,15 @@ case "$cmd" in
       ${WT_TMUX_SOCKET:+-e WT_TMUX_SOCKET="$WT_TMUX_SOCKET"} \
       ${GH_TOKEN:+-e GH_TOKEN="$GH_TOKEN"} \
       ${CLAUDE_CODE_FORCE_SESSION_PERSISTENCE:+-e CLAUDE_CODE_FORCE_SESSION_PERSISTENCE="$CLAUDE_CODE_FORCE_SESSION_PERSISTENCE"} \
-      -c "$ROOT" "exec bun src/main.ts"
+      -c "$ROOT" "exec env -u BUN_INSPECT bun src/main.ts"
+    # `env -u BUN_INSPECT` for the reason bin/wt does it: the caller is
+    # normally a Claude session, whose environment binds that session's
+    # inspector socket, and bun hands it to every child — so wt died on
+    # EADDRINUSE and `start` reported only "never painted". Going through
+    # src/main.ts is what skips bin/wt's scrub. It has to be the command
+    # prefix, not a `-e` above: a tmux session's environment comes from
+    # the SERVER's birth environment, so an -e can be silently ignored by
+    # an already-running server.
     # Wait for the first painted frame (bun cold start + cache hydrate).
     for _ in $(seq 1 60); do
       out="$(T capture-pane -pt "$name" 2>/dev/null || true)"

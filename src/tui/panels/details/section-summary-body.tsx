@@ -10,11 +10,12 @@ import {
   WORK_STATES,
   effectiveWorkState,
   workStateRank,
+  type WorkRisk,
   type WorkState,
 } from "../../../core/work-status.ts";
 import type { WorktreeRow } from "../../hooks/useWorktreeRows.ts";
 import { workStateColor, workStateGlyph } from "../../badges.ts";
-import { BadgeCluster } from "../../badge-cluster.tsx";
+import { BadgeCluster, badgeClusterCells } from "../../badge-cluster.tsx";
 import { NF } from "../../icons.ts";
 import {
   rowSpine,
@@ -72,6 +73,49 @@ export type SectionDetail = {
  *  the same resolution the list dot renders. */
 function memberState(m: SectionMember): WorkState | null {
   return effectiveWorkState(m.row.work, m.sessionState)?.state ?? null;
+}
+
+/** Risk a member row shows: the merge decision, and only once the work
+ *  is actually `ready` — before that it is a guess about unfinished work. */
+function memberRisk(m: SectionMember): WorkRisk | undefined {
+  return memberState(m) === "ready" ? m.row.work?.risk : undefined;
+}
+
+function riskColor(risk: WorkRisk): string {
+  return risk === "low" ? theme.ok : risk === "medium" ? theme.warn : theme.err;
+}
+
+/**
+ * Widths reserved for the two right-hand columns, taken over the whole
+ * section.
+ *
+ * Left to themselves neither is a column, for two independent reasons
+ * that produce the identical symptom. The risk WORD varies in length
+ * (`low` / `medium` / `high`), and the badge cluster is a different width
+ * on every row because it renders only the badges that row actually has.
+ * The cluster is the last thing in the row so it stays flush right
+ * whatever it measures — but risk rides immediately to its left, so it
+ * landed on a different column per row, drifting by the word-length
+ * difference plus the cluster-width difference at once.
+ *
+ * Measured over the members rather than fixed, so a section with no ready
+ * rows spends nothing on risk and one with no badges spends nothing on
+ * the cluster; the label column keeps whatever neither claims.
+ */
+function memberColumns(members: SectionMember[]): { risk: number; badges: number } {
+  let risk = 0;
+  let badges = 0;
+  for (const m of members) {
+    const r = memberRisk(m);
+    // +2 for the leading space and the gap that keeps the longest label
+    // off the cluster to its right.
+    if (r) risk = Math.max(risk, r.length + 2);
+    badges = Math.max(
+      badges,
+      badgeClusterCells(m.row, m.actionRunning, m.activeHarnessId),
+    );
+  }
+  return { risk, badges };
 }
 
 /**
@@ -166,16 +210,18 @@ function MemberRow({
   m,
   gutterCells,
   spineCell,
+  cols,
 }: {
   m: SectionMember;
   gutterCells: number;
   /** This member's rail cell, laid out over the members shown here (so a
    *  parent filed in another section draws nothing) — `rowSpine`. */
   spineCell: SpineCell | null;
+  /** Section-wide column widths — `memberColumns`. */
+  cols: { risk: number; badges: number };
 }) {
   const dim = m.row.archived;
-  const state = memberState(m);
-  const risk = state === "ready" ? m.row.work?.risk : undefined;
+  const risk = memberRisk(m);
   return (
     <box flexDirection="row" flexShrink={0}>
       <StackConnector row={m.row} cell={spineCell} cells={gutterCells} />
@@ -186,20 +232,35 @@ function MemberRow({
         </text>
       </box>
       {/* Risk is the merge decision, so it rides the row rather than
-          hiding one keystroke away in the member's own detail pane. */}
-      {risk ? (
-        <box flexShrink={0}>
-          <text fg={risk === "low" ? theme.ok : risk === "medium" ? theme.warn : theme.err}>
-            {` ${risk} `}
+          hiding one keystroke away in the member's own detail pane. The
+          cell is reserved on every row once ANY member has a risk —
+          blank where there is none, because a column that some rows opt
+          out of stops being one for the rows that don't. */}
+      {cols.risk > 0 ? (
+        <box width={cols.risk} flexShrink={0}>
+          <text fg={risk ? riskColor(risk) : theme.fgDim} wrapMode="none">
+            {risk ? ` ${risk}` : ""}
           </text>
         </box>
       ) : null}
-      <BadgeCluster
-        row={m.row}
-        actionRunning={m.actionRunning}
-        activeHarnessId={m.activeHarnessId}
-        sessionState={m.sessionState}
-      />
+      {/* Right-aligned inside the section's widest cluster, so the
+          rightmost badge stays flush with the pane the way the list pane
+          reads while the reserved width holds risk still. */}
+      {cols.badges > 0 ? (
+        <box
+          width={cols.badges}
+          flexShrink={0}
+          flexDirection="row"
+          justifyContent="flex-end"
+        >
+          <BadgeCluster
+            row={m.row}
+            actionRunning={m.actionRunning}
+            activeHarnessId={m.activeHarnessId}
+            sessionState={m.sessionState}
+          />
+        </box>
+      ) : null}
     </box>
   );
 }
@@ -309,6 +370,7 @@ export function SectionSummaryBody({
   // spine group — exactly as they would if the section were unfolded.
   const spine = rowSpine([section.members.map((m) => m.row)]);
   const gutterCells = spineGutterCells(spine);
+  const cols = memberColumns(section.members);
   // Border (2) + padding (2) + the scrollbox's reserved scrollbar
   // column — the text budget inside the scroll region.
   const inner = Math.max(10, width - 5);
@@ -361,6 +423,7 @@ export function SectionSummaryBody({
               m={m}
               gutterCells={gutterCells}
               spineCell={spine.get(m.row.wt.slug) ?? null}
+              cols={cols}
             />
           ))
         )}

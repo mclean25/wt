@@ -57,10 +57,16 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # Run wt against the fixture. Every knob is pinned here rather than
 # inherited so an ambient WT_CONFIG in the caller's shell can never
 # aim these writes at the live instance.
+# `env -u BUN_INSPECT` for the same reason bin/wt does it: these scripts
+# are run by agents, so the caller is a Claude session whose environment
+# binds that session's inspector socket, and bun hands the variable to
+# every child. Going through src/main.ts directly bypasses bin/wt's
+# scrub, so each wt here died on EADDRINUSE binding a socket its parent
+# already owned.
 wtfx() {
   WT_CONFIG="$CONFIG" WT_TMUX_SOCKET="$SOCKET" \
     WT_GITHUB=off WT_AUTOMATIONS=off WT_UPDATE=off WT_SKILLS=off \
-    bun "$ROOT/src/main.ts" "$@"
+    env -u BUN_INSPECT bun "$ROOT/src/main.ts" "$@"
 }
 
 new_wt() { # slug [base-ref]
