@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import { REPOSITORY_CONFIG_ENV } from "./config-layer.ts";
 import { git, trackedTmpDirs } from "./test-fixtures.ts";
+import { resolveDestroyCommand } from "./lifecycle.ts";
 
 const { tmp } = trackedTmpDirs();
 
@@ -78,4 +79,42 @@ copy_globs = [".agents/**", ".git/**", "./.git/**"]
   const copied = join(worktrees, "copy-agents", ".agents", "skills", "example", "SKILL.md");
   expect(readFileSync(copied, "utf8")).toBe("agent skill\n");
   expect(existsSync(join(worktrees, "copy-agents", ".cache", "private.txt"))).toBe(false);
+});
+
+// --- [lifecycle] destroy_command -------------------------------------------
+
+test("resolveDestroyCommand substitutes path, slug and port", () => {
+  expect(
+    resolveDestroyCommand("teardown {{slug}} in {{path}} on {{port}}", {
+      path: "/wt/thing",
+      slug: "thing",
+      port: 8103,
+    }),
+  ).toBe("teardown thing in /wt/thing on 8103");
+});
+
+test("resolveDestroyCommand substitutes every occurrence, not just the first", () => {
+  expect(
+    resolveDestroyCommand("a {{slug}} b {{slug}}", { path: "/p", slug: "s", port: null }),
+  ).toBe("a s b s");
+});
+
+test("resolveDestroyCommand returns null when nothing is configured", () => {
+  expect(resolveDestroyCommand(null, { path: "/p", slug: "s", port: 8100 })).toBeNull();
+});
+
+// A worktree with no recorded port never started a dev server, so the
+// resources a port-derived teardown targets were never created. Running
+// the command with an empty substitution would be the worse answer: it
+// hands the shell a command with a hole in it.
+test("resolveDestroyCommand skips a port-dependent command when no port was allocated", () => {
+  expect(
+    resolveDestroyCommand("docker stop stack-{{port}}", { path: "/p", slug: "s", port: null }),
+  ).toBeNull();
+});
+
+test("resolveDestroyCommand still runs a port-independent command with no port", () => {
+  expect(
+    resolveDestroyCommand("docker rm -f {{slug}}", { path: "/p", slug: "s", port: null }),
+  ).toBe("docker rm -f s");
 });

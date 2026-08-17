@@ -168,6 +168,14 @@ command    = "python3 -m http.server {{port}} --bind 127.0.0.1"
 port_base  = 8700
 port_range = 50
 
+[lifecycle]
+# Exercises the destroy-time teardown hook. The process reaper can only
+# see things holding a listening socket with a cwd in the worktree, so a
+# project that creates anything else (docker containers above all) needs
+# this to release it. The marker lands OUTSIDE the checkout on purpose —
+# the checkout is what's being deleted.
+destroy_command = "echo {{slug}} >> $FX/destroyed.log"
+
 [skills]
 # Never answer the machine-global skills prompt on the human's behalf.
 startup_check = false

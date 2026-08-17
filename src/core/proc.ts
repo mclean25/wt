@@ -252,10 +252,15 @@ export async function streamLines(
  * Spawn a subprocess, stream stdout+stderr line-by-line through the
  * callback, resolve with the exit code. Lets long-running output surface
  * in the TUI without blocking on `inherit`.
+ *
+ * `killAfterMs` is the ONE opt-in bound (see the note inside about why
+ * `timeoutMs` is otherwise ignored). Absent — every caller but the
+ * `[lifecycle] destroy_command` — keeps the original wait-forever
+ * behavior exactly.
  */
 export async function runStreaming(
   argv: string[],
-  opts: RunOptions & { onLine?: (line: string) => void } = {},
+  opts: RunOptions & { onLine?: (line: string) => void; killAfterMs?: number } = {},
 ): Promise<number> {
   // Deliberately NOT behind `RUN_CONCURRENCY` either: these run for
   // minutes (pnpm install, sst remove), so a slot held here would starve
@@ -265,10 +270,10 @@ export async function runStreaming(
   //
   // Deliberately ignores `timeoutMs`/`signal` from RunOptions: callers
   // are long-running lifecycle ops (pnpm install, sst remove) where a
-  // mid-flight kill leaves worse state than waiting. If a future caller
-  // needs cancellation, wire it up here explicitly — don't assume the
-  // options work just because the type accepts them.
-  const { cwd, env, onLine } = opts;
+  // mid-flight kill leaves worse state than waiting. A caller that needs
+  // cancellation asks for it explicitly via `killAfterMs` — don't assume
+  // the other options work just because the type accepts them.
+  const { cwd, env, onLine, killAfterMs } = opts;
   const proc = Bun.spawn(argv, {
     cwd,
     stdin: "ignore",
@@ -277,9 +282,23 @@ export async function runStreaming(
     env: env ? { ...process.env, ...env } : process.env,
   });
   const emit = onLine ?? (() => {});
-  await Promise.all([
-    streamLines(proc.stdout, emit),
-    streamLines(proc.stderr, emit),
-  ]);
-  return proc.exited;
+  // Kill on the deadline rather than abandoning the wait: resolving
+  // early would leave the child streaming into a callback whose caller
+  // has moved on (for destroy, into a worktree it is about to delete).
+  const timer =
+    killAfterMs !== undefined && killAfterMs > 0
+      ? setTimeout(() => {
+          emit(`timed out after ${Math.round(killAfterMs / 1000)}s — killing`);
+          proc.kill("SIGKILL");
+        }, killAfterMs)
+      : null;
+  try {
+    await Promise.all([
+      streamLines(proc.stdout, emit),
+      streamLines(proc.stderr, emit),
+    ]);
+    return await proc.exited;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

@@ -151,6 +151,22 @@ Preview-stage naming, used by the SST integration and stage URLs.
 | `env_files_to_copy` | no | `[".env"]` | Files copied from the main clone into each new worktree during setup. |
 | `copy_globs` | no | `[]` | Glob patterns resolved relative to the main clone and copied into each new worktree with their paths preserved. Dotfiles are included except root `.git` metadata, existing destinations are not overwritten, and patterns must be relative without `..` segments. Example: `[".agents/**"]`. |
 | `install_command` | no | *(auto-detect)* | Dependency install run in a fresh `git-worktree` checkout, via `$SHELL -lc`. Unset ⇒ detect the package manager from the checkout's lockfile (`bun.lock`/`bun.lockb` → `bun install`, `pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn install`, `package-lock.json`/`npm-shrinkwrap.json` → `npm install`); no lockfile ⇒ the install is skipped with a note. The `rift` backend never installs — packages ride the CoW clone. |
+| `destroy_command` | no | *(none)* | Teardown run at destroy, inside the checkout, via `$SHELL -lc`, just before the process reaper and the backend remove. `{{path}}`, `{{slug}}` and `{{port}}` substitute. Never blocks the destroy: a non-zero exit or a hang past 120s is logged and the removal proceeds. |
+
+### `destroy_command` — what it is for
+
+The destroy-time **process** reaper kills anything holding a listening TCP socket whose cwd is inside the worktree. That covers a hand-started `pnpm preview` or a stray watch runner, and nothing else. Resources a dev server creates *outside* the process tree are invisible to it — **docker containers above all**: a container has no cwd in the worktree, and its published host ports are held by the docker daemon, so neither half of the reaper's match ever fires.
+
+The failure that follows is indirect enough to be hard to read. A stack left running after its worktree is destroyed keeps its host ports; wt frees the slug's dev port and hands it to the next worktree (correctly — it probes, and the *dev* port really is free); that worktree derives the same downstream ports from it and dies on a `port is already allocated` error naming a container wt has never heard of.
+
+`destroy_command` is the hook for releasing that. It is deliberately a shell command rather than anything docker-aware, because the same shape covers tunnels, sandboxes, and per-worktree cloud resources:
+
+```toml
+[lifecycle]
+destroy_command = "docker ps -aq --filter name={{slug}} | xargs -r docker rm -f"
+```
+
+Two behaviors worth knowing. It **never fails a destroy** — a broken teardown script leaving a worktree undeletable would be a worse leak than the one this fixes, so a non-zero exit is logged and removal continues, and a command still running after 120s is killed. And a template that mentions `{{port}}` is **skipped entirely** when the slug has no recorded dev port, since that means no dev server ever ran there and the resources it would tear down were never created; templates that don't mention the port always run.
 
 `install_command` caveats: the same command is also used verbatim for the main-clone dependency sync ([backends.md](backends.md)), so it must not rewrite the committed lockfile (use a frozen/`ci` variant) — auto-detection picks frozen variants for that path on its own. The command string is echoed into logs and the activity pane, so don't embed secrets in it. And like `[[actions]]`/`[[automations]]`, it executes automatically — a `.wt.toml` is trusted config, so don't point `wt` at repository config you don't control.
 

@@ -625,6 +625,28 @@ export type Config = {
      * the install with a note.
      */
     installCommand: string | null;
+    /**
+     * Teardown command run at destroy, inside the checkout, just before
+     * the process reaper and the backend remove. Executed via
+     * `$SHELL -lc`; `{{path}}`, `{{slug}}` and `{{port}}` substitute.
+     * Null (the default) runs nothing.
+     *
+     * This is the counterpart to `installCommand` and exists because the
+     * reaper can only see PROCESSES — anything holding a listening
+     * socket with a cwd inside the worktree. Resources a dev server
+     * creates *outside* the process tree are invisible to it: docker
+     * containers most of all, which have no cwd in the worktree and
+     * whose host ports are held by the docker daemon, not by a child.
+     * A stack left running after its worktree is destroyed keeps its
+     * ports, and the next worktree to derive the same ports fails to
+     * start with a docker error that names nothing wt knows about.
+     *
+     * Never blocks the destroy: a non-zero exit, or a hang past
+     * `DESTROY_COMMAND_TIMEOUT_MS`, is logged and the destroy proceeds.
+     * Leaving the worktree on disk because its teardown script was
+     * broken is strictly worse than leaking what leaks today.
+     */
+    destroyCommand: string | null;
   };
   /**
    * How new worktrees are materialized on disk. `git-worktree` (default)
@@ -997,6 +1019,7 @@ function build(raw: Raw, errs: Errors): Config {
     errs.add("lifecycle.copy_globs entries must be relative paths without '..' segments");
   }
   const installCommand = errs.optStrOrNull(lifecycle, "install_command");
+  const destroyCommand = errs.optStrOrNull(lifecycle, "destroy_command");
 
   // Worktree backend — opt-in. Absent section (or absent key) means the
   // default `git-worktree`; `rift` switches new creates to CoW clones.
@@ -1282,7 +1305,7 @@ function build(raw: Raw, errs: Errors): Config {
     tmux: { socket: tmuxSocket },
     branch: { prefix: branchPrefix, base: branchBase, idPattern, slugMaxLen },
     stage: { prefix: stagePrefix, defaultPersonal: stageDefault, domain: stageDomain },
-    lifecycle: { envFilesToCopy: envFiles, copyGlobs, installCommand },
+    lifecycle: { envFilesToCopy: envFiles, copyGlobs, installCommand, destroyCommand },
     backend: { kind: backendKind },
     sst,
     issueTracker,

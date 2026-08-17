@@ -41,7 +41,39 @@ import { fetchOrigin } from "./worktree.ts";
  */
 const LOCK_ACQUIRE_WAIT_MS = 8000;
 
+/**
+ * Bound on `[lifecycle] destroy_command`. Sized for the realistic worst
+ * case it exists for — `docker compose down` on a ten-plus container
+ * stack, tens of seconds — with headroom. On expiry the child is killed
+ * and the destroy continues: whatever the teardown was going to release
+ * simply leaks, which is exactly today's behavior with no hook at all.
+ */
+export const DESTROY_COMMAND_TIMEOUT_MS = 120_000;
+
 const log = createLogger("[lifecycle]");
+
+/**
+ * Substitute `{{path}}` / `{{slug}}` / `{{port}}` into the configured
+ * teardown command. Null = don't run anything.
+ *
+ * A template naming `{{port}}` with no port ever allocated resolves to
+ * null rather than to a command with a hole in it. That reads as a
+ * special case but is the honest one: the port is recorded when a dev
+ * server first starts, so "no port" means this worktree never ran one,
+ * which means the resources such a template tears down were never
+ * created. Templates that don't mention the port always run.
+ */
+export function resolveDestroyCommand(
+  template: string | null,
+  vars: { path: string; slug: string; port: number | null },
+): string | null {
+  if (!template) return null;
+  if (template.includes("{{port}}") && vars.port === null) return null;
+  return template
+    .replaceAll("{{path}}", vars.path)
+    .replaceAll("{{slug}}", vars.slug)
+    .replaceAll("{{port}}", String(vars.port ?? ""));
+}
 
 export type CreateResult =
   | { ok: true; path: string; branch: string; stage: string; slug: string }
@@ -538,6 +570,48 @@ export async function removeWorktree(
         } else {
           opts.onLog?.(`sst remove failed (exit ${sstExit})`);
         }
+      }
+    }
+
+    // Project teardown BEFORE the reaper, for the same reason the
+    // reaper runs before the backend remove: the command runs `cwd` in
+    // the checkout, so the directory has to still exist. Graceful first,
+    // blunt second — this is the project's own chance to release what it
+    // created, and the reaper is the sweep for whatever convention
+    // missed. Its blind spot is the whole point: the reaper matches on a
+    // listening socket plus a cwd inside the worktree, and a docker
+    // container has neither (the host port belongs to the daemon), so
+    // nothing about a container is reachable through the process tree.
+    const destroyCommand = resolveDestroyCommand(config.lifecycle.destroyCommand, {
+      path: wt.path,
+      slug: wt.slug,
+      port: readWtState().slugs[wt.slug]?.devPort ?? null,
+    });
+    if (destroyCommand) {
+      opts.onPhase?.("destroy command");
+      handle.phase("destroy command");
+      opts.onLog?.(`destroy_command: ${destroyCommand}`);
+      // Never fatal. A teardown script that exits non-zero, or hangs
+      // until the bound kills it, must not strand a worktree the user
+      // asked to delete — the failure mode this hook exists to fix is a
+      // leak, and refusing the destroy converts it into a bigger one.
+      try {
+        const exit = await runStreaming(
+          [process.env.SHELL || "bash", "-lc", destroyCommand],
+          {
+            cwd: wt.path,
+            onLine: (line) => opts.onLog?.(line),
+            killAfterMs: DESTROY_COMMAND_TIMEOUT_MS,
+          },
+        );
+        if (exit !== 0) {
+          opts.onLog?.(`destroy_command failed (exit ${exit}) — continuing`);
+          log.warn("destroy_command failed", { slug: wt.slug, exit });
+        }
+      } catch (err) {
+        opts.onLog?.(
+          `destroy_command errored: ${err instanceof Error ? err.message : String(err)} — continuing`,
+        );
       }
     }
 
