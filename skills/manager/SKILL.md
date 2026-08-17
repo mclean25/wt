@@ -116,7 +116,15 @@ the human asks.
 - `wt status --all --json` — the status-only view: asserted state, risk,
   note, staleness (appends the same recently-removed rows).
 - `wt ls --json` — worktree health (dirty, unpushed, PRs); appends the same
-  recently-removed rows (live rows never carry a `state` field).
+  recently-removed rows.
+- **All three of those append removed history, and `kind` is how you drop
+  it**: `"live"` for the worktrees that exist, `"merged"` / `"removed"` for
+  the last 48h. Same field, same values, all three commands — filter on the
+  VALUE. Don't count rows and don't cross-check against `wt section ls` or
+  `wt doctor`, which list live worktrees only: the disagreement is the
+  removed history doing its job, not a prune wt failed to run. A landed row
+  keeps its `pr`, which is exactly what makes "everything landed" readable,
+  and exactly what makes it look actionable if you forgot to filter.
 - `wt claude ls [--json]` — live agent sessions (worktrees + the repo-level
   wt/main/dotfiles/manager slots). `--json` adds per-session `busy` and
   `last_activity` from Claude's process registry (null when the tmux session

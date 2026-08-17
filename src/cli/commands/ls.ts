@@ -35,9 +35,11 @@ configured, PR, status). Worktrees destroyed in the last 48h stay
 visible as a dim "recently merged" footer, so an empty fleet says why.
 
   --json    machine-readable array (slug, branch, path, stage, section,
-            base, status, dirty, issue_id, issue_url, …). Recently-removed rows are
-            appended with kind: "merged"|"removed", pr, archived_at;
-            live rows never carry a "kind" field.`;
+            base, status, dirty, issue_id, issue_url, …). Recently-removed rows
+            are appended with pr and archived_at. Every row carries kind:
+            filter kind == "live" for the worktrees that exist, "merged" /
+            "removed" for the history. Same field, same values, on
+            wt fleet --json and wt status --all --json.`;
 
 const KNOWN_FLAGS = new Set(["--json", "--help", "-h"]);
 
@@ -71,6 +73,14 @@ export async function run(argv: string[]): Promise<number> {
           branch: w.branch,
           path: w.path,
           stage: w.stage,
+          // Positive discriminator, matching `wt status --all --json`.
+          // Live rows used to carry nothing, so the only way to drop the
+          // appended removed-history rows was a negative test — and a
+          // negative test reads as "this command has no discriminator"
+          // rather than as a deliberate absence. A manager cross-checked
+          // this count against `wt section ls`, found four extra rows,
+          // and concluded wt was failing to prune on remove.
+          kind: "live" as const,
           // Manual TUI section (human grouping intent, e.g. "Merge
           // after Release"); null = inbox. Never a stack key — those
           // groupings are inferred at render time, not stored.

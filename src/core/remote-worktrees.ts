@@ -98,18 +98,25 @@ export function parseRemoteWorktrees(
 ): RemoteWorktreeSummary[] {
   const value: unknown = parseWorktreeJson(raw);
   if (!Array.isArray(value)) throw new Error("remote wt ls returned non-array JSON");
-  // `wt ls --json` appends recently-removed rows (discriminated by a
-  // `kind` field live rows never carry — see core/wtstate/removed.ts;
-  // `state` was the discriminator for one release, kept for skew). The
-  // remote section renders live worktrees only, so drop them here;
-  // older remotes simply don't emit them. Filtering must be per-entry
-  // lenient: hosts run independently-updated wt versions, and one
-  // unrecognized future row shape must degrade to a skipped row, not
-  // poison the host's whole live list.
-  const live = value.filter(
-    (entry) =>
-      !(entry && typeof entry === "object" && ("kind" in entry || "state" in entry)),
-  );
+  // `wt ls --json` appends recently-removed rows, discriminated by
+  // `kind` — see core/wtstate/removed.ts. The remote section renders
+  // live worktrees only, so drop them here.
+  //
+  // Keep on the VALUE, never on the key's absence: hosts run
+  // independently-updated wt versions, and `kind` has meant three things
+  // across them — absent (before it existed), then `merged`/`removed` on
+  // archived rows only, and now `live` on live rows too. A host that
+  // tested for the key's presence would drop every row from a newer
+  // remote and render the section empty, which looks exactly like a host
+  // with no worktrees. Unknown future kinds skip that row rather than
+  // poisoning the host's whole list, same as an unparseable one.
+  // (`state` was the discriminator for one release; still dropped.)
+  const live = value.filter((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    if ("state" in entry) return false;
+    if (!("kind" in entry)) return true;
+    return (entry as { kind?: unknown }).kind === "live";
+  });
   return live.map((entry, index) => {
     if (!entry || typeof entry !== "object") {
       throw new Error(`remote worktree ${index} is not an object`);

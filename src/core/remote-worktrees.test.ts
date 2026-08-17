@@ -121,4 +121,24 @@ describe("parseRemoteWorktrees", () => {
       "did not return JSON",
     );
   });
+
+  // The remote runs its own wt build, so every `kind` this field has ever
+  // meant can arrive here at once. Keeping a live row is what fails
+  // silently: dropping them all renders an empty host section, which is
+  // indistinguishable from a host that genuinely has no worktrees.
+  test("keeps live rows across every wt version's `kind` convention", () => {
+    const row = (slug: string, extra: Record<string, unknown>) => ({
+      slug, branch: slug, path: `/${slug}`, stage: slug, exists: true,
+      status: "clean", status_label: "clean", dirty: false, ...extra,
+    });
+    const rows = parseRemoteWorktrees(JSON.stringify([
+      row("old-remote", {}),                       // before `kind` existed
+      row("new-remote", { kind: "live" }),         // positive discriminator
+      { slug: "landed", branch: "landed", kind: "merged", archived_at: "z" },
+      { slug: "gone", branch: "gone", kind: "removed", archived_at: "z" },
+      { slug: "future", branch: "future", kind: "something-new" },
+      { slug: "legacy", branch: "legacy", state: "removed" },
+    ]), "cachy");
+    expect(rows.map((r) => r.slug)).toEqual(["old-remote", "new-remote"]);
+  });
 });

@@ -47,10 +47,13 @@ like "Merge after Release" is a merge-order hint; null/— = inbox).
 Recently-removed rows (≤48h) are appended so "everything landed" never
 reads as "nothing exists".
 
-  --json    machine-readable array. Live rows carry work / session /
+  --json    machine-readable array. Every row carries kind: filter
+            kind == "live" for the worktrees that exist, "merged" /
+            "removed" for the history. Live rows carry work / session /
             pr objects (pr is null with a pr_note when GitHub is
-            unavailable); removed rows carry kind: "merged"|"removed"
-            instead (live rows never have a "kind" field).
+            unavailable); removed rows carry pr and archived_at only.
+            Same field, same values, on wt ls --json and
+            wt status --all --json.
 
 Merge fields report "computing" while GitHub is still calculating
 mergeability (its UNKNOWN state) — re-run after a few seconds; the
@@ -277,6 +280,9 @@ export async function run(argv: string[]): Promise<number> {
         slug: r.wt.slug,
         branch: r.wt.branch,
         path: r.wt.path,
+        // Positive discriminator, same value and meaning on every JSON
+        // surface that appends removed history — see ls.ts.
+        kind: "live" as const,
         // The human's manual grouping in the TUI ("Merge after Release",
         // …) — asserted intent the manager should weigh; null = inbox.
         // Inferred stack groupings deliberately don't appear here: they
