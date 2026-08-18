@@ -39,7 +39,7 @@ They also never fire on the manager's *own* status writes. Triage ends by sharpe
 | `d` | Digest: what needs me | ≤5 bullets — what needs the human now, what's mergeable in what order, what's stalled |
 | `t` | Triage needs-human rows | unblock what it can itself, re-assert statuses, distill the remainder to one ask per row |
 | `o` | Plan merge order | concrete order + conflict risks + forced restacks |
-| `n` | Nudge stalled workers | pointed `wt claude send` to quiet working/review rows |
+| `n` | Nudge stalled workers | pointed `wt agent send` to quiet working/review rows |
 | `a` | Audit work statuses | cross-check every assertion against PR/CI/session reality, fix drifted records |
 | `s` | Start next todo | pick the highest-value `todo` row(s) and kick their agents off |
 | `r` | Ask about selected row | free text about the list-pane selection, delivered `[re: <slug>]` |
@@ -67,18 +67,23 @@ Everything is ordinary CLI surface, so any harness can drive it:
 - `wt status <slug> <state> …` — assert on a worktree's behalf after acting on it (`--note-only` sharpens a note without touching state or timestamp).
 - `wt edge <from> <before|conflicts|enables> <to> [--blocks|--prefer] [-m why]` — record merge sequencing as structured state instead of prose ([cli.md](cli.md#wt-edge-from-kind-to)); `wt edge --json` reads it back with staleness computed. Edges self-expire when either branch moves — re-assert what still matters, never audit the list. Worktrees assert their own first-hand dependencies; cross-branch edges are yours to assert.
 - `wt dev queue` / `wt dev queue <slug> --first` — the dev-slot wait queue, and the one lever for saying a worktree goes first. Promotion edits that waiter's own entry, so it takes effect on the waiter's next poll with no message and no cooperation; asking an agent to stand aside instead loses to a slot that frees instantly (it did, once, with three agents all cooperating correctly). Only a queued worktree can be moved (`wt dev start --wait` first), the tier lasts exactly as long as that wait, and worktrees cannot promote themselves — this is the fleet call they are told to bring here.
-- `wt claude send <slug> "<text>"` — ensure and nudge a worktree session (also accepts the `wt`/`main`/`dotfiles`/`manager` repo-level slugs; an archived slug answers with why it is gone). Delivery is confirmed against the target transcript; a non-zero exit means the message is not in that conversation. A payload that IS a slash command (`/compact`, a bare `/context`) runs, because submitting at the prompt is exactly what running one requires — but a command leaves no prompt entry behind, so its delivery is reported as unknown rather than confirmed.
+- `wt agent send <slug> "<text>"` — ensure and nudge a worktree's configured primary harness. `wt agent start <slug>` invokes its bundled start skill with the correct harness-native prefix.
+- `wt claude send <slug> "<text>"` — Claude-specific compatibility path, and the path for the `wt`/`main`/`dotfiles`/`manager` repo-level slots (an archived slug answers with why it is gone). Delivery is confirmed against the target transcript; a non-zero exit means the message is not in that conversation. A payload that IS a slash command (`/compact`, a bare `/context`) runs, because submitting at the prompt is exactly what running one requires — but a command leaves no prompt entry behind, so its delivery is reported as unknown rather than confirmed.
 - `wt claude ls --json` — live sessions with stable session, process, tmux and activity fields, plus `transport` (`inspector` = wt can submit into it directly; `terminal` = it has to be typed at) and `waiting_for` (what it is blocked on, when it is).
 - `wt manager report [--ok|--warn|--err] "<text>"` — surface a terse result on the TUI's attention feed (the palette's report-back channel).
 - `gh` — PR state, merges (only when the human asked), CI.
 
 ### wt owns session addressing and delivery
 
-Callers address worktrees and repo slots through `wt claude send`, never through a Claude peer name, socket path, or tmux pane. wt maps the canonical cwd and managed name to a stable Claude conversation identity, discovers a live process, and cold-starts it when absent. Tmux remains the process and interactive UI host.
+Callers address worktrees through `wt agent send` and Claude-only repo slots
+through `wt claude send`, never through a harness-private peer name, socket
+path, or tmux pane. wt maps the canonical cwd and managed name to a stable
+conversation identity, discovers a live process, and cold-starts it when
+absent. Tmux remains the process and interactive UI host.
 
 **A cold start that finds a stuck session recycles it rather than failing.** A tmux session can exist with no live Claude process in it (a harness that never came up). tmux refuses a duplicate name, so the start adopts that session, creates nothing, and waits out the registration timeout — and so does every retry, which is why the failure used to be sticky and only `wt claude stop <slug>` cleared it. Now an *adopted* session that still hasn't registered after the full timeout is killed and recreated once, since by then no conversation can be at stake and the concurrent-creator race the adoption path exists for has already lost its whole window. A session this call genuinely created is not recycled: that is the harness failing to start, and recreating it reproduces the failure. Either way the error quotes the pane, which is where a refusing harness explains itself and the only place that says so — the wrapper's `.err` file is empty in every observed instance, and `wt logs` is about destroy logs.
 
-Messages are also **signed**: a send from inside a wt harness session is prefixed with that session's slug (`[eng-1234-thing] …`), from the `WT_AGENT` variable wt stamps at spawn. Agents used to be told to do this by hand, which is the kind of rule that gets forgotten precisely when attribution matters. A slash command is never stamped — a prefix would stop it being a command.
+Messages are also **signed**: a send from inside a wt harness session is prefixed with that session's slug (`[eng-1234-thing] …`), from the `WT_AGENT` variable wt stamps at spawn. Agents used to be told to do this by hand, which is the kind of rule that gets forgotten precisely when attribution matters. A harness command (`/…` for Claude, `$…` for Codex/OpenCode) is never stamped — a prefix would stop it being a command.
 
 ## How a message reaches a session
 

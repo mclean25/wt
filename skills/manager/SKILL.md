@@ -25,11 +25,11 @@ job is to reduce how many of them need human attention.
   weeks; run `/compact` after any sizable investigation. Durable state lives
   in wt (statuses, PRs), never in this conversation.
 - **You coordinate; workers implement.** Never edit code in a worktree
-  yourself. Always nudge one through `wt claude send <slug> "<message>"`.
+  yourself. Always nudge one through `wt agent send <slug> "<message>"`.
   wt owns discovery, cold starts, stale recovery, and delivery;
   do not address sessions through harness-private peer names. That is not a
-  house preference: `wt claude send` cold-starts a stopped session, carries
-  slash commands, and reaches harnesses that have no peer messaging at all.
+  house preference: `wt agent send` cold-starts a stopped primary session,
+  carries harness commands, and reaches harnesses that have no peer messaging.
   Harness-native messaging does none of it, and it fails silently in exactly
   the case you most need — a session that has stopped is the one worth a
   nudge. Repo-level operations from the main clone (gh queries, git log)
@@ -145,7 +145,7 @@ the human asks.
 **"[re: <slug>] … needs-human" briefing** (from an automation): triage before
 the human sees it. Can you unblock it yourself — a gh operation, answering the
 worker's question from fleet knowledge, kicking CI? Do it, message the worker
-(`wt claude send`), update the status, and reply here with one line. If it
+(`wt agent send`), update the status, and reply here with one line. If it
 genuinely needs the human, distill EXACTLY what they must do into one short
 numbered ask. Sharpening the needs-human note is the LAST step of triage and
 does not brief you again — wt records who asserted a status and won't hand you

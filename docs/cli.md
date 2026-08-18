@@ -208,7 +208,7 @@ Delete the engine's `backup/restack-*` branches older than `--days` (default all
 
 ### `wt skills [status|sync|diff|reset]`
 
-Keep wt's bundled agent skills (`wt`, `restack`, `manager`, `start`, `triage`) and the managed instructions block installed and current across every harness on the machine — following symlinks, deduping shared directories, and writing through rulesync pipelines (durable source + regenerate) where one manages the target. See [skills.md](skills.md) for the full model.
+Keep wt's bundled agent skills (`wt`, `restack`, `manager`, `start`, `handoff`, `triage`) and the managed instructions block installed and current across every harness on the machine — following symlinks, deduping shared directories, and writing through rulesync pipelines (durable source + regenerate) where one manages the target. See [skills.md](skills.md) for the full model.
 
 - `wt skills` / `status` — freshness of every unit at every target, plus remembered template answers.
 - `sync [<name>...]` — interactive install/update; the same flow the TUI runs at startup. `--yes` accepts all missing/outdated units without prompting (never touches modified copies); `--force` additionally allows overwriting modified copies. Naming a unit explicitly overrides a remembered decline. `install` is a legacy alias.
@@ -247,6 +247,21 @@ The optional GitHub webhook daemon — see [github-events.md](github-events.md).
 | `secret` | generate or show the HMAC secret |
 | `uninstall` | unload + remove the launchd agent |
 | `serve` | run the daemon in the foreground (what launchd invokes) |
+
+### `wt agent <sub>`
+
+Drive a worktree's configured primary coding-agent harness from scripts or
+another session. The primary is the same persisted Claude/Codex/OpenCode
+selection shown in the TUI and changed with `Shift+Tab`.
+
+| sub | what it does |
+|---|---|
+| `send <slug> [text...]` | ensure the worktree's primary harness session exists, then submit text at its prompt; reads stdin when no text args |
+| `start <slug>` | ensure the primary session exists and invoke the bundled `start` skill using that harness's native prefix (`/start` for Claude, `$start` for Codex/OpenCode) |
+
+Both commands are fire-and-forget with respect to the receiving agent's work,
+but fail when delivery is known not to have reached the conversation. Use
+`wt claude` below only for Claude-specific session inspection and control.
 
 ### `wt claude <sub>`
 

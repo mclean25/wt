@@ -80,7 +80,7 @@ type SessionMessageOk = {
   coldStarted: boolean;
   /**
    * Did the prompt reach the conversation? `null` = nothing durable
-   * can witness it (a slash command leaves no prompt entry), so
+   * can witness it (a harness command may leave no prompt entry), so
    * delivery is UNKNOWN — report it that way, never as success.
    */
   delivered: boolean | null;
@@ -122,17 +122,17 @@ export function senderTag(): string | null {
 }
 
 /**
- * Whether a payload is a slash command rather than a message — i.e.
+ * Whether a payload is a harness command rather than a message — i.e.
  * whether it only means anything if the harness *executes* it.
  *
- * Anchored and shaped, not a bare `startsWith("/")`: a command name is
- * lowercase and unbroken, and must be the whole first token. That is
- * what keeps a message opening with an absolute path out of the command
- * path — `/Users/…` fails the lowercase rule and `/tmp/foo` fails the
- * token boundary, while `/compact` and `/compact <args>` match.
+ * Anchored and shaped, not a bare prefix check: a command name is lowercase
+ * and unbroken, and must be the whole first token. That keeps a message
+ * opening with an absolute path out of the command path — `/Users/…` fails
+ * the lowercase rule and `/tmp/foo` fails the token boundary — while also
+ * recognizing Codex/OpenCode's `$start` form.
  */
-function isSlashCommand(text: string): boolean {
-  return /^\/[a-z][a-z0-9_-]*(\s|$)/.test(text.trimStart());
+function isHarnessCommand(text: string): boolean {
+  return /^[/$][a-z][a-z0-9_-]*(\s|$)/.test(text.trimStart());
 }
 
 /**
@@ -141,17 +141,17 @@ function isSlashCommand(text: string): boolean {
  * Two things are deliberately left unstamped. A payload that already
  * opens with a bracketed tag (`[re: <slug>]` briefings, anything a
  * caller attributed itself) keeps its own framing instead of collecting
- * a second bracket. And a slash command is left exactly as it is: the
+ * a second bracket. A harness command is left exactly as it is: the
  * injector submits it at the prompt, where it RUNS — but only while the
  * command is the first token, so a sender tag would quietly turn
- * `/compact` back into a sentence about compaction, which is the
+ * `/compact` or `$start` back into a sentence, which is the
  * failure this whole transport was meant to end.
  */
 export function stampSender(text: string): string {
   const tag = senderTag();
   if (!tag) return text;
   if (/^\s*\[/.test(text)) return text;
-  if (isSlashCommand(text)) return text;
+  if (isHarnessCommand(text)) return text;
   return `[${tag}] ${text}`;
 }
 
@@ -322,11 +322,11 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     });
 
     if (delivery.ok) {
-      // A slash command is recorded in the transcript as an EXPANDED
+      // A Claude slash command is recorded in the transcript as an EXPANDED
       // command entry, not as the text that was submitted, so scanning
       // for the payload can only ever come back empty — `/context` runs
       // perfectly and confirms as lost. Unknown is the honest answer.
-      const delivered = isSlashCommand(text)
+      const delivered = isHarnessCommand(text)
         ? null
         : await confirmInjected({ cwd, managedName, text, sinceMs, idleAtSubmit });
       return { ok: true, coldStarted, delivered, resent: false, transport: "inspector" };

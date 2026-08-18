@@ -174,7 +174,7 @@ const REPORT_BACK =
  * `[[actions]] target="manager"` path against the selected row.
  *
  * Universal builtins (no config gate): the vocabulary they lean on
- * (`wt status --all --json`, `wt claude send`, `wt manager report`) is
+ * (`wt status --all --json`, `wt agent send`, `wt manager report`) is
  * wt's own CLI surface, which every harness can drive.
  */
 export const MANAGER_BUILTIN_ACTIONS: readonly ActionDef[] = [
@@ -207,7 +207,7 @@ export const MANAGER_BUILTIN_ACTIONS: readonly ActionDef[] = [
       "Triage every worktree currently asserting needs-human (`wt status --all",
       "--json`). For each: first try to unblock it yourself — gh operations,",
       "answering the worker's question from fleet knowledge, nudging its session",
-      "with `wt claude send <slug> \"...\"` — and re-assert its status on the",
+      "with `wt agent send <slug> \"...\"` — and re-assert its status on the",
       "worker's behalf when you do. Distill whatever genuinely remains into one",
       "short ask per row.",
       REPORT_BACK,
@@ -249,7 +249,7 @@ export const MANAGER_BUILTIN_ACTIONS: readonly ActionDef[] = [
     prompt: [
       "Find stalled workers: rows asserting working/review whose sessions have",
       "gone quiet or whose status timestamps are old (`wt status --all --json`).",
-      "Nudge each live-but-idle one with a pointed `wt claude send <slug>",
+      "Nudge each live-but-idle one with a pointed `wt agent send <slug>",
       "\"...\"` naming what it should do next; note the ones that are genuinely",
       "blocked rather than stalled.",
       REPORT_BACK,
@@ -291,9 +291,9 @@ export const MANAGER_BUILTIN_ACTIONS: readonly ActionDef[] = [
     prompt: [
       "Pick the next todo work to start. From rows asserting todo (`wt status",
       "--all --json`), choose the highest-value one(s) given current fleet load",
-      "(don't flood — a couple at most), and kick each off by injecting a",
-      "starting prompt into its session with `wt claude send <slug> \"...\"`",
-      "that tells the agent to begin the task and own its status transitions.",
+      "(don't flood — a couple at most), and kick each off with `wt agent",
+      "start <slug>`, which invokes its prepared prompt.txt through the bundled",
+      "start skill and makes that agent own its status transitions.",
       REPORT_BACK,
     ].join(" "),
     target: "manager",

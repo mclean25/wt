@@ -81,6 +81,10 @@ in each one.
   or attach/detach its secondary GitHub issue. The primary id stays parsed
   from the slug; the attached GH issue becomes the `i`-key / `y i` target
   (most specific wins), while `I` / `y I` always hit the primary.
+- `wt agent send <slug> <text…>` / `wt agent start <slug>` — message or
+  cold-start the worktree's configured primary coding-agent harness. `start`
+  invokes the bundled start skill with the receiving harness's native prefix,
+  so callers never need to special-case Claude, Codex, or OpenCode.
 - `wt dev <start|stop|status|logs> [slug]` — the worktree's dev server, when
   the project configures one. Use it instead of running the project's dev
   command yourself: wt pins the server to a port it allocates per worktree

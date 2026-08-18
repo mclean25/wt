@@ -56,6 +56,12 @@ describe("sender stamping", () => {
     expect(stampSender("/compact keep the fleet state")).toBe("/compact keep the fleet state");
   });
 
+  test("a dollar-prefixed Codex/OpenCode skill is never stamped", () => {
+    process.env.WT_AGENT = "wt";
+    expect(stampSender("$start")).toBe("$start");
+    expect(stampSender("$handoff next task")).toBe("$handoff next task");
+  });
+
   test("a message that merely mentions a path or a command is stamped", () => {
     process.env.WT_AGENT = "wt";
     expect(stampSender("/Users/michael/x.ts is where it broke")).toBe(
@@ -392,6 +398,16 @@ describe("the claude transport ladder", () => {
       transport: "inspector",
       delivered: null,
     });
+  });
+
+  test("a dollar-prefixed harness command is also left executable", async () => {
+    process.env.WT_AGENT = "wt";
+    const fake = fakes();
+    const send = createSessionMessenger(fake.deps);
+
+    await send({ ...target, harnessId: "codex", text: "$start" });
+
+    expect(fake.calls.terminal).toBe(1);
   });
 
   test("an empty message is refused before any transport is touched", async () => {

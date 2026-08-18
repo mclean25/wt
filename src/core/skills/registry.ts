@@ -86,6 +86,12 @@ export const UNITS: readonly Unit[] = [
   },
   {
     kind: "skill",
+    name: "handoff",
+    summary: "create a follow-up worktree, brief it, and start its primary agent",
+    vars: [],
+  },
+  {
+    kind: "skill",
     name: "triage",
     summary: "turn a task batch into prioritized, ready-to-work worktrees",
     vars: [PROJECT_NOTES],

@@ -24,6 +24,7 @@ commands:
   section     list / move / rename / drop the fleet's sections (the human's batching)
   manager     attach the fleet-coordinator session / send it a message / report a result
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
+  agent       send to / start a worktree's configured primary coding agent
   claude      drive a worktree's Claude Code session (send / ls / stop)
   dev         start / stop / inspect a worktree's [dev_server]
 
@@ -71,6 +72,7 @@ const RUNNERS: Record<string, Loader> = {
   section: () => import("./commands/section.ts"),
   manager: () => import("./commands/manager.ts"),
   issue: () => import("./commands/issue.ts"),
+  agent: () => import("./commands/agent.ts"),
   claude: () => import("./commands/claude.ts"),
   dev: () => import("./commands/dev.ts"),
   _destroy: () => import("./commands/_destroy.ts"),

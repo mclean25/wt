@@ -4,7 +4,7 @@ description: >-
   Start work on the task this wt worktree is for. Reads the prompt.txt
   kickoff brief and any referenced GitHub issues, researches the code,
   implements the work, then reviews, tests, and hands off with a clear
-  `wt status`. User-initiated only via /start.
+  `wt status`. User-initiated via /start (Claude) or $start (Codex/OpenCode).
 targets:
   - '*'
 argument-hint: "[optional task context or extra instructions, e.g. a pasted task description]"

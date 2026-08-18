@@ -129,13 +129,14 @@ Only after explicit approval, and only after restating the exact batch.
 
    After writing each brief, seed the worktree's status so the wt list shows
    the batch as queued work: `wt status <slug> todo -m "<one-line goal>"`.
-5. **Kick off `/start` in every worktree created** —
-   `wt claude send <slug> '/start'` for each, fire-and-forget. Always do
-   this; don't offer it or wait to be asked. Sessions run in parallel and the
-   human attaches via the wt TUI when they want to watch.
+5. **Kick off the start skill in every worktree created** —
+   `wt agent start <slug>` for each, fire-and-forget. Always do this; don't
+   offer it or wait to be asked. wt selects the configured primary harness
+   and uses that harness's native skill prefix. Sessions run in parallel and
+   the human attaches via the wt TUI when they want to watch.
 6. **Report**: a table (task(s), branch, path) plus sequencing notes (which
    worktrees are independent, which are stacked or soft-dependent), and
-   confirm the `/start` sessions were dispatched.
+   confirm the start-skill sessions were dispatched.
 
 ## Mode: review
 
