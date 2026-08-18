@@ -15,6 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
@@ -22,12 +23,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 import { HARNESSES } from "../../registry.ts";
 import { __testing } from "./shims.ts";
 
-const { discoverBunExecutables, isBunCompiled, pruneShims, NEVER_SHIM } = __testing;
+const { discoverBunExecutables, isBunCompiled, pruneShims, shimBody, LAUNCHER_SHIM, NEVER_SHIM } =
+  __testing;
 
 /** Comfortably over the scan's size floor, without writing 9MB. */
 const BIG = 9 * 1024 * 1024;
@@ -159,5 +161,96 @@ describe("pruneShims", () => {
     expect(() =>
       pruneShims(join(tmpdir(), "wt-shims-test-absent-xyz"), new Set(["bun"])),
     ).not.toThrow();
+  });
+});
+
+describe("shimBody", () => {
+  /** Write a shim, run it, return {stdout, stderr, exitCode}. */
+  function runShim(
+    dir: string,
+    name: string,
+    cmd: string,
+    realPath: string,
+    opts: { argv?: string[]; path?: string; env?: Record<string, string> } = {},
+  ) {
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, name);
+    writeFileSync(file, shimBody(cmd, realPath), { mode: 0o700 });
+    chmodSync(file, 0o700);
+    const res = Bun.spawnSync([file, ...(opts.argv ?? [])], {
+      // Bounded on purpose: the failure this guards against is an
+      // infinite exec loop, and an unbounded spawn would hang the suite
+      // instead of failing it. A hang is not a test result.
+      timeout: 15_000,
+      env: {
+        ...process.env,
+        BUN_INSPECT: "ws+unix:///tmp/wt-shim-test.sock",
+        ...(opts.path ? { PATH: opts.path } : {}),
+        ...(opts.env ?? {}),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      stdout: res.stdout.toString().trim(),
+      stderr: res.stderr.toString().trim(),
+      exitCode: res.exitCode,
+    };
+  }
+
+  test("strips BUN_INSPECT before exec'ing the baked binary", () => {
+    const dir = join(tmpdir(), `wt-shimbody-${Date.now()}-a`);
+    // printenv exits 1 when the name is unset — that IS the assertion.
+    const r = runShim(dir, "printenv", "printenv", "/usr/bin/printenv", {
+      argv: ["BUN_INSPECT"],
+    });
+    expect(r.stdout).toBe("");
+    expect(r.exitCode).toBe(1);
+  });
+
+  // fnm puts pnpm/npx/yarn in a per-shell directory, so a baked path can
+  // die while the command is perfectly installed. Shadowing a working
+  // binary is worse than the leak the shim exists to stop.
+  test("falls back to PATH when the baked path is gone", () => {
+    const dir = join(tmpdir(), `wt-shimbody-${Date.now()}-b`);
+    const r = runShim(dir, "printenv", "printenv", "/nonexistent/gone/printenv", {
+      argv: ["HOME"],
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe(process.env.HOME ?? "");
+  });
+
+  // The regression that actually bit: the shim dropped only the BAKED
+  // shim dir from PATH, so a copy living anywhere else re-found itself
+  // and exec'd forever. It drops $0's dirname too.
+  test("cannot exec itself when its own directory is on PATH", () => {
+    const dir = join(tmpdir(), `wt-shimbody-${Date.now()}-c`);
+    const r = runShim(dir, "printenv", "printenv", "/nonexistent/gone/printenv", {
+      argv: ["HOME"],
+      path: `${dir}${delimiter}${process.env.PATH ?? ""}`,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe(process.env.HOME ?? "");
+  });
+
+  test("exits 127 with a diagnostic when the command is genuinely absent", () => {
+    const dir = join(tmpdir(), `wt-shimbody-${Date.now()}-d`);
+    const r = runShim(dir, "wt-no-such-tool", "wt-no-such-tool", "/nonexistent/x", {
+      path: `${dir}${delimiter}${process.env.PATH ?? ""}`,
+    });
+    expect(r.exitCode).toBe(127);
+    expect(r.stderr).toContain("not found on PATH");
+  });
+});
+
+describe("LAUNCHER_SHIM", () => {
+  // Discovery is Mach-O `__BUN` detection, and a launcher is a node
+  // script — it can never be found that way, which is exactly why the
+  // gap went unnoticed: `pnpm exec supabase` prepends node_modules/.bin
+  // and never consults the shimmed PATH entry at all.
+  test("names launchers that resolve outside PATH, and no harness binary", () => {
+    expect(LAUNCHER_SHIM).toContain("pnpm");
+    expect(LAUNCHER_SHIM).toContain("npx");
+    for (const cmd of NEVER_SHIM) expect(LAUNCHER_SHIM).not.toContain(cmd);
   });
 });
