@@ -5,11 +5,15 @@ import {
   DevSlotFullError,
   devServerStatus,
   devSlotReport,
+  DEV_READY_DEFAULT_TIMEOUT_MS,
+  devHealth,
   readDevCrashLog,
   readDevWaiters,
+  resetDevServer,
   setDevWaiterPriority,
   startDevServer,
   stopDevServer,
+  waitForDevReady,
   type DevSlotHolder,
 } from "../../core/dev-server.ts";
 import { sessionName, TMUX_SOCKET } from "../../core/tmux.ts";
@@ -18,7 +22,7 @@ import type { Worktree } from "../../core/types.ts";
 import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import { agentIdentity } from "../../core/agent-identity.ts";
 import { hasHelpFlag } from "../args.ts";
-import { cyan, dim, green, red, yellow } from "../colors.ts";
+import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 
 /**
  * Exit status for "no dev-server slot is free right now". Deliberately
@@ -30,11 +34,22 @@ import { cyan, dim, green, red, yellow } from "../colors.ts";
  */
 const EXIT_NO_SLOT = 75;
 
+/**
+ * How long after a start an unhealthy answer is read as "still coming
+ * up" rather than "broken". Sized off the observed case: a migration
+ * replay that read 29 of 35 applied and settled at 35 about a minute
+ * later, plus room for a slower machine.
+ */
+const SETTLING_GRACE_MS = 5 * 60_000;
+
 const USAGE =
   "usage: wt dev <start|stop|status|logs> [slug] [flags]\n" +
   "  start    start (or restart) the worktree's dev server\n" +
-  "             --wait            queue until a slot frees instead of refusing\n" +
+  "             --wait            queue for a slot AND block until it is usable\n" +
   "             --timeout <secs>  give up waiting after this long (default 1800)\n" +
+  "             --rebuild         drop the environment's state first (see reset)\n" +
+  "  reset    stop, run [dev_server] reset_command, start again — the recovery\n" +
+  "             when the environment no longer matches the tree (after a rebase)\n" +
   "  stop     stop it (the port stays reserved for the slug)\n" +
   "  status   print state, port, and URL\n" +
   "             --all             every dev server, the slot count and the queue\n" +
@@ -82,8 +97,12 @@ function reclaimHint(holders: readonly DevSlotHolder[]): string | null {
 
 async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> {
   const wait = argv.includes("--wait");
+  const rebuild = argv.includes("--rebuild");
   const timeoutIdx = argv.indexOf("--timeout");
-  let timeoutMs = DEV_WAIT_DEFAULT_TIMEOUT_MS;
+  // One budget covers the whole operation — queueing for a slot and
+  // then coming up. Splitting them would make `--timeout` mean
+  // different things depending on how busy the fleet happened to be.
+  let timeoutMs = Math.max(DEV_WAIT_DEFAULT_TIMEOUT_MS, DEV_READY_DEFAULT_TIMEOUT_MS);
   if (timeoutIdx >= 0) {
     const raw = Number(argv[timeoutIdx + 1]);
     if (!Number.isFinite(raw) || raw <= 0) {
@@ -122,11 +141,88 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
     }
   }
 
+  // Read BEFORE starting: the start re-anchors to the current HEAD, so
+  // afterwards there is nothing left to compare against. This is the
+  // moment the reader is paying attention, and it is the moment they
+  // have historically had no reason to suspect anything.
+  const priorStale = rebuild ? false : (await devServerStatus(wt.slug, { path: wt.path })).rebasedSince;
   try {
-    const { port, url } = await startDevServer(wt);
-    console.log(green(`✓ dev server starting for ${cyan(wt.slug)}`));
+    const { port, url } = rebuild
+      ? await resetDevServer(wt, (line) => console.error(dim(`  ${line}`)))
+      : await startDevServer(wt);
+    if (priorStale) {
+      // wt does not know what a volume is, but it knows this slug last
+      // ran a server on a commit that is no longer in the history —
+      // which is precisely when whatever the environment persisted
+      // (a migrated database above all) describes a tree that no longer
+      // exists. Loud, and before the URL, because the URL is what makes
+      // it look fine.
+      console.error(
+        yellow(
+          `! this worktree's environment last came up before a rebase — it may be stale`,
+        ),
+      );
+      console.error(
+        dim(
+          `  anything it kept (a migrated database, a cache) predates this history;` +
+            ` ${bold(`wt dev reset ${wt.slug}`)} rebuilds it`,
+        ),
+      );
+    }
+    if (!wait) {
+      // Deliberately not a green tick. Launching is asynchronous — the
+      // supervised process is still bringing the environment up, and
+      // for a stack that migrates a database that phase can fail
+      // minutes from now, in `wt dev logs`, long after this returns 0.
+      // A ✓ followed by a working URL reads as "done" and was read
+      // that way: two worktrees took these three lines as a healthy
+      // environment. So the banner says what is true — launched, not
+      // ready — and names the flag that does wait.
+      console.log(`${yellow("→")} dev server launching for ${cyan(wt.slug)}`);
+      console.log(`  ${dim("port:")} ${port}`);
+      console.log(`  ${dim("url:")}  ${url}`);
+      console.log(
+        dim("  still coming up — `wt dev start --wait` blocks until it is usable,"),
+      );
+      console.log(dim("  `wt dev status` asks now, `wt dev logs` shows the boot"));
+      return 0;
+    }
+    const outcome = await waitForDevReady(wt, {
+      timeoutMs: timeoutMs,
+      onTick: ({ waited, state }) => {
+        if (state === "checking") {
+          console.error(dim(`  serving — waiting for the environment to settle (${humanAge(waited)})`));
+        } else {
+          console.error(dim(`  starting… (${humanAge(waited)})`));
+        }
+      },
+    });
+    if (!outcome.ready) {
+      if (outcome.reason === "crashed") {
+        console.error(red(`dev server crashed while starting (${wt.slug})`));
+        console.error(dim(`  ${bold(`wt dev logs ${wt.slug}`)} has the boot output`));
+        return 1;
+      }
+      if (outcome.reason === "timeout") {
+        console.error(
+          red(`dev server still not serving after ${humanAge(timeoutMs)} (${wt.slug})`),
+        );
+        console.error(dim(`  ${bold(`wt dev logs ${wt.slug}`)} has the boot output`));
+        return 1;
+      }
+      console.error(
+        red(`dev server is serving but its environment never settled (${humanAge(timeoutMs)})`),
+      );
+      console.error(`  ${red(outcome.health.message)}`);
+      console.error(
+        dim(`  ${bold(`wt dev reset ${wt.slug}`)} rebuilds it from scratch`),
+      );
+      return 1;
+    }
+    console.log(green(`✓ dev server ready for ${cyan(wt.slug)}`));
     console.log(`  ${dim("port:")} ${port}`);
     console.log(`  ${dim("url:")}  ${url}`);
+    if (outcome.health) console.log(`  ${dim("health:")} ${outcome.health.message}`);
     return 0;
   } catch (err) {
     if (!(err instanceof DevSlotFullError)) throw err;
@@ -285,11 +381,15 @@ async function runStatusAll(json: boolean): Promise<number> {
 }
 
 async function runStatusOne(wt: Worktree, json: boolean): Promise<number> {
-  const st = await devServerStatus(wt.slug);
+  const st = await devServerStatus(wt.slug, { path: wt.path });
+  // Only worth asking a running server, and only here: this is the
+  // on-demand surface, where a slow-but-exact answer is the point. It
+  // never rides a poll.
+  const health = st.running ? await devHealth(wt) : null;
   const now = Date.now();
   if (json) {
-    console.log(JSON.stringify({ slug: wt.slug, ...st }, null, 2));
-    return st.crashed ? 1 : 0;
+    console.log(JSON.stringify({ slug: wt.slug, ...st, health }, null, 2));
+    return st.crashed || health?.ok === false ? 1 : 0;
   }
   // The elapsed time is the whole value of the `starting` line: a stack
   // that has to bring docker up legitimately takes minutes, so the word
@@ -309,7 +409,46 @@ async function runStatusOne(wt: Worktree, json: boolean): Promise<number> {
   console.log(`${cyan(wt.slug)}: ${state}`);
   if (st.port !== null) console.log(`  ${dim("port:")} ${st.port}`);
   if (st.url) console.log(`  ${dim("url:")}  ${st.url}`);
-  return st.crashed ? 1 : 0;
+  // The free signal, and the one that needs no project cooperation:
+  // this server came up on commits that are no longer in the tree's
+  // history, so anything it derived from the tree describes a version
+  // that no longer exists.
+  if (st.rebasedSince) {
+    // Said for a STOPPED server too, and that is the point of saying it
+    // here: "not running" reads as a clean slate, so nobody expects the
+    // next start to come up on an old schema. A stopped server's
+    // environment is still on disk; only its processes are gone.
+    console.log(
+      st.running
+        ? `  ${yellow("stale:")} started before a rebase — its environment predates this history`
+        : `  ${yellow("stale:")} last ran before a rebase — whatever it kept on disk predates this history`,
+    );
+    console.log(dim(`  ${bold(`wt dev reset ${wt.slug}`)} rebuilds it from the current tree`));
+  }
+  if (health) {
+    console.log(
+      `  ${dim("health:")} ${health.ok ? green(health.message) : red(health.message)}`,
+    );
+    if (!health.ok) {
+      // A one-shot check cannot tell "not yet" from "wrong", and a
+      // young server is usually the former: a migration replay in
+      // progress reads exactly like a stale one stuck at the same
+      // count. Say so rather than sending someone to rebuild a stack
+      // that was about to be fine.
+      const age = st.since === null ? null : now - st.since;
+      if (age !== null && age < SETTLING_GRACE_MS) {
+        console.log(
+          dim(
+            `  it started ${humanAge(age)} ago — this may just be unfinished startup;` +
+              " `wt dev start --wait` blocks until it settles",
+          ),
+        );
+      } else {
+        console.log(dim(`  ${bold(`wt dev reset ${wt.slug}`)} rebuilds it from scratch`));
+      }
+    }
+  }
+  return st.crashed || health?.ok === false ? 1 : 0;
 }
 
 export async function run(argv: string[]): Promise<number> {
@@ -327,7 +466,15 @@ export async function run(argv: string[]): Promise<number> {
     console.log(USAGE);
     return 2;
   }
-  const known = new Set(["--wait", "--timeout", "--all", "--json", "--first", "--normal"]);
+  const known = new Set([
+    "--wait",
+    "--timeout",
+    "--all",
+    "--json",
+    "--first",
+    "--normal",
+    "--rebuild",
+  ]);
   const unknown = flags.find((f) => !known.has(f));
   if (unknown) {
     console.error(red(`unknown flag: ${unknown}`));
@@ -359,6 +506,11 @@ export async function run(argv: string[]): Promise<number> {
   switch (sub) {
     case "start":
       return runStart(wt, argv);
+    case "reset":
+      // Same code path as `start --rebuild`; a name of its own because
+      // "rebuild this environment from the tree" is what someone
+      // reaches for, and they will not find it under `start`.
+      return runStart(wt, [...argv, "--rebuild"]);
     case "stop": {
       await stopDevServer(wt);
       console.log(green(`✓ dev server stopped for ${cyan(wt.slug)}`));

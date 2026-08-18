@@ -76,6 +76,25 @@ export type WtSlugState = {
    */
   devPort?: number;
   /**
+   * HEAD when this worktree's dev server was last started.
+   *
+   * The point is not "how old is it" but whether the commits it came
+   * up on are still ANCESTORS of HEAD. Ordinary commits keep it an
+   * ancestor and a hot-reloading server handles them; a rebase, reset
+   * or restack does not, and that is precisely when a dev environment
+   * caching anything derived from the tree (a migrated database above
+   * all) goes silently wrong — the schema stays where it was while the
+   * files move underneath it.
+   *
+   * A recorded sha and an ancestor test cost one `git merge-base
+   * --is-ancestor` (0.1s here). Asking the environment itself is the
+   * precise answer and is 90x more expensive: a `docker exec psql`
+   * against a live Supabase stack measured 9s on this machine, which
+   * is why that check is on-demand (`[dev_server] health_command`) and
+   * this one can ride a poll.
+   */
+  devStartedSha?: string;
+  /**
    * Per-worktree opt-out from `[[automations]]` (Ctrl+A in the TUI).
    * Present only when true; the engine skips paused slugs entirely
    * (no fires, no queued intents).

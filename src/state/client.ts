@@ -44,6 +44,11 @@ export const CACHE_DB = config.paths.cacheDb;
 // threads regardless of author). A cached PR from v11 has no such field,
 // and a missing count would render as "nothing outstanding" — the exact
 // absence-reads-as-clean failure the field was added to fix.
+// v16: `DevServerStatus` gained `rebasedSince` — a restored v15 entry
+// has it absent, and absent is the tri-state's "unknown", which the
+// row renders as nothing. Harmless for a poll, but the entry would
+// also be the one shown at boot, i.e. exactly when a rebase that
+// happened while wt was closed is most worth seeing.
 // v15: `RemoteWorktreeSummary` gained `workBlockedOn` — the external
 // merge gate. A restored v14 entry has the field absent, which a
 // consumer reading it as "no gate" cannot distinguish from a remote
@@ -57,7 +62,7 @@ export const CACHE_DB = config.paths.cacheDb;
 // base). Same field, same type, different answer: a restored v12 entry
 // would feed ahead-of-base numbers straight into the destroy guard,
 // which is the bug the change exists to fix.
-const CACHE_BUSTER = "v15";
+const CACHE_BUSTER = "v16";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

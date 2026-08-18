@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 5;
+export const WT_STATE_VERSION = 6;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -70,6 +70,16 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // prose-parsing this field exists to replace. The entry exists for
     // the version boundary, same as v2-v4.
     to: 5,
+    up: (raw) => raw,
+  },
+  {
+    // v6: additive — `devStartedSha` on a slug record (the HEAD a dev
+    // server came up on). Nothing to backfill: a server already running
+    // came up on a commit nobody recorded, and guessing HEAD now would
+    // assert the one thing the field exists to detect. Absent reads as
+    // "unknown", which suppresses the staleness signal until the next
+    // start — the right way to be wrong.
+    to: 6,
     up: (raw) => raw,
   },
 ];

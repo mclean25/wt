@@ -138,6 +138,21 @@ export async function revParse(ref: string, cwd?: string): Promise<string | null
   return r.exitCode === 0 && sha ? sha : null;
 }
 
+/**
+ * Whether `sha` is an ancestor of `ref` (or `ref` itself). False when
+ * either is unknown to this repo — a sha that has been rebased away is
+ * usually still present as a dangling object, but a pruned one reads as
+ * "not an ancestor", which is the answer that matters anyway.
+ */
+export async function shaIsAncestor(
+  sha: string,
+  ref: string,
+  cwd?: string,
+): Promise<boolean> {
+  const r = await gitRun(["merge-base", "--is-ancestor", sha, ref], cwd);
+  return r.exitCode === 0;
+}
+
 /** First ref among `refs` that resolves to a commit in `cwd`, as a SHA. */
 export async function firstSha(cwd: string, refs: string[]): Promise<string | null> {
   for (const ref of refs) {

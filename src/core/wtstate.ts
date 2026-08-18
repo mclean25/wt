@@ -32,6 +32,7 @@ export {
   reparentBaseReferences,
   setSlugBase,
   setSlugDevPort,
+  setSlugDevStartedSha,
   setSlugGithubIssue,
   setSlugSection,
   setSlugWorkStatus,

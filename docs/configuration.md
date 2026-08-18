@@ -163,10 +163,18 @@ The failure that follows is indirect enough to be hard to read. A stack left run
 
 ```toml
 [lifecycle]
-# Supabase stamps every container it creates with its project id. Match on
-# THAT, not on the container name — see below.
-destroy_command = "docker ps -aq --filter label=com.supabase.cli.project=$(printf %.40s {{slug}}) | xargs -r docker rm -f"
+# Supabase stamps its project id on every container, network AND volume it
+# creates. Match on THAT, not on names — see below. Containers first: a
+# network with something attached refuses to go.
+destroy_command = """
+P=$(printf %.40s {{slug}})
+docker ps -aq     --filter label=com.supabase.cli.project=$P | xargs -r docker rm -f
+docker network ls -q --filter label=com.supabase.cli.project=$P | xargs -r docker network rm
+docker volume ls  -q --filter label=com.supabase.cli.project=$P | xargs -r docker volume rm
+"""
 ```
+
+**Enumerate every resource KIND the tool creates, not just the obvious one.** A teardown that removes containers and stops there leaks networks and volumes silently, and the networks are the ones that bite: docker's predefined address pools are finite, and ~24 orphaned ones exhausted them fleet-wide with `all predefined address pools have been fully subnetted` — an error naming nothing wt- or Supabase-related, so the first guess is always wrong, and nobody can start a stack until it is cleared. Measured on this machine after a containers-only teardown: one stopped project with **0 containers, 1 network and 3 volumes** still present. `docker network prune -f` is the emergency clear; enumerating the kinds is the fix.
 
 **Match on an identity the tool assigns, not on the container name, and test the pattern read-only before you run it destructively.** Two independent ways a name match goes wrong, both silent:
 
@@ -228,6 +236,8 @@ command = "npm run dev -- --port {{port}} --strictPort"
 | `url` | no | `"http://localhost:{{port}}/"` | URL template for the row, `s` open, and yank. |
 | `max_concurrent` | no | *(uncapped)* | Most dev servers allowed to run at once across the whole fleet. A start beyond it is refused with exit `75`; `wt dev start --wait` queues instead. See below. |
 | `stop_command` | no | *(none)* | Shell command run after the session dies on `wt dev stop` (and when a slot is reclaimed). Same `{{path}}`/`{{slug}}`/`{{port}}` substitution and same never-fatal contract as [`[lifecycle] destroy_command`](#destroy_command--what-it-is-for). See below. |
+| `reset_command` | no | *(none)* | Destructive teardown run by `wt dev reset`, between the stop and the start: drop the state `stop_command` deliberately keeps (docker volumes, generated caches). See below. |
+| `health_command` | no | *(none)* | "Is this environment actually usable?" Exit 0 = yes; non-zero = no, first line of stdout is the message. Run on demand only — `wt dev status`, and polled by `wt dev start --wait`. See below. |
 
 Semantics:
 
@@ -245,12 +255,44 @@ That matters beyond tidiness, because it is what `max_concurrent` would otherwis
 
 ```toml
 [dev_server]
-stop_command = "docker ps -aq --filter label=com.supabase.cli.project=$(printf %.40s {{slug}}) | xargs -r docker rm -f"
+# Containers and the network go; VOLUMES STAY. That asymmetry is the point:
+# keeping the data is what makes retaking a slot fast, and a network holds no
+# state, so leaving it behind is pure leak (see destroy_command above).
+stop_command = """
+P=$(printf %.40s {{slug}})
+docker ps -aq     --filter label=com.supabase.cli.project=$P | xargs -r docker rm -f
+docker network ls -q --filter label=com.supabase.cli.project=$P | xargs -r docker network rm
+"""
 ```
 
 Same rules as `destroy_command`, [matching traps included](#destroy_command--what-it-is-for) — do not match on the container name. It runs *after* the session is killed, so the teardown isn't racing a supervisor about to restart what it just tore down. It does **not** run on a restart: `wt dev start` on a running server relaunches the command, and tearing the stack down first would turn every restart into a full cold boot.
 
 `destroy_command` and `stop_command` are separate keys on purpose. A destroy teardown may legitimately be heavier (dropping volumes, deleting generated trees), and running that on an ordinary `wt dev stop` would be a nasty surprise. Setting both to the same line is fine and common.
+
+### `health_command` and `reset_command` — because a port is not readiness
+
+`wt dev start` launches a supervised process and returns. That is the design, and it means **the exit code says "launched", never "ready"**. For a dev command that only runs Vite the distinction is invisible. For one that brings up a container stack, applies migrations and seeds data, it is the whole story: `supabase start` succeeds, the port opens, the URL works — and the migration phase can throw a minute later, in the background, in `wt dev logs`, long after wt reported success. What is left is a serviceable stack on a stale schema behind a green tick.
+
+That cost a full day of misdirected work once. A worktree reported a passing test suite as red (6 files, 20 assertions) because every migration-dependent test was asserting against a half-migrated database; a second worktree was spun up to fix the non-problem; and the comparison run against `origin/staging` was invalid too, because it varied the code while holding the broken database fixed. The failure presents as a defect in the repo, not in the environment, so the investigation goes the wrong way from its first step.
+
+wt cannot ask the question itself — it has no idea what a migration ledger is — so the project answers it:
+
+```toml
+[dev_server]
+health_command = "scripts/dev/check-migrations.sh"
+reset_command  = "docker volume ls -q --filter label=com.supabase.cli.project=$(printf %.40s {{slug}}) | xargs -r docker volume rm"
+```
+
+- **`health_command`** runs in the worktree with `$PORT` exported and the usual `{{...}}` substitution. Exit 0 is healthy; anything else is a problem and the first line of stdout (then stderr) becomes the message. It is **on demand only** — `wt dev status`, and polled by `wt dev start --wait`. Never on a poll: a `docker exec psql` against a live stack measured **9 seconds** on this machine, which is fine once and ruinous every fifteen seconds across four worktrees.
+- **`reset_command`** is the destructive twin of `stop_command`, run by `wt dev reset` between the stop and the start. `stop_command` keeps the environment's state, which is what makes retaking a slot fast and is right nearly always; this drops it. It exists because the recovery was otherwise folklore — a raw `docker volume rm` nobody could discover from wt, with both obvious in-place repairs actively wrong (`supabase migration up` refuses once newly-arrived stamps sort before the last applied one, and `supabase db reset` wipes buckets that are provisioned at start rather than by migrations).
+
+**Write the health check to distinguish "not yet" from "wrong", or let wt do the waiting.** A check that runs once cannot tell them apart: a migration replay in progress reads 29 of 35 applied, which is indistinguishable from a stale volume stuck at 29, and the one observed settled at 35 about a minute later. `wt dev start --wait` handles this by re-running the check until it passes or the budget expires, so the quiescence wait lives in wt once instead of being reinvented per agent (where it was, and where it was written down wrong). `wt dev status` is a snapshot and says so: an unhealthy answer from a server younger than five minutes is reported as possibly-unfinished startup rather than sending anyone to rebuild.
+
+### The free half: `stale (rebased since start)`
+
+Independent of any of the above, and needing no configuration: wt records HEAD when a dev server starts (`devStartedSha`) and flags the server when that commit is **no longer an ancestor of HEAD** — a rebase, reset or restack rewrote history underneath a running environment. That is exactly when anything the environment derived from the tree is describing a version that no longer exists.
+
+Deliberately not "HEAD moved". Ordinary commits keep the anchor an ancestor and a hot-reloading server absorbs them; flagging those would fire constantly, and a warning that fires constantly is one people learn to scroll past. One `git merge-base --is-ancestor` costs 0.1s, which is why this rides the row's existing poll where the 9-second precise question could not.
 
 ### `max_concurrent` — the load governor
 

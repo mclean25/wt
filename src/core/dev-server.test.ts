@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import {
   decideDevSlot,
+  DEV_SERVER_STOPPED,
   probePort,
   readDevWaiters,
   type DevSlotHolder,
@@ -210,5 +211,31 @@ describe("dev-queue priority", () => {
     write(d, "alive", { pid: process.pid, since: 2000 });
     expect(readDevWaiters(d).map((w) => w.slug)).toEqual(["alive"]);
     expect(existsSync(join(d, "dead-vip.json"))).toBe(false);
+  });
+});
+
+
+describe("dev-server readiness", () => {
+  // The report that started this: a dev command that brings up a
+  // database and THEN applies migrations. `supabase start` succeeds,
+  // the port opens, the URL works — and the migration phase throws a
+  // minute later, in the background, after `wt dev start` has already
+  // exited 0. Every cheap signal says ready and none of them mean it.
+  test("a listening port is not readiness, so DevServerStatus keeps them separate", () => {
+    // `running` is the port; `rebasedSince` and the health command are
+    // the two independent answers to "but is it USABLE". Pinned as a
+    // shape test because the whole defect was one standing in for the
+    // others.
+    const keys = Object.keys(DEV_SERVER_STOPPED);
+    expect(keys).toContain("running");
+    expect(keys).toContain("rebasedSince");
+  });
+
+  // Absent must never read as fine. A server started by a wt that
+  // predates the anchor has nothing to compare against, and claiming
+  // freshness for it would be the same silent lie the field exists to
+  // break.
+  test("no anchor means unknown, not fresh", () => {
+    expect(DEV_SERVER_STOPPED.rebasedSince).toBeNull();
   });
 });

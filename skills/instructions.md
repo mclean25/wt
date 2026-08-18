@@ -39,6 +39,18 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   production bug), say so once with `wt manager send` and keep
   waiting; the manager can move you and needs nothing from you to do
   it. Never stop another slug's dev server to take its slot.
+  **`wt dev start` exiting 0 means LAUNCHED, not ready.** It returns as
+  soon as the supervised process is up; an environment that brings up a
+  database and applies migrations can still fail that phase minutes
+  later, in `wt dev logs`, leaving a serving port and a stale schema.
+  Use `wt dev start --wait`, which blocks until the environment is
+  actually usable and exits non-zero when it never gets there. Before
+  believing a test result that depends on the dev environment, check
+  `wt dev status`: it reports whether the server predates a rebase and
+  runs the project's own health check. A whole day was lost to a
+  passing suite reported as broken because the database was two
+  migrations behind the tree, and the failure looks like a bug in the
+  repo, not in the environment. `wt dev reset` rebuilds from scratch.
   A dev server you start by hand is
   invisible to wt and to the human (no row, no status, no logs) and
   unsupervised. Short-lived servers for your own checks (`pnpm preview`,

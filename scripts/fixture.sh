@@ -181,6 +181,13 @@ max_concurrent = 2
 # the session releases nothing — this marker is how the fixture proves
 # the hook actually fires.
 stop_command = "echo {{slug}} >> $FX/dev-stopped.log"
+# The destructive twin, exercised by \`wt dev reset\`: where stop_command
+# keeps the environment's state (fast to retake a slot), this drops it.
+reset_command = "echo {{slug}} >> $FX/dev-reset.log"
+# "Is this environment actually usable?" — a listening port is not
+# readiness, and only the project can answer. Toggle it by creating or
+# removing \$FX/unhealthy.
+health_command = "test ! -f $FX/unhealthy || { echo 'fixture marked unhealthy'; exit 1; }"
 
 [lifecycle]
 # Exercises the destroy-time teardown hook. The process reaper can only

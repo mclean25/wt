@@ -41,8 +41,14 @@ import { run } from "./proc.ts";
 import { resolveTeardownCommand, runTeardownCommand } from "./teardown.ts";
 import { sessionName, shQuote, SUFFIX, TMUX_SOCKET } from "./tmux/naming.ts";
 import { capturePane, killByName, probeSessionNames } from "./tmux/process.ts";
+import { revParse, shaIsAncestor } from "./git.ts";
 import { listWorktrees } from "./worktree.ts";
-import { claimDevPort, readWtState, WT_STATE_DIR } from "./wtstate.ts";
+import {
+  claimDevPort,
+  readWtState,
+  setSlugDevStartedSha,
+  WT_STATE_DIR,
+} from "./wtstate.ts";
 
 const log = createLogger("[dev-server]");
 
@@ -81,6 +87,21 @@ export type DevServerStatus = {
    * the board rather than looking idle.
    */
   waiting: { rank: number; since: number } | null;
+  /**
+   * The running server came up on a commit that is no longer an
+   * ancestor of HEAD — history was rewritten underneath it (a rebase,
+   * a reset, a restack). Null when it can't be told: no recorded
+   * anchor, no path to ask git with, or nothing running.
+   *
+   * Deliberately NOT "HEAD moved". Ordinary commits keep the anchor an
+   * ancestor and a hot-reloading server absorbs them; flagging those
+   * would fire on every commit, and a warning that fires constantly is
+   * one people learn to scroll past. Rewritten history is the case
+   * where a dev environment holding anything derived from the tree — a
+   * migrated database above all — is silently describing a tree that
+   * no longer exists.
+   */
+  rebasedSince: boolean | null;
 };
 
 export const DEV_SERVER_STOPPED: DevServerStatus = {
@@ -91,6 +112,7 @@ export const DEV_SERVER_STOPPED: DevServerStatus = {
   url: null,
   since: null,
   waiting: null,
+  rebasedSince: null,
 };
 
 function requireDevServer(): DevServerConfig {
@@ -890,6 +912,10 @@ export async function startDevServer(wt: {
       stderr: remain.stderr.slice(0, 200),
     });
   }
+  // Anchor the run to the commit it came up on. Written after the
+  // session is confirmed spawned, so a failed start doesn't move the
+  // anchor and make a stale environment look fresh.
+  setSlugDevStartedSha(wt.slug, await revParse("HEAD", wt.path));
   log.event.info(`dev server starting on port ${port} (${wt.slug})`);
   return { port, url: devUrl(port) };
 }
@@ -986,6 +1012,175 @@ export async function stopDevServer(wt: { slug: string; path: string }): Promise
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Readiness
+// ---------------------------------------------------------------------------
+
+/**
+ * How long `--wait` gives a server to become usable once it holds a
+ * slot. Generous on purpose: the environments this exists for bring up
+ * a container stack, apply migrations and seed data before serving, and
+ * a first start can genuinely run minutes.
+ */
+export const DEV_READY_DEFAULT_TIMEOUT_MS = 10 * 60_000;
+const DEV_READY_POLL_MS = 2_000;
+/**
+ * Bound on one `health_command` run. Sized off a measured 9s
+ * `docker exec psql` against a live stack, with room for a loaded
+ * machine; a hung check must never become a hung `wt dev status`.
+ */
+const DEV_HEALTH_TIMEOUT_MS = 60_000;
+
+export type DevHealth = {
+  ok: boolean;
+  /** First line of the command's output, or a description of how it failed. */
+  message: string;
+};
+
+/**
+ * Ask the project whether the environment is actually usable. Null when
+ * no `health_command` is configured — which is the honest answer, and
+ * distinct from "healthy": callers must not render an unconfigured
+ * project as verified.
+ *
+ * Exit 0 is healthy. Anything else is a problem, and the first line of
+ * stdout (falling back to stderr) is the message, so the project owns
+ * the wording — wt has no idea what a migration ledger is.
+ */
+export async function devHealth(wt: {
+  slug: string;
+  path: string;
+}): Promise<DevHealth | null> {
+  const template = config.devServer?.healthCommand ?? null;
+  const command = resolveTeardownCommand(template, {
+    path: wt.path,
+    slug: wt.slug,
+    port: readWtState().slugs[wt.slug]?.devPort ?? null,
+  });
+  if (!command) return null;
+  const port = readWtState().slugs[wt.slug]?.devPort;
+  const r = await run([process.env.SHELL || "bash", "-lc", command], {
+    cwd: wt.path,
+    timeoutMs: DEV_HEALTH_TIMEOUT_MS,
+    env: port !== undefined ? { PORT: String(port) } : undefined,
+  });
+  const firstLine = (text: string) =>
+    text
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l !== "") ?? "";
+  if (r.exitCode === 0) {
+    return { ok: true, message: firstLine(r.stdout) || "healthy" };
+  }
+  return {
+    ok: false,
+    message:
+      firstLine(r.stdout) ||
+      firstLine(r.stderr) ||
+      `health_command exited ${r.exitCode}`,
+  };
+}
+
+export type DevReadyOutcome =
+  | { ready: true; health: DevHealth | null }
+  /** The supervisor parked after repeated rapid failures. */
+  | { ready: false; reason: "crashed" }
+  /** The port never opened inside the bound. */
+  | { ready: false; reason: "timeout" }
+  /** Serving, but the project says the environment is wrong. */
+  | { ready: false; reason: "unhealthy"; health: DevHealth };
+
+/**
+ * Wait for a just-started dev server to become usable, which is a
+ * different question from the one `wt dev start` used to answer.
+ *
+ * Starting a dev server is asynchronous by construction — wt launches a
+ * supervised process and returns — so the exit code carried no
+ * information about whether the thing came up. That is not a cosmetic
+ * gap: a dev command that starts a database and THEN applies migrations
+ * can fail its migration phase minutes after wt reported success,
+ * leaving a serviceable stack on a stale schema, a green exit code and
+ * a working URL. Two worktrees read that as a healthy environment and
+ * one of them reported a passing test suite as broken.
+ *
+ * Three answers, and they want different next actions: `crashed` (the
+ * supervisor gave up — read the logs), `timeout` (still booting, or
+ * wedged — read the logs), and `unhealthy` (serving, but the project's
+ * own check says the environment is wrong — usually rebuild).
+ */
+export async function waitForDevReady(
+  wt: { slug: string; path: string },
+  opts: {
+    timeoutMs?: number;
+    onTick?: (info: { waited: number; state: "starting" | "checking" }) => void;
+  } = {},
+): Promise<DevReadyOutcome> {
+  const timeoutMs = opts.timeoutMs ?? DEV_READY_DEFAULT_TIMEOUT_MS;
+  const started = Date.now();
+  let lastHealth: DevHealth | null = null;
+  for (;;) {
+    const st = await devServerStatus(wt.slug, { path: wt.path });
+    if (st.crashed) return { ready: false, reason: "crashed" };
+    if (st.running) {
+      const health = await devHealth(wt);
+      if (!health || health.ok) return { ready: true, health };
+      // An unhealthy answer is RETRIED rather than believed, because
+      // "not yet" and "wrong" are the same answer from a check that
+      // runs once. A migration replay in progress reads 29 of 35
+      // applied — indistinguishable from a stale volume stuck at 29 —
+      // and it settled at 35 a minute later. Somebody encoding this
+      // check per-agent has to remember to wait for quiescence, and
+      // the report that reached us was written by someone who did not.
+      // So the waiting happens here, once, for everyone.
+      lastHealth = health;
+    }
+    if (Date.now() - started >= timeoutMs) {
+      return lastHealth
+        ? { ready: false, reason: "unhealthy", health: lastHealth }
+        : { ready: false, reason: "timeout" };
+    }
+    opts.onTick?.({ waited: Date.now() - started, state: st.running ? "checking" : "starting" });
+    await Bun.sleep(DEV_READY_POLL_MS);
+  }
+}
+
+/**
+ * Stop the server, run the project's destructive teardown, start it
+ * again. The recovery for an environment whose cached state no longer
+ * matches the tree — after a rebase above all, where a database keeps
+ * the schema it was migrated to while the migration files move
+ * underneath it.
+ *
+ * Exists as a command because the alternative was folklore: the working
+ * incantation involved a raw `docker volume rm` that nobody could
+ * discover from wt, and the obvious in-place repairs make it worse
+ * (`supabase migration up` refuses when newly-arrived stamps sort
+ * before the last applied one; `supabase db reset` wipes buckets that
+ * are provisioned at start rather than by migrations).
+ */
+export async function resetDevServer(
+  wt: { slug: string; path: string },
+  onLog?: (line: string) => void,
+): Promise<{ port: number; url: string }> {
+  await stopDevServer(wt);
+  const command = resolveTeardownCommand(config.devServer?.resetCommand ?? null, {
+    path: wt.path,
+    slug: wt.slug,
+    port: readWtState().slugs[wt.slug]?.devPort ?? null,
+  });
+  if (command) {
+    await runTeardownCommand({
+      label: "reset_command",
+      command,
+      cwd: wt.path,
+      slug: wt.slug,
+      onLog: onLog ?? ((line) => log.info(line, { slug: wt.slug })),
+    });
+  }
+  return startDevServer(wt);
+}
+
 /**
  * Level-derived state: session existence (tmux) + recorded-port
  * liveness (TCP probe) + the supervisor's marker. Cheap and local —
@@ -999,7 +1194,7 @@ export async function stopDevServer(wt: { slug: string; path: string }): Promise
  */
 export async function devServerStatus(
   slug: string,
-  opts: { sessionExists?: boolean } = {},
+  opts: { sessionExists?: boolean; path?: string } = {},
 ): Promise<DevServerStatus> {
   if (!config.devServer) return DEV_SERVER_STOPPED;
   const port = readWtState().slugs[slug]?.devPort ?? null;
@@ -1012,7 +1207,17 @@ export async function devServerStatus(
   const rank = queued.findIndex((w) => w.slug === slug);
   const waiting =
     rank >= 0 ? { rank, since: queued[rank]!.since } : null;
-  const base = { port, since, waiting };
+  // One `git merge-base --is-ancestor` (0.1s), and only when there is
+  // both an anchor and a path to ask with. Absent reads as null —
+  // unknown, never "fine": a server started by a wt that predates the
+  // anchor has nothing to compare against, and claiming freshness for
+  // it would be the same silent lie the field exists to break.
+  const startedSha = readWtState().slugs[slug]?.devStartedSha;
+  const rebasedSince =
+    startedSha && opts.path
+      ? !(await shaIsAncestor(startedSha, "HEAD", opts.path))
+      : null;
+  const base = { port, since, waiting, rebasedSince };
   const has =
     opts.sessionExists !== undefined
       ? opts.sessionExists

@@ -183,6 +183,9 @@ export function parseWtState(raw: unknown): WtState {
       ) {
         slugs[k]!.devPort = rec.devPort;
       }
+      if (typeof rec.devStartedSha === "string" && rec.devStartedSha.trim() !== "") {
+        slugs[k]!.devStartedSha = rec.devStartedSha.trim();
+      }
       if (
         typeof rec.githubIssue === "number" &&
         Number.isInteger(rec.githubIssue) &&

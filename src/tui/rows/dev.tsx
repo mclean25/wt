@@ -20,6 +20,18 @@ export const devRow: RowModule = {
   render: ({ row }) => {
     const dev = row.fields.dev.data ?? DEV_SERVER_STOPPED;
     if (dev.running) {
+      // A running server whose start commit is no longer in the tree's
+      // history: anything it derived from the tree (a migrated database
+      // above all) describes a version that no longer exists. The URL
+      // still works, which is exactly why this needs saying — the
+      // failure presents as a bug in the repo, not in the environment.
+      if (dev.rebasedSince) {
+        return (
+          <text fg={theme.warn} wrapMode="none" truncate>
+            {NF.bolt}  {dev.url ?? `port ${dev.port}`} · stale (rebased since start)
+          </text>
+        );
+      }
       return (
         <text fg={theme.warn} wrapMode="none" truncate>
           {NF.bolt}  {dev.url ?? `port ${dev.port}`}

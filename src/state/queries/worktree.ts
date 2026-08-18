@@ -80,13 +80,19 @@ export const wtDeployQuery = (wt: Pick<Worktree, "slug" | "path">) =>
  * the port probe half (a crash, a hand-run `wt dev`).
  */
 export const wtDevQuery = (
-  wt: Pick<Worktree, "slug">,
+  wt: Pick<Worktree, "slug" | "path">,
   sessionExists: boolean | null = null,
 ) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).dev(sessionExists),
     queryFn: async (): Promise<DevServerStatus> =>
-      devServerStatus(wt.slug, { sessionExists: sessionExists ?? undefined }),
+      devServerStatus(wt.slug, {
+        sessionExists: sessionExists ?? undefined,
+        // Enables the rebase-staleness check: one `git merge-base
+        // --is-ancestor` (0.1s), which is why it can ride this poll
+        // where asking the environment itself (9s) could not.
+        path: wt.path,
+      }),
     staleTime: STALE.fast,
     refetchInterval: 15_000,
   });

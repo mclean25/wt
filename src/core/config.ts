@@ -128,6 +128,41 @@ export type DevServerConfig = {
    * `[lifecycle] destroy_command`; see core/teardown.ts.
    */
   stopCommand: string | null;
+  /**
+   * Destructive teardown (`reset_command`), run by `wt dev reset`
+   * between the stop and the start. Where `stop_command` releases the
+   * processes and containers but KEEPS their state — which is what
+   * makes retaking a slot fast, and is right nearly always — this one
+   * drops it: the docker volumes, a generated cache, whatever the
+   * project needs gone before the environment can be rebuilt from the
+   * tree.
+   *
+   * A separate key rather than a flag on `stop_command` because the
+   * two are wanted at different moments and the fast one is the
+   * default. Its existence is also the point: the recovery was
+   * previously folklore involving a raw `docker volume rm`, which
+   * nobody could discover from wt.
+   */
+  resetCommand: string | null;
+  /**
+   * Project-supplied "is this environment actually usable?"
+   * (`health_command`). Exit 0 = fine; non-zero = a problem, with the
+   * first line of stdout used as the message.
+   *
+   * Exists because a listening port is not readiness, and wt cannot
+   * know the difference. `wt dev start` returns as soon as the
+   * supervised process is launched, so a dev command that brings up a
+   * database and THEN applies migrations can fail its migration phase
+   * after wt has already reported success — leaving a serviceable
+   * stack on a stale schema, a green exit code, and a URL that works.
+   * Only the project can ask the question that catches that.
+   *
+   * Run on demand only: `wt dev status`, and after the port opens on
+   * `wt dev start --wait`. Never on a poll — a `docker exec psql`
+   * against a live stack measured 9s on this machine, which is fine
+   * once and ruinous every fifteen seconds across four worktrees.
+   */
+  healthCommand: string | null;
 };
 
 export type ReviewBotUnresolvedVia = "threads" | "checklist";
@@ -1163,6 +1198,8 @@ function build(raw: Raw, errs: Errors): Config {
       urlTemplate: errs.optStr(devServerRaw, "url", "http://localhost:{{port}}/"),
       maxConcurrent,
       stopCommand: errs.optStrOrNull(devServerRaw, "stop_command"),
+      resetCommand: errs.optStrOrNull(devServerRaw, "reset_command"),
+      healthCommand: errs.optStrOrNull(devServerRaw, "health_command"),
     };
   }
 

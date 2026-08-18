@@ -141,6 +141,25 @@ export function setSlugDevPort(slug: string, port: number | null): void {
   });
 }
 
+/**
+ * Record (or clear) the HEAD a dev server was started on. Written on
+ * every start, so a restart re-anchors and the staleness signal is
+ * about the CURRENT run rather than the first one ever.
+ */
+export function setSlugDevStartedSha(slug: string, sha: string | null): void {
+  withWtStateLock(() => {
+    const state = readWtState();
+    const prev = state.slugs[slug];
+    if (!prev && sha === null) return;
+    const next: WtState = { ...state, slugs: { ...state.slugs } };
+    const entry: WtSlugState = { section: null, order: 0, ...prev };
+    if (sha === null) delete entry.devStartedSha;
+    else entry.devStartedSha = sha;
+    next.slugs[slug] = entry;
+    writeWtState(next);
+  });
+}
+
 export function setSlugBase(
   slug: string,
   base: { branch: string; sha?: string } | null,
