@@ -1,10 +1,13 @@
 import { config } from "../../core/config.ts";
 import {
+  DEV_QUEUE_FIRST,
   DEV_WAIT_DEFAULT_TIMEOUT_MS,
   DevSlotFullError,
   devServerStatus,
   devSlotReport,
   readDevCrashLog,
+  readDevWaiters,
+  setDevWaiterPriority,
   startDevServer,
   stopDevServer,
   type DevSlotHolder,
@@ -13,6 +16,7 @@ import { sessionName, TMUX_SOCKET } from "../../core/tmux.ts";
 import { run as runProc } from "../../core/proc.ts";
 import type { Worktree } from "../../core/types.ts";
 import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
+import { agentIdentity } from "../../core/agent-identity.ts";
 import { hasHelpFlag } from "../args.ts";
 import { cyan, dim, green, red, yellow } from "../colors.ts";
 
@@ -35,6 +39,9 @@ const USAGE =
   "  status   print state, port, and URL\n" +
   "             --all             every dev server, the slot count and the queue\n" +
   "             --json            machine-readable form of either view\n" +
+  "  queue    show the wait queue; move a waiter between tiers\n" +
+  "             <slug> --first    put it ahead of every ordinary waiter\n" +
+  "             <slug> --normal   give its place back\n" +
   "  logs     print the supervisor pane's recent output\n" +
   "slug defaults to the worktree containing the current directory.\n" +
   `exit ${EXIT_NO_SLOT} from \`start\` means the concurrency cap is full — retry later.`;
@@ -123,6 +130,19 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
     return 0;
   } catch (err) {
     if (!(err instanceof DevSlotFullError)) throw err;
+    if (err.yieldingTo.length > 0) {
+      // A slot IS free — saying "full" here would send the reader
+      // looking for a holder to free, which is the wrong action and
+      // the wrong worktree.
+      console.error(
+        red(
+          `a dev-server slot is free but held for ${err.yieldingTo.map((w) => w.slug).join(", ")}`,
+        ),
+      );
+      console.error(dim("  that worktree was moved to the front of the queue deliberately"));
+      console.error(dim("  queue behind it with `wt dev start --wait`"));
+      return EXIT_NO_SLOT;
+    }
     console.error(
       red(
         `dev-server slots full (${err.holders.length}/${err.limit}): ${describeHolders(err.holders)}`,
@@ -137,6 +157,93 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
   }
 }
 
+/**
+ * `wt dev queue [<slug> --first|--normal]`.
+ *
+ * Promotion edits an already-queued waiter, so it needs nothing from
+ * the promoted agent — its own poll re-reads the queue and finds itself
+ * at the front. That is what removes the race: a slot frees instantly
+ * and a message asking an agent to act does not, so the only orderings
+ * that survive are the ones already written down when the slot opens.
+ */
+async function runQueue(
+  slugArg: string | undefined,
+  flags: readonly string[],
+  json: boolean,
+): Promise<number> {
+  const first = flags.includes("--first");
+  const normal = flags.includes("--normal");
+  if (first && normal) {
+    console.error(red("--first and --normal are opposites — pick one"));
+    return 2;
+  }
+  if (!slugArg) {
+    if (first || normal) {
+      console.error(red("which worktree? `wt dev queue <slug> --first`"));
+      return 2;
+    }
+    return printQueue(json);
+  }
+  if (!first && !normal) {
+    console.error(red("`wt dev queue <slug>` needs --first or --normal"));
+    return 2;
+  }
+  // Relative urgency across a fleet is not knowable from inside one
+  // worktree — every task looks urgent to the agent doing it, and a
+  // tier anyone can claim for themselves is a tier everyone claims. The
+  // knowledge lives with whoever can see the other worktrees, so the
+  // refusal points there rather than at a permission. A human's shell
+  // carries no WT_AGENT and is never caught by this.
+  if (first && agentIdentity() === slugArg) {
+    console.error(red(`${slugArg} can't move itself to the front of the queue`));
+    console.error(
+      dim("  whether one task outranks another is a fleet call — ask for it:"),
+    );
+    console.error(dim(`  wt manager send "dev slot: <why ${slugArg} should jump>"`));
+    return 2;
+  }
+  const updated = setDevWaiterPriority(slugArg, first ? DEV_QUEUE_FIRST : 0);
+  if (!updated) {
+    console.error(red(`${slugArg} is not in the dev-server queue`));
+    console.error(
+      dim("  only a waiting worktree can be moved — it queues with `wt dev start --wait`"),
+    );
+    return 1;
+  }
+  console.log(
+    green(
+      first
+        ? `✓ ${cyan(slugArg)} moved to the front of the queue`
+        : `✓ ${cyan(slugArg)} returned to its place in the queue`,
+    ),
+  );
+  return printQueue(json);
+}
+
+function printQueue(json: boolean): number {
+  const waiters = readDevWaiters();
+  const now = Date.now();
+  if (json) {
+    console.log(
+      JSON.stringify(
+        waiters.map((w) => ({ ...w, waitingMs: now - w.since })),
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
+  if (waiters.length === 0) {
+    console.log(dim("nothing queued for a dev-server slot"));
+    return 0;
+  }
+  waiters.forEach((w, i) => {
+    const tier = w.priority > 0 ? yellow(" first") : "";
+    console.log(`  ${i + 1}. ${cyan(w.slug)}${tier} ${dim(`waiting ${humanAge(now - w.since)}`)}`);
+  });
+  return 0;
+}
+
 async function runStatusAll(json: boolean): Promise<number> {
   const report = await devSlotReport();
   const now = Date.now();
@@ -147,6 +254,9 @@ async function runStatusAll(json: boolean): Promise<number> {
           limit: report.limit,
           free: report.free,
           holders: report.holders,
+          // `priority` rides along: a manager filtering this surface for
+          // "who is next" must see a deliberate promotion, not just an
+          // order it would have to trust blindly.
           waiting: report.waiters.map((w) => ({ ...w, waitingMs: now - w.since })),
         },
         null,
@@ -165,7 +275,10 @@ async function runStatusAll(json: boolean): Promise<number> {
   if (report.waiters.length > 0) {
     console.log(`${dim("queued:")}`);
     report.waiters.forEach((w, i) => {
-      console.log(`  ${i + 1}. ${cyan(w.slug)} ${dim(`waiting ${humanAge(now - w.since)}`)}`);
+      const tier = w.priority > 0 ? yellow(" first") : "";
+      console.log(
+        `  ${i + 1}. ${cyan(w.slug)}${tier} ${dim(`waiting ${humanAge(now - w.since)}`)}`,
+      );
     });
   }
   return 0;
@@ -214,7 +327,7 @@ export async function run(argv: string[]): Promise<number> {
     console.log(USAGE);
     return 2;
   }
-  const known = new Set(["--wait", "--timeout", "--all", "--json"]);
+  const known = new Set(["--wait", "--timeout", "--all", "--json", "--first", "--normal"]);
   const unknown = flags.find((f) => !known.has(f));
   if (unknown) {
     console.error(red(`unknown flag: ${unknown}`));
@@ -231,6 +344,9 @@ export async function run(argv: string[]): Promise<number> {
   // "not inside a worktree" bail — `wt dev status --all` has to work
   // from anywhere, which is where a manager or a queued agent runs it.
   if (sub === "status" && flags.includes("--all")) return runStatusAll(json);
+  // Also subject-less: promoting names its target explicitly, and the
+  // manager runs this from wherever it happens to be.
+  if (sub === "queue") return runQueue(slugArg, flags, json);
 
   const wt = await resolveWorktree(slugArg);
   if (!wt) {

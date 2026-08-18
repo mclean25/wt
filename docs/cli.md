@@ -108,10 +108,19 @@ Manage the worktree's `[dev_server]` (see [configuration.md](configuration.md#de
 Flags:
 
 - `start --wait [--timeout <secs>]` — when `[dev_server] max_concurrent` is set and the fleet is full, queue until a slot opens instead of refusing. Default timeout 1800s; on expiry it exits `75` like a plain refusal. While queued the slug shows in `wt dev status --all` and on its own board row, so a waiting agent doesn't read as a stalled one.
-- `status --all` — the fleet view: slots in use against the cap, every dev server and whether it's up or crashed, and the queue with ages. Works from anywhere; it needs no subject worktree.
+- `status --all` — the fleet view: slots in use against the cap, every dev server and whether it's up or crashed, and the queue with ages and tiers. Works from anywhere; it needs no subject worktree.
+- `queue` — print the wait queue. `queue <slug> --first` moves a waiter ahead of every ordinary one; `queue <slug> --normal` gives its place back. See below.
 - `status --json` — machine-readable form of either view.
 
 **Exit `75` from `start` means the concurrency cap is full, not that anything is broken.** It's sysexits' `EX_TEMPFAIL`; retry later, or use `--wait` and let wt do the retrying. The refusal names who holds the slots, and names crashed holders specifically — a parked supervisor still holds its slot (its containers are still up) and is the cheapest one to reclaim. Semantics: [configuration.md](configuration.md#max_concurrent--the-load-governor).
+
+**`wt dev queue <slug> --first` is how one worktree goes first, and it exists because asking nicely loses a race it cannot win.** Getting an urgent worktree (a coded fix for a live data-loss bug) to the front of a full queue used to take four messages: ask a holder to release, ask the queue leader to step aside, watch the freed slot go to that leader anyway because a promotion is instant and a message to an agent is not, then ask for it back. Three agents cooperated correctly and the ordering still came out wrong, because nothing was written down when the slot opened.
+
+Promotion edits the waiter's own queue entry, so it needs nothing from the promoted agent — its next poll re-reads the queue and finds itself at the front. There is no window to lose. It is a **tier, not an index**: `--first` sorts ahead of every ordinary waiter with arrival order preserved inside each tier, so nothing has to be renumbered when a waiter joins, leaves, or is pruned for having died. And it inherits the waiting room's self-expiry — the priority lives in the waiter's file and is gone with that pid, so a promotion covers the current wait and no more. Re-queueing later starts ordinary again, deliberately: if it still matters, whoever has the fleet context says so again.
+
+Two rules follow from where the knowledge lives. Only an already-queued worktree can be moved (`wt dev start --wait` first), because a priority with no waiter attached has nothing to expire it. And **a worktree cannot promote itself** — relative urgency across a fleet is not knowable from inside one of them, every task looks urgent to the agent doing it, and a tier anyone can claim is a tier everyone claims; the refusal points at `wt manager send`. A human's shell carries no `WT_AGENT` and is never caught by this.
+
+A plain `wt dev start` normally takes any free slot without consulting the queue — an ordinary waiter loses at most one poll interval, and being told "full" while a slot is visibly free would be the worse lie. It does **not** barge past a promoted waiter: that is a deliberate decision rather than a default, and the refusal says so specifically ("a slot is free but held for X") rather than reporting a capacity problem that would send the reader hunting the wrong worktree.
 
 `logs` falls back to a saved copy of the scrollback when the session is gone: a parked supervisor's pane is captured to disk before anything reclaims its slot, so the crash report outlives the pane that held it.
 

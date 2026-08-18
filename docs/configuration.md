@@ -267,7 +267,7 @@ max_concurrent = 4
 - **Reap-on-acquire.** When a start finds the fleet full, dev sessions belonging to no live worktree are killed (running their `stop_command`) and the count retaken before refusing. Scope is deliberately narrow: a dev server whose worktree still exists is somebody's, even with no agent attached.
 - **It is a governor, not a mutex.** Two starts racing at the same instant can both see the last slot. That overshoot is one extra dev server; a real lock would have to be *released*, and a lock that must be released is the drifting counter this design exists to avoid.
 
-Refusal is exit `75` (sysexits `EX_TEMPFAIL`), distinct from `1` so a looping agent can tell "try later" from "the dev server is broken". `wt dev start --wait` queues instead of refusing — see [cli.md](cli.md#wt-dev-startstopstatuslogs).
+Refusal is exit `75` (sysexits `EX_TEMPFAIL`), distinct from `1` so a looping agent can tell "try later" from "the dev server is broken". `wt dev start --wait` queues instead of refusing, and `wt dev queue <slug> --first` moves one waiter ahead of the rest when somebody with fleet context says it goes first — see [cli.md](cli.md#wt-dev-startstopstatuslogs).
 
 ## `[issue_tracker]` — optional integration
 

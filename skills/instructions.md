@@ -32,7 +32,14 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   "try later", not a breakage and not something to escalate. Re-run it
   as `wt dev start --wait`, which queues until a slot opens and shows
   your position on the board while it waits; `wt dev status --all`
-  says who holds the slots. Nothing is wrong and nobody needs asking. A dev server you start by hand is
+  says who holds the slots. Nothing is wrong and nobody needs asking.
+  The queue is first-come and you cannot move yourself up it — whether
+  your task outranks another worktree's is a fleet call you cannot make
+  from inside one worktree. If it genuinely is urgent (a live
+  production bug), say so once with `wt manager send` and keep
+  waiting; the manager can move you and needs nothing from you to do
+  it. Never stop another slug's dev server to take its slot.
+  A dev server you start by hand is
   invisible to wt and to the human (no row, no status, no logs) and
   unsupervised. Short-lived servers for your own checks (`pnpm preview`,
   a watch runner) are different: run those bare, no wt involvement —

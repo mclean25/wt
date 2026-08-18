@@ -169,3 +169,46 @@ describe("readDevWaiters", () => {
     expect(readDevWaiters(join(tmpdir(), "wt-devqueue-does-not-exist"))).toEqual([]);
   });
 });
+
+
+describe("dev-queue priority", () => {
+  const dir = () => mkdtempSync(join(tmpdir(), "wt-devprio-"));
+  const write = (d: string, slug: string, rec: unknown) =>
+    writeFileSync(join(d, `${slug}.json`), JSON.stringify(rec));
+
+  // The whole point: a promotion has to change who the NEXT free slot
+  // goes to, without the promoted agent doing anything. Its own poll
+  // re-reads the queue and finds itself at the front.
+  test("a promoted waiter sorts ahead of everyone who arrived earlier", () => {
+    const d = dir();
+    write(d, "early-a", { pid: process.pid, since: 1000 });
+    write(d, "early-b", { pid: process.pid, since: 2000 });
+    write(d, "urgent", { pid: process.pid, since: 9000, priority: 1 });
+    expect(readDevWaiters(d).map((w) => w.slug)).toEqual(["urgent", "early-a", "early-b"]);
+  });
+
+  test("arrival still orders within a tier", () => {
+    const d = dir();
+    write(d, "second", { pid: process.pid, since: 2000, priority: 1 });
+    write(d, "first", { pid: process.pid, since: 1000, priority: 1 });
+    write(d, "ordinary", { pid: process.pid, since: 500 });
+    expect(readDevWaiters(d).map((w) => w.slug)).toEqual(["first", "second", "ordinary"]);
+  });
+
+  test("an absent or junk priority is the ordinary tier, not a crash", () => {
+    const d = dir();
+    write(d, "none", { pid: process.pid, since: 1000 });
+    write(d, "junk", { pid: process.pid, since: 2000, priority: "high" });
+    expect(readDevWaiters(d).map((w) => w.priority)).toEqual([0, 0]);
+  });
+
+  // Self-expiry has to survive the new field: a promoted waiter that
+  // dies must not keep steering the queue from a file nobody prunes.
+  test("a dead promoted waiter is pruned like any other", () => {
+    const d = dir();
+    write(d, "dead-vip", { pid: DEAD_PID, since: 1000, priority: 1 });
+    write(d, "alive", { pid: process.pid, since: 2000 });
+    expect(readDevWaiters(d).map((w) => w.slug)).toEqual(["alive"]);
+    expect(existsSync(join(d, "dead-vip.json"))).toBe(false);
+  });
+});

@@ -271,7 +271,28 @@ const DEV_WAIT_POLL_MS = 3_000;
  */
 const DEV_WAIT_RECLAIM_EVERY_MS = 60_000;
 
-export type DevWaiter = { slug: string; pid: number; since: number };
+export type DevWaiter = {
+  slug: string;
+  pid: number;
+  since: number;
+  /**
+   * Queue tier. 0 is everyone; `DEV_QUEUE_FIRST` jumps ahead of every
+   * 0, with `since` still ordering within a tier.
+   *
+   * A tier and not an index, because an index is a total order and a
+   * total order has to be renumbered on every insert, every departure
+   * and every pruned dead waiter — while the thing anyone actually
+   * wants to say is "this one goes first", which is a property of the
+   * waiter rather than a position in a list. It also inherits the
+   * waiting room's self-expiry for free: the priority lives in the
+   * waiter's own file and is gone the moment that pid is, so nothing
+   * has to remember to reset it.
+   */
+  priority: number;
+};
+
+/** The one non-default tier: ahead of every ordinary waiter. */
+export const DEV_QUEUE_FIRST = 1;
 
 /**
  * One dev server occupying a slot. `crashed` is a holder like any
@@ -326,7 +347,7 @@ export function readDevWaiters(dir: string = WAIT_DIR): DevWaiter[] {
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
     const slug = name.slice(0, -".json".length);
-    let rec: { pid?: unknown; since?: unknown };
+    let rec: { pid?: unknown; since?: unknown; priority?: unknown };
     try {
       rec = JSON.parse(readFileSync(join(dir, name), "utf8"));
     } catch {
@@ -340,6 +361,8 @@ export function readDevWaiters(dir: string = WAIT_DIR): DevWaiter[] {
     }
     const pid = typeof rec.pid === "number" ? rec.pid : null;
     const since = typeof rec.since === "number" ? rec.since : null;
+    const priority =
+      typeof rec.priority === "number" && Number.isFinite(rec.priority) ? rec.priority : 0;
     if (pid === null || since === null || !pidAlive(pid)) {
       try {
         rmSync(join(dir, name), { force: true });
@@ -348,9 +371,50 @@ export function readDevWaiters(dir: string = WAIT_DIR): DevWaiter[] {
       }
       continue;
     }
-    waiters.push({ slug, pid, since });
+    waiters.push({ slug, pid, since, priority });
   }
-  return waiters.sort((a, b) => a.since - b.since || a.slug.localeCompare(b.slug));
+  // Tier first, then arrival. Within a tier this is exactly the FIFO it
+  // has always been.
+  return waiters.sort(
+    (a, b) => b.priority - a.priority || a.since - b.since || a.slug.localeCompare(b.slug),
+  );
+}
+
+/**
+ * Move an already-queued waiter between tiers. Returns the updated
+ * waiter, or null when the slug isn't in the queue.
+ *
+ * Deliberately edits an EXISTING waiter rather than recording a
+ * priority for a slug that might queue later: a priority with no waiter
+ * attached has nothing to expire it, and would sit in the cache
+ * steering a decision made weeks ago. It also means promotion needs no
+ * cooperation from the promoted agent — its own poll re-reads the queue
+ * and finds itself at the front. That is the whole point: a message
+ * asking an agent to act loses the race against a slot that frees
+ * instantly, and this doesn't race at all.
+ */
+export function setDevWaiterPriority(slug: string, priority: number): DevWaiter | null {
+  const current = readDevWaiters().find((w) => w.slug === slug);
+  if (!current) return null;
+  const next: DevWaiter = { ...current, priority };
+  try {
+    writeFileSync(
+      waiterPath(slug),
+      JSON.stringify({ pid: next.pid, since: next.since, priority }),
+    );
+  } catch (err) {
+    log.warn("could not set dev-queue priority", {
+      slug,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  log.attention.info(
+    priority > 0
+      ? `${slug} moved to the front of the dev-server queue`
+      : `${slug} returned to its place in the dev-server queue`,
+  );
+  return next;
 }
 
 function joinDevQueue(slug: string): void {
@@ -498,15 +562,27 @@ export async function reclaimDevSlots(): Promise<string[]> {
 export class DevSlotFullError extends Error {
   readonly holders: DevSlotHolder[];
   readonly limit: number;
+  /**
+   * Non-empty when a slot was actually free and is being held for a
+   * promoted waiter. The two refusals need different next actions —
+   * "the fleet is at capacity" says free something, "you are behind X"
+   * says queue up — so the caller must be able to tell them apart
+   * rather than reading a capacity number that isn't the reason.
+   */
+  readonly yieldingTo: DevWaiter[];
   constructor(decision: DevSlotDecision) {
     const limit = decision.limit ?? 0;
+    const yieldingTo = decision.yieldingTo ?? [];
     super(
-      `dev-server slots full (${decision.holders.length}/${limit}): ` +
-        decision.holders.map((h) => h.slug).join(", "),
+      yieldingTo.length > 0
+        ? `a dev-server slot is free but held for ${yieldingTo.map((w) => w.slug).join(", ")}`
+        : `dev-server slots full (${decision.holders.length}/${limit}): ` +
+            decision.holders.map((h) => h.slug).join(", "),
     );
     this.name = "DevSlotFullError";
     this.holders = decision.holders;
     this.limit = limit;
+    this.yieldingTo = yieldingTo;
   }
 }
 
@@ -518,6 +594,13 @@ export type DevSlotDecision = {
   free: number | null;
   /** Everyone holding a slot right now, excluding the asking slug. */
   holders: DevSlotHolder[];
+  /**
+   * Set when a slot was free but is being held for a promoted waiter.
+   * A distinct reason from "full", and the caller says so: "wait your
+   * turn behind X" and "the fleet is at capacity" want different next
+   * actions.
+   */
+  yieldingTo?: DevWaiter[];
 };
 
 /**
@@ -539,7 +622,7 @@ export type DevSlotDecision = {
  */
 export async function checkDevSlot(
   slug: string,
-  opts: { reclaim?: boolean } = {},
+  opts: { reclaim?: boolean; respectPriority?: boolean } = {},
 ): Promise<DevSlotDecision> {
   const limit = config.devServer?.maxConcurrent ?? null;
   if (limit === null) return decideDevSlot(slug, [], null);
@@ -547,7 +630,23 @@ export async function checkDevSlot(
   if (!decideDevSlot(slug, holders, limit).ok && opts.reclaim !== false) {
     if ((await reclaimDevSlots()).length > 0) holders = (await devSlotHolders()) ?? [];
   }
-  return decideDevSlot(slug, holders, limit);
+  const decision = decideDevSlot(slug, holders, limit);
+  if (!decision.ok || opts.respectPriority === false) return decision;
+  // A plain `wt dev start` normally takes any free slot without
+  // consulting the queue — being told "full" while `wt dev status`
+  // shows a free slot is a worse lie than the occasional queue-jump,
+  // and jumping only ever costs an ordinary waiter one poll interval.
+  //
+  // A PROMOTED waiter is different in kind. Someone with fleet context
+  // said this one goes first, and a barge past it silently defeats a
+  // deliberate decision rather than a default. So a free slot is
+  // withheld from anyone the promoted waiter is ahead of — which is
+  // everyone except itself.
+  const promoted = readDevWaiters().filter((w) => w.priority > 0 && w.slug !== slug);
+  if (promoted.length >= decision.free!) {
+    return { ...decision, ok: false, yieldingTo: promoted.slice(0, decision.free!) };
+  }
+  return decision;
 }
 
 /**
