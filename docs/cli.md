@@ -103,7 +103,17 @@ List SST stages in the configured state bucket and flag orphans (no matching liv
 
 Manage the worktree's `[dev_server]` (see [configuration.md](configuration.md#dev_server--optional-per-worktree-dev-server)). `start` is also restart; `stop` keeps the slug's port reserved; `logs` prints the supervisor pane's recent output. The slug defaults to the worktree containing the current directory.
 
-`stop` also closes the browser tabs that were on the server, matched by the dev port (not by session name, so the login-script sessions actually holding the app open are covered) — both the `browser-control` sessions sitting on that port and, over AppleScript, the browser's own tabs on it. Stopping the server strands those tabs on a refused port, so they go with it. The worktree's other browser sessions are deliberately untouched: an agent's reference tabs are not the dev server's.
+`stop` also closes the browser tabs that were on the server, matched by the dev port (not by session name, so the login-script sessions actually holding the app open are covered) — both the `browser-control` sessions sitting on that port and, over AppleScript, the browser's own tabs on it. Stopping the server strands those tabs on a refused port, so they go with it. The worktree's other browser sessions are deliberately untouched: an agent's reference tabs are not the dev server's. And it runs `[dev_server] stop_command` if the project set one, which is the only thing that releases what the dev command created *outside* its own process tree (docker containers above all).
+
+Flags:
+
+- `start --wait [--timeout <secs>]` — when `[dev_server] max_concurrent` is set and the fleet is full, queue until a slot opens instead of refusing. Default timeout 1800s; on expiry it exits `75` like a plain refusal. While queued the slug shows in `wt dev status --all` and on its own board row, so a waiting agent doesn't read as a stalled one.
+- `status --all` — the fleet view: slots in use against the cap, every dev server and whether it's up or crashed, and the queue with ages. Works from anywhere; it needs no subject worktree.
+- `status --json` — machine-readable form of either view.
+
+**Exit `75` from `start` means the concurrency cap is full, not that anything is broken.** It's sysexits' `EX_TEMPFAIL`; retry later, or use `--wait` and let wt do the retrying. The refusal names who holds the slots, and names crashed holders specifically — a parked supervisor still holds its slot (its containers are still up) and is the cheapest one to reclaim. Semantics: [configuration.md](configuration.md#max_concurrent--the-load-governor).
+
+`logs` falls back to a saved copy of the scrollback when the session is gone: a parked supervisor's pane is captured to disk before anything reclaims its slot, so the crash report outlives the pane that held it.
 
 ### `wt logs [<slug>]`
 

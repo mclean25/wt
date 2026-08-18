@@ -116,7 +116,10 @@ build() {
     for entry in "$FX"/* "$FX"/.[!.]*; do
       [ -e "$entry" ] || continue
       case "${entry##*/}" in
-        origin.git|main-clone|wts|cache|config.toml|env.sh) ;;
+        # *.log: markers the fixture's own teardown hooks append to
+        # (destroy_command, [dev_server] stop_command) — written by a
+        # previous run of this fixture, so they are ours to delete.
+        origin.git|main-clone|wts|cache|config.toml|env.sh|*.log) ;;
         *) die "$FX holds ${entry##*/}, which no fixture creates — refusing to delete it" ;;
       esac
     done
@@ -157,7 +160,10 @@ prefix = "$PREFIX"
 base   = "main"
 
 [ui]
-rows = ["branch", "base", "path", "status", "git"]
+# "dev" is in the list because the section below configures a real
+# [dev_server]: without it the row is hidden and the fixture silently
+# stops covering the surface its own comment claims to exercise.
+rows = ["branch", "base", "path", "status", "dev", "git"]
 
 # A real, supervised, per-worktree dev server — enough to exercise
 # \`wt dev start/stop\`, the row's URL, port allocation, and the browser-tab
@@ -167,6 +173,14 @@ rows = ["branch", "base", "path", "status", "git"]
 command    = "python3 -m http.server {{port}} --bind 127.0.0.1"
 port_base  = 8700
 port_range = 50
+# Small enough to hit by hand: start three dev servers and the third is
+# refused with exit 75, which is the whole point of the cap.
+max_concurrent = 2
+# The stop-time twin of destroy_command. A dev command routinely creates
+# things that are not its children (containers above all), so killing
+# the session releases nothing — this marker is how the fixture proves
+# the hook actually fires.
+stop_command = "echo {{slug}} >> $FX/dev-stopped.log"
 
 [lifecycle]
 # Exercises the destroy-time teardown hook. The process reaper can only

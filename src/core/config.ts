@@ -99,6 +99,35 @@ export type DevServerConfig = {
   portRange: number;
   /** URL template for the row/open/yank surfaces; `{{port}}` substituted. */
   urlTemplate: string;
+  /**
+   * Cap on how many dev servers may run at once across the whole fleet
+   * (`max_concurrent`). Null = uncapped, the historical behavior.
+   *
+   * Exists because a modern `dev` command is not one process. cozee's
+   * brings up a twelve-container Supabase stack per worktree; twelve
+   * worktrees running one each is 144 containers and an unusable
+   * machine. The cap is a load governor, not a mutex — see
+   * `checkDevSlot` for what "a slot" is derived from and why the
+   * accounting can never drift.
+   */
+  maxConcurrent: number | null;
+  /**
+   * Teardown run after the dev server's session dies (`stop_command`).
+   * Null = nothing to do, and for a plain `vite` that is correct.
+   *
+   * The hook exists because the resources a dev command creates are
+   * routinely NOT its children: `supabase start` hands containers to
+   * the docker daemon and returns, so killing the session leaves the
+   * whole stack up. Measured on this machine while the cap was being
+   * designed: four Supabase stacks running, only one of them with a
+   * live dev session — the other three were survivors of dev servers
+   * that had already been stopped. Without this, capping dev sessions
+   * would govern a number with no relationship to the load.
+   *
+   * Same substitution and same never-fatal contract as
+   * `[lifecycle] destroy_command`; see core/teardown.ts.
+   */
+  stopCommand: string | null;
 };
 
 export type ReviewBotUnresolvedVia = "threads" | "checklist";
@@ -911,6 +940,16 @@ class Errors {
     const v = parent?.[key];
     return typeof v === "number" && Number.isFinite(v) ? v : fallback;
   }
+  /**
+   * Optional number with no default. Null means "unset", which for
+   * `dev_server.max_concurrent` means "no cap" — distinct from any
+   * number the key could carry, so it can't be folded into `optNum`
+   * with a sentinel fallback.
+   */
+  optNumOrNull(parent: Raw | null, key: string): number | null {
+    const v = parent?.[key];
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  }
   /** Read an optional string-enum field; record an error on a value outside `allowed`. */
   optEnum<T extends string>(
     parent: Raw | null,
@@ -1113,11 +1152,17 @@ function build(raw: Raw, errs: Errors): Config {
     if (!Number.isInteger(portRange) || portRange < 1 || portBase + portRange > 65_536) {
       errs.add("dev_server.port_range must keep the range within 1-65535");
     }
+    const maxConcurrent = errs.optNumOrNull(devServerRaw, "max_concurrent");
+    if (maxConcurrent !== null && (!Number.isInteger(maxConcurrent) || maxConcurrent < 1)) {
+      errs.add("dev_server.max_concurrent must be a positive integer (omit it for no cap)");
+    }
     devServer = {
       command: errs.reqStr(devServerRaw, "dev_server", "command"),
       portBase,
       portRange,
       urlTemplate: errs.optStr(devServerRaw, "url", "http://localhost:{{port}}/"),
+      maxConcurrent,
+      stopCommand: errs.optStrOrNull(devServerRaw, "stop_command"),
     };
   }
 

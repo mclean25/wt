@@ -218,6 +218,8 @@ command = "npm run dev -- --port {{port}} --strictPort"
 | `port_base` | no | `8100` | Start of the port range wt allocates from. |
 | `port_range` | no | `100` | Range size. Each slug gets a stable port, persisted in wtstate and freed when the worktree is destroyed. |
 | `url` | no | `"http://localhost:{{port}}/"` | URL template for the row, `s` open, and yank. |
+| `max_concurrent` | no | *(uncapped)* | Most dev servers allowed to run at once across the whole fleet. A start beyond it is refused with exit `75`; `wt dev start --wait` queues instead. See below. |
+| `stop_command` | no | *(none)* | Shell command run after the session dies on `wt dev stop` (and when a slot is reclaimed). Same `{{path}}`/`{{slug}}`/`{{port}}` substitution and same never-fatal contract as [`[lifecycle] destroy_command`](#destroy_command--what-it-is-for). See below. |
 
 Semantics:
 
@@ -226,6 +228,38 @@ Semantics:
 - **Start is restart.** Starting an already-running server kills and relaunches it (picking up config edits).
 - **Cleanup is automatic.** The session is killed with the worktree (`wt rm`, `wt clean`) and swept by the startup orphan reaper; the port reservation is freed with the slug's state.
 - Vite note: if `vite.config` hardcodes `server.hmr.port`, remove it — HMR then follows `--port` automatically, which is what makes per-worktree instances hot-reload correctly.
+
+### `stop_command` — because stopping a process releases only a process
+
+`pnpm dev` is not one process any more. cozee's runs `supabase start`, which hands twelve containers to the docker daemon and returns; killing the tmux session takes vite down and leaves the stack up. Measured on this machine: four Supabase stacks running, one live dev session. Three of the four were survivors of dev servers already stopped, two of them nineteen hours old.
+
+That matters beyond tidiness, because it is what `max_concurrent` would otherwise be counting. Capping dev *sessions* while the *stacks* leak governs a number with no relationship to the load — the cap would have seen 2 where the machine was carrying 4.
+
+```toml
+[dev_server]
+stop_command = "docker ps -aq --filter name=_{{slug}}$ | xargs -r docker rm -f"
+```
+
+Same rules as `destroy_command`, including the anchoring trap (`_{{slug}}$`, not `{{slug}}` — docker's name filter is an unanchored regex and slugs are routinely prefixes of each other). It runs *after* the session is killed, so the teardown isn't racing a supervisor about to restart what it just tore down. It does **not** run on a restart: `wt dev start` on a running server relaunches the command, and tearing the stack down first would turn every restart into a full cold boot.
+
+`destroy_command` and `stop_command` are separate keys on purpose. A destroy teardown may legitimately be heavier (dropping volumes, deleting generated trees), and running that on an ordinary `wt dev stop` would be a nasty surprise. Setting both to the same line is fine and common.
+
+### `max_concurrent` — the load governor
+
+A dev server that costs a browser tab's worth of RAM needs no cap. One that costs a twelve-container database stack does: twelve worktrees running one each is 144 containers, and that is a machine you cannot type on.
+
+```toml
+[dev_server]
+max_concurrent = 4
+```
+
+- **A slot is derived, never recorded.** It is held by a live `<slug>-dev` tmux session, read fresh from tmux on every check. There is no counter to release and nothing to drift: a slot frees itself whether its server was stopped, crashed, destroyed, or lost with the tmux server. If tmux can't be reached, the holders are unknown and the cap does *not* wave everything through.
+- **Restart is never blocked.** The asking slug doesn't count against itself, so a full fleet can still pick up a config edit.
+- **A crashed server still holds its slot.** The supervisor parked, but the containers its command created outside its own process tree are still up, and those are what is being rationed. The refusal message names crashed holders specifically, since they are the cheapest slot to reclaim.
+- **Reap-on-acquire.** When a start finds the fleet full, dev sessions belonging to no live worktree are killed (running their `stop_command`) and the count retaken before refusing. Scope is deliberately narrow: a dev server whose worktree still exists is somebody's, even with no agent attached.
+- **It is a governor, not a mutex.** Two starts racing at the same instant can both see the last slot. That overshoot is one extra dev server; a real lock would have to be *released*, and a lock that must be released is the drifting counter this design exists to avoid.
+
+Refusal is exit `75` (sysexits `EX_TEMPFAIL`), distinct from `1` so a looping agent can tell "try later" from "the dev server is broken". `wt dev start --wait` queues instead of refusing — see [cli.md](cli.md#wt-dev-startstopstatuslogs).
 
 ## `[issue_tracker]` — optional integration
 

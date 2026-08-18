@@ -27,7 +27,12 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   again is setup you do, never an escalation — if it takes a human every
   time, that is the setup defect above, and the fix is a scripted login.
   `wt dev logs` is the output, and another slug's server is
-  never yours to stop or restart. A dev server you start by hand is
+  never yours to stop or restart. **A dev server can be rationed**: if
+  a start exits **75**, the fleet is at its concurrency cap — that is a
+  "try later", not a breakage and not something to escalate. Re-run it
+  as `wt dev start --wait`, which queues until a slot opens and shows
+  your position on the board while it waits; `wt dev status --all`
+  says who holds the slots. Nothing is wrong and nobody needs asking. A dev server you start by hand is
   invisible to wt and to the human (no row, no status, no logs) and
   unsupervised. Short-lived servers for your own checks (`pnpm preview`,
   a watch runner) are different: run those bare, no wt involvement —

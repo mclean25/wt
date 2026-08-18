@@ -44,12 +44,15 @@ export const CACHE_DB = config.paths.cacheDb;
 // threads regardless of author). A cached PR from v11 has no such field,
 // and a missing count would render as "nothing outstanding" — the exact
 // absence-reads-as-clean failure the field was added to fix.
+// v14: `DevServerStatus` gained `since` and `waiting`. A restored v13
+// entry has neither, and the row reads them unconditionally — an
+// undefined `since` would render `NaN` where the starting age goes.
 // v13: `SyncState.remote` changed MEANING, not shape — it now counts
 // against `origin/<branch>` rather than `@{u}` (which wt points at the
 // base). Same field, same type, different answer: a restored v12 entry
 // would feed ahead-of-base numbers straight into the destroy guard,
 // which is the bug the change exists to fix.
-const CACHE_BUSTER = "v13";
+const CACHE_BUSTER = "v14";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

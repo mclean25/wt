@@ -30,7 +30,7 @@
  * port accepting connections" into the level-derived state the row and
  * bolt render.
  */
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
 
@@ -38,8 +38,10 @@ import { closeDevServerBrowserSessions } from "./browser.ts";
 import { config, type DevServerConfig } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { run } from "./proc.ts";
-import { sessionName, shQuote, TMUX_SOCKET } from "./tmux/naming.ts";
-import { killByName } from "./tmux/process.ts";
+import { resolveTeardownCommand, runTeardownCommand } from "./teardown.ts";
+import { sessionName, shQuote, SUFFIX, TMUX_SOCKET } from "./tmux/naming.ts";
+import { capturePane, killByName, probeSessionNames } from "./tmux/process.ts";
+import { listWorktrees } from "./worktree.ts";
 import { claimDevPort, readWtState, WT_STATE_DIR } from "./wtstate.ts";
 
 const log = createLogger("[dev-server]");
@@ -61,6 +63,24 @@ export type DevServerStatus = {
   port: number | null;
   /** Resolved URL when running, else null. */
   url: string | null;
+  /**
+   * When the current attempt began (the supervisor rewrites its marker
+   * at the top of every loop iteration), or null when it never ran.
+   *
+   * Exists so `starting` can say how long it has been starting. A stack
+   * that needs docker can legitimately take minutes, and a hung one is
+   * indistinguishable from a slow one without the clock — one worktree
+   * sat at `starting` for fifteen minutes with nothing on any surface
+   * to say whether that was normal.
+   */
+  since: number | null;
+  /**
+   * Set while this slug is queued for a dev slot (`wt dev start
+   * --wait`): its position in the fleet-wide queue and when it joined.
+   * The row renders it, so an agent blocked on the cap is visible on
+   * the board rather than looking idle.
+   */
+  waiting: { rank: number; since: number } | null;
 };
 
 export const DEV_SERVER_STOPPED: DevServerStatus = {
@@ -69,6 +89,8 @@ export const DEV_SERVER_STOPPED: DevServerStatus = {
   crashed: false,
   port: null,
   url: null,
+  since: null,
+  waiting: null,
 };
 
 function requireDevServer(): DevServerConfig {
@@ -90,6 +112,16 @@ function readMarker(slug: string): "running" | "stopped" | "crashed" | null {
   try {
     const raw = readFileSync(markerPath(slug), "utf8").trim();
     return raw === "running" || raw === "stopped" || raw === "crashed" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** When the marker was last written, or null if it never was. */
+function markerMtime(slug: string): number | null {
+  try {
+    // Rounded: mtimeMs is fractional, and this reaches `--json`.
+    return Math.round(statSync(markerPath(slug)).mtimeMs);
   } catch {
     return null;
   }
@@ -209,6 +241,418 @@ export async function allocateDevPort(slug: string): Promise<number> {
   return port;
 }
 
+
+// ---------------------------------------------------------------------------
+// Concurrency slots
+// ---------------------------------------------------------------------------
+
+/**
+ * The fleet-wide waiting room: one `<slug>.json` per queued starter,
+ * holding the waiting process's pid and when it joined.
+ *
+ * A file, and not a counter, because the accounting has to survive
+ * crashes. wt's rule for encoded state is that it be write-once and
+ * self-expiring, and this is: written once when a `--wait` begins, and
+ * validated on every read against whether that pid is still alive. A
+ * waiter killed with SIGKILL leaves a file that the next reader ignores
+ * and deletes. There is no release call to forget.
+ */
+const WAIT_DIR = join(DEV_DIR, "waiting");
+
+/** How long a `--wait` polls before giving up, when no timeout is given. */
+export const DEV_WAIT_DEFAULT_TIMEOUT_MS = 30 * 60_000;
+/** Gap between slot polls while waiting. */
+const DEV_WAIT_POLL_MS = 3_000;
+/**
+ * How often a waiting starter re-runs the reclaim sweep. The sweep
+ * lists worktrees (git) and may shell out to `stop_command`, so it is
+ * far too heavy for every poll; the leak it clears took hours to
+ * appear, so a minute of latency on clearing it costs nothing.
+ */
+const DEV_WAIT_RECLAIM_EVERY_MS = 60_000;
+
+export type DevWaiter = { slug: string; pid: number; since: number };
+
+/**
+ * One dev server occupying a slot. `crashed` is a holder like any
+ * other: the supervisor parked, but the resources the command created
+ * outside its own process tree — the containers, the tunnels — are
+ * still up, and those are what the cap is actually rationing. Reporting
+ * it separately is so the refusal message can point at the cheapest
+ * slot to reclaim.
+ */
+export type DevSlotHolder = { slug: string; state: "up" | "crashed" };
+
+export type DevSlotReport = {
+  /** `[dev_server] max_concurrent`, or null when uncapped. */
+  limit: number | null;
+  holders: DevSlotHolder[];
+  /** Live waiters, oldest first — the queue order. */
+  waiters: DevWaiter[];
+  /** Slots left, or null when uncapped. */
+  free: number | null;
+};
+
+function waiterPath(slug: string): string {
+  return join(WAIT_DIR, `${slug}.json`);
+}
+
+/**
+ * Whether a pid is still around. `EPERM` counts as alive — the process
+ * exists, it just isn't ours to signal. Only `ESRCH` is dead.
+ */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Live waiters, oldest first, pruning the files of processes that are
+ * gone. The prune is the whole reason this can be trusted: nothing ever
+ * has to remember to leave the queue.
+ */
+export function readDevWaiters(dir: string = WAIT_DIR): DevWaiter[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return []; // Dir doesn't exist until the first `--wait`.
+  }
+  const waiters: DevWaiter[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const slug = name.slice(0, -".json".length);
+    let rec: { pid?: unknown; since?: unknown };
+    try {
+      rec = JSON.parse(readFileSync(join(dir, name), "utf8"));
+    } catch {
+      // A torn or hand-edited file is not a waiter. Drop it.
+      try {
+        rmSync(join(dir, name), { force: true });
+      } catch {
+        // Advisory.
+      }
+      continue;
+    }
+    const pid = typeof rec.pid === "number" ? rec.pid : null;
+    const since = typeof rec.since === "number" ? rec.since : null;
+    if (pid === null || since === null || !pidAlive(pid)) {
+      try {
+        rmSync(join(dir, name), { force: true });
+      } catch {
+        // Advisory.
+      }
+      continue;
+    }
+    waiters.push({ slug, pid, since });
+  }
+  return waiters.sort((a, b) => a.since - b.since || a.slug.localeCompare(b.slug));
+}
+
+function joinDevQueue(slug: string): void {
+  try {
+    mkdirSync(WAIT_DIR, { recursive: true });
+    writeFileSync(
+      waiterPath(slug),
+      JSON.stringify({ pid: process.pid, since: Date.now() }),
+    );
+  } catch (err) {
+    // The queue is a visibility and fairness aid, not a lock — a
+    // failure here degrades to "starts race for free slots", which is
+    // the behavior without the queue at all.
+    log.warn("could not join the dev-server queue", {
+      slug,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function leaveDevQueue(slug: string): void {
+  try {
+    rmSync(waiterPath(slug), { force: true });
+  } catch {
+    // Left behind at worst; the pid check prunes it on the next read.
+  }
+}
+
+/** Slugs with a live `<slug>-dev` tmux session, or null if tmux couldn't be asked. */
+async function devSessionSlugs(): Promise<string[] | null> {
+  const names = await probeSessionNames();
+  if (names === null) return null;
+  const slugs: string[] = [];
+  for (const name of names) {
+    if (name.endsWith(SUFFIX.dev)) slugs.push(name.slice(0, -SUFFIX.dev.length));
+  }
+  return slugs;
+}
+
+/**
+ * Who currently holds a slot. Derived from tmux every time — there is
+ * no ledger to drift, and a slot frees itself when its session goes,
+ * whether that was a stop, a crash, a destroy, or a killed tmux server.
+ *
+ * `null` (tmux unreachable) is propagated rather than collapsed to an
+ * empty list: an unanswerable question must not read as "nothing is
+ * running", which would let the cap wave everything through at exactly
+ * the moment wt has lost track of the fleet.
+ */
+export async function devSlotHolders(): Promise<DevSlotHolder[] | null> {
+  const slugs = await devSessionSlugs();
+  if (slugs === null) return null;
+  return slugs
+    .map((slug): DevSlotHolder => ({
+      slug,
+      state: readMarker(slug) === "crashed" ? "crashed" : "up",
+    }))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+/** Slots, holders and queue in one shot — the `wt dev status --all` view. */
+export async function devSlotReport(): Promise<DevSlotReport> {
+  const limit = config.devServer?.maxConcurrent ?? null;
+  const holders = (await devSlotHolders()) ?? [];
+  return {
+    limit,
+    holders,
+    waiters: readDevWaiters(),
+    free: limit === null ? null : Math.max(0, limit - holders.length),
+  };
+}
+
+/**
+ * Run the project's `stop_command` for a slug whose dev server has just
+ * gone down (or is being reclaimed). Never fatal — see
+ * `runTeardownCommand`.
+ *
+ * `cwd` falls back to the main clone when the checkout is gone, which
+ * is the reclaim case: an orphaned dev session outlived its worktree.
+ * The teardown still has the slug and the port, which is what a
+ * container-name or port-block filter needs.
+ */
+async function runDevStopCommand(
+  slug: string,
+  path: string | null,
+  onLog?: (line: string) => void,
+): Promise<void> {
+  const template = config.devServer?.stopCommand ?? null;
+  const command = resolveTeardownCommand(template, {
+    path: path ?? config.paths.mainClone,
+    slug,
+    port: readWtState().slugs[slug]?.devPort ?? null,
+  });
+  if (!command) return;
+  await runTeardownCommand({
+    label: "stop_command",
+    command,
+    cwd: path ?? config.paths.mainClone,
+    slug,
+    onLog: onLog ?? ((line) => log.info(line, { slug })),
+  });
+}
+
+/**
+ * Reclaim slots held by dev sessions that belong to no live worktree.
+ * Run when an acquire finds the fleet full, never on the happy path:
+ * the sweep is the answer to "the counter drifted", and there is
+ * nothing to answer while slots are free.
+ *
+ * Scope is deliberately narrow — a session whose worktree is gone owns
+ * nothing anyone can still want. A dev server for a worktree that still
+ * exists is somebody's, even if no agent is attached to it right now,
+ * and taking it would be wt reaching into another slug's work.
+ *
+ * Returns the slugs reclaimed.
+ */
+export async function reclaimDevSlots(): Promise<string[]> {
+  const slugs = await devSessionSlugs();
+  if (slugs === null || slugs.length === 0) return [];
+  let live: Set<string>;
+  try {
+    live = new Set((await listWorktrees()).map((w) => w.slug));
+  } catch {
+    // Can't establish what's live — reclaiming on a guess would kill a
+    // working dev server. Leave the fleet as it is.
+    return [];
+  }
+  const orphans = slugs.filter((slug) => !live.has(slug));
+  if (orphans.length === 0) return [];
+  for (const slug of orphans) {
+    log.attention.warn(`reclaiming dev-server slot from orphaned ${slug}`);
+    await captureDevCrashLog(slug);
+    await killByName(sessionName(slug, "dev"));
+    await runDevStopCommand(slug, null);
+  }
+  return orphans;
+}
+
+/**
+ * Thrown by `startDevServer` when `[dev_server] max_concurrent` is
+ * reached. Carries the holders so the caller can say WHO has the slots
+ * — a refusal that doesn't name what to free just moves the question to
+ * the human, which is the opposite of the point.
+ */
+export class DevSlotFullError extends Error {
+  readonly holders: DevSlotHolder[];
+  readonly limit: number;
+  constructor(decision: DevSlotDecision) {
+    const limit = decision.limit ?? 0;
+    super(
+      `dev-server slots full (${decision.holders.length}/${limit}): ` +
+        decision.holders.map((h) => h.slug).join(", "),
+    );
+    this.name = "DevSlotFullError";
+    this.holders = decision.holders;
+    this.limit = limit;
+  }
+}
+
+export type DevSlotDecision = {
+  /** True when a start may proceed now. */
+  ok: boolean;
+  limit: number | null;
+  /** Slots left, or null when uncapped. */
+  free: number | null;
+  /** Everyone holding a slot right now, excluding the asking slug. */
+  holders: DevSlotHolder[];
+};
+
+/**
+ * Whether `slug` may start a dev server. The asking slug never counts
+ * against itself: `wt dev start` is also restart, and relaunching a
+ * server that is already running adds no load — refusing it would make
+ * a full fleet unable to pick up a config edit.
+ *
+ * When the fleet is full and `reclaim` is set, orphaned sessions are
+ * swept and the count retaken before refusing.
+ *
+ * This is a load governor, not a mutex, and the gap between deciding
+ * and the new session existing is real: two starts racing at exactly
+ * the same instant can both see the last slot. That overshoot is one
+ * dev server for as long as one of them runs, which is the failure this
+ * feature can afford; a genuine lock across independent CLI processes
+ * would have to be released, and a lock that must be released is the
+ * drifting counter this design exists to avoid.
+ */
+export async function checkDevSlot(
+  slug: string,
+  opts: { reclaim?: boolean } = {},
+): Promise<DevSlotDecision> {
+  const limit = config.devServer?.maxConcurrent ?? null;
+  if (limit === null) return decideDevSlot(slug, [], null);
+  let holders = (await devSlotHolders()) ?? [];
+  if (!decideDevSlot(slug, holders, limit).ok && opts.reclaim !== false) {
+    if ((await reclaimDevSlots()).length > 0) holders = (await devSlotHolders()) ?? [];
+  }
+  return decideDevSlot(slug, holders, limit);
+}
+
+/**
+ * The cap arithmetic, split from the tmux read so the rule is testable.
+ *
+ * `slug` is filtered out of its own holder list: `wt dev start` is also
+ * restart, and relaunching a server that is already up adds no load.
+ * Without that, a full fleet could never pick up a config edit — every
+ * restart would be refused by the server it was restarting.
+ */
+export function decideDevSlot(
+  slug: string,
+  holders: readonly DevSlotHolder[],
+  limit: number | null,
+): DevSlotDecision {
+  const others = holders.filter((h) => h.slug !== slug);
+  if (limit === null) return { ok: true, limit: null, free: null, holders: others };
+  const free = Math.max(0, limit - others.length);
+  return { ok: free > 0, limit, free, holders: others };
+}
+
+/**
+ * Queue for a slot, resolving once one is available (or `false` on
+ * timeout). Joins the visible waiting room for the duration, so a
+ * blocked start shows on the board and in `wt dev status --all`
+ * instead of looking like an agent that stopped working.
+ *
+ * Fairness is FIFO among waiters only: a waiter takes a slot when its
+ * rank in the queue is inside the number of free slots. A plain
+ * (non-waiting) `wt dev start` is never held back by the queue — being
+ * told "full" while `wt dev status` shows a free slot would be a worse
+ * lie than the occasional queue-jump, and the jumper is only ever
+ * taking a slot that was genuinely free.
+ */
+export async function waitForDevSlot(
+  slug: string,
+  opts: {
+    timeoutMs?: number;
+    /** Called on each poll that doesn't get a slot. */
+    onWait?: (info: { rank: number; holders: DevSlotHolder[]; waited: number }) => void;
+  } = {},
+): Promise<boolean> {
+  const timeoutMs = opts.timeoutMs ?? DEV_WAIT_DEFAULT_TIMEOUT_MS;
+  const started = Date.now();
+  joinDevQueue(slug);
+  let lastReclaim = 0;
+  try {
+    for (;;) {
+      const reclaim = Date.now() - lastReclaim >= DEV_WAIT_RECLAIM_EVERY_MS;
+      if (reclaim) lastReclaim = Date.now();
+      const decision = await checkDevSlot(slug, { reclaim });
+      const waiters = readDevWaiters();
+      const rank = waiters.findIndex((w) => w.slug === slug);
+      // rank < 0 means our own file went missing (a hand-cleaned cache,
+      // a full disk). Fall back to first-come rather than waiting for a
+      // position we no longer hold.
+      if (decision.ok && (decision.free === null || rank < 0 || rank < decision.free)) {
+        return true;
+      }
+      if (Date.now() - started >= timeoutMs) return false;
+      opts.onWait?.({
+        rank: rank < 0 ? 0 : rank,
+        holders: decision.holders,
+        waited: Date.now() - started,
+      });
+      await Bun.sleep(DEV_WAIT_POLL_MS);
+    }
+  } finally {
+    leaveDevQueue(slug);
+  }
+}
+
+/**
+ * Save a parked supervisor's scrollback next to its marker before
+ * anything kills the pane. `remain-on-exit` keeps the crash report
+ * readable, but only for as long as the session lives, and reclaim
+ * kills sessions — losing the one artifact that says why the server
+ * died would make the sweep worse than the leak. `wt dev logs` falls
+ * back to this file when the pane is gone.
+ */
+async function captureDevCrashLog(slug: string): Promise<void> {
+  if (readMarker(slug) !== "crashed") return;
+  const text = await capturePane(sessionName(slug, "dev"));
+  if (!text) return;
+  try {
+    mkdirSync(DEV_DIR, { recursive: true });
+    writeFileSync(crashLogPath(slug), text);
+  } catch {
+    // Best-effort; the pane is about to go either way.
+  }
+}
+
+function crashLogPath(slug: string): string {
+  return join(DEV_DIR, `${slug}.crash.log`);
+}
+
+/** The saved crash scrollback for a slug, or null if there isn't one. */
+export function readDevCrashLog(slug: string): string | null {
+  try {
+    return readFileSync(crashLogPath(slug), "utf8");
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The supervisor script. POSIX sh (runs under /bin/sh); the user's
  * command is spliced in verbatim — it's trusted config, the same
@@ -274,6 +718,12 @@ export async function startDevServer(wt: {
   path: string;
 }): Promise<{ port: number; url: string }> {
   const dev = requireDevServer();
+  // The cap is enforced here rather than in the CLI so a future caller
+  // inherits it — the whole point of a load governor is that there is
+  // no path around it. `wt dev start --wait` queues first and lands
+  // here with a slot already free.
+  const slot = await checkDevSlot(wt.slug, { reclaim: true });
+  if (!slot.ok) throw new DevSlotFullError(slot);
   const session = sessionName(wt.slug, "dev");
   // Kill directly rather than through `stopDevServer`: start is also
   // restart, and restarting must NOT take the user's browser tabs with
@@ -352,7 +802,7 @@ export async function startDevServer(wt: {
  * fresh-start guarantee `clearSlugState` gives the wtstate record.
  */
 export function clearDevServerFiles(slug: string): void {
-  for (const p of [markerPath(slug), scriptPath(slug)]) {
+  for (const p of [markerPath(slug), scriptPath(slug), crashLogPath(slug), waiterPath(slug)]) {
     try {
       rmSync(p, { force: true });
     } catch {
@@ -375,7 +825,7 @@ export function reapDevServerFiles(liveSlugs: ReadonlySet<string>): void {
     return; // Dir doesn't exist until the first start — nothing to sweep.
   }
   for (const name of entries) {
-    const slug = name.replace(/\.(state|sh)$/, "");
+    const slug = name.replace(/\.(state|sh|crash\.log)$/, "");
     if (slug === name || liveSlugs.has(slug)) continue;
     try {
       rmSync(join(DEV_DIR, name), { force: true });
@@ -383,10 +833,31 @@ export function reapDevServerFiles(liveSlugs: ReadonlySet<string>): void {
       // Best-effort; a leftover file is cosmetic.
     }
   }
+  // The waiting room needs no liveness rule of its own — every entry is
+  // validated against its pid on read — but a dead slug's file would
+  // otherwise sit there until someone happened to read the queue.
+  for (const waiter of readDevWaiters()) {
+    if (liveSlugs.has(waiter.slug)) continue;
+    try {
+      rmSync(waiterPath(waiter.slug), { force: true });
+    } catch {
+      // Best-effort.
+    }
+  }
 }
 
-/** Stop the slug's dev server. Idempotent; the port stays reserved. */
-export async function stopDevServer(slug: string): Promise<void> {
+/**
+ * Stop the slug's dev server. Idempotent; the port stays reserved.
+ *
+ * Killing the session is only half of a stop. A dev command routinely
+ * hands work to something that is not its child — `supabase start`
+ * returns once the docker daemon has the containers — so the process
+ * tree going away releases nothing. `[dev_server] stop_command` is the
+ * project's chance to say what else to take down; without it, "stopped"
+ * means the vite process is gone and the twelve containers are not.
+ */
+export async function stopDevServer(wt: { slug: string; path: string }): Promise<void> {
+  const slug = wt.slug;
   await killByName(sessionName(slug, "dev"));
   try {
     mkdirSync(DEV_DIR, { recursive: true });
@@ -394,6 +865,9 @@ export async function stopDevServer(slug: string): Promise<void> {
   } catch {
     // Marker is advisory; the killed session already means "not running".
   }
+  // After the kill, so the teardown isn't racing a supervisor that is
+  // about to restart the command it just tore down.
+  await runDevStopCommand(slug, wt.path);
   log.event.info(`dev server stopped (${slug})`);
   // The tabs pointed at this server are stranded on a refused port the
   // moment it goes down, so they go with it — same reflex as destroy,
@@ -431,6 +905,15 @@ export async function devServerStatus(
   if (!config.devServer) return DEV_SERVER_STOPPED;
   const port = readWtState().slugs[slug]?.devPort ?? null;
   const session = sessionName(slug, "dev");
+  // The supervisor rewrites the marker at the top of every loop pass,
+  // so its mtime is when the CURRENT attempt began — not when the
+  // server was first asked for. That's the number `starting` wants.
+  const since = markerMtime(slug);
+  const queued = readDevWaiters();
+  const rank = queued.findIndex((w) => w.slug === slug);
+  const waiting =
+    rank >= 0 ? { rank, since: queued[rank]!.since } : null;
+  const base = { port, since, waiting };
   const has =
     opts.sessionExists !== undefined
       ? opts.sessionExists
@@ -441,13 +924,13 @@ export async function devServerStatus(
     // to a tmux server restart): "it crashed the last time it ran" is
     // still the honest state until a start/stop rewrites it.
     if (readMarker(slug) === "crashed") {
-      return { running: false, starting: false, crashed: true, port, url: null };
+      return { running: false, starting: false, crashed: true, url: null, ...base };
     }
-    return { ...DEV_SERVER_STOPPED, port };
+    return { ...DEV_SERVER_STOPPED, ...base };
   }
   const probe = port !== null ? await probePort(port) : "free";
   if (probe === "listening") {
-    return { running: true, starting: false, crashed: false, port, url: devUrl(port!) };
+    return { running: true, starting: false, crashed: false, url: devUrl(port!), ...base };
   }
   const marker = readMarker(slug);
   if (probe === "unknown" && marker === "running") {
@@ -456,10 +939,10 @@ export async function devServerStatus(
     // went away — reporting it as stopped drops the bolt off the row and
     // makes `s` refuse to open a URL that works. Keep the last known
     // truth; the next pass re-probes.
-    return { running: true, starting: false, crashed: false, port, url: devUrl(port!) };
+    return { running: true, starting: false, crashed: false, url: devUrl(port!), ...base };
   }
   if (marker === "crashed") {
-    return { running: false, starting: false, crashed: true, port, url: null };
+    return { running: false, starting: false, crashed: true, url: null, ...base };
   }
   // Session up, port not answering, not parked: either still booting or
   // a stopped-but-remained pane. The marker disambiguates.
@@ -467,7 +950,7 @@ export async function devServerStatus(
     running: false,
     starting: marker === "running",
     crashed: false,
-    port,
     url: null,
+    ...base,
   };
 }
