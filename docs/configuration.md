@@ -242,7 +242,7 @@ command = "npm run dev -- --port {{port}} --strictPort"
 Semantics:
 
 - **Survives wt restarts.** The server runs in a tmux session (`<slug>-dev`) on the wt-private server, independent of the TUI process.
-- **Crash restart without thrash.** A supervisor loop restarts the command after an exit; three exits within 10s of their start in a row park it as `crashed` (row turns red, logs stay readable via `wt dev logs` or by attaching to the pane). A SIGINT/SIGTERM exit counts as an intentional stop, not a crash.
+- **Crash restart without thrash.** A supervisor loop restarts the command after an exit; three exits within 10s of their start in a row park it as `crashed` (row turns red, logs stay readable via `wt dev logs` or by attaching to the pane). When the TUI observes that transition, the attention feed and toast show the last useful application-error line plus the `wt dev logs` command, so a startup dependency failure cannot hide behind a red row. A SIGINT/SIGTERM exit counts as an intentional stop, not a crash.
 - **Start is restart.** Starting an already-running server kills and relaunches it (picking up config edits).
 - **Cleanup is automatic.** The session is killed with the worktree (`wt rm`, `wt clean`) and swept by the startup orphan reaper; the port reservation is freed with the slug's state.
 - Vite note: if `vite.config` hardcodes `server.hmr.port`, remove it — HMR then follows `--port` automatically, which is what makes per-worktree instances hot-reload correctly.

@@ -37,7 +37,7 @@ import { join } from "node:path";
 import { closeDevServerBrowserSessions } from "./browser.ts";
 import { config, type DevServerConfig } from "./config.ts";
 import { createLogger } from "./logger.ts";
-import { run } from "./proc.ts";
+import { run, sanitizeLine } from "./proc.ts";
 import { resolveTeardownCommand, runTeardownCommand } from "./teardown.ts";
 import { sessionName, shQuote, SUFFIX, TMUX_SOCKET } from "./tmux/naming.ts";
 import { capturePane, killByName, probeSessionNames } from "./tmux/process.ts";
@@ -114,6 +114,42 @@ export const DEV_SERVER_STOPPED: DevServerStatus = {
   waiting: null,
   rebasedSince: null,
 };
+
+/** Maximum app-output characters carried on one attention-feed line. */
+const CRASH_SUMMARY_CHARS = 180;
+
+/**
+ * Turn a supervisor pane snapshot into one useful, feed-safe error line.
+ * The supervisor's own `wt:` epilogue says only that retries stopped;
+ * the last application line before it is the part that usually says why.
+ */
+export function devServerCrashSummary(output: string): string | null {
+  const lines = output
+    .split("\n")
+    .map((line) => sanitizeLine(line).replace(/\s+/g, " ").trim())
+    .filter((line) => line.length > 0 && !line.startsWith("wt:"));
+  const summary = lines.at(-1);
+  if (!summary) return null;
+  return summary.length > CRASH_SUMMARY_CHARS
+    ? `${summary.slice(0, CRASH_SUMMARY_CHARS - 1)}…`
+    : summary;
+}
+
+/** Recent output retained in the dev supervisor's active (or parked) pane. */
+export async function devServerLogs(slug: string, lines = 200): Promise<string | null> {
+  const r = await run([
+    "tmux",
+    "-L",
+    TMUX_SOCKET,
+    "capture-pane",
+    "-p",
+    "-t",
+    `=${sessionName(slug, "dev")}:`,
+    "-S",
+    `-${lines}`,
+  ]);
+  return r.exitCode === 0 ? r.stdout.trimEnd() : null;
+}
 
 function requireDevServer(): DevServerConfig {
   if (!config.devServer) {

@@ -3,6 +3,7 @@ import {
   DEV_QUEUE_FIRST,
   DEV_WAIT_DEFAULT_TIMEOUT_MS,
   DevSlotFullError,
+  devServerLogs,
   devServerStatus,
   devSlotReport,
   DEV_READY_DEFAULT_TIMEOUT_MS,
@@ -16,8 +17,6 @@ import {
   waitForDevReady,
   type DevSlotHolder,
 } from "../../core/dev-server.ts";
-import { sessionName, TMUX_SOCKET } from "../../core/tmux.ts";
-import { run as runProc } from "../../core/proc.ts";
 import type { Worktree } from "../../core/types.ts";
 import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import { agentIdentity } from "../../core/agent-identity.ts";
@@ -520,22 +519,9 @@ export async function run(argv: string[]): Promise<number> {
       return runStatusOne(wt, json);
     case "logs": {
       // The tmux pane (alive or remained-on-exit) IS the log store.
-      const r = await runProc([
-        "tmux",
-        "-L",
-        TMUX_SOCKET,
-        "capture-pane",
-        "-p",
-        // Trailing ":" = exact-session + active window; capture-pane
-        // resolves a PANE target, where the bare `=name` form errors
-        // (same quirk send-keys has — see closeHarnessSessionGracefully).
-        "-t",
-        `=${sessionName(wt.slug, "dev")}:`,
-        "-S",
-        "-200",
-      ]);
-      if (r.exitCode === 0) {
-        console.log(r.stdout.trimEnd());
+      const output = await devServerLogs(wt.slug);
+      if (output !== null) {
+        console.log(output);
         return 0;
       }
       // No pane. A parked supervisor's scrollback is saved off before

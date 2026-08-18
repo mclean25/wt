@@ -35,6 +35,7 @@ import { useAutoCopy } from "./hooks/useAutoCopy.ts";
 import { useLogTails } from "./hooks/useLogTails.ts";
 import { usePaste } from "./hooks/usePaste.ts";
 import { usePrCommentEvents } from "./hooks/usePrCommentEvents.ts";
+import { useDevServerEvents } from "./hooks/useDevServerEvents.ts";
 import { useTerminalFocus } from "./hooks/useTerminalFocus.ts";
 import { useWtStateEvents } from "./hooks/useWtStateEvents.ts";
 import { useManagerReports } from "./hooks/useManagerSignals.ts";
@@ -257,6 +258,8 @@ export function App({ onExit }: Props) {
   // Narrate work-status transitions (from any process) into the
   // attention feed.
   useWtStateEvents(wtStateForStacks.data);
+  // Detached dev supervisors can fail after their start command exits.
+  useDevServerEvents(rows);
   // New PR comments from other people → attention feed.
   usePrCommentEvents(rows, githubData);
   // `wt manager report` spool → attention feed (cross-process watcher).

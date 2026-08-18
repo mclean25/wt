@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   decideDevSlot,
   DEV_SERVER_STOPPED,
+  devServerCrashSummary,
   probePort,
   readDevWaiters,
   type DevSlotHolder,
@@ -237,5 +238,35 @@ describe("dev-server readiness", () => {
   // break.
   test("no anchor means unknown, not fresh", () => {
     expect(DEV_SERVER_STOPPED.rebasedSince).toBeNull();
+  });
+});
+
+describe("devServerCrashSummary", () => {
+  test("returns the last application error before the supervisor epilogue", () => {
+    const output = [
+      "Starting local services",
+      "\u001b[31mCannot connect to /Users/alex/.orbstack/run/docker.sock\u001b[0m",
+      "wt: dev server exited (1) — restarting in 2s",
+      "wt: dev server crashed 3 times in a row (last exit 1) — giving up.",
+      'wt: fix the cause, then start it again from the ! menu or "wt dev start".',
+    ].join("\n");
+    expect(devServerCrashSummary(output)).toBe(
+      "Cannot connect to /Users/alex/.orbstack/run/docker.sock",
+    );
+  });
+
+  test("returns null when the pane contains only supervisor output", () => {
+    expect(
+      devServerCrashSummary(
+        "wt: dev server crashed 3 times in a row (last exit 1) — giving up.\n",
+      ),
+    ).toBeNull();
+  });
+
+  test("flattens control noise and caps the feed payload", () => {
+    const summary = devServerCrashSummary(`error:\t${"x".repeat(300)}\x07`);
+    expect(summary).not.toContain("\x07");
+    expect(summary!.length).toBe(180);
+    expect(summary!.endsWith("…")).toBe(true);
   });
 });
