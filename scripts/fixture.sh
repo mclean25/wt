@@ -224,12 +224,12 @@ ENV
   wtfx section mv landed-clean landed-dirty "Landed" >/dev/null
 
   # --- Every work status, so the dot column shows its whole palette ----
-  for s in todo working review needs-testing needs-human ready-low ready-high; do
+  for s in todo working review needs-testing needs-human ready-low ready-high blocked; do
     new_wt "st-$s"
     commit_in "st-$s" "Status sample: $s"
   done
   wtfx section mv st-todo st-working st-review st-needs-testing \
-    st-needs-human st-ready-low st-ready-high "Statuses" >/dev/null
+    st-needs-human st-ready-low st-ready-high st-blocked "Statuses" >/dev/null
   wtfx status st-todo todo >/dev/null
   wtfx status st-working working >/dev/null
   wtfx status st-review review >/dev/null
@@ -247,6 +247,16 @@ OPS:      none
 REVERT:   no: fixture rows are not revertable, they are fabricated
 IF WRONG: nothing real is behind this row
 UNTESTED: everything, by construction" >/dev/null
+  # A `ready` held back by an external gate: the one record whose STATE
+  # and RENDER deliberately disagree (warn circle-slash, out of the merge
+  # band, `blocked - ready` in the banner). Without a row carrying it,
+  # the whole rendering branch is invisible on any local board.
+  wtfx status st-blocked ready --risk low \
+    --blocked-on "mobile 2.14 shipped and old builds drained" \
+    -m "Sample gated note.
+OPS:      none
+REVERT:   safe
+IF WRONG: nothing real is behind this row" >/dev/null
 
   # --- A chain: depth 0/1/2, co-located, so the rail has somewhere to go
   new_wt chain-root;                            commit_in chain-root "Chain root lays the schema"

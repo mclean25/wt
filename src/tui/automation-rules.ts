@@ -26,7 +26,7 @@ import { githubIssueNumberFromSlug } from "../core/issue-tracker.ts";
 import { MANAGER_SLUG } from "../core/manager.ts";
 import { pluralize } from "../core/text.ts";
 import { REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
-import { workStatusSuffix, type WorkState } from "../core/work-status.ts";
+import { isBlockedReady, workStatusSuffix, type WorkState } from "../core/work-status.ts";
 
 import { isCleanCandidate } from "./app-helpers.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
@@ -307,6 +307,14 @@ function evaluateRowTrigger(
       const want = statusTriggerState(trigger)!;
       const work = row.work;
       if (!work || work.state !== want) return null;
+      // A gated `ready` is finished but must not be merged, and every
+      // documented use of `status.ready` says "look at me, this is
+      // yours to merge" — firing it here would reproduce the exact
+      // misread at the escalation layer, where it is loudest. The fire
+      // comes back on its own when the gate clears: `--unblock` amends
+      // in place, so `at` is unchanged and the fire key was never
+      // consumed.
+      if (isBlockedReady(work)) return null;
       if (writerIsAudience(work.by ?? null, slug, ctx.audienceOf(rule))) return null;
       return singleRowFire(
         rule,

@@ -49,6 +49,18 @@ const VOCAB = `states (unique prefixes + nh/nt work):
                  required: why. No --risk — nothing is being merged. The row
                  sinks out of the queue instead of wearing a fake ready
 
+${bold("--blocked-on \"<gate>\"")} decorates ${bold("ready")} — "finished and verified, but it
+MUST NOT be merged until <gate>". Not a state, because "the work is done"
+and "it can't land yet" are two facts and a state can only carry one.
+The row then renders blocked and sorts out of the merge band; clear it
+with ${bold("wt status --unblock")} when the gate clears (nothing expires it).
+  gate:     a mobile release shipping, an upstream branch landing, a
+            hosted change that has to be in place BEFORE this merges
+  not gate: anything that happens AFTER the merge — a migration to apply,
+            functions to redeploy. That is the ${bold("OPS:")} line of the note,
+            and it does not stop the merge. If you gate on it, the field
+            comes to mean "read the note", which is what it replaced
+
 ${bold("risk")} = how confident you are AFTER testing — NOT how big or scary the
 change is. The human can already see the diff on the PR; your confidence
 is the one thing they can't. Judge it by what you verified, not by what
@@ -75,10 +87,12 @@ You write one note; the human reads all of them at once. The budget is
 the point — without it "concise" loses to "thorough" every time.
 
 set:   wt status [<slug>] <state> [-m "note"] [--risk low|medium|high]
+                            [--blocked-on "<gate>"]   (ready only)
 show:  wt status [<slug>] [--all [--json]]     clear: wt status --clear [<slug>]
 amend: wt status [<slug>] --risk <r> [-m "..."]  re-judge risk as testing lands
        wt status [<slug>] --note-only "..."      amend the note alone
-       (both keep the state and timestamp — no need to restate anything)
+       wt status [<slug>] --unblock              the gate cleared
+       (all keep the state and timestamp — no need to restate anything)
 
 ${bold("-m REPLACES the note")}; add ${bold("--append")} to add to it instead. A replaced note
 is echoed back so what you overwrote is recoverable from this output.`;
@@ -131,6 +145,28 @@ function guidance(state: WorkState): string[] {
         `Leave the worktree itself alone — destroying it is the human's call.`,
       ];
   }
+}
+
+/**
+ * Replaces the plain `ready` guidance when a gate is set. `ready`'s
+ * advice ("leave the PR for the human to merge") is exactly wrong here
+ * — the point is that it must NOT be merged — so the footer has to say
+ * something different or it teaches the failure it exists to prevent.
+ */
+function blockedGuidance(): string[] {
+  return [
+    `this row now sorts OUT of the merge band and renders as blocked, so nobody`,
+    `merges it by reading the state. Keep the PR a draft while the gate stands.`,
+    `When the gate clears: ${bold("wt status --unblock")} (keeps the state, risk, note and`,
+    `timestamp). Nothing expires a gate — wt cannot see a release ship.`,
+  ];
+}
+
+function unblockedGuidance(): string[] {
+  return [
+    `gate cleared — this is a plain ${bold("ready")} again and rejoins the merge band.`,
+    `Mark the PR ready for review if you left it a draft.`,
+  ];
 }
 
 /**
@@ -251,6 +287,13 @@ export type StatusArgs =
       note: string | null;
       risk: WorkRisk | null;
       append: boolean;
+      /**
+       * Three-valued on purpose: absent = leave the gate alone, a
+       * string = set it, null = clear it (`--unblock`). Amending risk
+       * must not silently unblock a branch, and unblocking must not
+       * require restating the risk.
+       */
+      blockedOn?: string | null;
     }
   | {
       kind: "set";
@@ -259,6 +302,7 @@ export type StatusArgs =
       note: string | null;
       risk: WorkRisk | null;
       append: boolean;
+      blockedOn: string | null;
     };
 
 function err(message: string, hints?: string[], showVocab = false): StatusArgs {
@@ -283,9 +327,17 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   let all = false;
   let json = false;
   let append = false;
+  let blockedOnRaw: string | null = null;
+  let unblock = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "-m" || a === "--note" || a === "--risk" || a === "--note-only") {
+    if (
+      a === "-m" ||
+      a === "--note" ||
+      a === "--risk" ||
+      a === "--note-only" ||
+      a === "--blocked-on"
+    ) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("-")) {
         // `--note-only -m "..."` is the natural mistake, because -m is
@@ -300,8 +352,10 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       i++;
       if (a === "--risk") riskRaw = value;
       else if (a === "--note-only") noteOnly = value;
+      else if (a === "--blocked-on") blockedOnRaw = value;
       else note = value;
     } else if (a === "--append") append = true;
+    else if (a === "--unblock") unblock = true;
     else if (a === "--clear") clear = true;
     else if (a === "--all") all = true;
     else if (a === "--json") json = true;
@@ -313,6 +367,23 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   if (note !== null) {
     note = sanitizeWorkNote(note);
     if (note === "") note = null;
+  }
+
+  let blockedOn: string | null = null;
+  if (blockedOnRaw !== null) {
+    blockedOn = sanitizeWorkNote(blockedOnRaw);
+    if (blockedOn === "") {
+      return err(
+        "--blocked-on requires the gate itself — what has to happen before this can merge?",
+        [
+          `e.g. --blocked-on "mobile 2.14 shipped and old builds drained".`,
+          `To remove a gate that has cleared: ${bold("wt status --unblock")}.`,
+        ],
+      );
+    }
+  }
+  if (blockedOn !== null && unblock) {
+    return err("--blocked-on sets a gate and --unblock removes one — pick one");
   }
 
   let risk: WorkRisk | null = null;
@@ -328,8 +399,8 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   // untouched, so it conflicts with every state-changing flag.
   if (noteOnly !== null) {
     if (clear || all) return err("--note-only doesn't combine with --all/--clear");
-    if (note !== null || riskRaw !== null) {
-      return err("--note-only amends only the note — drop -m/--risk");
+    if (note !== null || riskRaw !== null || blockedOn !== null || unblock) {
+      return err("--note-only amends only the note — drop -m/--risk/--blocked-on/--unblock");
     }
     if (positionals.length > 1) return err("too many arguments for --note-only");
     if (positionals[0] && resolveWorkState(positionals[0])) {
@@ -353,7 +424,14 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   }
 
   if (all) {
-    if (clear || riskRaw !== null || note !== null || positionals.length > 0) {
+    if (
+      clear ||
+      riskRaw !== null ||
+      note !== null ||
+      blockedOn !== null ||
+      unblock ||
+      positionals.length > 0
+    ) {
       return err("--all only combines with --json — drop the other flags/arguments");
     }
     return { kind: "all", json };
@@ -361,8 +439,10 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   if (json) return err("--json requires --all");
 
   if (clear) {
-    if (riskRaw !== null || note !== null) {
-      return err("--clear doesn't take -m/--risk — it just drops the record");
+    if (riskRaw !== null || note !== null || blockedOn !== null || unblock) {
+      return err(
+        "--clear doesn't take -m/--risk/--blocked-on/--unblock — it just drops the record",
+      );
     }
     if (positionals.length > 1) return err("too many arguments for --clear");
     return { kind: "clear", slugArg: positionals[0] ?? null };
@@ -410,6 +490,20 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     // erroring: confidence is supposed to move as testing lands, and the
     // only alternative — re-asserting `ready` in full — fakes a fresh
     // assertion and forces the note to be restated.
+    // Same reasoning for the gate as for risk: a gate clearing is news
+    // about the WORLD, not a new claim about the work, so amending it
+    // must not fake a fresh assertion (which would reset the note and
+    // re-narrate the state to every watching TUI).
+    if (blockedOn !== null || unblock) {
+      return {
+        kind: "amend",
+        slugArg,
+        note,
+        risk,
+        append,
+        blockedOn: unblock ? null : blockedOn,
+      };
+    }
     if (risk) return { kind: "amend", slugArg, note, risk, append };
     if (note !== null) {
       return err(
@@ -425,6 +519,23 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
 
   if (risk && state !== "ready") {
     return err(`--risk only applies to ready (got ${state})`);
+  }
+  if (unblock) {
+    return err("a new assertion already clears any gate — drop --unblock", [
+      `${bold("--unblock")} amends an existing record (${bold("wt status --unblock")}); asserting a`,
+      `state fresh replaces the whole record, gate included.`,
+    ]);
+  }
+  // The gate means "finished, but must not be merged yet", so it only
+  // has a meaning where merging was otherwise on the table. On any
+  // other state it would be a second, weaker way of saying what the
+  // state already says.
+  if (blockedOn !== null && state !== "ready") {
+    return err(`--blocked-on only applies to ready (got ${state})`, [
+      `${bold("--blocked-on")} means "the work is DONE but must not merge yet".`,
+      `Still working on it? that is just ${bold(state)}. Blocked on the human to`,
+      `make progress at all? that is ${bold("needs-human")}.`,
+    ]);
   }
   if (state === "ready" && !risk) {
     return err("ready requires --risk low|medium|high — how confident are you in it?", [
@@ -459,7 +570,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     ]);
   }
 
-  return { kind: "set", slugArg, state, note, risk, append };
+  return { kind: "set", slugArg, state, note, risk, append, blockedOn };
 }
 
 function describe(
@@ -469,8 +580,13 @@ function describe(
 ): string {
   if (!record) return `${cyan(slug)}  ${dim("no status asserted")}`;
   const color = stateColor(record.state);
-  const parts = [`${cyan(slug)}  ${color(record.state)}`];
+  const parts = [
+    `${cyan(slug)}  ${record.blockedOn ? red("blocked") + dim("/") + color(record.state) : color(record.state)}`,
+  ];
   if (record.risk) parts.push(dim("risk:") + " " + color(record.risk));
+  // Ahead of the age and the note: this is the one field that changes
+  // what the reader may DO with the row.
+  if (record.blockedOn) parts.push(red(`blocked on: ${record.blockedOn}`));
   const age = workAge(record.at);
   if (age) parts.push(dim(`${age} ago`));
   if (record.sha && headSha && record.sha !== headSha) {
@@ -546,6 +662,14 @@ export async function run(argv: string[]): Promise<number> {
               state: record?.state ?? null,
               note: record?.note ?? null,
               risk: record?.risk ?? null,
+              // The external gate that must clear before this may be
+              // merged (`wt status --blocked-on`). Non-null means DO
+              // NOT MERGE, whatever `state` says — a consumer that
+              // reads `state == "ready"` alone repeats the failure the
+              // field was added for. Flat here, against
+              // `.work.blockedOn` on `wt fleet --json`, matching how
+              // `by`/`.work.by` already differ between these surfaces.
+              blocked_on: record?.blockedOn ?? null,
               at: record?.at ?? null,
               // Agent identity that asserted it (`manager` when triage
               // did); null = the human, or a plain shell.
@@ -615,6 +739,20 @@ export async function run(argv: string[]): Promise<number> {
       ]);
       return 2;
     }
+    if (args.blockedOn !== undefined && args.blockedOn !== null && prev.state !== "ready") {
+      console.error(
+        red(`--blocked-on only applies to ready (${target.slug} is ${prev.state})`),
+      );
+      hint([
+        `a gate means "finished, but must not merge yet" — assert the finish first:`,
+        `${bold("wt status ready --risk <r> --blocked-on \"<gate>\"")}`,
+      ]);
+      return 2;
+    }
+    if (args.blockedOn === null && !prev.blockedOn) {
+      console.error(red(`${target.slug} has no gate to clear`));
+      return 2;
+    }
     const { note, replaced } = resolveNote(
       prev.note ?? null,
       args.note,
@@ -635,9 +773,17 @@ export async function run(argv: string[]): Promise<number> {
     const next: WorkStatusRecord = { ...prev };
     if (args.risk) next.risk = args.risk;
     if (note) next.note = note;
+    if (args.blockedOn !== undefined) {
+      if (args.blockedOn === null) delete next.blockedOn;
+      else next.blockedOn = args.blockedOn;
+    }
     setSlugWorkStatus(target.slug, next);
-    const what =
-      args.risk && args.note ? "risk + note" : args.risk ? "risk" : "note";
+    const changed = [
+      args.risk ? "risk" : null,
+      args.note ? "note" : null,
+      args.blockedOn === undefined ? null : args.blockedOn === null ? "gate cleared" : "gate",
+    ].filter(Boolean);
+    const what = changed.join(" + ") || "note";
     createLogger(target.slug).info(
       `work status ${what} amended${workStatusSuffix(next)}`,
     );
@@ -647,9 +793,12 @@ export async function run(argv: string[]): Promise<number> {
         next.risk ? `  ${dim("risk:")} ${color(next.risk)}` : ""
       }  ${dim(`${what} amended (state + timestamp kept)`)}`,
     );
+    if (next.blockedOn) console.log(`  ${red("blocked on:")} ${next.blockedOn}`);
     if (next.note) console.log(`  ${dim("note:")} ${next.note}`);
     reportReplacedNote(replaced, args.note !== null);
     noteBudgetHint(prev.state, next.note ?? null);
+    if (args.blockedOn === null) hint(unblockedGuidance());
+    else if (args.blockedOn) hint(blockedGuidance());
     return 0;
   }
 
@@ -677,6 +826,7 @@ export async function run(argv: string[]): Promise<number> {
   };
   if (note) record.note = note;
   if (args.risk) record.risk = args.risk;
+  if (args.blockedOn) record.blockedOn = args.blockedOn;
   // Who is claiming this. Usually the worktree's own agent; the manager
   // playbook also has it assert on a worker's behalf after triage, and
   // that difference is what keeps a `status.*` automation from briefing
@@ -696,9 +846,10 @@ export async function run(argv: string[]): Promise<number> {
   console.log(
     `${green("✓")} ${cyan(target.slug)} → ${color(args.state)}${args.risk ? `  ${dim("risk:")} ${color(args.risk)}` : ""}`,
   );
+  if (record.blockedOn) console.log(`  ${red("blocked on:")} ${record.blockedOn}`);
   if (record.note) console.log(`  ${dim("note:")} ${record.note}`);
   reportReplacedNote(replaced, args.note !== null);
   noteBudgetHint(args.state, record.note ?? null);
-  hint(guidance(args.state));
+  hint(record.blockedOn ? blockedGuidance() : guidance(args.state));
   return 0;
 }

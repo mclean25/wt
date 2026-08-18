@@ -54,6 +54,22 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   `wt status --risk <r>` amends risk alone, keeping the state, timestamp
   and note, so there's never a reason to append to a note instead of
   fixing it. The human merges PRs; never merge one yourself.
+  **Finished but not safe to merge yet is a different thing, and it has
+  a field**: `wt status ready --risk <r> --blocked-on "<gate>"`. Use it
+  when the work is genuinely done and something OUTSIDE this repo has
+  to happen before it can land — a mobile release shipping, an upstream
+  branch merging, a hosted change that must be in place first. Do NOT
+  say it only in the note. A note saying BLOCKED next to a state saying
+  `ready` loses: that exact pair got a branch queued for merge twice by
+  two readers who each had reason to catch it. The gate is what makes
+  the row leave the merge band and render as blocked.
+  What is NOT a gate: anything that happens AFTER the merge. A
+  migration someone applies by hand, functions to redeploy — those are
+  the `OPS:` line and they do not stop the merge. Gate on those and the
+  field turns back into "read the note".
+  Nothing expires a gate; when it clears, `wt status --unblock` (keeps
+  the state, risk, note and timestamp). Leaving one set parks a
+  mergeable branch, which is the safe way to be wrong.
   If the branch will NEVER land (superseded, duplicate, deliberately not
   pursued), the honest terminal state is `wt status dropped -m "<why>"` —
   never `ready` with a "nothing to merge" note (ready puts the row at the

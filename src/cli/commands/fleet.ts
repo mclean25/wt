@@ -24,7 +24,8 @@ import type {
 import { listWorktrees } from "../../core/worktree.ts";
 import {
   workAge,
-  workStateRank,
+  isBlockedReady,
+  workRecordRank,
   type WorkStatusRecord,
 } from "../../core/work-status.ts";
 import {
@@ -151,6 +152,9 @@ type FleetRow = {
 
 function workCell(row: FleetRow): string {
   if (!row.work) return dim("—");
+  // A gated ready is not a ready. The manager reads this column to
+  // build a merge order, and it read `ready` off a gated branch twice.
+  if (isBlockedReady(row.work)) return yellow(`blocked/${row.work.state}`);
   const color =
     row.work.state === "needs-human"
       ? red
@@ -270,7 +274,7 @@ export async function run(argv: string[]): Promise<number> {
   // by): ready first, then needs-human, todo last.
   rows.sort(
     (a, b) =>
-      workStateRank(a.work?.state) - workStateRank(b.work?.state) ||
+      workRecordRank(a.work) - workRecordRank(b.work) ||
       a.wt.slug.localeCompare(b.wt.slug),
   );
 
@@ -293,6 +297,11 @@ export async function run(argv: string[]): Promise<number> {
               state: r.work.state,
               note: r.work.note ?? null,
               risk: r.work.risk ?? null,
+              // The external merge gate. Non-null means DO NOT MERGE
+              // whatever `state` says — this row is the manager's
+              // primary sense, and reading `ready` off a gated branch
+              // here is the exact failure the field was added for.
+              blockedOn: r.work.blockedOn ?? null,
               at: r.work.at,
               // Agent identity that asserted it — the worktree's own
               // slug normally, `manager` when triage did, null for the

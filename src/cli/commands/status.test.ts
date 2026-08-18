@@ -180,3 +180,71 @@ describe("parseStatusArgs", () => {
     expect(parseStatusArgs(["a", "b", "c"])).toMatchObject({ kind: "error" });
   });
 });
+
+describe("parseStatusArgs --blocked-on / --unblock", () => {
+  const parse = (s: string) => parseStatusArgs(s.split("|"));
+
+  test("decorates a ready assertion", () => {
+    const a = parse('ready|--risk|low|--blocked-on|mobile 2.14 shipped');
+    expect(a).toMatchObject({
+      kind: "set",
+      state: "ready",
+      risk: "low",
+      blockedOn: "mobile 2.14 shipped",
+    });
+  });
+
+  // The gate means "finished but must not merge yet", so it only has a
+  // meaning where merging was otherwise on the table. Anywhere else it
+  // would be a second, weaker way of saying what the state already says.
+  test("is refused on every state but ready", () => {
+    for (const state of ["working", "review", "needs-testing", "needs-human", "todo", "dropped"]) {
+      const a = parse(`${state}|-m|n|--blocked-on|a release`);
+      expect(a.kind).toBe("error");
+    }
+  });
+
+  test("with no state it amends in place, so the gate can clear without re-asserting", () => {
+    expect(parse("--unblock")).toMatchObject({ kind: "amend", blockedOn: null });
+    expect(parse("--blocked-on|a release")).toMatchObject({
+      kind: "amend",
+      blockedOn: "a release",
+    });
+  });
+
+  // Amending is how a gate clears WITHOUT minting a new `at` — which is
+  // what keeps the suppressed `status.ready` automation fire live, and
+  // keeps the note from being reset by a branch that only wanted to say
+  // "the world moved".
+  test("an amend carries no state, so nothing is re-asserted", () => {
+    const a = parse("--unblock");
+    expect(a).not.toHaveProperty("state");
+  });
+
+  test("setting and clearing at once is refused", () => {
+    expect(parse("--blocked-on|x|--unblock").kind).toBe("error");
+  });
+
+  // A fresh assertion replaces the whole record, gate included, so
+  // asking for both is a sign the writer expects one of them not to
+  // happen.
+  test("--unblock alongside a state is refused rather than silently redundant", () => {
+    expect(parse("ready|--risk|low|--unblock").kind).toBe("error");
+  });
+
+  test("an empty gate is refused, not silently treated as unblocking", () => {
+    expect(parseStatusArgs(["ready", "--risk", "low", "--blocked-on", "   "]).kind).toBe(
+      "error",
+    );
+  });
+
+  test("does not combine with --all/--clear/--note-only", () => {
+    expect(parse("--all|--unblock").kind).toBe("error");
+    expect(parse("--clear|--blocked-on|x").kind).toBe("error");
+    expect(parse("--note-only|n|--unblock").kind).toBe("error");
+  });
+
+  test("a plain ready carries no gate", () => {
+    expect(parse("ready|--risk|low")).toMatchObject({ kind: "set", blockedOn: null });
+  });
+});

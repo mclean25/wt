@@ -50,6 +50,14 @@ export type RemoteWorktreeSummary = {
   workState: WorkState | null;
   workNote: string | null;
   workRisk: WorkRisk | null;
+  /**
+   * External merge gate (`wt status --blocked-on`). Non-null means the
+   * remote's `ready` is NOT mergeable. Null on a remote running a wt
+   * that predates the field, which reads the same as "no gate" — the
+   * only tolerant option, and the reason the local surfaces all gained
+   * it in one change rather than one at a time.
+   */
+  workBlockedOn: string | null;
   workAt: string | null;
 };
 
@@ -179,6 +187,10 @@ export function parseRemoteWorktrees(
         typeof row.work_risk === "string" &&
         (WORK_RISKS as readonly string[]).includes(row.work_risk)
           ? (row.work_risk as WorkRisk)
+          : null,
+      workBlockedOn:
+        typeof row.work_blocked_on === "string" && row.work_blocked_on.trim() !== ""
+          ? sanitizeWorkNote(row.work_blocked_on)
           : null,
       workAt: typeof row.work_at === "string" ? row.work_at : null,
     };

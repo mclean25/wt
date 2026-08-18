@@ -103,6 +103,20 @@ function migrateAndPersist(fallback: Record<string, unknown>): Record<string, un
   const { value } = migrateRawWtState(current);
   try {
     atomicWriteJson(value);
+    // Re-baseline: this rewrite was OURS. Without it the migration
+    // moves state.json's mtime while the sidecar still points at the
+    // pre-migration one, and the very next read fires
+    // `detectForeignWrite` — telling the user that something which
+    // isn't this build rewrote their state and may have dropped
+    // fields, on the one occasion when this build deliberately
+    // rewrote it and dropped nothing. Observed live on the v4→v5 bump.
+    // `writeWtState` stamps for the same reason; the migration path
+    // reaches `atomicWriteJson` directly and so has to do it itself.
+    // The genuinely dangerous case is untouched: a build old enough to
+    // be a real hazard predates the stamp entirely, so it moves the
+    // mtime without writing one, which is exactly what still trips the
+    // detector.
+    recordWriterStamp();
   } catch (err) {
     // Non-fatal: the migrated value is still used in-memory for this
     // read. A failed persist just means the next read repeats this

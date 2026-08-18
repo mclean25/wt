@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 import {
   effectiveWorkState,
+  isBlockedReady,
+  WORK_STATES,
+  workRecordRank,
+  workStatusSuffix,
   isWorkStatusStale,
+  BLOCKED_RANK,
   LANDED_RANK,
   NO_STATUS_RANK,
   parseWorkStatus,
@@ -47,6 +52,7 @@ describe("workStateRank", () => {
       workStateRank("needs-testing"),
       workStateRank("review"),
       workStateRank("working"),
+      BLOCKED_RANK,
       NO_STATUS_RANK,
       workStateRank("todo"),
       LANDED_RANK,
@@ -64,10 +70,12 @@ describe("effectiveWorkState", () => {
     expect(effectiveWorkState(ready, "asking")).toEqual({
       state: "needs-human",
       derived: true,
+      blocked: false,
     });
     expect(effectiveWorkState(null, "asking")).toEqual({
       state: "needs-human",
       derived: true,
+      blocked: false,
     });
   });
 
@@ -75,6 +83,7 @@ describe("effectiveWorkState", () => {
     expect(effectiveWorkState(ready, "working")).toEqual({
       state: "ready",
       derived: false,
+      blocked: false,
     });
     expect(effectiveWorkState(null, "idle")).toBeNull();
     expect(effectiveWorkState(undefined, undefined)).toBeNull();
@@ -143,5 +152,110 @@ describe("isWorkStatusStale", () => {
 
   test("an unparseable assertion timestamp is not stale", () => {
     expect(isWorkStatusStale({ state: "ready", at: "garbage" }, atMs)).toBe(false);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// The external merge gate (`--blocked-on`)
+// ---------------------------------------------------------------------------
+
+const at = "2026-08-18T00:00:00Z";
+
+describe("isBlockedReady", () => {
+  test("a ready carrying a gate is blocked", () => {
+    expect(isBlockedReady({ state: "ready", at, blockedOn: "mobile 2.14" })).toBe(true);
+  });
+
+  test("a plain ready is not", () => {
+    expect(isBlockedReady({ state: "ready", at })).toBe(false);
+    expect(isBlockedReady(null)).toBe(false);
+    expect(isBlockedReady(undefined)).toBe(false);
+  });
+
+  // state.json is hand-editable and older/newer wt versions write it.
+  // One predicate decides what "blocked" means so a stray gate is inert
+  // EVERYWHERE rather than honoured by the dot and ignored by the sort.
+  test("a gate on any other state is inert", () => {
+    for (const state of WORK_STATES) {
+      if (state === "ready") continue;
+      expect(isBlockedReady({ state, at, blockedOn: "something" })).toBe(false);
+    }
+  });
+});
+
+describe("workRecordRank", () => {
+  // The bug this whole field exists for: a gated branch sitting in the
+  // top merge band is a branch that gets merged, because that band is
+  // what a human scans for what to merge next.
+  test("a gated ready leaves the merge band entirely", () => {
+    const plain = workRecordRank({ state: "ready", at });
+    const gated = workRecordRank({ state: "ready", at, blockedOn: "mobile 2.14" });
+    expect(plain).toBe(workStateRank("ready"));
+    expect(gated).toBeGreaterThan(workStateRank("working"));
+    expect(gated).toBe(BLOCKED_RANK);
+  });
+
+  // Finished work that will need merging once the world moves — it must
+  // not sink below rows nobody has started.
+  test("but still outranks statusless and todo", () => {
+    const gated = workRecordRank({ state: "ready", at, blockedOn: "x" });
+    expect(gated).toBeLessThan(NO_STATUS_RANK);
+    expect(gated).toBeLessThan(workStateRank("todo"));
+  });
+
+  test("agrees with workStateRank for every ungated record", () => {
+    for (const state of WORK_STATES) {
+      expect(workRecordRank({ state, at })).toBe(workStateRank(state));
+    }
+    expect(workRecordRank(null)).toBe(NO_STATUS_RANK);
+  });
+});
+
+describe("effectiveWorkState with a gate", () => {
+  test("reports blocked alongside the asserted state, not instead of it", () => {
+    expect(
+      effectiveWorkState({ state: "ready", at, blockedOn: "mobile 2.14" }, "idle"),
+    ).toEqual({ state: "ready", derived: false, blocked: true });
+  });
+
+  // The session-asking override is live information about right now;
+  // a gate is a claim about the record. Asking wins the dot, and
+  // nothing about it is "blocked".
+  test("a session asking still overrides, without inheriting the gate", () => {
+    expect(
+      effectiveWorkState({ state: "ready", at, blockedOn: "mobile 2.14" }, "asking"),
+    ).toEqual({ state: "needs-human", derived: true, blocked: false });
+  });
+});
+
+describe("workStatusSuffix with a gate", () => {
+  // Ahead of the note on purpose: every surface inherits this string,
+  // and the gate losing the last cells of a truncated line to a long
+  // note is the original failure in miniature.
+  test("puts the gate before the note", () => {
+    expect(
+      workStatusSuffix({ risk: "low", blockedOn: "mobile 2.14", note: "some note" }),
+    ).toBe(" (risk: low) [blocked on: mobile 2.14] — some note");
+  });
+
+  test("omits it entirely when there is no gate", () => {
+    expect(workStatusSuffix({ risk: "low", note: "n" })).toBe(" (risk: low) — n");
+  });
+});
+
+describe("parseWorkStatus with a gate", () => {
+  test("round-trips and sanitizes it like a note", () => {
+    const rec = parseWorkStatus({
+      state: "ready",
+      at,
+      blockedOn: "mobile 2.14\tshipped",
+    });
+    expect(rec?.blockedOn).toBe("mobile 2.14 shipped");
+  });
+
+  test("a blank gate is no gate", () => {
+    expect(parseWorkStatus({ state: "ready", at, blockedOn: "   " })?.blockedOn).toBeUndefined();
+    expect(parseWorkStatus({ state: "ready", at, blockedOn: 7 })?.blockedOn).toBeUndefined();
   });
 });

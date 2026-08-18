@@ -118,6 +118,11 @@ export async function run(argv: string[]): Promise<number> {
           work_state: slugStates[w.slug]?.work?.state ?? null,
           work_note: slugStates[w.slug]?.work?.note ?? null,
           work_risk: slugStates[w.slug]?.work?.risk ?? null,
+          // Non-null means DO NOT MERGE regardless of `work_state`.
+          // Added to every surface carrying a work status in the same
+          // change: a gate visible on one and absent on another is a
+          // consumer reading `ready` off the surface that dropped it.
+          work_blocked_on: slugStates[w.slug]?.work?.blockedOn ?? null,
           work_at: slugStates[w.slug]?.work?.at ?? null,
         };
       }),

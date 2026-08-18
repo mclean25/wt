@@ -89,6 +89,13 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
 
   function commitStatusPick(item: StatusPickerItem, slug: string): void {
     setModal(null);
+    // A fresh record, so a pick DROPS whatever the previous assertion
+    // carried — note, risk, and any `--blocked-on` gate. Deliberate and
+    // unchanged by the gate's arrival: the picker is the human's lenient
+    // path, the human is the merge authority, and "I am asserting this
+    // state now" is exactly what a gate should yield to. Agents clear a
+    // gate the narrow way instead (`wt status --unblock`, which keeps
+    // the state, risk, note and timestamp).
     const record: WorkStatusRecord | null = item.state
       ? { state: item.state, at: new Date().toISOString() }
       : null;

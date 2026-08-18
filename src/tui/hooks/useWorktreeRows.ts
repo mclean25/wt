@@ -21,7 +21,7 @@ import type { LockMeta, MergeQueueEntry, PullRequest, Status, Worktree } from ".
 import { StatusKind } from "../../core/types.ts";
 import {
   LANDED_RANK,
-  workStateRank,
+  workRecordRank,
   type WorkStatusRecord,
 } from "../../core/work-status.ts";
 import type { SyncState } from "../../core/worktree.ts";
@@ -423,7 +423,7 @@ export function rowWorkRank(row: WorktreeRow): number {
   if (row.status.kind === StatusKind.Merged || row.status.kind === StatusKind.Gone) {
     return LANDED_RANK;
   }
-  return workStateRank(row.work?.state);
+  return workRecordRank(row.work);
 }
 
 /**

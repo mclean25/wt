@@ -45,6 +45,7 @@ describe("parseRemoteWorktrees", () => {
       workState: null,
       workNote: null,
       workRisk: null,
+      workBlockedOn: null,
       workAt: null,
     });
   });

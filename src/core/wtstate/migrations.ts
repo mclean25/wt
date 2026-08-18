@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 4;
+export const WT_STATE_VERSION = 5;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -60,6 +60,16 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // unknown, and "unknown" is exactly what an absent `by` means. The
     // entry exists for the version boundary, same as v2 and v3.
     to: 4,
+    up: (raw) => raw,
+  },
+  {
+    // v5: additive — `blockedOn` on a work-status record (an external
+    // gate that must clear before the branch may be merged). Nothing to
+    // backfill: an existing `ready` that was gated said so only in
+    // prose, and guessing which notes meant it would be exactly the
+    // prose-parsing this field exists to replace. The entry exists for
+    // the version boundary, same as v2-v4.
+    to: 5,
     up: (raw) => raw,
   },
 ];

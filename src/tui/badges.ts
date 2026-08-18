@@ -134,6 +134,17 @@ export function workStatusBadge(
 ): Badge {
   const eff = effectiveWorkState(record, sessionState);
   if (!eff) return { glyph: NF.dotOutline, fg: theme.fgDim };
+  // A gated `ready` must not wear ready's green dot. The dot is what a
+  // scan of the board reads, and green sitting in the merge band is the
+  // whole reason a branch gated on a mobile release got queued for
+  // merge twice.
+  //
+  // Circle-slash in warn, reusing `dropped`'s glyph in a different
+  // color rather than minting one: the shape says "no" at a glance and
+  // is already proven to render, and color is this slot's signal by
+  // convention. Not dim-and-hollow, which would collide with `todo` and
+  // with statusless — a finished branch must not look unstarted.
+  if (eff.blocked) return { glyph: NF.slash, fg: theme.warn };
   return {
     // Stale (commits landed after the assertion — see
     // `isWorkStatusStale`) hollows the dot but keeps the state color:

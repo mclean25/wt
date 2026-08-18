@@ -52,6 +52,11 @@ import type { DerivedState } from "./harness/status.ts";
  * asserted "will never land", which the machine cannot derive (a
  * closed PR isn't proof: branches are dropped pre-PR too, and a
  * closed PR can be reopened).
+ *
+ * There is deliberately no `blocked` WORD either — see `blockedOn` on
+ * the record. "The work is finished" and "it cannot land yet" are two
+ * facts, and a state can only carry one of them; collapsing them is
+ * what produced the failure that field exists to fix.
  */
 export const WORK_STATES = [
   "todo",
@@ -119,6 +124,38 @@ export type WorkStatusRecord = {
   at: string;
   sha?: string;
   by?: string;
+  /**
+   * An external gate that must clear before this branch may be merged.
+   * Only meaningful on `ready`, where it means: the work is finished
+   * and verified, and merging it anyway would be wrong.
+   *
+   * This is a field rather than a seventh state because "done" and
+   * "can't land yet" are independent facts. A `blocked` state would
+   * have to eat one of them — it would either lose the risk judgement
+   * or claim verification is still owed — and every option in the
+   * six-word vocabulary already misreports the combination: `ready`
+   * claims mergeable, `needs-testing` claims verification is owed,
+   * `needs-human` claims the work is stuck.
+   *
+   * It is a field rather than a line in the NOTE because the note is
+   * not load-bearing and was never going to be. A worktree wrote
+   * "BLOCKED ON A MOBILE RELEASE" into its own note while asserting
+   * `ready --risk low` one field to the left, and both the fleet
+   * manager and a human read the state and put the branch in a merge
+   * order — twice. Prose next to a field loses to the field every
+   * time, so the gate has to BE a field, and the render has to change.
+   *
+   * Scope is exactly "do not merge yet". Work that must happen AFTER
+   * the merge — a migration to apply, functions to redeploy — is an
+   * `OPS:` line in the note and is not a gate; treating it as one
+   * would make the field mean "read the note", which is where this
+   * started. Nothing expires it: wt cannot observe a mobile release or
+   * a hand-applied migration, so it clears when someone says so
+   * (`wt status --unblock`). A gate left set after it cleared parks a
+   * mergeable branch, which is the safe direction to be wrong in; the
+   * record's `at` age is what flags one worth re-checking.
+   */
+  blockedOn?: string;
 };
 
 /**
@@ -159,17 +196,53 @@ const RANK: Record<WorkState, number> = {
   "needs-testing": 2,
   review: 3,
   working: 4,
-  todo: 6,
+  todo: 7,
   // Will never land: below even todo — future work outranks no work.
-  dropped: 7,
+  dropped: 8,
 };
 
-export const NO_STATUS_RANK = 5;
+/**
+ * A gated `ready` (see `blockedOn`) sorts BELOW everything in flight
+ * and above the statusless rows. Keeping it in the top merge band is
+ * the entire bug: the human scans the top of each section for what to
+ * merge, and a gated branch sitting there is a branch that gets
+ * merged. It outranks `todo` because it is finished work that will
+ * need merging once the world moves, and it sits under `working`
+ * because a working row will produce news on its own and this one will
+ * not.
+ */
+export const BLOCKED_RANK = 5;
+
+export const NO_STATUS_RANK = 6;
 /** Merged/gone rows sink below everything, whatever they last asserted. */
-export const LANDED_RANK = 8;
+export const LANDED_RANK = 9;
 
 export function workStateRank(state: WorkState | null | undefined): number {
   return state ? RANK[state] : NO_STATUS_RANK;
+}
+
+/**
+ * Rank for a whole record, which is what callers with one in hand
+ * should use: identical to `workStateRank` except that a gated `ready`
+ * drops to `BLOCKED_RANK`. `workStateRank` stays for the callers that
+ * only ever have a bare state (the section summary's histogram).
+ */
+export function workRecordRank(record: WorkStatusRecord | null | undefined): number {
+  if (!record) return NO_STATUS_RANK;
+  return isBlockedReady(record) ? BLOCKED_RANK : RANK[record.state];
+}
+
+/**
+ * Whether a record is a `ready` held back by an external gate. One
+ * predicate so the dot, the banner, the sort, the CLI and the
+ * automation gate can't drift on what "blocked" means — and so a gate
+ * hand-written onto a non-`ready` record (state.json is editable) is
+ * inert everywhere rather than inert in some places.
+ */
+export function isBlockedReady(
+  record: WorkStatusRecord | null | undefined,
+): boolean {
+  return !!record && record.state === "ready" && !!record.blockedOn;
 }
 
 /**
@@ -184,9 +257,13 @@ export function workStateRank(state: WorkState | null | undefined): number {
 export function effectiveWorkState(
   record: WorkStatusRecord | null | undefined,
   sessionState: DerivedState | undefined,
-): { state: WorkState; derived: boolean } | null {
-  if (sessionState === "asking") return { state: "needs-human", derived: true };
-  if (record) return { state: record.state, derived: false };
+): { state: WorkState; derived: boolean; blocked: boolean } | null {
+  if (sessionState === "asking") {
+    return { state: "needs-human", derived: true, blocked: false };
+  }
+  if (record) {
+    return { state: record.state, derived: false, blocked: isBlockedReady(record) };
+  }
   return null;
 }
 
@@ -255,12 +332,19 @@ export function sanitizeWorkNote(s: string): string {
  * can't drift across them.
  */
 export function workStatusSuffix(record: {
+  state?: WorkState;
   risk?: WorkRisk;
   note?: string;
+  blockedOn?: string;
 }): string {
   const risk = record.risk ? ` (risk: ${record.risk})` : "";
+  // Ahead of the note, and unconditionally: every surface that renders
+  // a status inherits this, and the gate losing a race with a long note
+  // for the last cells of a truncated line is the original failure in
+  // miniature.
+  const gate = record.blockedOn ? ` [blocked on: ${record.blockedOn}]` : "";
   const note = record.note ? ` — ${record.note}` : "";
-  return `${risk}${note}`;
+  return `${risk}${gate}${note}`;
 }
 
 /**
@@ -288,6 +372,14 @@ export function parseWorkStatus(raw: unknown): WorkStatusRecord | null {
     (WORK_RISKS as readonly string[]).includes(rec.risk)
   ) {
     out.risk = rec.risk as WorkRisk;
+  }
+  if (typeof rec.blockedOn === "string") {
+    // Same sanitization as the note — it travels to the same places.
+    // Kept regardless of state; `isBlockedReady` is the one place that
+    // decides a gate is meaningful, so a hand-edited stray is inert
+    // rather than half-honoured.
+    const gate = sanitizeWorkNote(rec.blockedOn);
+    if (gate !== "") out.blockedOn = gate;
   }
   if (typeof rec.sha === "string" && rec.sha.trim() !== "") out.sha = rec.sha;
   if (typeof rec.by === "string" && rec.by.trim() !== "") out.by = rec.by.trim();
