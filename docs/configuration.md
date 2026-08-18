@@ -163,11 +163,19 @@ The failure that follows is indirect enough to be hard to read. A stack left run
 
 ```toml
 [lifecycle]
-# Containers named <something>_<slug>. Note the anchors — see below.
-destroy_command = "docker ps -aq --filter name=_{{slug}}$ | xargs -r docker rm -f"
+# Supabase stamps every container it creates with its project id. Match on
+# THAT, not on the container name — see below.
+destroy_command = "docker ps -aq --filter label=com.supabase.cli.project=$(printf %.40s {{slug}}) | xargs -r docker rm -f"
 ```
 
-**Anchor whatever matches `{{slug}}`, and test the pattern before you run it destructively.** Docker's `--filter name=` is an *unanchored regex*, so a bare `name={{slug}}` also matches every container whose name merely *contains* the slug — which includes every longer slug that starts with it. Slugs are routinely prefixes of each other, because worktrees derived from the same issue lead with the same id, so destroying `coz-1691` with an unanchored filter tears down the live stack of `coz-1691-domestic-bovid`. Measured on a real board: unanchored `coz-1691` matched 12 containers, all of them the *other* worktree's; `_coz-1691$` matched 0; `_coz-1691-domestic-bovid$` matched exactly its own 12. The failure is silent and lands on a worktree nobody asked to touch, so confirm with a read-only `docker ps -a --filter … --format '{{.Names}}'` first. The same caution applies to any tool whose name filter is a substring or regex match rather than an equality test.
+**Match on an identity the tool assigns, not on the container name, and test the pattern read-only before you run it destructively.** Two independent ways a name match goes wrong, both silent:
+
+- **Docker's `--filter name=` is an unanchored regex**, so a bare `name={{slug}}` also matches every container whose name merely *contains* the slug — which includes every longer slug that starts with it. Slugs are routinely prefixes of each other, because worktrees derived from the same issue lead with the same id, so destroying `coz-1691` with an unanchored filter tears down the live stack of `coz-1691-domestic-bovid`. Measured: unanchored `coz-1691` matched 12 containers, all of them the *other* worktree's; `_coz-1691$` matched 0.
+- **Anchoring is not enough, because the name is truncated.** The Supabase CLI cuts its project id to 40 characters, so a 41-character slug's containers are named for the first 40 — and `--filter name=_{{slug}}$` then matches **nothing at all**. Measured on `meetings-notifies-before-actually-joining` (41 chars): the anchored name filter matched 0 containers while 12 were running. That is the more dangerous of the two, because a teardown that quietly does nothing looks exactly like a teardown with nothing to do.
+
+A **label** filter avoids both: `--filter label=k=v` is an equality test, not a regex, so there is no anchoring question and no prefix collision. `printf %.40s` reproduces the CLI's own truncation, and two slugs sharing their first 40 characters would collide inside Supabase anyway. `com.supabase.cli.project` is the label to use — `com.supabase.cli.workdir` carries the full untruncated path and looks like the better key, but the **database container does not have it**, so a filter on it leaves the heaviest container (and the port block) running.
+
+Whatever you match on, confirm with a read-only `docker ps -a --filter … --format '{{.Names}}'` first, and count the result. The general rule: prefer an identity the tool stamps on what it created over a string you reconstruct, and treat any filter whose semantics are "contains" as unsafe.
 
 Two behaviors worth knowing. It **never fails a destroy** — a broken teardown script leaving a worktree undeletable would be a worse leak than the one this fixes, so a non-zero exit is logged and removal continues, and a command still running after 120s is killed. And a template that mentions `{{port}}` is **skipped entirely** when the slug has no recorded dev port, since that means no dev server ever ran there and the resources it would tear down were never created; templates that don't mention the port always run.
 
@@ -237,10 +245,10 @@ That matters beyond tidiness, because it is what `max_concurrent` would otherwis
 
 ```toml
 [dev_server]
-stop_command = "docker ps -aq --filter name=_{{slug}}$ | xargs -r docker rm -f"
+stop_command = "docker ps -aq --filter label=com.supabase.cli.project=$(printf %.40s {{slug}}) | xargs -r docker rm -f"
 ```
 
-Same rules as `destroy_command`, including the anchoring trap (`_{{slug}}$`, not `{{slug}}` — docker's name filter is an unanchored regex and slugs are routinely prefixes of each other). It runs *after* the session is killed, so the teardown isn't racing a supervisor about to restart what it just tore down. It does **not** run on a restart: `wt dev start` on a running server relaunches the command, and tearing the stack down first would turn every restart into a full cold boot.
+Same rules as `destroy_command`, [matching traps included](#destroy_command--what-it-is-for) — do not match on the container name. It runs *after* the session is killed, so the teardown isn't racing a supervisor about to restart what it just tore down. It does **not** run on a restart: `wt dev start` on a running server relaunches the command, and tearing the stack down first would turn every restart into a full cold boot.
 
 `destroy_command` and `stop_command` are separate keys on purpose. A destroy teardown may legitimately be heavier (dropping volumes, deleting generated trees), and running that on an ordinary `wt dev stop` would be a nasty surprise. Setting both to the same line is fine and common.
 
