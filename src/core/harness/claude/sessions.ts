@@ -18,6 +18,7 @@ import { resolve } from "node:path";
 
 import { withAsyncFileLock } from "../../locks.ts";
 import {
+  capturePane,
   killHarnessSession,
   startHarnessSessionDetached,
 } from "../../tmux.ts";
@@ -27,6 +28,8 @@ import { readRegistry, type RegistryStatus } from "./registry.ts";
 
 const START_TIMEOUT_MS = 20_000;
 const START_POLL_MS = 200;
+/** Pane lines quoted back when a start fails — enough for a prompt or a stack head. */
+const PANE_TAIL_LINES = 8;
 
 export type ClaudeSessionTarget = {
   slug: string;
@@ -58,8 +61,16 @@ type Dependencies = {
     cwd: string,
     harnessId: "claude",
     managedName: string | null,
-  ): Promise<{ ok: true } | { ok: false; reason: string }>;
+  ): Promise<{ ok: true; adopted?: boolean } | { ok: false; reason: string }>;
   kill(slug: string, harnessId: "claude", managedName: string | null): Promise<void>;
+  /**
+   * The tmux pane's visible text, or null when it can't be read. Only
+   * consulted on the failure path: when a start doesn't register, the
+   * pane is the ONLY place saying why, and nothing else surfaces it —
+   * the `.err` file catches the wrapper's stderr and is empty in every
+   * observed instance, and `wt logs <slug>` answers about destroy logs.
+   */
+  peekPane(tmuxName: string): Promise<string | null>;
   now(): number;
   sleep(ms: number): Promise<void>;
 };
@@ -76,6 +87,7 @@ const defaults: Dependencies = {
   readNative: readRegistry,
   startDetached: startHarnessSessionDetached,
   kill: killHarnessSession,
+  peekPane: async (tmuxName) => capturePane(tmuxName),
   now: Date.now,
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
 };
@@ -158,8 +170,33 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     return null;
   }
 
+  /**
+   * Last few non-blank lines of the session's pane, for a failure
+   * message. The pane is where a harness that refused to start says so
+   * (a trust prompt, a crash, an auth expiry), and it is otherwise
+   * unreachable to whoever ran the command: the wrapper's `.err` file
+   * is empty in every observed instance, and `wt logs <slug>` is about
+   * destroy logs. An explicitly EMPTY pane is worth saying too — it is
+   * the difference between "it printed a reason" and "nothing ever
+   * ran", which is the first fork in diagnosing this.
+   */
+  async function paneTail(tmuxName: string): Promise<string> {
+    const text = await deps.peekPane(tmuxName);
+    if (text === null) return "  (pane could not be read)";
+    const lines = text
+      .split("\n")
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim() !== "");
+    if (lines.length === 0) return "  (pane is empty — nothing has run in it)";
+    return lines
+      .slice(-PANE_TAIL_LINES)
+      .map((l) => `  | ${l}`)
+      .join("\n");
+  }
+
   async function startUnlocked(target: ClaudeSessionTarget): Promise<ClaudeSessionInfo> {
     const managedName = target.managedName ?? null;
+    const identity = targetIdentity(target);
     const started = await deps.startDetached(
       target.slug,
       target.cwd,
@@ -168,12 +205,45 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     );
     if (!started.ok) throw new Error(started.reason);
     const session = await waitForRegistration(target);
-    if (!session) {
+    if (session) return session;
+
+    // Nothing registered. If the tmux session ALREADY EXISTED, this
+    // call created nothing and waited out the timeout on somebody
+    // else's broken session — which is also exactly what the retry
+    // would do, forever. tmux refuses a duplicate name, so every
+    // attempt re-adopts the same corpse: two attempts 42 seconds apart
+    // are in the log, both reporting a 20s "did not register".
+    //
+    // Recycling is safe HERE and nowhere earlier. We hold the
+    // per-session lock, no claude is registered for this identity, and
+    // a full registration timeout has elapsed — so the genuine race
+    // this adoption path exists for (a concurrent creator whose claude
+    // is a moment from registering) has already had its whole window
+    // and lost. A session in that state has no conversation to lose.
+    if (started.adopted) {
+      const before = await paneTail(identity.tmuxName);
+      await deps.kill(target.slug, "claude", managedName);
+      const restarted = await deps.startDetached(
+        target.slug,
+        target.cwd,
+        "claude",
+        managedName,
+      );
+      if (!restarted.ok) throw new Error(restarted.reason);
+      const recovered = await waitForRegistration(target);
+      if (recovered) return recovered;
       throw new Error(
-        `Claude started but did not register within ${START_TIMEOUT_MS / 1000}s`,
+        `Claude did not register within ${START_TIMEOUT_MS / 1000}s, and did not ` +
+          `after recycling the pre-existing ${identity.tmuxName} session either. ` +
+          `The stuck pane held:\n${before}\n` +
+          `Now:\n${await paneTail(identity.tmuxName)}`,
       );
     }
-    return session;
+
+    throw new Error(
+      `Claude started but did not register within ${START_TIMEOUT_MS / 1000}s. ` +
+        `Its pane (${identity.tmuxName}) holds:\n${await paneTail(identity.tmuxName)}`,
+    );
   }
 
   async function start(target: ClaudeSessionTarget): Promise<ClaudeSession> {

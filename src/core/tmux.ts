@@ -50,7 +50,7 @@ export type { ClaudeSessionEntry } from "./tmux/admin.ts";
 
 export { killActionSession, startActionSession } from "./tmux/action-sessions.ts";
 
-export { listAllSessionsRaw } from "./tmux/process.ts";
+export { capturePane, listAllSessionsRaw } from "./tmux/process.ts";
 
 export { attachOrCreate } from "./tmux/attach.ts";
 export type { AttachResult } from "./tmux/attach.ts";

@@ -10,7 +10,20 @@ import { listAllSessionsRaw } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
-export type StartHarnessSessionResult = { ok: true } | { ok: false; reason: string };
+/**
+ * `adopted` means the session already existed and this call created
+ * nothing. The caller needs that distinction because the two cases
+ * diverge completely a few seconds later: a session we just created
+ * that fails to register is a broken harness start, while an ADOPTED
+ * one that fails to register was already broken before we arrived, and
+ * no amount of waiting or retrying will move it — only tearing it down
+ * will. Collapsing them into a bare `ok` is what made a failed start
+ * sticky: every retry re-adopted the same dead session, waited the
+ * full registration timeout, and reported a timing error.
+ */
+export type StartHarnessSessionResult =
+  | { ok: true; adopted?: boolean }
+  | { ok: false; reason: string };
 
 /**
  * Create a worktree harness session detached, without attaching a tmux
@@ -100,12 +113,12 @@ export async function startHarnessSessionDetached(
   if (code !== 0) {
     const nowExists = (await listAllSessionsRaw().catch(() => new Set<string>())).has(name);
     if (nowExists) {
-      log.warn("detached harness start lost create race; session exists, proceeding", {
+      log.warn("detached harness start adopted an existing session", {
         slug,
         harnessId,
         code,
       });
-      return { ok: true };
+      return { ok: true, adopted: true };
     }
     const reason = stderr.trim() || `tmux new-session exited ${code}`;
     log.warn("detached harness start failed", { slug, harnessId, code, reason });

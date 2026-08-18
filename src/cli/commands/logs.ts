@@ -52,7 +52,20 @@ export async function run(argv: string[]): Promise<number> {
     logPath = mostRecentLog();
   }
   if (!logPath) {
-    console.log(dim("No destroy logs found."));
+    // "No destroy logs found" is true and is almost never the question.
+    // This command gets reached by someone whose SESSION misbehaved,
+    // for whom a destroy log was never the right artifact — so say what
+    // this command covers, and name the two places the other answers
+    // live. Both were unfindable when a Claude start failed to
+    // register: the reader had a true sentence about the wrong subject
+    // and nowhere else to look.
+    console.log(dim(slug ? `No destroy logs for ${slug}.` : "No destroy logs found."));
+    console.log(
+      dim("(destroy logs only — a session's own output is `wt claude ls`"),
+    );
+    console.log(
+      dim(` and its pane; wt's own log is ${join(config.paths.logDir, "app")}/wt-<date>.log)`),
+    );
     return 1;
   }
   if (!existsSync(logPath)) {
