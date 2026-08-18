@@ -145,11 +145,26 @@ export type WorkStatusRecord = {
    * order — twice. Prose next to a field loses to the field every
    * time, so the gate has to BE a field, and the render has to change.
    *
-   * Scope is exactly "do not merge yet". Work that must happen AFTER
-   * the merge — a migration to apply, functions to redeploy — is an
-   * `OPS:` line in the note and is not a gate; treating it as one
-   * would make the field mean "read the note", which is where this
-   * started. Nothing expires it: wt cannot observe a mobile release or
+   * Scope is exactly "do not merge yet", and the test is whether
+   * merging makes something WORSE than not merging:
+   *
+   *  - Gate. Merging causes harm on its own. A revocation that lands
+   *    before the mobile build that tolerates it breaks every shipped
+   *    client the moment it merges.
+   *  - Not a gate. Merging causes nothing until someone follows
+   *    through, and forgetting leaves the status quo intact. A policy
+   *    tightening whose migration is applied by hand is SAFE to merge
+   *    and dangerous to FORGET: unapplied, the bucket stays exactly as
+   *    open as it is today, and the only new harm is a PR that reads
+   *    as shipped. That hazard is real and belongs in the note's
+   *    `OPS:` line, which is read at merge time — it is not this
+   *    field.
+   *
+   * The two feel alike and are the boundary case that will erode this
+   * field if it is allowed in, because "merging has a consequence
+   * somebody must follow through on" is not "merging is unsafe". Admit
+   * the first and the field comes to mean "read the note", which is
+   * where this started. Nothing expires it: wt cannot observe a mobile release or
    * a hand-applied migration, so it clears when someone says so
    * (`wt status --unblock`). A gate left set after it cleared parks a
    * mergeable branch, which is the safe direction to be wrong in; the

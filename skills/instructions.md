@@ -63,10 +63,16 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   `ready` loses: that exact pair got a branch queued for merge twice by
   two readers who each had reason to catch it. The gate is what makes
   the row leave the merge band and render as blocked.
-  What is NOT a gate: anything that happens AFTER the merge. A
-  migration someone applies by hand, functions to redeploy — those are
-  the `OPS:` line and they do not stop the merge. Gate on those and the
-  field turns back into "read the note".
+  The test is whether MERGING makes something worse than not merging.
+  A revocation that lands before the mobile build tolerating it breaks
+  shipped clients the moment it merges: gate. A migration someone
+  applies by hand, functions to redeploy: NOT a gate — merging causes
+  nothing until someone follows through, and forgetting leaves the
+  status quo. A policy tightening whose migration is manual is safe to
+  MERGE and dangerous to FORGET; unapplied, nothing gets worse and the
+  PR merely reads as shipped. That is the `OPS:` line, which is read at
+  merge time. These two feel alike, and gating on the second turns the
+  field back into "read the note".
   Nothing expires a gate; when it clears, `wt status --unblock` (keeps
   the state, risk, note and timestamp). Leaving one set parks a
   mergeable branch, which is the safe way to be wrong.

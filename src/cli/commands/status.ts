@@ -54,12 +54,17 @@ MUST NOT be merged until <gate>". Not a state, because "the work is done"
 and "it can't land yet" are two facts and a state can only carry one.
 The row then renders blocked and sorts out of the merge band; clear it
 with ${bold("wt status --unblock")} when the gate clears (nothing expires it).
-  gate:     a mobile release shipping, an upstream branch landing, a
-            hosted change that has to be in place BEFORE this merges
-  not gate: anything that happens AFTER the merge — a migration to apply,
-            functions to redeploy. That is the ${bold("OPS:")} line of the note,
-            and it does not stop the merge. If you gate on it, the field
-            comes to mean "read the note", which is what it replaced
+the test is whether MERGING makes something worse than not merging:
+  gate:     merging causes harm on its own — a revocation landing before
+            the mobile build that tolerates it, an upstream change that
+            has to be in place first
+  not gate: merging causes nothing until someone follows through, and
+            forgetting leaves the status quo. A policy tightening whose
+            migration is applied by hand is safe to MERGE and dangerous
+            to FORGET — unapplied, nothing gets worse; the PR just reads
+            as shipped. That belongs in the ${bold("OPS:")} line, which is read at
+            merge time. Gate on it and the field comes to mean "read the
+            note", which is what it replaced
 
 ${bold("risk")} = how confident you are AFTER testing — NOT how big or scary the
 change is. The human can already see the diff on the PR; your confidence
