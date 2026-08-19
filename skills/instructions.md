@@ -39,6 +39,20 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   production bug), say so once with `wt manager send` and keep
   waiting; the manager can move you and needs nothing from you to do
   it. Never stop another slug's dev server to take its slot.
+  **Before you believe a test FAILURE, check whether the machine was the
+  variable.** A saturated box fails tests that pass on an idle one, and
+  a fleet of worktrees is exactly how a box gets saturated: measured at
+  load average 78, one suite went from 27.8s to 664s and a 30s-capped
+  test took 61s. Two agents lost half an hour each to this on the same
+  day. Two tells. A bare `Test timed out in NNNNms` with no assertion
+  error is a statement about the clock, not about the code. And **the
+  usual flake heuristic inverts here**: "it reproduced twice, so it is
+  not a flake, so it is my diff" is wrong when the confounder is
+  sustained load, because the load persists across your reruns. Run
+  `wt perf` before you start reading your own diff, and ask the cheaper
+  question first — could my change even reach this test? Both agents
+  broke the spell that way; one had touched only SQL and the other only
+  edge functions, and neither could have affected the failing file.
   **`wt dev start` exiting 0 means LAUNCHED, not ready.** It returns as
   soon as the supervised process is up; an environment that brings up a
   database and applies migrations can still fail that phase minutes

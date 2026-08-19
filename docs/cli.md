@@ -108,7 +108,7 @@ Manage the worktree's `[dev_server]` (see [configuration.md](configuration.md#de
 Flags:
 
 - `start --wait [--timeout <secs>]` — when `[dev_server] max_concurrent` is set and the fleet is full, queue until a slot opens instead of refusing. Default timeout 1800s; on expiry it exits `75` like a plain refusal. While queued the slug shows in `wt dev status --all` and on its own board row, so a waiting agent doesn't read as a stalled one.
-- `status --all` — the fleet view: slots in use against the cap, every dev server and whether it's up or crashed, and the queue with ages and tiers. Works from anywhere; it needs no subject worktree.
+- `status --all` — the fleet view: slots in use against the cap, every dev server and whether it's up or crashed, the queue with ages and tiers, and the machine's **1-minute load against its core count**. Works from anywhere; it needs no subject worktree. The load line is there because slots ration *stacks*, not load: a test run, a build or a type-check is neither queued nor counted, so every slot can read healthy on a box that is far past capacity (observed: 3 of 4 slots in use at load 84.9 on 12 cores). Past 2× cores it says so, and points at `wt perf` — a test timing out on a saturated box is measuring the box.
 - `queue` — print the wait queue. `queue <slug> --first` moves a waiter ahead of every ordinary one; `queue <slug> --normal` gives its place back. See below.
 - `status --json` — machine-readable form of either view.
 

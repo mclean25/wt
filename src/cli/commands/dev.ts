@@ -1,3 +1,5 @@
+import { cpus, loadavg } from "node:os";
+
 import { config } from "../../core/config.ts";
 import {
   DEV_QUEUE_FIRST,
@@ -348,6 +350,10 @@ async function runStatusAll(json: boolean): Promise<number> {
         {
           limit: report.limit,
           free: report.free,
+          // Slots count stacks; this counts the machine. A fleet can be
+          // far past capacity with every slot looking fine.
+          load1: Number((loadavg()[0] ?? 0).toFixed(2)),
+          cores: cpus().length,
           holders: report.holders,
           // `priority` rides along: a manager filtering this surface for
           // "who is next" must see a deliberate promotion, not just an
@@ -367,6 +373,26 @@ async function runStatusAll(json: boolean): Promise<number> {
     console.log(`  ${cyan(h.slug)} ${st}`);
   }
   if (report.holders.length === 0) console.log(dim("  (none running)"));
+  // Slots ration STACKS, not load. A test run, a build, a type-check —
+  // none are queued or counted here, so every slot can look healthy on a
+  // box that is far past capacity. This is the surface that claims to
+  // describe fleet capacity, so it says what the machine is actually
+  // doing: two agents each lost half an hour to a test that fails only
+  // under saturation, and nothing anywhere connected the red suite to
+  // the load.
+  const [load1] = loadavg();
+  const cores = cpus().length;
+  const ratio = cores > 0 ? (load1 ?? 0) / cores : 0;
+  const loadText = `${(load1 ?? 0).toFixed(1)} on ${cores} cores`;
+  console.log(
+    `${dim("load:")} ${ratio >= 2 ? red(`${loadText} — saturated`) : ratio >= 1 ? yellow(loadText) : dim(loadText)}`,
+  );
+  if (ratio >= 2) {
+    console.log(
+      dim("  test timeouts here measure the box, not your diff — `wt perf` for whose"),
+    );
+  }
+
   if (report.waiters.length > 0) {
     console.log(`${dim("queued:")}`);
     report.waiters.forEach((w, i) => {
