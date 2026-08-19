@@ -267,6 +267,15 @@ mode, and broadcasting makes it everyone's problem. Mark a synthesised rule
 provisional until it survives a deliberate counter-sample, and if you broadcast
 it, keep the recipient list — you will need it for the correction.
 
+**Weight a distilled rule by the TYPE of its evidence, not just the count.** A
+rule built on N observations of something happening is far stronger than one
+built on N observations of it *not* happening. An absence tells you nothing
+about the shape of the space you have not seen: "I have never found a blocked
+PR to mean anything" was true of every instance its author had met, and still
+wrong, because they had no idea what the full set of merge requirements even
+was. Rules of that second kind belong in a playbook as observations with their
+basis attached ("never yet seen to matter here"), never as decision rules.
+
 ## Stopping
 
 **Have a termination predicate and say it out loud when you start**, or the
