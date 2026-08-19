@@ -34,6 +34,24 @@ const log = createLogger("[events]");
 /** Coalesce check_run/check_suite bursts into one fetch per CI step storm. */
 const FETCH_DEBOUNCE_MS = 1_500;
 /**
+ * Floor on the sustained refetch rate. The debounce alone only collapses
+ * deliveries that arrive *together*; under a stream it schedules a fetch
+ * as fast as fetches complete, so the cadence ends up set by query latency
+ * rather than by any policy. Measured on an 18-branch fleet with a merge
+ * queue running: 130 deliveries in 180s produced 13 full refetches at ~30
+ * GraphQL points each, a 7,760 points/hour pace against a 5,000/hour limit
+ * — and a rate-limited fetch is the one failure `fetchGithub` deliberately
+ * never retries.
+ *
+ * Costs nothing visible because it is a third of `SNAPSHOT_FRESH_MS`: the
+ * TUI serves a snapshot up to 90s old, so a fetch deferred to 30s is still
+ * well inside the window the renderer already treats as current. And it
+ * only ever delays the *Nth* fetch of a burst — the first delivery after a
+ * quiet spell still lands in `FETCH_DEBOUNCE_MS`, which is the case that
+ * governs how fast a badge flips after you push.
+ */
+const MIN_FETCH_INTERVAL_MS = 30_000;
+/**
  * Reject webhook bodies larger than this before buffering them. GitHub
  * payloads are well under this (typically <1MB, hard-capped ~25MB), so the
  * cap only bites a malformed or hostile request — which matters once the
@@ -157,6 +175,39 @@ export function extractBranches(event: string, payload: unknown): string[] | nul
   }
 }
 
+/**
+ * When a queued refetch may fire, given the last fetch's *start* time and
+ * the firing time of any already-pending timer.
+ *
+ * Returns null to mean "a pending timer already satisfies both constraints
+ * — leave it alone". That branch is load-bearing, and specifically because
+ * of the fix it ships with. Re-arming on every delivery starves the fetch:
+ * deliveries closer together than `FETCH_DEBOUNCE_MS` push the firing time
+ * out again each time, indefinitely. That hazard was always latent in the
+ * debounce, but it never fired, because the trailing re-run bypassed the
+ * scheduler and ran immediately — the unbounded path masked the starvable
+ * one. Routing the trailing re-run through here is what arms it. Simulated
+ * against this fleet's measured rate (~43 deliveries/min, one per 1.4s
+ * against a 1.5s debounce): the naive rule defers past 151s and climbing
+ * for as long as the stream lasts. So only the first delivery after a
+ * fetch arms the timer; every later one in the window is a no-op.
+ *
+ * Measured from the fetch's start, not its finish, so the floor caps the
+ * rate rather than adding to a slow query's latency.
+ */
+export function nextFetchAt(
+  now: number,
+  lastFetchStartedAt: number,
+  pendingAt: number | null,
+): number | null {
+  const earliest = Math.max(
+    now + FETCH_DEBOUNCE_MS,
+    lastFetchStartedAt + MIN_FETCH_INTERVAL_MS,
+  );
+  if (pendingAt !== null && pendingAt <= earliest) return null;
+  return earliest;
+}
+
 type Daemon = {
   stop: () => void;
 };
@@ -194,6 +245,10 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
   }
 
   let fetchTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Firing time of `fetchTimer`, so `nextFetchAt` can leave it be. */
+  let pendingAt: number | null = null;
+  /** Start (not finish) of the most recent fetch; the floor measures from it. */
+  let lastFetchStartedAt = 0;
   let fetching = false;
   let refetchQueued = false;
 
@@ -205,6 +260,10 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
       return;
     }
     fetching = true;
+    const startedAt = Date.now();
+    // Null on the warm-up fetch, which has no predecessor to measure from.
+    const sinceLast = lastFetchStartedAt === 0 ? null : startedAt - lastFetchStartedAt;
+    lastFetchStartedAt = startedAt;
     try {
       try {
         await fetchOrigin();
@@ -227,7 +286,13 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
       state.lastFetchAt = Date.now();
       state.lastError = null;
       writeState(state);
-      log.info("refetched after webhook", { branches: branches.length, prs: prs.size });
+      // `sinceLastMs` makes the cadence auditable straight from the log —
+      // it is what the floor governs, and what a burn-rate question asks.
+      log.info("refetched after webhook", {
+        branches: branches.length,
+        prs: prs.size,
+        sinceLastMs: sinceLast,
+      });
     } catch (err) {
       state.lastError = err instanceof Error ? err.message : String(err);
       writeState(state);
@@ -236,17 +301,29 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
       fetching = false;
       if (refetchQueued) {
         refetchQueued = false;
-        void runFetch();
+        // Through the scheduler, not straight back into `runFetch`: the
+        // trailing re-run is exactly the path that used to bypass every
+        // rate constraint and turn a delivery stream into back-to-back
+        // full refetches.
+        scheduleFetch();
       }
     }
   }
 
   function scheduleFetch(): void {
+    const now = Date.now();
+    const at = nextFetchAt(now, lastFetchStartedAt, pendingAt);
+    if (at === null) return;
     if (fetchTimer) clearTimeout(fetchTimer);
-    fetchTimer = setTimeout(() => {
-      fetchTimer = null;
-      void runFetch();
-    }, FETCH_DEBOUNCE_MS);
+    pendingAt = at;
+    fetchTimer = setTimeout(
+      () => {
+        fetchTimer = null;
+        pendingAt = null;
+        void runFetch();
+      },
+      Math.max(0, at - now),
+    );
   }
 
   async function handleDelivery(event: string, body: string): Promise<void> {
@@ -325,6 +402,8 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
   return {
     stop: () => {
       if (fetchTimer) clearTimeout(fetchTimer);
+      fetchTimer = null;
+      pendingAt = null;
       server.stop(true);
     },
   };
