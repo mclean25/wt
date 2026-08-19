@@ -59,6 +59,28 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   when the worktree is destroyed, so they can't leak. `[dev_server] is
   not configured` means the project has none — then start the dev
   server however the project documents.
+- **The worktree is SHARED, and it is LIVE.** wt isolates worktrees from
+  each other; nothing isolates anything inside one. A subagent you spawn,
+  a reviewer, a second session on the same slug and the human all act on
+  the same checkout at the same time — and that checkout usually has a
+  dev server hot-reloading it and may have a browser test running
+  against it right now.
+  So **never mutate tree state to test a hypothesis**: no `git stash`,
+  `checkout`, `restore` or `reset` to see whether something fails
+  without a change, even with an immediate restore. Verify against a
+  COPY of the file instead. The restore is not what makes it safe — the
+  window is the damage. Two reviewers did exactly this, each stashing
+  and popping within seconds, while the owner had experiment changes
+  applied to that tree; two measurement runs silently recorded the
+  wrong arm, and nothing announced it. `git stash` is doubly wrong
+  here because the stash stack is shared and unlabelled: a pop takes
+  the top entry, which may not be the one you pushed.
+  Scratch files go in your harness's scratchpad, never in the repo — a
+  concurrent `git add -A` in another process will sweep them into
+  somebody's commit.
+  If you genuinely must change tree state, say so in the session first
+  and put it back before you finish. The failure mode here is silent:
+  the owner finds out only if you happen to mention it.
 - **Never end a session without a clear status.** Finished means
   `wt status ready --risk low|medium|high [-m ...]`. **Risk is your
   confidence AFTER testing, not the size or category of the change** —
