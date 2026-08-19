@@ -12,7 +12,7 @@ wt checkout and offer themselves on the next launch.
 
 | unit | what it is |
 |---|---|
-| `instructions` | a managed block spliced into each harness's **global instructions file** (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`): the always-on ownership rules for agents working in wt worktrees (work status, manual testing, the dev server) |
+| `instructions` | a managed block spliced into each harness's **global instructions file** (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`): the always-on ownership rules for agents working in wt worktrees (work status, decision ownership and the `needs-human` refusal test, manual testing, the dev server) |
 | `wt` skill | orientation: subcommands, conventions, the stacked-PR model, gotchas |
 | `restack` skill | the conflict-resolution playbook behind `/restack` |
 | `manager` skill | the fleet-coordinator playbook for the [manager session](manager.md) |

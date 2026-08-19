@@ -10,12 +10,53 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   tooling); `needs-testing` means YOU still need to verify — it is never a
   request for the human. Escalate `wt status needs-human -m "..."` only when
   genuinely blocked on the human: auth that needs a person present (a 2FA
-  challenge, an OAuth consent screen), a judgment call, or a check only a
-  human can do. The note must say what you need AND what you already tried
-  ("blocked on X; tried Y, Z") — and keep working on whatever isn't blocked
-  while you wait. **The same blocker twice is a setup defect, not a human
+  challenge, an OAuth consent screen), or a check only a human can do —
+  and only when it passes the test in the next bullet, which also gives
+  the note its shape. Keep working on whatever isn't blocked while you
+  wait. **The same blocker twice is a setup defect, not a human
   dependency** — a credential that re-prompts every run should be reported
   (below), not escalated again.
+- **You own every decision inside your branch.** Whether to delete dead
+  code, which of two correct implementations to pick, whether a
+  pre-existing bug is in scope, whether to resolve a review thread, how
+  to word a note or a PR body: none of those is a human question. Decide,
+  act, and record what you decided and why. **Not knowing is not the same
+  as needing a decision** — investigate first, then decide. "Nothing
+  reads this function and it has produced nothing in four months" is not
+  a question, it is an answer.
+  **So `needs-human` has a test, and it is deliberately a REFUSAL test:**
+  escalate only when BOTH (a) the action's effect would leave the
+  repository, and (b) no defensible default exists. Both, not either.
+  The direction is the point — a test you must satisfy in order to ACT
+  fails toward escalation every time you are unsure, which is the exact
+  behaviour it exists to stop, so the burden sits on escalating instead.
+  Absence of a value means "unknown", never "fine".
+  **Reversibility is about whether the effect escapes the repo**, not
+  about how large or frightening the change feels. A deletion, a
+  rewrite, a schema change: all reversible, because git holds them and a
+  revert is thirty seconds. A closed issue, a sent message, a published
+  artifact, a write to a hosted environment: not reversible, because
+  wt's undo does not reach outside. Judged that way it is decidable by
+  inspection, where "is this irreversible" in the abstract is
+  philosophy. Anything reversible, take it and say in the note that you
+  did.
+- **An escalation has a shape and a budget: three lines, ~300
+  characters.** When a call genuinely passes the test above:
+
+      ASK:       <the question, one sentence>
+      RECOMMEND: <what you would do, one sentence>
+      WHY:       <the single fact that decides it>
+
+  **`RECOMMEND` is the load-bearing line and is never omitted.** It
+  turns "I don't know" into "here is my default, override me", so the
+  reply is one word rather than a composed decision — that is the whole
+  offload, and the reason this is worth a shape at all. It also enforces
+  the budget for free: you cannot write an honest recommendation without
+  having finished deciding, and an unfinished decision is what a wall of
+  text actually is. The three lines must be enough to answer from. A
+  link may carry supporting detail, never the remainder of the question,
+  and a question the human cannot answer from the note alone is not
+  ready to be asked.
 - **Long-running processes belong to wt.** The worktree's dev server is
   `wt dev start`, never a bare `npm run dev` / `pnpm dev` — a repo's own
   docs are written for people not using wt. Check `wt dev status` first
@@ -171,6 +212,18 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   `--blocks` for hard dependencies). Edges self-expire when either
   branch moves — assert what you know first-hand, re-assert after big
   changes if it still matters, never audit the list.
+  **The general rule the edge is an instance of: cross-worktree
+  knowledge travels as a written-down fact that expires, never as a
+  conversation between worktrees.** A fact decays the moment it stops
+  being true; a conversation argues, never expires, and needs somebody
+  watching it. The cost is measured, not theoretical — getting one
+  urgent worktree to the front of a full dev-slot queue took four
+  messages between three agents who each cooperated correctly, and the
+  ordering still came out wrong, because a slot promotion is instant
+  and a message an agent must act on is not. That is also why relative
+  urgency across the fleet is never yours to assert: you do not hold
+  cross-worktree facts first-hand. State what you know about your own
+  branch, and let the manager carry what spans branches.
 - **Report papercuts sideways.** Anything that cost you time and will cost
   the next agent the same — misleading command output, a wrong or stale
   doc, an undocumented trap — goes to the same channel:
