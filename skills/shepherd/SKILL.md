@@ -144,7 +144,7 @@ which is precisely when your conclusion stops being trustworthy.
 | PR conflicted | Highest priority — a conflicted PR gets NO CI and is indistinguishable from "workflows have not started". Nudge the owner to resolve, and set the row `working`. |
 | PR behind base | Nudge to rebase **only if something stacks behind it**. Behind does not block a merge — and moving the head is not free (below). |
 | PR blocked | **A merge requirement is unmet, and checks are only one class of requirement.** See below — do not assume pending checks. |
-| a check reports failed | **Read the check name before believing it.** A review-bot job commonly reports failed while its review is still running. Never nudge on check status alone — read the review threads and the summary checklist. |
+| a check reports failed | **Read the check name before believing it**, then which of the four shapes it is (below). None of them mean findings. Never nudge on check status alone — read the review threads and the summary checklist. |
 | draft + `ready` + not busy + not stale + note has no open questions | Mark it ready for review. This is the main forward action: a finished draft often gets neither CI nor review, so it is invisible until someone flips it. |
 | draft + `ready` but stale or busy | **Do not mark ready.** See one-shot resources. |
 | unresolved review threads, or unticked boxes in the bot's summary comment | Nudge for **four** actions: fix, reply on the thread, resolve the thread, tick the box. Stopping after the fix leaves the PR reading as though the objection stands. |
@@ -186,6 +186,32 @@ That last call is where `required_review_thread_resolution` and
 that 404 reads as "no protection configured" when the rules are simply
 somewhere else.
 
+## Read in a batch. Dispatch on a pace.
+
+The sweep's shape is to read the whole fleet and act in one pass. That is
+correct for reading and wrong for **dispatching against a metered shared
+resource** — review credits, CI minutes, an LLM token budget, anything with a
+per-minute ceiling shared by the org.
+
+A large merge conflicted nine PRs at once. All nine were nudged to rebase and
+force-push in a single pass — which this document told you to do, since
+conflicted is top priority and nothing here said to pace. Three pushes landed
+within **nine seconds** and together hit the org token ceiling exactly
+(4,000,000 of 4,000,000). All three review jobs died mid-stream. Every earlier
+run, spaced further apart, had gone through.
+
+The cost is worse than three wasted runs, because a dead review leaves the head
+**unreviewed**: under a per-head review requirement, the required check never
+passes, the PR sits blocked, and it does not self-heal. It also reads as a code
+failure, so the next person to look starts in the wrong place.
+
+So: when a fleet-wide event puts many rows in the same state, dispatch a few
+per pass and let the rest wait for the next one. The sweep runs on a timer;
+spreading nine nudges over three passes costs minutes and nothing else. Note
+that wt's own automations engine already does this — it caps concurrent
+dispatches across all worktrees at two — which is one more reason to prefer it
+for routine per-row fires over a hand-rolled fan-out.
+
 ## Moving a head can spend what the PR already earned
 
 Before nudging a rebase, ask what a new head **invalidates**. A published
@@ -204,6 +230,24 @@ knowing on its own.
 Cheap tell: a review check reporting *skipping* rather than failing usually
 means the head has not moved since its review, i.e. the PR still holds what it
 earned. Leave it alone.
+
+## Four shapes of a red review check, none of them findings
+
+Cheap to tell apart, and only one wants action:
+
+| shape | meaning |
+|---|---|
+| `skipped`, 0 steps | a draft gate — the job declined to run |
+| `failed`, 0 steps, ~2 seconds | a billing or quota refusal before any work |
+| `fail` while the job is still in progress | the review is RUNNING; the check reports its interim state |
+| `fail` after minutes and a dozen steps | it read the diff and then died. Read the log. |
+
+For the last one: `gh run view --job <id> --log | grep -i "rate limit"`.
+
+**The action there is re-trigger, not push.** The reflex on a red check is to
+push a fix, and here that spends another review out of the budget that just
+ran out — while leaving the previous head unreviewed anyway. Re-triggering
+costs one review; pushing costs one review and a new head.
 
 ## One-shot resources
 
