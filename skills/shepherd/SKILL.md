@@ -143,7 +143,7 @@ which is precisely when your conclusion stops being trustworthy.
 |---|---|
 | PR conflicted | Highest priority — a conflicted PR gets NO CI and is indistinguishable from "workflows have not started". Nudge the owner to resolve, and set the row `working`. |
 | PR behind base | Nudge to rebase **only if something stacks behind it**. Behind does not block a merge — and moving the head is not free (below). |
-| PR blocked/pending checks | Look before acting. Almost always a run in flight. |
+| PR blocked | **A merge requirement is unmet, and checks are only one class of requirement.** See below — do not assume pending checks. |
 | a check reports failed | **Read the check name before believing it.** A review-bot job commonly reports failed while its review is still running. Never nudge on check status alone — read the review threads and the summary checklist. |
 | draft + `ready` + not busy + not stale + note has no open questions | Mark it ready for review. This is the main forward action: a finished draft often gets neither CI nor review, so it is invisible until someone flips it. |
 | draft + `ready` but stale or busy | **Do not mark ready.** See one-shot resources. |
@@ -152,6 +152,39 @@ which is precisely when your conclusion stops being trustworthy.
 | `ready` or `dropped` while holding a scarce dev slot, idle | Reclaim the slot. |
 | `todo` with a gate | Leave it alone until the gate clears. |
 | `todo` with no gate | Startable — subject to the start policy below. |
+
+## BLOCKED does not mean "checks are running"
+
+It means *some merge requirement is unmet*, and a green board is entirely
+compatible with it. One PR sat blocked across two passes with 13 checks
+SUCCESS, 1 SKIPPED, nothing pending and no review decision — one pass away
+from being escalated as a gate defect. The cause was a single **unresolved
+review thread**, under a ruleset requiring thread resolution. That blocks the
+merge on its own, independently of every check.
+
+Others that produce an identical blocked-with-a-green-board: a missing required
+approval, a required check that is SKIPPED where the ruleset wants SUCCESS, and
+merge-queue conditions.
+
+**Cheapest discriminator: blocked with zero failing and zero pending checks is
+almost certainly a non-check requirement**, and unresolved threads is the first
+thing to test — the table already tells you to chase those, and you may have
+the count in hand.
+
+When you do need the actual rules, read the ruleset rather than the checks:
+
+```
+gh api repos/<owner>/<repo>/rulesets --jq '.[]|"\(.id) \(.name)"'
+gh api repos/<owner>/<repo>/rulesets/<id> --jq '[.rules[].type]|join(", ")'
+gh api repos/<owner>/<repo>/rulesets/<id> --jq '.rules[]|select(.type=="pull_request")|.parameters'
+```
+
+That last call is where `required_review_thread_resolution` and
+`required_approving_review_count` live, and neither appears anywhere in
+`gh pr checks`. One trap on the way: `gh api repos/.../branches/<b>/protection`
+**404s when a repo uses rulesets** rather than classic branch protection, and
+that 404 reads as "no protection configured" when the rules are simply
+somewhere else.
 
 ## Moving a head can spend what the PR already earned
 
