@@ -20,6 +20,7 @@ import type { PullRequest } from "../../core/types.ts";
 import { patchPullRequest, type GithubData } from "../../state/index.ts";
 import type { QueryFilters } from "@tanstack/react-query";
 
+import { mergeWhenReadyArmed } from "../app-helpers.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
 
@@ -66,12 +67,17 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
   }
 
   /**
-   * Toggle GitHub "merge when ready" (auto-merge) on the PR. `gh pr
-   * merge --auto` enqueues into the repo's merge queue when one is
-   * configured, or arms classic auto-merge otherwise; `--disable-auto`
-   * cancels it. Optimistically flips `pr.autoMerge` so the badge
-   * updates before the round-trip; the settling invalidate reconciles
-   * against the merge-method GitHub actually lands on.
+   * Toggle GitHub "merge when ready" on the PR. Which of the two
+   * features that means is decided in `enableAutoMerge`/
+   * `disableAutoMerge` from the PR's base branch — a queued base is
+   * enqueued/dequeued, anything else arms classic auto-merge.
+   *
+   * The optimistic patch flips `pr.autoMerge` either way, so on a queue
+   * branch it paints the "armed" badge for the round trip even though
+   * the truth will arrive as a queue POSITION instead. That is
+   * deliberate: the point of the optimistic write is immediate
+   * acknowledgement of a keystroke, and the settling invalidate replaces
+   * it with whichever badge GitHub actually lands on.
    */
   async function doAutoMerge(
     slug: string,
@@ -83,12 +89,16 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       toast("no PR for this row", theme.warn, 2000);
       return;
     }
-    if (action === "enable" && row.pr.autoMerge) {
-      toast("auto-merge already enabled", theme.info, 2000);
+    // Armed-ness spans BOTH features this keystroke can drive; see
+    // `mergeWhenReadyArmed`. Keying on `pr.autoMerge` alone left a queued
+    // PR looking unarmed, so the disarm leg refused to dequeue it.
+    const armed = mergeWhenReadyArmed(row);
+    if (action === "enable" && armed) {
+      toast("merge when ready already armed", theme.info, 2000);
       return;
     }
-    if (action === "disable" && !row.pr.autoMerge) {
-      toast("auto-merge not enabled", theme.info, 2000);
+    if (action === "disable" && !armed) {
+      toast("merge when ready not armed", theme.info, 2000);
       return;
     }
     const prNumber = row.pr.number;
@@ -122,8 +132,14 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
         run: async () => {
           const result =
             action === "enable"
-              ? await enableAutoMerge(prId ?? "")
-              : await disableAutoMerge(prNumber);
+              ? await enableAutoMerge(prId ?? "", {
+                  baseRefName: row.pr?.baseRefName,
+                  headRefOid: row.pr?.headRefOid,
+                })
+              : await disableAutoMerge(prNumber, {
+                  prId,
+                  baseRefName: row.pr?.baseRefName,
+                });
           if (!result.ok) throw new Error(result.error);
         },
       });
@@ -260,7 +276,10 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
               },
             })),
           run: async () => {
-            const r = await enableAutoMerge(prId ?? "");
+            const r = await enableAutoMerge(prId ?? "", {
+              baseRefName: row.pr?.baseRefName,
+              headRefOid: row.pr?.headRefOid,
+            });
             if (!r.ok) throw new Error(r.error);
           },
         });

@@ -66,7 +66,14 @@ export const CACHE_DB = config.paths.cacheDb;
 // base). Same field, same type, different answer: a restored v12 entry
 // would feed ahead-of-base numbers straight into the destroy guard,
 // which is the bug the change exists to fix.
-const CACHE_BUSTER = "v17";
+// v18: GithubData.mergeQueue changed MEANING without changing shape. It
+// was populated from the repo's DEFAULT-branch queue, which is the wrong
+// queue whenever worktrees target something else — on a repo whose queue
+// lives on `staging` it was empty on every poll, so the position badge
+// never rendered. A restored v17 entry's empty map is indistinguishable
+// from a fresh "nothing is queued", which is exactly the case the buster
+// exists for.
+const CACHE_BUSTER = "v18";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

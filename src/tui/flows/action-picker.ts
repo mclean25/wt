@@ -13,6 +13,7 @@ import {
 } from "../../core/actions.ts";
 import { config } from "../../core/config.ts";
 import { MANAGER_SLUG } from "../../core/manager.ts";
+import { mergeWhenReadyArmed } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import { assignActionKeys, type PickerItem } from "../panels/action-picker.tsx";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
@@ -69,7 +70,7 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
     const autoMergeItem: PickerItem = {
       kind: "autoMerge",
       key: AUTO_MERGE_KEY,
-      armed: row?.pr?.autoMerge != null,
+      armed: mergeWhenReadyArmed(row),
       availability: !row?.pr
         ? { ok: false, reason: "no PR" }
         : row.pr.state !== "OPEN"

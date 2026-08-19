@@ -243,9 +243,18 @@ export function buildQuery(branchCount: number, withMergeQueue: boolean): string
   const aliases = Array.from({ length: branchCount }, (_, i) =>
     `    wt_${i}: pullRequests(first: 2, headRefName: $b${i}, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...PrFields } }`,
   ).join("\n");
+  // `mergeQueue` with no `branch:` argument resolves to the DEFAULT
+  // branch's queue, which is the wrong queue whenever worktrees target
+  // something else. Measured on a repo whose queue lives on `staging`
+  // while the default branch is `main`: the unqualified field returned
+  // null on every poll, so the merge-queue position badge could never
+  // render and read as "no queue configured" rather than "asked the
+  // wrong branch". Worktree PRs target `branch.base` (a stacked PR
+  // targets its parent, which is a feature branch and never has a
+  // queue), so that is the only queue whose entries can describe a row.
   const mergeQueue = withMergeQueue
     ? `
-    mergeQueue {
+    mergeQueue(branch: $mergeQueueBranch) {
       entries(first: 50) {
         nodes {
           enqueuedAt
@@ -257,8 +266,9 @@ export function buildQuery(branchCount: number, withMergeQueue: boolean): string
       }
     }`
     : "";
+  const mqVar = withMergeQueue ? ", $mergeQueueBranch: String!" : "";
   return `
-query($owner: String!, $name: String!, ${varDecls}) {
+query($owner: String!, $name: String!${mqVar}, ${varDecls}) {
   repository(owner: $owner, name: $name) {
 ${aliases}${mergeQueue}
   }
@@ -299,6 +309,7 @@ async function fetchChunk(
     "-f",
     `name=${name}`,
   ];
+  if (withMergeQueue) args.push("-f", `mergeQueueBranch=${config.branch.base}`);
   for (let i = 0; i < branches.length; i++) {
     args.push("-f", `b${i}=${branches[i]}`);
   }

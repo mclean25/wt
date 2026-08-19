@@ -307,6 +307,26 @@ export function parseNewInput(raw: string, defaultBase?: string): NewInput {
  * squash-merged branches before the next `R` lands, which is by far the
  * most common case with GitHub's default merge style.
  */
+/**
+ * Is "merge when ready" currently armed on this row's PR?
+ *
+ * Two different GitHub features answer that, and only one of them sets
+ * `autoMerge`. On a base branch with a merge queue, arming ENQUEUES —
+ * `autoMergeRequest` stays null forever and the queue entry is the only
+ * evidence. Reading `autoMerge` alone therefore reported a queued PR as
+ * unarmed, which is wrong in both directions at once: the picker offered
+ * to arm an already-queued PR (GitHub then rejects the duplicate
+ * enqueue), and the disarm path refused with "auto-merge not enabled" on
+ * the exact PRs that most need dequeuing.
+ *
+ * Shared by the picker's label and the flow's guard so the two can never
+ * disagree about what the keystroke is about to do.
+ */
+export function mergeWhenReadyArmed(row: WorktreeRow | undefined): boolean {
+  if (!row?.pr) return false;
+  return row.pr.autoMerge != null || row.mq != null;
+}
+
 export function isCleanCandidate(row: WorktreeRow): boolean {
   // Archived worktrees opted out of the automatic lifecycle — don't
   // sweep them even if their branch has merged since.
