@@ -141,7 +141,12 @@ export function createWtQueryClient(): WtQueryClient {
         // `staleTime` to drive refetch rather than gcTime-on-unmount.
         gcTime: 24 * 60 * 60 * 1000,
         // Retries are annoying in a TUI — the user will hit `r` if
-        // something looks off.
+        // something looks off. The one exception is deliberate and lives
+        // a layer down: `core/github/fetch.ts` retries an individual
+        // chunk of its batched fetch on transient 5xx/timeout, because
+        // that fetch is a background poll with nobody watching and
+        // `keepPreviousData` holds the last good badges on screen
+        // throughout. Retrying HERE would re-run the whole fan-out.
         retry: false,
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,

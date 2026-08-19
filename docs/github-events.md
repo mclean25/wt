@@ -6,6 +6,8 @@ Add a `[github.events]` section and run the small local daemon to have GitHub **
 
 It's a plain repo webhook — no GitHub App, no OAuth.
 
+**What it is not: a fix for GitHub 5xx errors.** The daemon re-runs the *same* batched `fetchGithub` the TUI uses, so it changes how OFTEN the query runs, never what one costs. A fleet large enough to cross GitHub's per-query execution ceiling failed identically with the daemon configured, just less frequently. Query cost is bounded by chunking instead (see [architecture.md](architecture.md#state--data-flow)), which the daemon inherits for free.
+
 ## Setup
 
 ```sh
