@@ -153,6 +153,31 @@ export async function shaIsAncestor(
   return r.exitCode === 0;
 }
 
+/**
+ * Current tip of the branch a worktree merges INTO, resolved in the
+ * main clone. `baseBranch` is the slug's recorded fork base, or null
+ * for trunk.
+ *
+ * Resolved in the main clone deliberately, and this is the whole point
+ * of the helper: under the `rift` backend every worktree is an
+ * INDEPENDENT CLONE with its own remote-tracking refs, only as fresh as
+ * the last fetch inside it. Asking a worktree for `origin/<trunk>`
+ * returns whatever it last saw — measured on a live fleet, 10 distinct
+ * answers across 28 rows, one of them 9 merges behind, none of them the
+ * actual tip. The main clone is where `fetchOrigin` fetches, so it is
+ * the freshest local answer and, more importantly, a CONSISTENT one:
+ * any caller comparing two of these needs both sides computed in the
+ * same reference frame or the comparison is meaningless.
+ *
+ * Prefers the remote-tracking ref, since a local branch of that name
+ * may not exist in the main clone at all (again: independent clones).
+ * Null when neither resolves — callers must treat that as unknown.
+ */
+export async function baseTipSha(baseBranch: string | null): Promise<string | null> {
+  const branch = baseBranch && baseBranch.trim() !== "" ? baseBranch : config.branch.base;
+  return (await revParse(`origin/${branch}`)) ?? (await revParse(branch));
+}
+
 /** First ref among `refs` that resolves to a commit in `cwd`, as a SHA. */
 export async function firstSha(cwd: string, refs: string[]): Promise<string | null> {
   for (const ref of refs) {

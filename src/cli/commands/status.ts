@@ -14,7 +14,7 @@
  * git (see status.test.ts); `run` only resolves worktrees and does IO.
  */
 import { agentIdentity } from "../../core/agent-identity.ts";
-import { effectiveBaseOrTrunk, revParse } from "../../core/git.ts";
+import { baseTipSha, revParse } from "../../core/git.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Worktree } from "../../core/types.ts";
 import {
@@ -704,10 +704,9 @@ export async function run(argv: string[]): Promise<number> {
         w,
         record: state.slugs[w.slug]?.work,
         headSha: await revParse("HEAD", w.path),
-        baseSha: await revParse(
-          await effectiveBaseOrTrunk(w.path, state.slugs[w.slug]?.baseBranch ?? null),
-          w.path,
-        ),
+        // Same helper as the write path, so both sides share one
+        // reference frame. Computed anywhere else they would disagree.
+        baseSha: await baseTipSha(state.slugs[w.slug]?.baseBranch ?? null),
       })),
     );
     if (args.json) {
@@ -813,11 +812,8 @@ export async function run(argv: string[]): Promise<number> {
       console.error(red(`could not resolve HEAD for ${target.slug}`));
       return 2;
     }
-    const baseRef = await effectiveBaseOrTrunk(
-      target.path,
-      state.slugs[target.slug]?.baseBranch ?? null,
-    );
-    const baseSha = await revParse(baseRef, target.path);
+    const baseBranch = state.slugs[target.slug]?.baseBranch ?? null;
+    const baseSha = await baseTipSha(baseBranch);
     const by = agentIdentity();
     setSlugExamined(target.slug, {
       sha,
@@ -828,7 +824,7 @@ export async function run(argv: string[]): Promise<number> {
     });
     console.log(
       `${green("✓")} ${cyan(target.slug)} ${dim("examined at")} ${sha.slice(0, 7)}${
-        baseSha ? dim(` on ${baseRef} ${baseSha.slice(0, 7)}`) : ""
+        baseSha ? dim(` on ${baseBranch ?? "trunk"} ${baseSha.slice(0, 7)}`) : ""
       }${by ? dim(` by ${by}`) : ""}`,
     );
     console.log(`  ${dim("verdict:")} ${args.verdict}`);

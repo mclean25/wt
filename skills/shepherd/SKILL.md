@@ -119,6 +119,15 @@ records both anchors and `examined_current` requires both to hold, so you can
 stamp base-dependent verdicts safely; they simply stop skipping as soon as the
 trunk moves, which is when you wanted to look anyway.
 
+**Never let a verdict decide whether you NOTICE a state change.** Read
+`mergeStateStatus` for every PR unconditionally — it is one call for all of
+them — and use `examined_current` only to skip the expensive per-row digging
+(review threads, checklist greps) on rows that came back CLEAN. A row that
+shows up non-CLEAN gets looked at whatever its verdict says. That keeps the
+memo an optimisation over cost rather than a gate on perception, which is the
+only shape where a wrong verdict can waste your time without ever hiding
+something from you.
+
 That exact case is why the field exists. A run spent four consecutive passes
 running the same two-call review query against the same two pull requests and
 getting the same empty answer, because they kept *looking* interesting. Roughly
