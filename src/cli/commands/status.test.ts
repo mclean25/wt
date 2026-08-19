@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseStatusArgs } from "./status.ts";
+import { examinedCurrent, parseStatusArgs } from "./status.ts";
 
 /**
  * The flag/positional/validation matrix for `wt status`, pinned
@@ -282,5 +282,38 @@ describe("examination verdicts", () => {
 
   test("an empty verdict is refused rather than stored blank", () => {
     expect(parseStatusArgs(["--examined", "   "]).kind).toBe("error");
+  });
+});
+
+describe("examinedCurrent", () => {
+  const at = { sha: "row1", baseSha: "base1" };
+
+  test("current only when both anchors hold", () => {
+    expect(examinedCurrent(at, "row1", "base1")).toBe(true);
+  });
+
+  // The case that inverted the safety property: a PR goes conflicted
+  // because the BASE moved, which leaves the row's own head untouched.
+  // A row-only anchor would call this current and skip the row that
+  // most needs looking at.
+  test("a base move voids it even though the row is untouched", () => {
+    expect(examinedCurrent(at, "row1", "base2")).toBe(false);
+  });
+
+  test("a row move voids it too", () => {
+    expect(examinedCurrent(at, "row2", "base1")).toBe(false);
+  });
+
+  // Unknown must read as "look properly", never as "fine".
+  test("unresolvable anchors and missing records are null, not true", () => {
+    expect(examinedCurrent(at, null, "base1")).toBeNull();
+    expect(examinedCurrent(at, "row1", null)).toBeNull();
+    expect(examinedCurrent(undefined, "row1", "base1")).toBeNull();
+  });
+
+  // Written before the base anchor existed: it cannot prove the base
+  // held still, so it stops skipping rather than skipping unsafely.
+  test("a record with no base anchor is never current", () => {
+    expect(examinedCurrent({ sha: "row1" }, "row1", "base1")).toBe(false);
   });
 });

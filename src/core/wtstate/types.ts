@@ -133,6 +133,29 @@ export type WtSlugState = {
   examined?: {
     /** HEAD when the conclusion was reached. Any other HEAD voids it. */
     sha: string;
+    /**
+     * The row's BASE head at the same moment, and the half that keeps
+     * this honest.
+     *
+     * Keying on the row alone was wrong in a way that inverted the
+     * field's whole safety property. A pull request goes from behind to
+     * CONFLICTING because the BASE moved, not because the row did — so
+     * a row-only key stays valid across exactly the event that makes a
+     * verdict worthless, and a sweep skips the one row that most needs
+     * looking at. Caught before it bit: a coordinator was about to
+     * stamp "behind only, no action" across 28 pull requests at the
+     * start of a merge batch.
+     *
+     * Invalidating on base movement costs re-examination during a merge
+     * batch and nothing at all when the trunk is quiet — which is the
+     * right way round twice over, because a settled fleet is when the
+     * saving matters and a moving trunk is when every mergeability
+     * verdict is suspect anyway.
+     *
+     * Absent on records written before this existed: those cannot prove
+     * the base held still, so they read as void rather than current.
+     */
+    baseSha?: string;
     /** What was concluded, in the examiner's words. */
     verdict: string;
     /** `WT_AGENT` of whoever looked (`manager`, a slug), when stamped. */

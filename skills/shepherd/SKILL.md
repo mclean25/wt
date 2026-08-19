@@ -110,6 +110,15 @@ you conclude nothing-to-do**, or the next pass pays the same attention again:
 wt status <slug> --examined "unstable is the review job still running; 0 findings"
 ```
 
+**A verdict is void when the row moves OR when its base does**, and the second
+half is not a technicality. A PR goes from behind to conflicted because the
+BASE moved, leaving the row's own head untouched — so an anchor on the row
+alone would keep a verdict alive across precisely the event that makes it
+worthless, and the sweep would skip the row that most needs looking at. wt
+records both anchors and `examined_current` requires both to hold, so you can
+stamp base-dependent verdicts safely; they simply stop skipping as soon as the
+trunk moves, which is when you wanted to look anyway.
+
 That exact case is why the field exists. A run spent four consecutive passes
 running the same two-call review query against the same two pull requests and
 getting the same empty answer, because they kept *looking* interesting. Roughly
@@ -122,7 +131,7 @@ which is precisely when your conclusion stops being trustworthy.
 | observation | action |
 |---|---|
 | PR conflicted | Highest priority — a conflicted PR gets NO CI and is indistinguishable from "workflows have not started". Nudge the owner to resolve, and set the row `working`. |
-| PR behind base | Nudge to rebase **only if something stacks behind it**. Behind does not block a merge. |
+| PR behind base | Nudge to rebase **only if something stacks behind it**. Behind does not block a merge — and moving the head is not free (below). |
 | PR blocked/pending checks | Look before acting. Almost always a run in flight. |
 | a check reports failed | **Read the check name before believing it.** A review-bot job commonly reports failed while its review is still running. Never nudge on check status alone — read the review threads and the summary checklist. |
 | draft + `ready` + not busy + not stale + note has no open questions | Mark it ready for review. This is the main forward action: a finished draft often gets neither CI nor review, so it is invisible until someone flips it. |
@@ -132,6 +141,25 @@ which is precisely when your conclusion stops being trustworthy.
 | `ready` or `dropped` while holding a scarce dev slot, idle | Reclaim the slot. |
 | `todo` with a gate | Leave it alone until the gate clears. |
 | `todo` with no gate | Startable — subject to the start policy below. |
+
+## Moving a head can spend what the PR already earned
+
+Before nudging a rebase, ask what a new head **invalidates**. A published
+review tied to the head SHA, a passed gate that is expensive to re-run, a
+green result on a metered CI budget — a rebase throws each of them away and
+buys a fresh cycle.
+
+This turns a routine tidy-up into a costly sweep at exactly the moment it looks
+most appealing. One fleet had all 28 open PRs go behind in a single merge batch;
+under a per-head review requirement, a reflexive "you are behind, please rebase"
+across all of them would have spent 28 review cycles to fix nothing, because
+behind does not block a merge. The rule above (rebase only when something stacks
+behind it) happens to give the right answer here, but for a second reason worth
+knowing on its own.
+
+Cheap tell: a review check reporting *skipping* rather than failing usually
+means the head has not moved since its review, i.e. the PR still holds what it
+earned. Leave it alone.
 
 ## One-shot resources
 

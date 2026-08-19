@@ -14,7 +14,7 @@
  * git (see status.test.ts); `run` only resolves worktrees and does IO.
  */
 import { agentIdentity } from "../../core/agent-identity.ts";
-import { revParse } from "../../core/git.ts";
+import { effectiveBaseOrTrunk, revParse } from "../../core/git.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Worktree } from "../../core/types.ts";
 import {
@@ -619,6 +619,28 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   return { kind: "set", slugArg, state, note, risk, append, blockedOn };
 }
 
+/**
+ * Does a recorded verdict still describe reality? Only when BOTH the
+ * row and its base are where they were when it was reached.
+ *
+ * Null when there is no verdict, or when either side cannot be
+ * resolved — and, deliberately, when the record carries no base anchor
+ * at all. Such a record cannot prove the base held still, and a
+ * behind-to-conflicted transition moves the base while leaving the row
+ * alone, so treating it as current would skip exactly the row that
+ * needs looking at. Unknown reads as "look properly", never as "fine".
+ */
+export function examinedCurrent(
+  examined: { sha: string; baseSha?: string } | undefined,
+  headSha: string | null,
+  baseSha: string | null,
+): boolean | null {
+  if (!examined || !headSha) return null;
+  if (!examined.baseSha) return false;
+  if (!baseSha) return null;
+  return examined.sha === headSha && examined.baseSha === baseSha;
+}
+
 function describe(
   slug: string,
   record: WorkStatusRecord | undefined,
@@ -682,6 +704,10 @@ export async function run(argv: string[]): Promise<number> {
         w,
         record: state.slugs[w.slug]?.work,
         headSha: await revParse("HEAD", w.path),
+        baseSha: await revParse(
+          await effectiveBaseOrTrunk(w.path, state.slugs[w.slug]?.baseBranch ?? null),
+          w.path,
+        ),
       })),
     );
     if (args.json) {
@@ -692,7 +718,7 @@ export async function run(argv: string[]): Promise<number> {
       console.log(
         JSON.stringify(
           [
-            ...entries.map(({ w, record, headSha }) => ({
+            ...entries.map(({ w, record, headSha, baseSha }) => ({
               slug: w.slug,
               branch: w.branch,
               // Positive discriminator, so branching on it doesn't come
@@ -722,10 +748,16 @@ export async function run(argv: string[]): Promise<number> {
               // applies. `examined_current` is the field a sweep keys
               // its early-out on: false or null means look properly.
               examined: state.slugs[w.slug]?.examined ?? null,
-              examined_current:
-                state.slugs[w.slug]?.examined && headSha
-                  ? state.slugs[w.slug]!.examined!.sha === headSha
-                  : null,
+              // True only when NEITHER the row nor its base has moved.
+              // A record with no base anchor (written before that
+              // existed) cannot prove the base held still, so it reads
+              // as not-current — the failure direction stays "look
+              // properly", never "skip a row that just went conflicted".
+              examined_current: examinedCurrent(
+                state.slugs[w.slug]?.examined,
+                headSha,
+                baseSha,
+              ),
               // Agent identity that asserted it (`manager` when triage
               // did); null = the human, or a plain shell.
               by: record?.by ?? null,
@@ -769,35 +801,44 @@ export async function run(argv: string[]): Promise<number> {
     return 1;
   }
 
-    if (args.kind === "examined") {
-  // Stamped with HEAD, which is the whole mechanism: the verdict is
-  // void the instant the branch moves, so a stale one can never be
-  // mistaken for a current one and nothing has to remember to clear
-  // it.
-  const sha = await revParse("HEAD", target.path);
-  if (!sha) {
-    console.error(red(`could not resolve HEAD for ${target.slug}`));
-    return 2;
-  }
-  const by = agentIdentity();
-  setSlugExamined(target.slug, {
-    sha,
-    verdict: args.verdict,
-    at: new Date().toISOString(),
-    ...(by ? { by } : {}),
-  });
-  console.log(
-    `${green("✓")} ${cyan(target.slug)} ${dim("examined at")} ${sha.slice(0, 7)}${
-      by ? dim(` by ${by}`) : ""
-    }`,
-  );
-  console.log(`  ${dim("verdict:")} ${args.verdict}`);
-  hint([
-    `this is a SKIP HINT for the next fleet sweep, not a status —`,
-    `${bold(target.slug)}'s own lifecycle state is untouched. It voids itself`,
-    `the moment the branch moves, so nothing has to clear it.`,
-  ]);
-  return 0;
+  if (args.kind === "examined") {
+    // Two anchors, and the second is the one that keeps this honest.
+    // HEAD is obvious. The BASE head matters because the transition
+    // most worth catching — behind becoming conflicted — is caused by
+    // the base moving and leaves this row's own head untouched, so a
+    // row-only anchor would keep a verdict valid across exactly the
+    // event that voids it.
+    const sha = await revParse("HEAD", target.path);
+    if (!sha) {
+      console.error(red(`could not resolve HEAD for ${target.slug}`));
+      return 2;
+    }
+    const baseRef = await effectiveBaseOrTrunk(
+      target.path,
+      state.slugs[target.slug]?.baseBranch ?? null,
+    );
+    const baseSha = await revParse(baseRef, target.path);
+    const by = agentIdentity();
+    setSlugExamined(target.slug, {
+      sha,
+      ...(baseSha ? { baseSha } : {}),
+      verdict: args.verdict,
+      at: new Date().toISOString(),
+      ...(by ? { by } : {}),
+    });
+    console.log(
+      `${green("✓")} ${cyan(target.slug)} ${dim("examined at")} ${sha.slice(0, 7)}${
+        baseSha ? dim(` on ${baseRef} ${baseSha.slice(0, 7)}`) : ""
+      }${by ? dim(` by ${by}`) : ""}`,
+    );
+    console.log(`  ${dim("verdict:")} ${args.verdict}`);
+    hint([
+      `a SKIP HINT for the next fleet sweep, not a status — ${bold(target.slug)}'s own`,
+      `lifecycle state is untouched. It voids itself when this branch moves OR`,
+      `when its base does; a PR goes conflicted because the BASE moved, which`,
+      `leaves this row's head alone.`,
+    ]);
+    return 0;
   }
 
   if (args.kind === "clear") {

@@ -197,10 +197,14 @@ export function parseWtState(raw: unknown): WtState {
         const e = ex as { sha: string; verdict: string; at: string; by?: unknown };
         const verdict = sanitizeWorkNote(e.verdict);
         if (e.sha.trim() !== "" && verdict !== "") {
+          const baseSha = (e as { baseSha?: unknown }).baseSha;
           slugs[k]!.examined = {
             sha: e.sha.trim(),
             verdict,
             at: e.at,
+            ...(typeof baseSha === "string" && baseSha.trim() !== ""
+              ? { baseSha: baseSha.trim() }
+              : {}),
             ...(typeof e.by === "string" && e.by.trim() !== "" ? { by: e.by.trim() } : {}),
           };
         }

@@ -168,7 +168,7 @@ export function setSlugDevStartedSha(slug: string, sha: string | null): void {
  */
 export function setSlugExamined(
   slug: string,
-  examined: { sha: string; verdict: string; by?: string; at: string } | null,
+  examined: { sha: string; baseSha?: string; verdict: string; by?: string; at: string } | null,
 ): void {
   withWtStateLock(() => {
     const state = readWtState();
