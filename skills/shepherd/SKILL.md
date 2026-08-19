@@ -126,7 +126,9 @@ them — and use `examined_current` only to skip the expensive per-row digging
 shows up non-CLEAN gets looked at whatever its verdict says. That keeps the
 memo an optimisation over cost rather than a gate on perception, which is the
 only shape where a wrong verdict can waste your time without ever hiding
-something from you.
+something from you. Put the other way round: a cache that can hide a state
+change is not a cache with a bug in it, it is a different feature wearing a
+cache label.
 
 That exact case is why the field exists. A run spent four consecutive passes
 running the same two-call review query against the same two pull requests and
