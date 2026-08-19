@@ -425,13 +425,18 @@ async function runStatusOne(wt: Worktree, json: boolean): Promise<number> {
     : st.starting
       ? yellow("starting") + age
       : st.crashed
-        ? red("crashed (see `wt dev logs`)")
+        ? red("crashed — gave up restarting")
         : st.waiting
           ? yellow(
               `queued #${st.waiting.rank + 1} for a slot (${humanAge(now - st.waiting.since)})`,
             )
           : dim("not running");
   console.log(`${cyan(wt.slug)}: ${state}`);
+  if (st.restarts) {
+    console.log(
+      `  ${red("restarts:")} ${st.restarts.count} consecutive failure${st.restarts.count === 1 ? "" : "s"} (last exit ${st.restarts.lastExit})`,
+    );
+  }
   if (st.port !== null) console.log(`  ${dim("port:")} ${st.port}`);
   if (st.url) console.log(`  ${dim("url:")}  ${st.url}`);
   // The free signal, and the one that needs no project cooperation:
@@ -449,6 +454,23 @@ async function runStatusOne(wt: Worktree, json: boolean): Promise<number> {
         : `  ${yellow("stale:")} last ran before a rebase — whatever it kept on disk predates this history`,
     );
     console.log(dim(`  ${bold(`wt dev reset ${wt.slug}`)} rebuilds it from the current tree`));
+  }
+  // The cause, inline. It was reachable only via `wt dev logs`, and
+  // nothing about a failed row prompted anyone to go there — one agent
+  // found it by chasing the error's own (misleading) suggestion instead.
+  if (st.crashed) {
+    const saved = readDevCrashLog(wt.slug);
+    const tail = (saved ?? "")
+      .split("\n")
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim() !== "")
+      .slice(-6);
+    if (tail.length > 0) {
+      console.log(`  ${dim("last output:")}`);
+      for (const line of tail) console.log(`  ${dim("|")} ${line}`);
+    } else {
+      console.log(dim(`  ${bold(`wt dev logs ${wt.slug}`)} has the failure output`));
+    }
   }
   if (health) {
     console.log(

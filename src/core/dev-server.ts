@@ -53,10 +53,38 @@ import {
 const log = createLogger("[dev-server]");
 
 const DEV_DIR = join(WT_STATE_DIR, "dev");
-/** An exit this soon after start counts as a rapid failure. */
-const RAPID_CRASH_SECONDS = 10;
-/** Consecutive rapid failures before the supervisor parks. */
+/**
+ * A run shorter than this never established itself, so its exit counts
+ * toward giving up. Longer runs reset the counter — the server was
+ * doing its job and something else killed it.
+ *
+ * It was 10 seconds, and that made the give-up UNREACHABLE for exactly
+ * the projects where looping costs the most. A command that brings up a
+ * container stack and then fails on a migration takes far longer than
+ * ten seconds to get there, so every attempt looked like a long healthy
+ * run, the counter reset every pass, and the supervisor restarted a
+ * deterministically-broken twelve-container stack forever. A fast-
+ * failing `vite` parked in six seconds; a slow-failing stack never
+ * parked at all. The guard failed open on the expensive half.
+ *
+ * Five minutes because the question is "did this ever serve anything",
+ * not "did it exit quickly": a dev server that dies within minutes of
+ * every start is broken however long each attempt took.
+ */
+const ESTABLISHED_AFTER_SECONDS = 300;
+/** Consecutive un-established runs before the supervisor parks. */
 const GIVE_UP_AFTER = 3;
+/** First wait between restarts; doubles up to `MAX_RESTART_DELAY`. */
+const RESTART_DELAY_SECONDS = 2;
+/**
+ * Ceiling on the backoff. Belt and braces next to the give-up above —
+ * if a project ever finds another way past it, the loop still costs
+ * one attempt a minute rather than one every two seconds. A
+ * crash-looping stack is not merely untidy: it is a direct contributor
+ * to the fleet saturation that makes unrelated test suites fail and
+ * look like real bugs.
+ */
+const MAX_RESTART_DELAY_SECONDS = 60;
 
 export type DevServerStatus = {
   /** Session exists and the recorded port accepts connections. */
@@ -102,6 +130,19 @@ export type DevServerStatus = {
    * no longer exists.
    */
   rebasedSince: boolean | null;
+  /**
+   * Consecutive failed starts the supervisor has counted, and the last
+   * exit code. Zero/absent while a first attempt is still in flight.
+   *
+   * Without this a restart loop is indistinguishable from a slow start:
+   * both render `starting`, and a stack that takes minutes to come up
+   * looks exactly like one failing every ninety seconds. "Nothing
+   * distinguishes running from restarting for the four-hundredth time"
+   * was the complaint, and it is the same complaint as a green test on
+   * a saturated box — the surface reported a state without reporting
+   * which world produced it.
+   */
+  restarts: { count: number; lastExit: number } | null;
 };
 
 export const DEV_SERVER_STOPPED: DevServerStatus = {
@@ -113,6 +154,7 @@ export const DEV_SERVER_STOPPED: DevServerStatus = {
   since: null,
   waiting: null,
   rebasedSince: null,
+  restarts: null,
 };
 
 /** Maximum app-output characters carried on one attention-feed line. */
@@ -160,6 +202,22 @@ function requireDevServer(): DevServerConfig {
 
 function markerPath(slug: string): string {
   return join(DEV_DIR, `${slug}.state`);
+}
+
+/**
+ * The supervisor's `<count> <exit>` line, written after every failed
+ * run. Absent until something fails, which is the common case.
+ */
+function readAttempts(slug: string): { count: number; lastExit: number } | null {
+  try {
+    const [c, e] = readFileSync(`${markerPath(slug)}.attempts`, "utf8").trim().split(/\s+/);
+    const count = Number(c);
+    const lastExit = Number(e);
+    if (!Number.isFinite(count) || count <= 0) return null;
+    return { count, lastExit: Number.isFinite(lastExit) ? lastExit : -1 };
+  } catch {
+    return null;
+  }
 }
 
 function scriptPath(slug: string): string {
@@ -831,6 +889,7 @@ export PORT
 # unreachable and the marker would stay "running" forever.
 trap : INT TERM
 fails=0
+delay=${RESTART_DELAY_SECONDS}
 while :; do
   printf running > "$STATE"
   started=$(date +%s)
@@ -843,21 +902,28 @@ while :; do
     echo "wt: dev server stopped (exit $code)"
     exec tmux -L ${TMUX_SOCKET} kill-session -t ${shQuote(`=${session}`)}
   fi
-  if [ $(($(date +%s) - started)) -lt ${RAPID_CRASH_SECONDS} ]; then
+  ran=$(($(date +%s) - started))
+  if [ "$ran" -lt ${ESTABLISHED_AFTER_SECONDS} ]; then
     fails=$((fails + 1))
   else
     fails=0
+    delay=${RESTART_DELAY_SECONDS}
   fi
+  # Attempt count and last exit, so a restart loop is visible as one
+  # rather than looking like a slow start. Read by devServerStatus.
+  printf '%s %s' "$fails" "$code" > "$STATE.attempts"
   if [ "$fails" -ge ${GIVE_UP_AFTER} ]; then
     printf crashed > "$STATE"
-    echo "wt: dev server crashed ${GIVE_UP_AFTER} times in a row (last exit $code) — giving up."
+    echo "wt: dev server failed ${GIVE_UP_AFTER} times without establishing (last exit $code) — giving up."
     # Single quotes: backticks in a double-quoted sh string would run as
     # command substitution.
     echo 'wt: fix the cause, then start it again from the ! menu or "wt dev start".'
     exit 1
   fi
-  echo "wt: dev server exited ($code) — restarting in 2s"
-  sleep 2
+  echo "wt: dev server exited ($code) after \${ran}s — restarting in \${delay}s (attempt $((fails + 1)) of ${GIVE_UP_AFTER})"
+  sleep "$delay"
+  delay=$((delay * 2))
+  [ "$delay" -gt ${MAX_RESTART_DELAY_SECONDS} ] && delay=${MAX_RESTART_DELAY_SECONDS}
 done
 `;
 }
@@ -963,7 +1029,13 @@ export async function startDevServer(wt: {
  * fresh-start guarantee `clearSlugState` gives the wtstate record.
  */
 export function clearDevServerFiles(slug: string): void {
-  for (const p of [markerPath(slug), scriptPath(slug), crashLogPath(slug), waiterPath(slug)]) {
+  for (const p of [
+    markerPath(slug),
+    `${markerPath(slug)}.attempts`,
+    scriptPath(slug),
+    crashLogPath(slug),
+    waiterPath(slug),
+  ]) {
     try {
       rmSync(p, { force: true });
     } catch {
@@ -986,7 +1058,7 @@ export function reapDevServerFiles(liveSlugs: ReadonlySet<string>): void {
     return; // Dir doesn't exist until the first start — nothing to sweep.
   }
   for (const name of entries) {
-    const slug = name.replace(/\.(state|sh|crash\.log)$/, "");
+    const slug = name.replace(/\.(state|state\.attempts|sh|crash\.log)$/, "");
     if (slug === name || liveSlugs.has(slug)) continue;
     try {
       rmSync(join(DEV_DIR, name), { force: true });
@@ -1253,7 +1325,7 @@ export async function devServerStatus(
     startedSha && opts.path
       ? !(await shaIsAncestor(startedSha, "HEAD", opts.path))
       : null;
-  const base = { port, since, waiting, rebasedSince };
+  const base = { port, since, waiting, rebasedSince, restarts: readAttempts(slug) };
   const has =
     opts.sessionExists !== undefined
       ? opts.sessionExists

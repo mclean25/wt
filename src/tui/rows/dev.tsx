@@ -51,6 +51,18 @@ export const devRow: RowModule = {
       // "booting" from "wedged" — one worktree sat here for a quarter of
       // an hour with nothing on the board to say which it was.
       const age = dev.since === null ? "" : ` ${ageMsToText(Date.now() - dev.since)}`;
+      // A restart loop renders as one. Without this it is `starting`,
+      // which is exactly what a genuinely slow stack looks like — and a
+      // looping server is a load sink that degrades every other
+      // worktree's test runs while looking merely patient.
+      if (dev.restarts) {
+        return (
+          <text fg={theme.err} wrapMode="none" truncate>
+            {NF.bolt}  restarting after failure (attempt {dev.restarts.count + 1}, last exit{" "}
+            {dev.restarts.lastExit}) — `wt dev logs`
+          </text>
+        );
+      }
       return (
         <text fg={theme.warn} wrapMode="none" truncate>
           {NF.bolt}  starting{dev.port !== null ? ` on ${dev.port}` : ""}…{age}

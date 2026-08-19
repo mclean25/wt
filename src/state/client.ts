@@ -44,6 +44,10 @@ export const CACHE_DB = config.paths.cacheDb;
 // threads regardless of author). A cached PR from v11 has no such field,
 // and a missing count would render as "nothing outstanding" — the exact
 // absence-reads-as-clean failure the field was added to fix.
+// v17: `DevServerStatus` gained `restarts`. A restored v16 entry
+// lacks it, so a row mid-restart-loop would render as merely
+// starting until the next poll — the exact confusion the field
+// exists to end.
 // v16: `DevServerStatus` gained `rebasedSince` — a restored v15 entry
 // has it absent, and absent is the tri-state's "unknown", which the
 // row renders as nothing. Harmless for a poll, but the entry would
@@ -62,7 +66,7 @@ export const CACHE_DB = config.paths.cacheDb;
 // base). Same field, same type, different answer: a restored v12 entry
 // would feed ahead-of-base numbers straight into the destroy guard,
 // which is the bug the change exists to fix.
-const CACHE_BUSTER = "v16";
+const CACHE_BUSTER = "v17";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
