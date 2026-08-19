@@ -213,8 +213,16 @@ const RANK: Record<WorkState, number> = {
   working: 4,
   todo: 7,
   // Will never land: below even todo — future work outranks no work.
-  dropped: 8,
+  dropped: 9,
 };
+
+/**
+ * A `todo` nobody can start yet, because something outside the repo has
+ * to happen first. Below an ordinary `todo` — the human scanning for
+ * what to pick up wants the ones they CAN pick up — and above
+ * `dropped`, because this one is still going to happen.
+ */
+export const GATED_TODO_RANK = 8;
 
 /**
  * A gated `ready` (see `blockedOn`) sorts BELOW everything in flight
@@ -230,7 +238,7 @@ export const BLOCKED_RANK = 5;
 
 export const NO_STATUS_RANK = 6;
 /** Merged/gone rows sink below everything, whatever they last asserted. */
-export const LANDED_RANK = 9;
+export const LANDED_RANK = 10;
 
 export function workStateRank(state: WorkState | null | undefined): number {
   return state ? RANK[state] : NO_STATUS_RANK;
@@ -244,20 +252,44 @@ export function workStateRank(state: WorkState | null | undefined): number {
  */
 export function workRecordRank(record: WorkStatusRecord | null | undefined): number {
   if (!record) return NO_STATUS_RANK;
-  return isBlockedReady(record) ? BLOCKED_RANK : RANK[record.state];
+  if (!isGated(record)) return RANK[record.state];
+  return record.state === "todo" ? GATED_TODO_RANK : BLOCKED_RANK;
 }
 
 /**
- * Whether a record is a `ready` held back by an external gate. One
- * predicate so the dot, the banner, the sort, the CLI and the
- * automation gate can't drift on what "blocked" means — and so a gate
- * hand-written onto a non-`ready` record (state.json is editable) is
- * inert everywhere rather than inert in some places.
+ * States a gate can decorate, and what it means on each. The field
+ * always names an external condition that must clear; the STATE supplies
+ * the verb:
+ *
+ *  - `ready` + gate — finished, but do not MERGE yet.
+ *  - `todo`  + gate — deliberately not STARTED yet.
+ *
+ * The second arrived from the fleet, and it is the more common one: a
+ * manager holding fourteen worktrees on an unlanded credentials file
+ * had nowhere to say so, so the policy lived in section NAMES it had
+ * invented ("Held: prompt written, deliberately not started") plus its
+ * own memory of which gate applied to which row and what would clear
+ * it. A section name tells a fresh reader that something is held; it
+ * cannot say what would unhold it, and a compaction between two ticks
+ * loses the rest.
+ *
+ * Nothing else takes one. The in-flight states (`working`, `review`,
+ * `needs-testing`) describe work in motion, where "blocked" already has
+ * a word — `needs-human` — and `dropped` is not waiting on anything.
  */
-export function isBlockedReady(
-  record: WorkStatusRecord | null | undefined,
-): boolean {
-  return !!record && record.state === "ready" && !!record.blockedOn;
+const GATED_STATES: readonly WorkState[] = ["ready", "todo"];
+
+/**
+ * Whether a record is held back by an external gate. One predicate so
+ * the dot, the banner, the sort, the CLI and the automation gate can't
+ * drift on what "blocked" means — and so a gate hand-written onto a
+ * state that can't carry one (state.json is editable) is inert
+ * everywhere rather than inert in some places.
+ */
+export function isGated(record: WorkStatusRecord | null | undefined): boolean {
+  return (
+    !!record && !!record.blockedOn && GATED_STATES.includes(record.state)
+  );
 }
 
 /**
@@ -277,7 +309,7 @@ export function effectiveWorkState(
     return { state: "needs-human", derived: true, blocked: false };
   }
   if (record) {
-    return { state: record.state, derived: false, blocked: isBlockedReady(record) };
+    return { state: record.state, derived: false, blocked: isGated(record) };
   }
   return null;
 }
@@ -390,7 +422,7 @@ export function parseWorkStatus(raw: unknown): WorkStatusRecord | null {
   }
   if (typeof rec.blockedOn === "string") {
     // Same sanitization as the note — it travels to the same places.
-    // Kept regardless of state; `isBlockedReady` is the one place that
+    // Kept regardless of state; `isGated` is the one place that
     // decides a gate is meaningful, so a hand-edited stray is inert
     // rather than half-honoured.
     const gate = sanitizeWorkNote(rec.blockedOn);

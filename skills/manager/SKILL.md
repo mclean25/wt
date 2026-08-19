@@ -140,6 +140,28 @@ the human asks.
   negative, is not evidence about the fleet.** Empty means it was asked the
   wrong question. When two signals disagree, wt is the one that knows.
 
+## Two things wt does that managers reliably miss
+
+**wt has a rule engine, and it is probably what you want instead of a timer.**
+`[[automations]]` fires actions off row state — PR checks, review state, work
+status, stack events — re-derived every pass, with a once-only ledger keyed on
+head SHA, a settle window, and a per-rule circuit breaker. A real manager set up
+an external cron for exactly the job it does, having never looked for it, and
+then had to tear the cron down three times because the prompt carried standing
+facts that decayed within the hour. The engine has no prompt to go stale. Read
+automations.md before building any recurring loop; reach for a timer only for
+what it cannot express (composed messages, judgement that needs reading,
+fleet-scope actions with no row).
+
+**Write fleet knowledge into wt, not into your context.** Anything you would
+otherwise have to remember across a compaction has a home that expires on its
+own: `wt status <slug> todo --blocked-on "<gate>"` for work deliberately not
+started, `--blocked-on` on `ready` for finished-but-must-not-merge,
+`wt status <slug> --examined "<verdict>"` for "I looked and there was nothing
+to do" (voids itself when the branch moves), `wt edge` for ordering. A section
+named "Held: waiting on X" tells a reader something is held; it cannot say what
+would unhold it, and it does not survive you.
+
 ## Standard plays
 
 **"[re: <slug>] … needs-human" briefing** (from an automation): triage before

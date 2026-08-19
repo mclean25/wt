@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   effectiveWorkState,
-  isBlockedReady,
+  isGated,
   WORK_STATES,
   workRecordRank,
   workStatusSuffix,
@@ -162,24 +162,30 @@ describe("isWorkStatusStale", () => {
 
 const at = "2026-08-18T00:00:00Z";
 
-describe("isBlockedReady", () => {
+describe("isGated", () => {
   test("a ready carrying a gate is blocked", () => {
-    expect(isBlockedReady({ state: "ready", at, blockedOn: "mobile 2.14" })).toBe(true);
+    expect(isGated({ state: "ready", at, blockedOn: "mobile 2.14" })).toBe(true);
   });
 
   test("a plain ready is not", () => {
-    expect(isBlockedReady({ state: "ready", at })).toBe(false);
-    expect(isBlockedReady(null)).toBe(false);
-    expect(isBlockedReady(undefined)).toBe(false);
+    expect(isGated({ state: "ready", at })).toBe(false);
+    expect(isGated(null)).toBe(false);
+    expect(isGated(undefined)).toBe(false);
   });
 
   // state.json is hand-editable and older/newer wt versions write it.
   // One predicate decides what "blocked" means so a stray gate is inert
   // EVERYWHERE rather than honoured by the dot and ignored by the sort.
+  // The verb comes from the state: ready + gate = do not MERGE yet,
+  // todo + gate = do not START yet.
+  test("a todo can be gated too", () => {
+    expect(isGated({ state: "todo", at, blockedOn: "the .env secrets land" })).toBe(true);
+  });
+
   test("a gate on any other state is inert", () => {
     for (const state of WORK_STATES) {
-      if (state === "ready") continue;
-      expect(isBlockedReady({ state, at, blockedOn: "something" })).toBe(false);
+      if (state === "ready" || state === "todo") continue;
+      expect(isGated({ state, at, blockedOn: "something" })).toBe(false);
     }
   });
 });
@@ -202,6 +208,15 @@ describe("workRecordRank", () => {
     const gated = workRecordRank({ state: "ready", at, blockedOn: "x" });
     expect(gated).toBeLessThan(NO_STATUS_RANK);
     expect(gated).toBeLessThan(workStateRank("todo"));
+  });
+
+  // A held todo must not sit among the todos someone could actually
+  // pick up, and must not sink below `dropped` either — it is still
+  // going to happen.
+  test("a gated todo sorts below plain todo and above dropped", () => {
+    const gated = workRecordRank({ state: "todo", at, blockedOn: "secrets land" });
+    expect(gated).toBeGreaterThan(workStateRank("todo"));
+    expect(gated).toBeLessThan(workStateRank("dropped"));
   });
 
   test("agrees with workStateRank for every ungated record", () => {

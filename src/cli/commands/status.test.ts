@@ -194,11 +194,20 @@ describe("parseStatusArgs --blocked-on / --unblock", () => {
     });
   });
 
-  // The gate means "finished but must not merge yet", so it only has a
-  // meaning where merging was otherwise on the table. Anywhere else it
-  // would be a second, weaker way of saying what the state already says.
-  test("is refused on every state but ready", () => {
-    for (const state of ["working", "review", "needs-testing", "needs-human", "todo", "dropped"]) {
+  // The field names an external condition; the STATE supplies the verb.
+  // Only the two states with a transition to gate take one.
+  test("decorates a todo too — deliberately not started", () => {
+    expect(parse("todo|--blocked-on|the .env secrets land")).toMatchObject({
+      kind: "set",
+      state: "todo",
+      blockedOn: "the .env secrets land",
+    });
+  });
+
+  // The in-flight states describe work in motion, where "blocked"
+  // already has a word (needs-human); dropped waits on nothing.
+  test("is refused on the states with no transition to gate", () => {
+    for (const state of ["working", "review", "needs-testing", "needs-human", "dropped"]) {
       const a = parse(`${state}|-m|n|--blocked-on|a release`);
       expect(a.kind).toBe("error");
     }
@@ -246,5 +255,32 @@ describe("parseStatusArgs --blocked-on / --unblock", () => {
 
   test("a plain ready carries no gate", () => {
     expect(parse("ready|--risk|low")).toMatchObject({ kind: "set", blockedOn: null });
+  });
+});
+
+describe("examination verdicts", () => {
+  const parse = (s: string) => parseStatusArgs(s.split("|"));
+
+  test("records an observer's verdict without touching the row's state", () => {
+    const a = parse("some-slug|--examined|unstable is the review job still running");
+    expect(a).toMatchObject({
+      kind: "examined",
+      slugArg: "some-slug",
+      verdict: "unstable is the review job still running",
+    });
+    expect(a).not.toHaveProperty("state");
+  });
+
+  // It is a claim by an observer, not by the owner, so mixing it with
+  // an assertion would blur who said what.
+  test("does not combine with asserting or amending", () => {
+    expect(parse("ready|--risk|low|--examined|x").kind).toBe("error");
+    expect(parse("--examined|x|--unblock").kind).toBe("error");
+    expect(parse("--all|--examined|x").kind).toBe("error");
+    expect(parse("--clear|--examined|x").kind).toBe("error");
+  });
+
+  test("an empty verdict is refused rather than stored blank", () => {
+    expect(parseStatusArgs(["--examined", "   "]).kind).toBe("error");
   });
 });

@@ -6,7 +6,7 @@
  * dot's glyph/color so the banner doubles as its legend; the note
  * gets the pane's full width and word-wraps.
  */
-import { isBlockedReady, isWorkStatusStale, workAge } from "../../../core/work-status.ts";
+import { isGated, isWorkStatusStale, workAge } from "../../../core/work-status.ts";
 import { workStateColor } from "../../badges.ts";
 import type { WorkState } from "../../../core/work-status.ts";
 
@@ -34,7 +34,7 @@ export function WorkStatusBlock({
 }) {
   const record = row.work;
   if (!record) return null;
-  const blocked = isBlockedReady(record);
+  const blocked = isGated(record);
   // The gate owns the banner's color when set: this block is the
   // legend for the list dot, and the two disagreeing is how a note
   // saying BLOCKED lost to a field saying ready.

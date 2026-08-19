@@ -33,6 +33,7 @@ export {
   setSlugBase,
   setSlugDevPort,
   setSlugDevStartedSha,
+  setSlugExamined,
   setSlugGithubIssue,
   setSlugSection,
   setSlugWorkStatus,

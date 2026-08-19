@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 6;
+export const WT_STATE_VERSION = 7;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -80,6 +80,15 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // "unknown", which suppresses the staleness signal until the next
     // start — the right way to be wrong.
     to: 6,
+    up: (raw) => raw,
+  },
+  {
+    // v7: additive — `examined`, the sha-keyed fleet verdict. Nothing to
+    // backfill and nothing that could be: a verdict is a claim someone
+    // made, and inventing one would defeat the point of recording who
+    // concluded what. Absent means "nobody has looked", which is the
+    // honest state of every row on the day this shipped.
+    to: 7,
     up: (raw) => raw,
   },
 ];

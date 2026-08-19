@@ -32,6 +32,7 @@ import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import {
   readWtState,
   recentlyRemovedWorktrees,
+  setSlugExamined,
   setSlugWorkStatus,
 } from "../../core/wtstate.ts";
 import { bold, cyan, dim, green, magenta, red, yellow } from "../colors.ts";
@@ -49,11 +50,18 @@ const VOCAB = `states (unique prefixes + nh/nt work):
                  required: why. No --risk — nothing is being merged. The row
                  sinks out of the queue instead of wearing a fake ready
 
-${bold("--blocked-on \"<gate>\"")} decorates ${bold("ready")} — "finished and verified, but it
-MUST NOT be merged until <gate>". Not a state, because "the work is done"
-and "it can't land yet" are two facts and a state can only carry one.
-The row then renders blocked and sorts out of the merge band; clear it
-with ${bold("wt status --unblock")} when the gate clears (nothing expires it).
+${bold("--blocked-on \"<gate>\"")} names an external condition that must clear.
+The STATE supplies the verb:
+  ${bold("ready")} + gate   finished and verified, but MUST NOT be merged until <gate>
+  ${bold("todo")}  + gate   deliberately NOT STARTED until <gate>
+Not a state of its own, because "the work is done" and "it can't land
+yet" are two facts and a state can only carry one. A gated row renders
+blocked and sorts out of the band it would otherwise lead; clear it with
+${bold("wt status --unblock")} when the gate clears (nothing expires it).
+The todo form exists because "held deliberately" and "nobody has picked
+it up" look identical otherwise — a fleet held 14 worktrees on an
+unlanded credentials file with the policy living only in section names
+and one coordinator's memory.
 the test is whether MERGING makes something worse than not merging:
   gate:     merging causes harm on its own — a revocation landing before
             the mobile build that tolerates it, an upstream change that
@@ -94,6 +102,9 @@ the point — without it "concise" loses to "thorough" every time.
 set:   wt status [<slug>] <state> [-m "note"] [--risk low|medium|high]
                             [--blocked-on "<gate>"]   (ready only)
 show:  wt status [<slug>] [--all [--json]]     clear: wt status --clear [<slug>]
+sweep: wt status [<slug>] --examined "<verdict>"   record that you LOOKED and
+       what you concluded, stamped with HEAD. A skip hint for the next
+       fleet pass, not a status — it voids itself when the branch moves
 amend: wt status [<slug>] --risk <r> [-m "..."]  re-judge risk as testing lands
        wt status [<slug>] --note-only "..."      amend the note alone
        wt status [<slug>] --unblock              the gate cleared
@@ -158,7 +169,15 @@ function guidance(state: WorkState): string[] {
  * — the point is that it must NOT be merged — so the footer has to say
  * something different or it teaches the failure it exists to prevent.
  */
-function blockedGuidance(): string[] {
+function blockedGuidance(state?: WorkState): string[] {
+  if (state === "todo") {
+    return [
+      `recorded as deliberately not started, so it reads as held rather than`,
+      `merely untouched, and sorts below the todos someone COULD pick up.`,
+      `When the gate clears: ${bold("wt status --unblock")}, then start it.`,
+      `Nothing expires a gate — wt cannot see a credentials file arrive.`,
+    ];
+  }
   return [
     `this row now sorts OUT of the merge band and renders as blocked, so nobody`,
     `merges it by reading the state. Keep the PR a draft while the gate stands.`,
@@ -278,6 +297,13 @@ export type StatusArgs =
   | { kind: "error"; message: string; hints?: string[]; showVocab?: boolean }
   | { kind: "all"; json: boolean }
   | { kind: "show"; slugArg: string | null }
+  /**
+   * Record a fleet-level "I looked at this and concluded X", stamped
+   * with the row's current HEAD. Separate from the work status because
+   * it is a claim by an OBSERVER, not by the owner: the row's own
+   * lifecycle state is untouched.
+   */
+  | { kind: "examined"; slugArg: string | null; verdict: string }
   | { kind: "clear"; slugArg: string | null }
   /**
    * Amend an EXISTING record in place — risk, note, or both — keeping
@@ -334,6 +360,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   let append = false;
   let blockedOnRaw: string | null = null;
   let unblock = false;
+  let examinedRaw: string | null = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (
@@ -341,7 +368,8 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       a === "--note" ||
       a === "--risk" ||
       a === "--note-only" ||
-      a === "--blocked-on"
+      a === "--blocked-on" ||
+      a === "--examined"
     ) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("-")) {
@@ -358,6 +386,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       if (a === "--risk") riskRaw = value;
       else if (a === "--note-only") noteOnly = value;
       else if (a === "--blocked-on") blockedOnRaw = value;
+      else if (a === "--examined") examinedRaw = value;
       else note = value;
     } else if (a === "--append") append = true;
     else if (a === "--unblock") unblock = true;
@@ -422,6 +451,16 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       risk: null,
       append,
     };
+  }
+
+  if (examinedRaw !== null) {
+    if (clear || all || note !== null || riskRaw !== null || blockedOn !== null || unblock) {
+      return err("--examined records an observer's verdict on its own — drop the other flags");
+    }
+    const verdict = sanitizeWorkNote(examinedRaw);
+    if (verdict === "") return err("--examined requires the verdict itself");
+    if (positionals.length > 1) return err("too many arguments for --examined");
+    return { kind: "examined", slugArg: positionals[0] ?? null, verdict };
   }
 
   if (append && note === null && noteOnly === null) {
@@ -531,15 +570,17 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       `state fresh replaces the whole record, gate included.`,
     ]);
   }
-  // The gate means "finished, but must not be merged yet", so it only
-  // has a meaning where merging was otherwise on the table. On any
-  // other state it would be a second, weaker way of saying what the
-  // state already says.
-  if (blockedOn !== null && state !== "ready") {
-    return err(`--blocked-on only applies to ready (got ${state})`, [
-      `${bold("--blocked-on")} means "the work is DONE but must not merge yet".`,
-      `Still working on it? that is just ${bold(state)}. Blocked on the human to`,
-      `make progress at all? that is ${bold("needs-human")}.`,
+  // A gate names an external condition that must clear; the STATE
+  // supplies the verb. `ready` + gate = do not MERGE yet; `todo` + gate
+  // = do not START yet. Nothing else takes one: the in-flight states
+  // describe work in motion, where "blocked" already has a word
+  // (`needs-human`), and `dropped` is not waiting on anything.
+  if (blockedOn !== null && state !== "ready" && state !== "todo") {
+    return err(`--blocked-on applies to ready and todo (got ${state})`, [
+      `on ${bold("ready")} it means "done, but must not MERGE yet".`,
+      `on ${bold("todo")} it means "deliberately not STARTED yet".`,
+      `Already working on it? that is just ${bold(state)}. Blocked on the human`,
+      `to make progress at all? that is ${bold("needs-human")}.`,
     ]);
   }
   if (state === "ready" && !risk) {
@@ -592,6 +633,7 @@ function describe(
   // Ahead of the age and the note: this is the one field that changes
   // what the reader may DO with the row.
   if (record.blockedOn) parts.push(red(`blocked on: ${record.blockedOn}`));
+
   const age = workAge(record.at);
   if (age) parts.push(dim(`${age} ago`));
   if (record.sha && headSha && record.sha !== headSha) {
@@ -676,6 +718,14 @@ export async function run(argv: string[]): Promise<number> {
               // `by`/`.work.by` already differ between these surfaces.
               blocked_on: record?.blockedOn ?? null,
               at: record?.at ?? null,
+              // The last fleet-level verdict, and whether it still
+              // applies. `examined_current` is the field a sweep keys
+              // its early-out on: false or null means look properly.
+              examined: state.slugs[w.slug]?.examined ?? null,
+              examined_current:
+                state.slugs[w.slug]?.examined && headSha
+                  ? state.slugs[w.slug]!.examined!.sha === headSha
+                  : null,
               // Agent identity that asserted it (`manager` when triage
               // did); null = the human, or a plain shell.
               by: record?.by ?? null,
@@ -704,7 +754,7 @@ export async function run(argv: string[]): Promise<number> {
       console.log(VOCAB);
       return 1;
     }
-    if (args.kind === "show") {
+  if (args.kind === "show") {
       // Bare `wt status` outside any worktree isn't an error — it's how
       // agents (and the skills' promises) discover the vocabulary. Teach,
       // then say how to address a worktree.
@@ -717,6 +767,37 @@ export async function run(argv: string[]): Promise<number> {
     }
     console.error(red("not inside a worktree — pass a slug, or cd into one"));
     return 1;
+  }
+
+    if (args.kind === "examined") {
+  // Stamped with HEAD, which is the whole mechanism: the verdict is
+  // void the instant the branch moves, so a stale one can never be
+  // mistaken for a current one and nothing has to remember to clear
+  // it.
+  const sha = await revParse("HEAD", target.path);
+  if (!sha) {
+    console.error(red(`could not resolve HEAD for ${target.slug}`));
+    return 2;
+  }
+  const by = agentIdentity();
+  setSlugExamined(target.slug, {
+    sha,
+    verdict: args.verdict,
+    at: new Date().toISOString(),
+    ...(by ? { by } : {}),
+  });
+  console.log(
+    `${green("✓")} ${cyan(target.slug)} ${dim("examined at")} ${sha.slice(0, 7)}${
+      by ? dim(` by ${by}`) : ""
+    }`,
+  );
+  console.log(`  ${dim("verdict:")} ${args.verdict}`);
+  hint([
+    `this is a SKIP HINT for the next fleet sweep, not a status —`,
+    `${bold(target.slug)}'s own lifecycle state is untouched. It voids itself`,
+    `the moment the branch moves, so nothing has to clear it.`,
+  ]);
+  return 0;
   }
 
   if (args.kind === "clear") {
@@ -744,13 +825,20 @@ export async function run(argv: string[]): Promise<number> {
       ]);
       return 2;
     }
-    if (args.blockedOn !== undefined && args.blockedOn !== null && prev.state !== "ready") {
+    if (
+      args.blockedOn !== undefined &&
+      args.blockedOn !== null &&
+      prev.state !== "ready" &&
+      prev.state !== "todo"
+    ) {
       console.error(
-        red(`--blocked-on only applies to ready (${target.slug} is ${prev.state})`),
+        red(
+          `--blocked-on applies to ready and todo (${target.slug} is ${prev.state})`,
+        ),
       );
       hint([
-        `a gate means "finished, but must not merge yet" — assert the finish first:`,
-        `${bold("wt status ready --risk <r> --blocked-on \"<gate>\"")}`,
+        `a gate says an EXTERNAL condition must clear first — before merging`,
+        `(${bold("ready")}) or before starting (${bold("todo")}). Assert that state first.`,
       ]);
       return 2;
     }
@@ -803,7 +891,7 @@ export async function run(argv: string[]): Promise<number> {
     reportReplacedNote(replaced, args.note !== null);
     noteBudgetHint(prev.state, next.note ?? null);
     if (args.blockedOn === null) hint(unblockedGuidance());
-    else if (args.blockedOn) hint(blockedGuidance());
+    else if (args.blockedOn) hint(blockedGuidance(prev.state));
     return 0;
   }
 
@@ -855,6 +943,6 @@ export async function run(argv: string[]): Promise<number> {
   if (record.note) console.log(`  ${dim("note:")} ${record.note}`);
   reportReplacedNote(replaced, args.note !== null);
   noteBudgetHint(args.state, record.note ?? null);
-  hint(record.blockedOn ? blockedGuidance() : guidance(args.state));
+  hint(record.blockedOn ? blockedGuidance(args.state) : guidance(args.state));
   return 0;
 }

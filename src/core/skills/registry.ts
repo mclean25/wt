@@ -80,6 +80,12 @@ export const UNITS: readonly Unit[] = [
   },
   {
     kind: "skill",
+    name: "shepherd",
+    summary: "drive the whole fleet toward mergeable on a loop, stopping short of the merge",
+    vars: [],
+  },
+  {
+    kind: "skill",
     name: "start",
     summary: "kick off work inside a prepared worktree (brief → research → build → hand off)",
     vars: [PROJECT_NOTES],

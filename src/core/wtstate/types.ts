@@ -111,6 +111,35 @@ export type WtSlugState = {
    */
   githubIssue?: number;
   /**
+   * "Someone with fleet context looked at this row and concluded X."
+   *
+   * The half of coordination nothing recorded. A shepherd sweeping the
+   * fleet every few minutes spends its attention re-deriving verdicts
+   * it already reached: one ran the same two-call review query against
+   * the same two pull requests on four consecutive passes and got the
+   * same empty answer every time, because the rows LOOKED interesting
+   * (a review job reports failed while its review is still running) and
+   * nothing recorded that the question had already been asked and
+   * answered.
+   *
+   * Write-once and self-expiring, which is the only reason it is safe
+   * to store: the verdict is stamped with the sha it was reached at, so
+   * it evaporates the moment the branch moves — and a branch moving is
+   * exactly when a verdict stops being trustworthy. It is a SKIP HINT,
+   * never authority: absent, stale or unrecognised all mean "look
+   * properly", so the failure direction is wasted work rather than a
+   * missed row.
+   */
+  examined?: {
+    /** HEAD when the conclusion was reached. Any other HEAD voids it. */
+    sha: string;
+    /** What was concluded, in the examiner's words. */
+    verdict: string;
+    /** `WT_AGENT` of whoever looked (`manager`, a slug), when stamped. */
+    by?: string;
+    at: string;
+  };
+  /**
    * Agent-asserted lifecycle status (`wt status` / the `u` picker).
    * See `core/work-status.ts` for the vocabulary and semantics.
    * Absent = never asserted (renders as no dot, sorts neutral).

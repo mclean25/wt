@@ -5,7 +5,7 @@ import { config } from "../config.ts";
 import { withFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
 import { parseMergeEdge, type MergeEdge } from "../merge-edges.ts";
-import { parseWorkStatus } from "../work-status.ts";
+import { parseWorkStatus, sanitizeWorkNote } from "../work-status.ts";
 import { migrateRawWtState, rawWtStateVersion, WT_STATE_VERSION } from "./migrations.ts";
 import { GROUP_INBOX, STACK_SECTION_PREFIX } from "./types.ts";
 import type { RemovedWorktree, WtSlugState, WtState } from "./types.ts";
@@ -185,6 +185,25 @@ export function parseWtState(raw: unknown): WtState {
       }
       if (typeof rec.devStartedSha === "string" && rec.devStartedSha.trim() !== "") {
         slugs[k]!.devStartedSha = rec.devStartedSha.trim();
+      }
+      const ex = rec.examined;
+      if (
+        ex &&
+        typeof ex === "object" &&
+        typeof (ex as { sha?: unknown }).sha === "string" &&
+        typeof (ex as { verdict?: unknown }).verdict === "string" &&
+        typeof (ex as { at?: unknown }).at === "string"
+      ) {
+        const e = ex as { sha: string; verdict: string; at: string; by?: unknown };
+        const verdict = sanitizeWorkNote(e.verdict);
+        if (e.sha.trim() !== "" && verdict !== "") {
+          slugs[k]!.examined = {
+            sha: e.sha.trim(),
+            verdict,
+            at: e.at,
+            ...(typeof e.by === "string" && e.by.trim() !== "" ? { by: e.by.trim() } : {}),
+          };
+        }
       }
       if (
         typeof rec.githubIssue === "number" &&

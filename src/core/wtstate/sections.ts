@@ -160,6 +160,29 @@ export function setSlugDevStartedSha(slug: string, sha: string | null): void {
   });
 }
 
+/**
+ * Record a fleet-level examination verdict against the sha it was
+ * reached at. Overwrites any previous one — a verdict describes the
+ * examiner's CURRENT conclusion, so keeping a history would just be a
+ * log nobody reads. `null` clears it.
+ */
+export function setSlugExamined(
+  slug: string,
+  examined: { sha: string; verdict: string; by?: string; at: string } | null,
+): void {
+  withWtStateLock(() => {
+    const state = readWtState();
+    const prev = state.slugs[slug];
+    if (!prev && examined === null) return;
+    const next: WtState = { ...state, slugs: { ...state.slugs } };
+    const entry: WtSlugState = { section: null, order: 0, ...prev };
+    if (examined === null) delete entry.examined;
+    else entry.examined = examined;
+    next.slugs[slug] = entry;
+    writeWtState(next);
+  });
+}
+
 export function setSlugBase(
   slug: string,
   base: { branch: string; sha?: string } | null,

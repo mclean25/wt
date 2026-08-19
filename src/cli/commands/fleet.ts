@@ -24,7 +24,7 @@ import type {
 import { listWorktrees } from "../../core/worktree.ts";
 import {
   workAge,
-  isBlockedReady,
+  isGated,
   workRecordRank,
   type WorkStatusRecord,
 } from "../../core/work-status.ts";
@@ -154,7 +154,7 @@ function workCell(row: FleetRow): string {
   if (!row.work) return dim("—");
   // A gated ready is not a ready. The manager reads this column to
   // build a merge order, and it read `ready` off a gated branch twice.
-  if (isBlockedReady(row.work)) return yellow(`blocked/${row.work.state}`);
+  if (isGated(row.work)) return yellow(`blocked/${row.work.state}`);
   const color =
     row.work.state === "needs-human"
       ? red
