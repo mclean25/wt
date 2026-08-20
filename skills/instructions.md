@@ -224,6 +224,20 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   urgency across the fleet is never yours to assert: you do not hold
   cross-worktree facts first-hand. State what you know about your own
   branch, and let the manager carry what spans branches.
+- **Inside a session, call tools by NAME, never by absolute path.** wt
+  puts a shim directory first on your PATH to strip an inspector
+  variable that the session itself needs but that breaks any
+  Bun-compiled CLI inheriting it. Some widely-used CLIs are compiled
+  that way. Call one by its absolute path and you skip the shim: it
+  dies on startup, exits non-zero, and prints **nothing at all** — not
+  even for `--help` — which reads as a broken install or a bad PATH
+  rather than an environment collision, so the search starts in the
+  wrong place. This is worth naming because the usual advice pushes you
+  into it: shell aliases genuinely do not exist inside `.sh` files, so
+  scripts are told to call the full path, and that is right for an
+  alias and wrong for a shimmed binary. If a tool exits silently with
+  no output, check whether you invoked it by path before you suspect
+  the install.
 - **Report papercuts sideways.** Anything that cost you time and will cost
   the next agent the same — misleading command output, a wrong or stale
   doc, an undocumented trap — goes to the same channel:
