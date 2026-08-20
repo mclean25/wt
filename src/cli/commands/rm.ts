@@ -13,6 +13,8 @@ import {
   pushCounts,
   worktreeIsDirty,
 } from "../../core/worktree.ts";
+import { owesPostMergeVerification } from "../../core/work-status.ts";
+import { readWtState } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, dim, green, red, yellow } from "../colors.ts";
 import { confirm, isInteractive, pickIndex } from "../prompt.ts";
@@ -149,6 +151,31 @@ export async function run(argv: string[]): Promise<number> {
     const logPath = latestLogFor(target.slug);
     if (logPath) console.log(dim(`  log: ${logPath}`));
     return 1;
+  }
+
+  // Independent of the dirty/unpushed guards below and checked first,
+  // because it is the one hazard that is not about the working tree:
+  // a landed branch owing a deployed-environment check
+  // (`--verify-after-merge`) loses the obligation along with the
+  // checkout, and nothing afterwards records that the check never
+  // happened. `--force` still overrides — a per-worktree decision, same
+  // as every other guard here.
+  if (!parsed.force) {
+    const owed = readWtState().slugs[target.slug]?.work;
+    if (owesPostMergeVerification(owed, true)) {
+      console.log(yellow(`${target.slug}: post-merge verification still owed`));
+      console.log(`  ${owed!.verifyAfterMerge}`);
+      console.log(
+        dim(
+          `  run it, then: wt status ${target.slug} verified -m "<what you checked>"`,
+        ),
+      );
+      if (parsed.yes || !isInteractive()) {
+        console.error(red("Refusing to remove without --force."));
+        return 1;
+      }
+      if (!(await confirm("Remove anyway?", false))) return 0;
+    }
   }
 
   let force = parsed.force;

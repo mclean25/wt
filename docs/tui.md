@@ -113,7 +113,7 @@ Inside these four special sessions, `F10`/`F11`/`F12` all return to wt — slots
 | `L` | rename the current section |
 | `J` / `K` | move the row (or its whole stack / folded group) down / up — under status sort, within the same status rank only |
 | `b` | base picker — record which branch this worktree forked from (`b b` confirms; record-only, never rebases) |
-| `u` | work-status picker (`u u` confirms; `t`/`w`/`r`/`n`/`h`/`y`/`d` set the state directly, `x` clears; `m` picks the highlighted state and collects an optional note in the footer — Enter on an empty note is a plain pick, Esc cancels the whole pick) — same record as [`wt status`](cli.md#wt-status-slug-state--m-note---risk-r), minus the CLI's risk/note rules (you're the human it escalates to) |
+| `u` | work-status picker (`u u` confirms; `t`/`w`/`r`/`n`/`h`/`y`/`v`/`d` set the state directly, `x` clears; `m` picks the highlighted state and collects an optional note in the footer — Enter on an empty note is a plain pick, Esc cancels the whole pick) — same record as [`wt status`](cli.md#wt-status-slug-state--m-note---risk-r), minus the CLI's risk/note rules (you're the human it escalates to) |
 | `R` | rebase/restack the selected row — a stack member restacks the whole stack, a standalone worktree rebases onto its recorded base or trunk; same engine as [`wt restack`](stacked-prs.md) (fetch + reconcile + squash-safe replay). On a conflict bail it hands off automatically: `/restack` is sent to the failing worktree's session (cold-starting it if needed) to resolve and finish. Locks per chain, so different stacks/worktrees restack concurrently; members show the sync glyph while it runs (warn-tinted when mid-rebase). Refuses on an already-landed row — that's `c`'s job |
 
 ### Automations

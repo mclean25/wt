@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import {
   effectiveWorkState,
   isGated,
+  owesPostMergeVerification,
+  verificationOverdue,
   WORK_STATES,
   workRecordRank,
   workStatusSuffix,
@@ -272,5 +274,100 @@ describe("parseWorkStatus with a gate", () => {
   test("a blank gate is no gate", () => {
     expect(parseWorkStatus({ state: "ready", at, blockedOn: "   " })?.blockedOn).toBeUndefined();
     expect(parseWorkStatus({ state: "ready", at, blockedOn: 7 })?.blockedOn).toBeUndefined();
+  });
+});
+
+
+describe("verifyAfterMerge", () => {
+  const at = new Date().toISOString();
+  const owed = { state: "ready" as const, at, verifyAfterMerge: "connect gcal" };
+
+  // The whole point of the field: it is inert until the branch lands,
+  // so it can never drag a mergeable row out of the merge band. That
+  // is the one behaviour separating it from `blockedOn`, and the one
+  // that would make it a second `blockedOn` if it broke.
+  test("is dormant before the branch lands", () => {
+    expect(owesPostMergeVerification(owed, false)).toBe(false);
+    expect(workRecordRank(owed)).toBe(workStateRank("ready"));
+    expect(effectiveWorkState(owed, "idle", false)).toEqual({
+      state: "ready",
+      derived: false,
+      blocked: false,
+    });
+  });
+
+  test("comes due on landing and renders as needs-testing", () => {
+    expect(owesPostMergeVerification(owed, true)).toBe(true);
+    expect(effectiveWorkState(owed, "idle", true)).toEqual({
+      state: "needs-testing",
+      derived: true,
+      blocked: false,
+    });
+  });
+
+  test("verified and dropped are its two exits", () => {
+    for (const state of ["verified", "dropped"] as const) {
+      expect(owesPostMergeVerification({ ...owed, state }, true)).toBe(false);
+    }
+  });
+
+  // A session waiting on a prompt still wins the dot: it is live
+  // information about right now, where this is a standing obligation.
+  test("an asking session still outranks it", () => {
+    expect(effectiveWorkState(owed, "asking", true)?.state).toBe("needs-human");
+  });
+
+  test("the suffix carries it ahead of the note", () => {
+    const s = workStatusSuffix({ ...owed, note: "the note" });
+    expect(s.indexOf("verify after merge")).toBeLessThan(s.indexOf("the note"));
+  });
+
+  test("it survives a parse round-trip and is sanitized", () => {
+    const parsed = parseWorkStatus({
+      state: "ready",
+      at,
+      verifyAfterMerge: "connect \u001b[31mgcal\u001b[0m",
+    });
+    expect(parsed?.verifyAfterMerge).toBe("connect gcal");
+  });
+
+  // Kept regardless of state, because unlike a gate this one
+  // legitimately outlives the assertion that created it — one place
+  // (`owesPostMergeVerification`) decides whether it is still owed.
+  test("parse keeps it on any state", () => {
+    expect(
+      parseWorkStatus({ state: "working", at, verifyAfterMerge: "x" })?.verifyAfterMerge,
+    ).toBe("x");
+  });
+});
+
+describe("verificationOverdue", () => {
+  const now = Date.parse("2026-08-20T12:00:00Z");
+  const owed = (at: string) => ({ state: "ready" as const, at, verifyAfterMerge: "x" });
+
+  test("not overdue inside the window", () => {
+    expect(verificationOverdue(owed("2026-08-19T12:00:00Z"), true, now, 2)).toBe(false);
+  });
+
+  test("overdue at the boundary and past it", () => {
+    expect(verificationOverdue(owed("2026-08-18T12:00:00Z"), true, now, 2)).toBe(true);
+    expect(verificationOverdue(owed("2026-08-01T12:00:00Z"), true, now, 2)).toBe(true);
+  });
+
+  // An obligation nothing can act on yet cannot be late.
+  test("an unlanded branch is never overdue", () => {
+    expect(verificationOverdue(owed("2020-01-01T00:00:00Z"), false, now, 2)).toBe(false);
+  });
+
+  // The one place unknown fails LOUD rather than quiet: a record whose
+  // age cannot be established must not be the one that goes silent.
+  test("an unparsable timestamp reads as overdue", () => {
+    expect(verificationOverdue(owed("not a date"), true, now, 2)).toBe(true);
+  });
+
+  test("nothing owed is never overdue", () => {
+    expect(
+      verificationOverdue({ state: "ready", at: new Date(now).toISOString() }, true, now),
+    ).toBe(false);
   });
 });

@@ -16,13 +16,23 @@ export function isRemoteCleanCandidate(
   return entry.status === StatusKind.Merged || entry.status === StatusKind.Gone;
 }
 
-/** What a fleet cleanup would destroy from a remote checkout. */
+/**
+ * What a fleet cleanup would destroy from a remote checkout. Mirrors
+ * the local `destroyHazards` list, including its odd one out: an
+ * outstanding post-merge verification is not lost DATA, but sweeping
+ * the checkout takes the obligation with it and nothing afterwards
+ * records that the check never ran. Every candidate here has landed by
+ * construction, which is exactly when the check comes due.
+ */
 export function remoteCleanHazardLabel(
   entry: RemoteWorktreeSummary,
 ): string | null {
   if (entry.dirty) return "uncommitted changes";
   if (entry.unpushed > 0) {
     return `${entry.unpushed} unpushed commit${entry.unpushed === 1 ? "" : "s"}`;
+  }
+  if (entry.workVerifyAfterMerge && entry.workState !== "verified") {
+    return `post-merge verification still owed: ${entry.workVerifyAfterMerge}`;
   }
   return null;
 }

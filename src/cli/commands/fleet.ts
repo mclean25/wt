@@ -11,7 +11,7 @@
  * "computing" and never retried here — the caller re-runs after a few
  * seconds if it cares (the query itself is what triggers the compute).
  */
-import { revParse } from "../../core/git.ts";
+import { branchIsGone, branchIsMerged, revParse } from "../../core/git.ts";
 import { fetchGithub, hasGh, pickPrForWorktree, repoSlug } from "../../core/github.ts";
 import { readRegistry } from "../../core/harness/claude/registry.ts";
 import { listSessions } from "../../core/tmux.ts";
@@ -25,7 +25,9 @@ import { listWorktrees } from "../../core/worktree.ts";
 import {
   workAge,
   isGated,
+  owesPostMergeVerification,
   workRecordRank,
+  workStateRank,
   type WorkStatusRecord,
 } from "../../core/work-status.ts";
 import {
@@ -146,6 +148,16 @@ type FleetRow = {
   /** Manual TUI section (human intent — e.g. merge batching); null = inbox. */
   section: string | null;
   work: (WorkStatusRecord & { stale: boolean }) | null;
+  /**
+   * Has the branch landed? The same three signals the TUI's
+   * `rowHasLanded` accepts, and worth the per-row git calls precisely
+   * because this command is the manager's primary sense: a squash
+   * merge whose PR record this fetch missed would otherwise read as a
+   * plain `ready` on a row that has already merged and still owes a
+   * deployed-environment check — the exact silent case the field
+   * exists to catch.
+   */
+  landed: boolean;
   session: SessionInfo;
   pr: PullRequest | undefined;
 };
@@ -155,6 +167,12 @@ function workCell(row: FleetRow): string {
   // A gated ready is not a ready. The manager reads this column to
   // build a merge order, and it read `ready` off a gated branch twice.
   if (isGated(row.work)) return yellow(`blocked/${row.work.state}`);
+  // Landed and still owing a deployed-environment check. Rendered
+  // ahead of the state for the same reason as the gate: the state
+  // alone says `ready`, and `ready` on a merged row reads as finished.
+  if (row.work.verifyAfterMerge && row.landed) {
+    return yellow(`unverified/${row.work.state}`);
+  }
   const color =
     row.work.state === "needs-human"
       ? red
@@ -247,10 +265,18 @@ export async function run(argv: string[]): Promise<number> {
   // Independent realities in parallel: the batched GitHub round trip,
   // tmux session list, and one HEAD resolve per worktree (for status
   // staleness, same signal `wt status --all` uses).
-  const [{ prs, note }, sessions, heads] = await Promise.all([
+  const [{ prs, note }, sessions, heads, landedFlags] = await Promise.all([
     fetchFleetPrs(branches),
     listSessions(),
     Promise.all(wts.map((w) => revParse("HEAD", w.path))),
+    Promise.all(
+      wts.map(async (w) =>
+        w.branch
+          ? (await branchIsMerged({ slug: w.slug, branch: w.branch, path: w.path })) ||
+            (await branchIsGone(w.branch, w.path))
+          : false,
+      ),
+    ),
   ]);
   const registry = readRegistry();
   const liveClaudeSlugs = new Set(
@@ -266,17 +292,23 @@ export async function run(argv: string[]): Promise<number> {
       work: record
         ? { ...record, stale: !!(record.sha && headSha && record.sha !== headSha) }
         : null,
+      landed: (landedFlags[i] ?? false) || pickPrForWorktree(w, prs)?.state === "MERGED",
       session: sessionInfoFor(w, liveClaudeSlugs, registry),
       pr: pickPrForWorktree(w, prs),
     };
   });
   // Urgency order, derived at render time (same ranking the TUI sorts
   // by): ready first, then needs-human, todo last.
-  rows.sort(
-    (a, b) =>
-      workRecordRank(a.work) - workRecordRank(b.work) ||
-      a.wt.slug.localeCompare(b.wt.slug),
-  );
+  // A landed branch still owing a deployed-environment check ranks as
+  // what it now is — needs-testing — rather than as the `ready` it
+  // still asserts. Same derivation the TUI's `rowWorkRank` makes, and
+  // for the same reason: this is the moment the check became runnable,
+  // so it is the wrong moment for the row to go quiet.
+  const rank = (r: FleetRow): number =>
+    owesPostMergeVerification(r.work, r.landed)
+      ? workStateRank("needs-testing")
+      : workRecordRank(r.work);
+  rows.sort((a, b) => rank(a) - rank(b) || a.wt.slug.localeCompare(b.wt.slug));
 
   if (json) {
     const payload = [
@@ -302,6 +334,12 @@ export async function run(argv: string[]): Promise<number> {
               // primary sense, and reading `ready` off a gated branch
               // here is the exact failure the field was added for.
               blockedOn: r.work.blockedOn ?? null,
+              // A check that can only run once this is DEPLOYED. Read
+              // it the OPPOSITE way from `blockedOn`: this row should
+              // be merged, and on a merged row a non-null value means
+              // the worktree is being held back deliberately and the
+              // check has not happened yet.
+              verifyAfterMerge: r.work.verifyAfterMerge ?? null,
               at: r.work.at,
               // Agent identity that asserted it — the worktree's own
               // slug normally, `manager` when triage did, null for the

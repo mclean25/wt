@@ -60,6 +60,7 @@ import {
 } from "../core/types.ts";
 import {
   effectiveWorkState,
+  verificationOverdue,
   type WorkState,
   type WorkStatusRecord,
 } from "../core/work-status.ts";
@@ -88,7 +89,9 @@ export function statusBadge(s: Status): Badge {
  * hue per state, chosen so a scan down the dot column answers "what
  * needs me": red = blocked on the human, yellow = verification
  * pending, green = merge it, magenta = in review, cyan = in flight,
- * dim = queued.
+ * dim = queued or finished. Red is reused for an overdue post-merge
+ * verification (`workStatusBadge`), which is the same message —
+ * something is waiting on a person — arriving by another route.
  */
 export function workStateColor(state: WorkState): string {
   switch (state) {
@@ -103,6 +106,7 @@ export function workStateColor(state: WorkState): string {
     case "working":
       return theme.accent;
     case "todo":
+    case "verified":
     case "dropped":
       return theme.fgDim;
   }
@@ -113,6 +117,10 @@ export function workStateColor(state: WorkState): string {
  *  gone marker, but in the status-dot slot and always dim). */
 export function workStateGlyph(state: WorkState): string {
   if (state === "dropped") return NF.slash;
+  // Landed and confirmed: the merge glyph in the dot slot, dim. It is
+  // the one terminal state that succeeded, and reusing the shape the
+  // row already wears for "merged" says so without minting a glyph.
+  if (state === "verified") return NF.merge;
   return state === "todo" ? NF.dotOutline : NF.dot;
 }
 
@@ -131,9 +139,21 @@ export function workStatusBadge(
   record: WorkStatusRecord | null | undefined,
   sessionState?: DerivedState,
   stale = false,
+  landed = false,
 ): Badge {
-  const eff = effectiveWorkState(record, sessionState);
+  const eff = effectiveWorkState(record, sessionState, landed);
   if (!eff) return { glyph: NF.dotOutline, fg: theme.fgDim };
+  // A post-merge verification that has aged out goes RED, not warn.
+  // The whole hazard this field addresses is a row that reads as
+  // covered while nothing happens, and warn-yellow is what every other
+  // pending-verification row already wears — indistinguishable at a
+  // glance from one asserted twenty minutes ago. Placed above the gate
+  // branch: an overdue verification is louder than a gate, and the two
+  // cannot co-occur anyway (a gate says do not merge, this one needs
+  // the merge to have happened).
+  if (verificationOverdue(record, landed)) {
+    return { glyph: NF.dot, fg: theme.err };
+  }
   // A gated `ready` must not wear ready's green dot. The dot is what a
   // scan of the board reads, and green sitting in the merge band is the
   // whole reason a branch gated on a mobile release got queued for

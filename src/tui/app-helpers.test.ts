@@ -34,6 +34,7 @@ function makeRow(overrides: {
   status?: WorktreeRow["status"];
   pr?: WorktreeRow["pr"];
   archived?: boolean;
+  work?: WorktreeRow["work"];
 }): WorktreeRow {
   const {
     dirty = [],
@@ -43,6 +44,7 @@ function makeRow(overrides: {
     status,
     pr,
     archived = false,
+    work,
   } = overrides;
   return {
     wt: {
@@ -79,6 +81,7 @@ function makeRow(overrides: {
     brief: null,
     section: null,
     sectionIsStack: false,
+    work: work ?? null,
     ...(pr ? { pr } : {}),
   } as unknown as WorktreeRow;
 }
@@ -249,5 +252,49 @@ describe("cursorSuccessor", () => {
 
   test("null when nothing survives", () => {
     expect(cursorSuccessor([wtItem("a", null)], 0, new Set(["a"]))).toBeNull();
+  });
+});
+
+describe("an unverified landing is a destroy hazard", () => {
+  const merged = { kind: StatusKind.Merged, label: "merged" } as WorktreeRow["status"];
+  const owed = {
+    state: "ready",
+    at: new Date().toISOString(),
+    verifyAfterMerge: "connect gcal on staging",
+  } as WorktreeRow["work"];
+
+  // The row a sweep would take, on the day the check became runnable.
+  // Removing it deletes the obligation along with the checkout, and
+  // nothing afterwards records that the check never happened.
+  test("a merged row owing a check is kept back", () => {
+    const row = makeRow({ status: merged, work: owed });
+    expect(isCleanCandidate(row)).toBe(true);
+    expect(destroyHazard(row)).toEqual({
+      kind: "unverified",
+      steps: "connect gcal on staging",
+    });
+    expect(destroyHazardLabel(destroyHazard(row)!)).toBe(
+      "post-merge verification still owed: connect gcal on staging",
+    );
+  });
+
+  // It must never hold back a row before the merge — that would make
+  // it a second `--blocked-on`, which is the failure it exists to avoid.
+  test("the same record on an unmerged row is not a hazard", () => {
+    expect(destroyHazard(makeRow({ work: owed }))).toBeNull();
+  });
+
+  test("verified discharges it", () => {
+    const row = makeRow({
+      status: merged,
+      work: { ...owed!, state: "verified" } as WorktreeRow["work"],
+    });
+    expect(destroyHazard(row)).toBeNull();
+  });
+
+  // Real data loss outranks an obligation when a confirm has one line.
+  test("it sorts below actual loss", () => {
+    const row = makeRow({ status: merged, work: owed, dirty: ["a.ts"] });
+    expect(destroyHazards(row).map((h) => h.kind)).toEqual(["dirty", "unverified"]);
   });
 });

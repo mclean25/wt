@@ -6,7 +6,14 @@
  * dot's glyph/color so the banner doubles as its legend; the note
  * gets the pane's full width and word-wraps.
  */
-import { isGated, isWorkStatusStale, workAge } from "../../../core/work-status.ts";
+import {
+  isGated,
+  isWorkStatusStale,
+  owesPostMergeVerification,
+  verificationOverdue,
+  workAge,
+} from "../../../core/work-status.ts";
+import { rowHasLanded } from "../../app-helpers.ts";
 import { workStateColor } from "../../badges.ts";
 import type { WorkState } from "../../../core/work-status.ts";
 
@@ -35,10 +42,19 @@ export function WorkStatusBlock({
   const record = row.work;
   if (!record) return null;
   const blocked = isGated(record);
+  // Same relationship as the gate, at the other end of the lifecycle:
+  // the row asserts `ready` and the branch has landed, so the state
+  // alone reads as finished while a check is still owed.
+  const owed = owesPostMergeVerification(record, rowHasLanded(row));
+  const overdue = owed && verificationOverdue(record, true);
   // The gate owns the banner's color when set: this block is the
   // legend for the list dot, and the two disagreeing is how a note
   // saying BLOCKED lost to a field saying ready.
-  const color = blocked ? theme.warn : workStateColor(record.state);
+  const color = overdue
+    ? theme.err
+    : blocked || owed
+      ? theme.warn
+      : workStateColor(record.state);
   const age = workAge(record.at);
   // Time-based staleness: commits after the assertion mean the status
   // describes an older tree. (The CLI's `stale` flag uses the recorded
@@ -49,7 +65,11 @@ export function WorkStatusBlock({
       <text wrapMode="none" truncate>
         <span fg={color}>{blocked ? "⊘" : bannerGlyph(record.state)}{" "}</span>
         <span fg={color} attributes={1}>
-          {blocked ? `blocked · ${record.state}` : record.state}
+          {blocked
+            ? `blocked · ${record.state}`
+            : owed
+              ? `unverified · ${record.state}`
+              : record.state}
         </span>
         {record.risk ? (
           <span>
@@ -60,6 +80,23 @@ export function WorkStatusBlock({
         {age ? <span fg={theme.fgDim}>{` · ${age} ago`}</span> : null}
         {stale ? <span fg={theme.warn}>{" · commits since"}</span> : null}
       </text>
+      {record.verifyAfterMerge ? (
+        // Its own line for the gate's reason, and above the note for
+        // the gate's reason. Dim before the branch lands (nothing can
+        // act on it yet, and a loud line that means "later" is how a
+        // loud line stops meaning anything); the banner's color once
+        // it comes due.
+        <box flexDirection="column">
+          {wrapText(
+            `${overdue ? "OVERDUE — " : ""}verify after merge: ${record.verifyAfterMerge}`,
+            Math.max(1, contentWidth),
+          ).map((line, i) => (
+            <text key={i} fg={owed ? color : theme.fgDim} wrapMode="none">
+              {line}
+            </text>
+          ))}
+        </box>
+      ) : null}
       {record.blockedOn ? (
         // Its own line, above the note and never truncated into it: the
         // gate is the one fact that changes what the reader may DO with

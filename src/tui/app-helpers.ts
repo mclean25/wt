@@ -14,6 +14,7 @@ import { lockLabel, lockStatus } from "../core/locks.ts";
 import { canEnterSessionDuringLock } from "../core/session-readiness.ts";
 import { expectedStage } from "../core/stage-safety.ts";
 import { StatusKind } from "../core/types.ts";
+import { owesPostMergeVerification } from "../core/work-status.ts";
 import type { SyncState } from "../core/worktree.ts";
 
 import { GROUP_INBOX, type WorktreeRow } from "./hooks/useWorktreeRows.ts";
@@ -332,10 +333,24 @@ export function isCleanCandidate(row: WorktreeRow): boolean {
   // sweep them even if their branch has merged since.
   if (row.archived) return false;
   if (row.status.kind === StatusKind.Busy) return false;
+  return rowHasLanded(row);
+}
+
+/**
+ * Has this branch finished upstream? The three signals `isCleanCandidate`
+ * accepts, without its archived/busy policy — because "the branch
+ * landed" and "wt may sweep this row" are different questions and two
+ * callers need the first one alone.
+ *
+ * The dot and the rank use it to decide whether a post-merge
+ * verification has come due (`owesPostMergeVerification`), and an
+ * archived row still owes one: archiving opts out of the SWEEP, which
+ * is the only thing it was ever about.
+ */
+export function rowHasLanded(row: WorktreeRow): boolean {
   if (row.status.kind === StatusKind.Merged) return true;
   if (row.status.kind === StatusKind.Gone) return true;
-  if (row.pr?.state === "MERGED") return true;
-  return false;
+  return row.pr?.state === "MERGED";
 }
 
 /**
@@ -360,7 +375,18 @@ export function isCleanCandidate(row: WorktreeRow): boolean {
 export type DestroyHazard =
   | { kind: "unknown" }
   | { kind: "dirty"; count: number }
-  | { kind: "unpushed"; count: number };
+  | { kind: "unpushed"; count: number }
+  /**
+   * The odd one out, and deliberately here rather than in a guard of
+   * its own: nothing in the checkout is unrecoverable, but the
+   * OBLIGATION is. A landed branch owing a deployed-environment check
+   * (`--verify-after-merge`) is exactly the row a sweep would take,
+   * and taking it deletes the context the check needs along with any
+   * trace that it was owed — after which nothing anywhere says the
+   * verification never happened. Listing it here is what makes every
+   * destroy path inherit the guard, since sweeps never force.
+   */
+  | { kind: "unverified"; steps: string };
 
 /**
  * Commits that exist ONLY in this checkout. `sync.remote` counts against
@@ -394,6 +420,11 @@ export function destroyHazards(row: WorktreeRow): DestroyHazard[] {
   if (dirty > 0) out.push({ kind: "dirty", count: dirty });
   const unpushed = localOnlyCommits(row, sync);
   if (unpushed > 0) out.push({ kind: "unpushed", count: unpushed });
+  // Last: real data loss outranks an outstanding obligation when a
+  // confirm has room for one line.
+  if (owesPostMergeVerification(row.work, rowHasLanded(row))) {
+    out.push({ kind: "unverified", steps: row.work!.verifyAfterMerge! });
+  }
   return out;
 }
 
@@ -410,6 +441,8 @@ export function destroyHazardLabel(hazard: DestroyHazard): string {
       return `${hazard.count} uncommitted change${hazard.count === 1 ? "" : "s"}`;
     case "unpushed":
       return `${hazard.count} unpushed commit${hazard.count === 1 ? "" : "s"}`;
+    case "unverified":
+      return `post-merge verification still owed: ${hazard.steps}`;
   }
 }
 

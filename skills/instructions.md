@@ -172,6 +172,34 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   Nothing expires a gate; when it clears, `wt status --unblock` (keeps
   the state, risk, note and timestamp). Leaving one set parks a
   mergeable branch, which is the safe way to be wrong.
+  **Some claims can only be proved by the DEPLOYED environment, and
+  that has a field too**: `wt status ready --risk <r>
+  --verify-after-merge "<exact steps>"`. The test for asserting it is
+  one question — is there a claim in this branch that only the
+  deployed environment can prove? An OAuth consent screen against the
+  real provider, a live third-party callback, an SDK with no local
+  double. If yes, name the STEPS in the field, not in the note: the
+  agent that runs them is not you, and may be reading this after a
+  compaction.
+  It is the OPPOSITE of `--blocked-on` and must not be confused with
+  it. A gate holds the row out of the merge band; this changes nothing
+  before the merge, because merging is not what it gates — merging is
+  the PREREQUISITE. What it does is survive the merge: the row stops
+  sinking, comes back as `needs-testing`, and the worktree is kept
+  back from the clean sweep instead of being taken with every scrap of
+  context in it. That is the whole job, because the check that never
+  happens is the one whose worktree was already deleted.
+  Record it the moment you know, on any state — it is dormant until
+  the branch lands, and it is carried across later assertions rather
+  than dropped by them.
+  **If you are holding a row that has landed and owes one, it is
+  yours** — `needs-testing` means YOU verify, exactly as everywhere
+  else. Confirm the deploy carrying the change actually landed BEFORE
+  believing a negative result: an environment still running the old
+  code cannot produce the positive, so it is not evidence of the
+  negative. Then `wt status verified -m "<what you checked, and
+  where>"`, which is the only thing that discharges it and finally
+  releases the checkout.
   If the branch will NEVER land (superseded, duplicate, deliberately not
   pursued), the honest terminal state is `wt status dropped -m "<why>"` —
   never `ready` with a "nothing to merge" note (ready puts the row at the

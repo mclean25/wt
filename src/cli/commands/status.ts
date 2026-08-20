@@ -46,6 +46,10 @@ const VOCAB = `states (unique prefixes + nh/nt work):
                  (dev env + browser), it is not a request for a human
   ${bold("needs-human")}    blocked on the human; ${bold("-m")} required: say exactly what you need
   ${bold("ready")}          tested & safe to merge; requires ${bold("--risk low|medium|high")}
+  ${bold("verified")}       merged AND confirmed in the deployed environment; the only
+                 honest exit from ${bold("--verify-after-merge")}, and what finally makes
+                 the checkout safe to sweep. ${bold("-m")} required: what you checked
+                 and where. No --risk — the merge already happened
   ${bold("dropped")}        will never land (superseded / duplicate / not pursued); ${bold("-m")}
                  required: why. No --risk — nothing is being merged. The row
                  sinks out of the queue instead of wearing a fake ready
@@ -74,6 +78,29 @@ the test is whether MERGING makes something worse than not merging:
             merge time. Gate on it and the field comes to mean "read the
             note", which is what it replaced
 
+${bold('--verify-after-merge "<steps>"')} records a check that CANNOT run until the
+change is deployed — an OAuth consent screen against the real provider, a
+live webhook callback, an SDK with no local double. Ask yourself: is there
+a claim in this branch that only the deployed environment can prove? If so,
+name the exact STEPS here, not in the note — the agent that runs them is
+not you, and may be reading this after a compaction.
+
+It is the opposite of ${bold("--blocked-on")} and the two must not be confused:
+  ${bold("--blocked-on")}          holds the row OUT of the merge band. Do not merge.
+  ${bold("--verify-after-merge")}  changes nothing before the merge. Merging is the
+                        PREREQUISITE, and the row sorts and renders exactly
+                        as ${bold("ready")} until it lands.
+Once the branch lands the row stops sinking, renders ${bold("needs-testing")}, and
+becomes a destroy hazard — so the ${bold("c")} sweep keeps the worktree instead of
+taking the checkout and every scrap of context with it. That is the actual
+job: the check that never happens is the one whose worktree was cleaned.
+Carried across later assertions (it describes the BRANCH, not one claim);
+${bold("verified")} discharges it and ${bold("dropped")} voids it.
+
+${bold("DEPLOYS LAG MERGES.")} Before believing a NEGATIVE result, confirm the deploy
+carrying this change actually landed. An instrument that cannot yet produce
+the positive is not evidence of the negative.
+
 ${bold("risk")} = how confident you are AFTER testing — NOT how big or scary the
 change is. The human can already see the diff on the PR; your confidence
 is the one thing they can't. Judge it by what you verified, not by what
@@ -100,7 +127,8 @@ You write one note; the human reads all of them at once. The budget is
 the point — without it "concise" loses to "thorough" every time.
 
 set:   wt status [<slug>] <state> [-m "note"] [--risk low|medium|high]
-                            [--blocked-on "<gate>"]   (ready only)
+                            [--blocked-on "<gate>"]   (ready/todo only)
+                            [--verify-after-merge "<steps>"]
 show:  wt status [<slug>] [--all [--json]]     clear: wt status --clear [<slug>]
 sweep: wt status [<slug>] --examined "<verdict>"   record that you LOOKED and
        what you concluded, stamped with HEAD. A skip hint for the next
@@ -108,6 +136,8 @@ sweep: wt status [<slug>] --examined "<verdict>"   record that you LOOKED and
 amend: wt status [<slug>] --risk <r> [-m "..."]  re-judge risk as testing lands
        wt status [<slug>] --note-only "..."      amend the note alone
        wt status [<slug>] --unblock              the gate cleared
+       wt status [<slug>] --verify-after-merge "..."   record the obligation
+                                                 late, without re-asserting
        (all keep the state and timestamp — no need to restate anything)
 
 ${bold("-m REPLACES the note")}; add ${bold("--append")} to add to it instead. A replaced note
@@ -155,12 +185,37 @@ function guidance(state: WorkState): string[] {
         `leave the PR ready for the human to merge — do NOT merge it yourself.`,
         `make sure the PR body reflects the final state of the change.`,
       ];
+    case "verified":
+      return [
+        `confirmed in the deployed environment — nothing is owed on this branch now.`,
+        `The row sinks out of every queue and the worktree becomes a ${bold("wt clean")}`,
+        `candidate, so anything still worth keeping should be out of the checkout.`,
+      ];
     case "dropped":
       return [
         `close (don't merge) any open PR for this branch and say why in a PR comment.`,
         `Leave the worktree itself alone — destroying it is the human's call.`,
       ];
   }
+}
+
+/**
+ * Appended whenever an assertion carries or inherits a post-merge
+ * verification. Every other footer here describes the next step for
+ * the agent asserting it; this one describes a step for whoever is
+ * holding the row AFTER the merge, which is usually a different
+ * session with none of this context. The deploy-lag line is the part
+ * that stops a false negative being reported as a bug.
+ */
+function verifyGuidance(steps: string): string[] {
+  return [
+    `${bold("after this merges")} the row stops sinking and renders ${bold("needs-testing")}, and the`,
+    `worktree is kept back from ${bold("wt clean")} until someone asserts ${bold("verified")}.`,
+    `Owed: ${steps}`,
+    `First confirm the deploy carrying this change actually landed — a negative`,
+    `result from an environment still running the old code is not a result.`,
+    `When it passes: ${bold('wt status verified -m "<what you checked, and where>"')}`,
+  ];
 }
 
 /**
@@ -280,6 +335,7 @@ function stateColor(state: WorkState): (s: string) => string {
     case "working":
       return cyan;
     case "todo":
+    case "verified":
     case "dropped":
       return dim;
   }
@@ -325,6 +381,15 @@ export type StatusArgs =
        * require restating the risk.
        */
       blockedOn?: string | null;
+      /**
+       * Absent = leave it alone. There is deliberately no clear form:
+       * an obligation stops being owed because it was DISCHARGED
+       * (`verified`) or because the branch will never land
+       * (`dropped`), and both of those are states. A flag that quietly
+       * dropped it would be the one way to make the row go silent
+       * without anyone claiming anything.
+       */
+      verifyAfterMerge?: string;
     }
   | {
       kind: "set";
@@ -334,6 +399,7 @@ export type StatusArgs =
       risk: WorkRisk | null;
       append: boolean;
       blockedOn: string | null;
+      verifyAfterMerge: string | null;
     };
 
 function err(message: string, hints?: string[], showVocab = false): StatusArgs {
@@ -359,6 +425,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   let json = false;
   let append = false;
   let blockedOnRaw: string | null = null;
+  let verifyRaw: string | null = null;
   let unblock = false;
   let examinedRaw: string | null = null;
   for (let i = 0; i < argv.length; i++) {
@@ -369,6 +436,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       a === "--risk" ||
       a === "--note-only" ||
       a === "--blocked-on" ||
+      a === "--verify-after-merge" ||
       a === "--examined"
     ) {
       const value = argv[i + 1];
@@ -386,6 +454,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       if (a === "--risk") riskRaw = value;
       else if (a === "--note-only") noteOnly = value;
       else if (a === "--blocked-on") blockedOnRaw = value;
+      else if (a === "--verify-after-merge") verifyRaw = value;
       else if (a === "--examined") examinedRaw = value;
       else note = value;
     } else if (a === "--append") append = true;
@@ -420,6 +489,20 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     return err("--blocked-on sets a gate and --unblock removes one — pick one");
   }
 
+  let verifyAfterMerge: string | null = null;
+  if (verifyRaw !== null) {
+    verifyAfterMerge = sanitizeWorkNote(verifyRaw);
+    if (verifyAfterMerge === "") {
+      return err(
+        "--verify-after-merge requires the steps themselves — what has to be checked once this is deployed?",
+        [
+          `e.g. --verify-after-merge "connect Google Calendar, cancel a meeting,`,
+          `confirm the connection survives". The agent that runs them is not you.`,
+        ],
+      );
+    }
+  }
+
   let risk: WorkRisk | null = null;
   if (riskRaw !== null) {
     risk = resolveRisk(riskRaw);
@@ -433,8 +516,16 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   // untouched, so it conflicts with every state-changing flag.
   if (noteOnly !== null) {
     if (clear || all) return err("--note-only doesn't combine with --all/--clear");
-    if (note !== null || riskRaw !== null || blockedOn !== null || unblock) {
-      return err("--note-only amends only the note — drop -m/--risk/--blocked-on/--unblock");
+    if (
+      note !== null ||
+      riskRaw !== null ||
+      blockedOn !== null ||
+      verifyAfterMerge !== null ||
+      unblock
+    ) {
+      return err(
+        "--note-only amends only the note — drop -m/--risk/--blocked-on/--verify-after-merge/--unblock",
+      );
     }
     if (positionals.length > 1) return err("too many arguments for --note-only");
     if (positionals[0] && resolveWorkState(positionals[0])) {
@@ -454,7 +545,15 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   }
 
   if (examinedRaw !== null) {
-    if (clear || all || note !== null || riskRaw !== null || blockedOn !== null || unblock) {
+    if (
+      clear ||
+      all ||
+      note !== null ||
+      riskRaw !== null ||
+      blockedOn !== null ||
+      verifyAfterMerge !== null ||
+      unblock
+    ) {
       return err("--examined records an observer's verdict on its own — drop the other flags");
     }
     const verdict = sanitizeWorkNote(examinedRaw);
@@ -473,6 +572,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       riskRaw !== null ||
       note !== null ||
       blockedOn !== null ||
+      verifyAfterMerge !== null ||
       unblock ||
       positionals.length > 0
     ) {
@@ -483,9 +583,9 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   if (json) return err("--json requires --all");
 
   if (clear) {
-    if (riskRaw !== null || note !== null || blockedOn !== null || unblock) {
+    if (riskRaw !== null || note !== null || blockedOn !== null || verifyAfterMerge !== null || unblock) {
       return err(
-        "--clear doesn't take -m/--risk/--blocked-on/--unblock — it just drops the record",
+        "--clear doesn't take -m/--risk/--blocked-on/--verify-after-merge/--unblock — it just drops the record",
       );
     }
     if (positionals.length > 1) return err("too many arguments for --clear");
@@ -546,7 +646,16 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
         risk,
         append,
         blockedOn: unblock ? null : blockedOn,
+        ...(verifyAfterMerge !== null ? { verifyAfterMerge } : {}),
       };
+    }
+    // An obligation is usually learned late — while writing the PR
+    // body, or when a reviewer points out the thing only the real
+    // provider can prove. Amending is how it gets recorded without
+    // faking a fresh assertion (which would reset the note and
+    // re-narrate an unchanged state to every watching TUI).
+    if (verifyAfterMerge !== null) {
+      return { kind: "amend", slugArg, note, risk, append, verifyAfterMerge };
     }
     if (risk) return { kind: "amend", slugArg, note, risk, append };
     if (note !== null) {
@@ -583,6 +692,27 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       `to make progress at all? that is ${bold("needs-human")}.`,
     ]);
   }
+  // Dormant until the branch lands, so unlike a gate it is safe on any
+  // state — recording it the moment it is known beats remembering to
+  // attach it at `ready`. The two exclusions are contradictions, not
+  // restrictions: `verified` says the check already happened, and
+  // `dropped` says nothing will ever be deployed to check.
+  if (verifyAfterMerge !== null && (state === "verified" || state === "dropped")) {
+    return err(
+      `--verify-after-merge doesn't apply to ${state} — ${
+        state === "verified"
+          ? "that state IS the discharge"
+          : "a branch that will never land has nothing deployed to check"
+      }`,
+    );
+  }
+  if (state === "verified" && !note) {
+    return err("verified requires -m: what did you check, and where?", [
+      `e.g. -m "reconnected gcal on staging, cancelled a meeting, connection survived".`,
+      `This is the record that the post-merge check actually happened — a bare`,
+      `${bold("verified")} is the same unevidenced claim the obligation existed to replace.`,
+    ]);
+  }
   if (state === "ready" && !risk) {
     return err("ready requires --risk low|medium|high — how confident are you in it?", [
       "risk is your residual uncertainty AFTER testing, not the size of the diff:",
@@ -616,7 +746,7 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     ]);
   }
 
-  return { kind: "set", slugArg, state, note, risk, append, blockedOn };
+  return { kind: "set", slugArg, state, note, risk, append, blockedOn, verifyAfterMerge };
 }
 
 /**
@@ -667,6 +797,12 @@ function describe(
   // without it.
   if (record.by && record.by !== slug) parts.push(dim(`via ${record.by}`));
   let out = parts.join("  ");
+  // Above the note deliberately: this is the one line that says
+  // somebody still owes an action, and a reader who stops at the note
+  // is the reader this whole field exists for.
+  if (record.verifyAfterMerge) {
+    out += `\n  ${yellow("verify after merge:")} ${record.verifyAfterMerge}`;
+  }
   if (record.note) out += `\n  ${dim("note:")} ${record.note}`;
   return out;
 }
@@ -742,6 +878,13 @@ export async function run(argv: string[]): Promise<number> {
               // `.work.blockedOn` on `wt fleet --json`, matching how
               // `by`/`.work.by` already differ between these surfaces.
               blocked_on: record?.blockedOn ?? null,
+              // A check that can only run once this is DEPLOYED, still
+              // outstanding. Non-null on a merged row means the
+              // worktree is deliberately being kept alive and the
+              // verification has not happened — the opposite reading
+              // from `blocked_on`, which means do not merge. Flat here,
+              // against `.work.verifyAfterMerge` on `wt fleet --json`.
+              verify_after_merge: record?.verifyAfterMerge ?? null,
               at: record?.at ?? null,
               // The last fleet-level verdict, and whether it still
               // applies. `examined_current` is the field a sweep keys
@@ -883,6 +1026,22 @@ export async function run(argv: string[]): Promise<number> {
       console.error(red(`${target.slug} has no gate to clear`));
       return 2;
     }
+    if (
+      args.verifyAfterMerge !== undefined &&
+      (prev.state === "verified" || prev.state === "dropped")
+    ) {
+      console.error(
+        red(
+          `--verify-after-merge doesn't apply to ${prev.state} (${target.slug} is ${prev.state})`,
+        ),
+      );
+      hint([
+        prev.state === "verified"
+          ? `that state IS the discharge — assert a live state first if this branch owes something new.`
+          : `a branch that will never land has nothing deployed to check.`,
+      ]);
+      return 2;
+    }
     const { note, replaced } = resolveNote(
       prev.note ?? null,
       args.note,
@@ -907,11 +1066,15 @@ export async function run(argv: string[]): Promise<number> {
       if (args.blockedOn === null) delete next.blockedOn;
       else next.blockedOn = args.blockedOn;
     }
+    if (args.verifyAfterMerge !== undefined) {
+      next.verifyAfterMerge = args.verifyAfterMerge;
+    }
     setSlugWorkStatus(target.slug, next);
     const changed = [
       args.risk ? "risk" : null,
       args.note ? "note" : null,
       args.blockedOn === undefined ? null : args.blockedOn === null ? "gate cleared" : "gate",
+      args.verifyAfterMerge === undefined ? null : "post-merge verification",
     ].filter(Boolean);
     const what = changed.join(" + ") || "note";
     createLogger(target.slug).info(
@@ -924,11 +1087,15 @@ export async function run(argv: string[]): Promise<number> {
       }  ${dim(`${what} amended (state + timestamp kept)`)}`,
     );
     if (next.blockedOn) console.log(`  ${red("blocked on:")} ${next.blockedOn}`);
+    if (next.verifyAfterMerge) {
+      console.log(`  ${yellow("verify after merge:")} ${next.verifyAfterMerge}`);
+    }
     if (next.note) console.log(`  ${dim("note:")} ${next.note}`);
     reportReplacedNote(replaced, args.note !== null);
     noteBudgetHint(prev.state, next.note ?? null);
     if (args.blockedOn === null) hint(unblockedGuidance());
     else if (args.blockedOn) hint(blockedGuidance(prev.state));
+    else if (args.verifyAfterMerge) hint(verifyGuidance(args.verifyAfterMerge));
     return 0;
   }
 
@@ -946,7 +1113,8 @@ export async function run(argv: string[]): Promise<number> {
   // notes are scoped to the assertion they explain, and carrying a
   // "blocked on dev login" note forward into `ready` would be worse than
   // losing it. What changes is that losing it is no longer SILENT.
-  const prevNote = state.slugs[target.slug]?.work?.note ?? null;
+  const prevRecord = state.slugs[target.slug]?.work;
+  const prevNote = prevRecord?.note ?? null;
   const { note, replaced } = resolveNote(prevNote, args.note, args.append, {
     keepWhenAbsent: false,
   });
@@ -957,6 +1125,24 @@ export async function run(argv: string[]): Promise<number> {
   if (note) record.note = note;
   if (args.risk) record.risk = args.risk;
   if (args.blockedOn) record.blockedOn = args.blockedOn;
+  // The one field a fresh assertion CARRIES rather than drops. Note,
+  // risk and gate are claims made by this assertion, so replacing the
+  // assertion replaces them. A post-merge verification is a standing
+  // obligation about the BRANCH: it outlives the state that recorded
+  // it, and dropping it on the next `wt status working` would silently
+  // release the merged worktree back to the clean sweep — a failure
+  // with no output at all, on the exact path this exists to close.
+  // The two states that end it end it here too.
+  const carried =
+    args.verifyAfterMerge ??
+    (args.state === "verified" || args.state === "dropped"
+      ? null
+      : (prevRecord?.verifyAfterMerge ?? null));
+  if (carried) record.verifyAfterMerge = carried;
+  const discharged =
+    args.state === "verified" && !!prevRecord?.verifyAfterMerge
+      ? prevRecord.verifyAfterMerge
+      : null;
   // Who is claiming this. Usually the worktree's own agent; the manager
   // playbook also has it assert on a worker's behalf after triage, and
   // that difference is what keeps a `status.*` automation from briefing
@@ -977,9 +1163,22 @@ export async function run(argv: string[]): Promise<number> {
     `${green("✓")} ${cyan(target.slug)} → ${color(args.state)}${args.risk ? `  ${dim("risk:")} ${color(args.risk)}` : ""}`,
   );
   if (record.blockedOn) console.log(`  ${red("blocked on:")} ${record.blockedOn}`);
+  if (record.verifyAfterMerge) {
+    console.log(`  ${yellow("verify after merge:")} ${record.verifyAfterMerge}`);
+  }
+  if (discharged) {
+    console.log(`  ${green("verified:")} ${dim(discharged)}`);
+  }
   if (record.note) console.log(`  ${dim("note:")} ${record.note}`);
   reportReplacedNote(replaced, args.note !== null);
   noteBudgetHint(args.state, record.note ?? null);
-  hint(record.blockedOn ? blockedGuidance(args.state) : guidance(args.state));
+  if (record.blockedOn) hint(blockedGuidance(args.state));
+  else {
+    hint(guidance(args.state));
+    // After the state's own footer, not instead of it: `ready` still
+    // needs to say "don't merge it yourself", and this adds what
+    // happens once someone does.
+    if (record.verifyAfterMerge) hint(verifyGuidance(record.verifyAfterMerge));
+  }
   return 0;
 }

@@ -92,6 +92,7 @@ function rule(overrides: Partial<AutomationDef>): AutomationDef {
     run: "fix-ci",
     busy: "queue",
     cooldownMinutes: null,
+    afterDays: 2,
     settleSeconds: 0,
     ...overrides,
   };
@@ -101,6 +102,7 @@ const FRESH: AutomationEvalCtx = {
   githubFresh: true,
   isPausedSlug: () => false,
   audienceOf: () => null,
+  nowMs: Date.parse("2026-08-20T12:00:00Z"),
 };
 
 describe("pr.checks.failed", () => {
@@ -256,6 +258,7 @@ describe("status.* (work-status triggers)", () => {
     githubFresh: false,
     isPausedSlug: () => false,
     audienceOf: () => null,
+    nowMs: Date.parse("2026-08-20T12:00:00Z"),
   };
 
   test("fires on the matching asserted state, keyed by assertion time", () => {
@@ -546,5 +549,72 @@ describe("wt.merged → builtin:delete-branch", () => {
     expect(evaluateAutomations([r], [row], FRESH)[0]!.fireKeys).toEqual([
       "rm-branch:merged:a:101",
     ]);
+  });
+});
+
+describe("status.verification_overdue", () => {
+  const r = rule({ id: "nag", on: "status.verification_overdue", afterDays: 2 });
+  const NOW = Date.parse("2026-08-20T12:00:00Z");
+  const ctx: AutomationEvalCtx = { ...FRESH, nowMs: NOW };
+  const owed = (at: string) =>
+    ({ state: "ready", at, verifyAfterMerge: "connect gcal" }) as WorktreeRow["work"];
+  const merged = { kind: StatusKind.Merged, label: "merged" } as WorktreeRow["status"];
+
+  test("fires on a landed row whose check has aged out", () => {
+    const row = makeRow("a", { status: merged, work: owed("2026-08-17T12:00:00Z") });
+    const fires = evaluateAutomations([r], [row], ctx);
+    expect(fires).toHaveLength(1);
+    expect(fires[0]!.detail).toContain("connect gcal");
+  });
+
+  // The one repeating fire key in the engine: the instance is "this
+  // obligation, today", so two passes on the same day share a key and
+  // the ledger fires once — but tomorrow is a new instance.
+  test("its key is stable within a day and moves the next", () => {
+    const row = makeRow("a", { status: merged, work: owed("2026-08-01T12:00:00Z") });
+    const morning = evaluateAutomations([r], [row], { ...ctx, nowMs: NOW })[0]!.fireKeys[0];
+    const evening = evaluateAutomations([r], [row], {
+      ...ctx,
+      nowMs: NOW + 6 * 3600_000,
+    })[0]!.fireKeys[0];
+    const tomorrow = evaluateAutomations([r], [row], {
+      ...ctx,
+      nowMs: NOW + 24 * 3600_000,
+    })[0]!.fireKeys[0];
+    expect(evening).toBe(morning!);
+    expect(tomorrow).not.toBe(morning!);
+  });
+
+  test("silent inside the window", () => {
+    const row = makeRow("a", { status: merged, work: owed("2026-08-19T12:00:00Z") });
+    expect(evaluateAutomations([r], [row], ctx)).toHaveLength(0);
+  });
+
+  // The property that keeps this from becoming a second --blocked-on.
+  test("never fires before the branch lands", () => {
+    const row = makeRow("a", { work: owed("2026-01-01T12:00:00Z") });
+    expect(evaluateAutomations([r], [row], ctx)).toHaveLength(0);
+  });
+
+  test("verified ends it", () => {
+    const row = makeRow("a", {
+      status: merged,
+      work: { ...owed("2026-08-01T12:00:00Z")!, state: "verified" } as WorktreeRow["work"],
+    });
+    expect(evaluateAutomations([r], [row], ctx)).toHaveLength(0);
+  });
+
+  // `rowHasLanded` also accepts a MERGED pr, and that leg is
+  // github-derived: a boot-stale cache must not nag about a merge it
+  // has not confirmed this session.
+  test("the PR-merged leg waits for fresh github data", () => {
+    const row = makeRow("a", {
+      work: owed("2026-08-01T12:00:00Z"),
+      pr: makePr({ state: "MERGED" }),
+    });
+    expect(
+      evaluateAutomations([r], [row], { ...ctx, githubFresh: false }),
+    ).toHaveLength(0);
+    expect(evaluateAutomations([r], [row], ctx)).toHaveLength(1);
   });
 });

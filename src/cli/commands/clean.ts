@@ -9,6 +9,8 @@ import {
   worktreeIsDirty,
   worktreeStatus,
 } from "../../core/worktree.ts";
+import { owesPostMergeVerification } from "../../core/work-status.ts";
+import { readWtState } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import { confirm, isInteractive } from "../prompt.ts";
@@ -100,11 +102,23 @@ export async function run(argv: string[]): Promise<number> {
   // Unpushed commits are deliberately not a hazard here: every candidate
   // is merged-or-landed, and a squash-merge leaves pre-squash commits
   // locally that read as unpushed without being unsaved work.
+  // Same filter, second reason. A branch carrying
+  // `--verify-after-merge` owes a check that could only run once it
+  // deployed, and this command's whole population is branches that
+  // just did. Sweeping one deletes the checkout AND the only record
+  // that the check was ever owed, after which nothing anywhere says it
+  // never happened — so the row is kept until someone asserts
+  // `verified`. This is the reason the field exists.
+  const slugStates = readWtState().slugs;
+  const unverified: Worktree[] = [];
   for (let i = candidates.length - 1; i >= 0; i--) {
     const [w] = candidates[i]!;
     if (await worktreeIsDirty(w.path)) {
       candidates.splice(i, 1);
       dirtyRows.unshift(w);
+    } else if (owesPostMergeVerification(slugStates[w.slug]?.work, true)) {
+      candidates.splice(i, 1);
+      unverified.unshift(w);
     }
   }
 
@@ -123,6 +137,17 @@ export async function run(argv: string[]): Promise<number> {
     for (const w of dirtyRows) {
       console.log(
         `  ${cyan(w.slug)}  ${dim(`commit them, or discard with: wt rm ${w.slug} --force`)}`,
+      );
+    }
+  }
+
+  if (unverified.length) {
+    console.log(dim("Skipping (post-merge verification still owed):"));
+    for (const w of unverified) {
+      const steps = slugStates[w.slug]?.work?.verifyAfterMerge ?? "";
+      console.log(`  ${cyan(w.slug)}  ${steps}`);
+      console.log(
+        `    ${dim(`run it, then: wt status ${w.slug} verified -m "<what you checked>"`)}`,
       );
     }
   }

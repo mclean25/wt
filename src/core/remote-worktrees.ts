@@ -58,6 +58,14 @@ export type RemoteWorktreeSummary = {
    * it in one change rather than one at a time.
    */
   workBlockedOn: string | null;
+  /**
+   * A deployed-environment check the branch owes once it lands
+   * (`wt status --verify-after-merge`). Reads the opposite way from
+   * the gate: the row SHOULD merge, and once it has, a non-null value
+   * means the check has not happened and the remote checkout is being
+   * kept alive for it. Null on an older remote wt, same tolerance.
+   */
+  workVerifyAfterMerge: string | null;
   workAt: string | null;
 };
 
@@ -191,6 +199,11 @@ export function parseRemoteWorktrees(
       workBlockedOn:
         typeof row.work_blocked_on === "string" && row.work_blocked_on.trim() !== ""
           ? sanitizeWorkNote(row.work_blocked_on)
+          : null,
+      workVerifyAfterMerge:
+        typeof row.work_verify_after_merge === "string" &&
+        row.work_verify_after_merge.trim() !== ""
+          ? sanitizeWorkNote(row.work_verify_after_merge)
           : null,
       workAt: typeof row.work_at === "string" ? row.work_at : null,
     };

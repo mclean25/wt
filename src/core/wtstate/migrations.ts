@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 8;
+export const WT_STATE_VERSION = 9;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -98,6 +98,16 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // was added to check. Absent reads as void, so old verdicts simply
     // stop skipping rows until they are re-examined.
     to: 8,
+    up: (raw) => raw,
+  },
+  {
+    // v9: additive — `verifyAfterMerge` on a work-status record (a
+    // check that can only run once the change is deployed). Nothing to
+    // backfill: no existing record can say whether its branch owed one,
+    // and inventing an obligation would hold merged worktrees on the
+    // board for a verification nobody asked for. Absent means "nothing
+    // owed", which is the honest state of every row that predates it.
+    to: 9,
     up: (raw) => raw,
   },
 ];

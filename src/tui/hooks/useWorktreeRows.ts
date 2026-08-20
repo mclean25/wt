@@ -21,7 +21,9 @@ import type { LockMeta, MergeQueueEntry, PullRequest, Status, Worktree } from ".
 import { StatusKind } from "../../core/types.ts";
 import {
   LANDED_RANK,
+  owesPostMergeVerification,
   workRecordRank,
+  workStateRank,
   type WorkStatusRecord,
 } from "../../core/work-status.ts";
 import type { SyncState } from "../../core/worktree.ts";
@@ -421,6 +423,16 @@ function resolveTitle(
  */
 export function rowWorkRank(row: WorktreeRow): number {
   if (row.status.kind === StatusKind.Merged || row.status.kind === StatusKind.Gone) {
+    // Except when the landing is what MAKES it actionable. A branch
+    // carrying `--verify-after-merge` owes a check that could not run
+    // until it deployed, so sinking it to the bottom on the day it
+    // becomes runnable is the exact failure the field exists to
+    // prevent — the row reads as covered, the sweep takes the
+    // checkout, and nobody ever finds out the check never happened.
+    // It ranks as what it now is: needs-testing.
+    if (owesPostMergeVerification(row.work, true)) {
+      return workStateRank("needs-testing");
+    }
     return LANDED_RANK;
   }
   return workRecordRank(row.work);

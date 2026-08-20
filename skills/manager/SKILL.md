@@ -207,6 +207,16 @@ does not brief you again — wt records who asserted a status and won't hand you
 back your own write. A second briefing for the same slug is therefore always
 real news: the worker re-escalated.
 
+**Merged but unverified** (`unverified/<state>` in `wt fleet`, or a non-null
+`.work.verifyAfterMerge` on a landed row): the branch owed a check only the
+deployed environment can prove, and landing is what made it runnable. The
+worktree is deliberately being kept alive for it, so this is not a cleanup
+candidate and not a row to tidy away. It belongs to the OWNING session —
+nudge it, and let it assert `verified` when the check passes. These go quiet
+by construction (the row reads as merged and done), which is why wt turns
+the dot red past `after_days`; a red one that nobody has touched is worth a
+line in the digest, not a second reminder to the same session.
+
 **Stalled worktree** (working/review status but idle session, or stale status
 with commits since): nudge the worker with a concrete question — "status says
 review since yesterday; what's blocking ready?" — not a generic "continue".

@@ -281,6 +281,7 @@ const WORK_STATUS_LABELS: Record<WorkState, string> = {
   review: "review — findings being addressed",
   working: "working — implementation in flight",
   todo: "todo — queued, not started",
+  verified: "verified — merged and confirmed where it deployed; safe to sweep",
   dropped: "dropped — will never land (superseded / duplicate)",
 };
 const WORK_STATUS_ORDER: readonly WorkState[] = [

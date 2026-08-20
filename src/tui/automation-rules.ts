@@ -27,7 +27,13 @@ import { githubIssueNumberFromSlug } from "../core/issue-tracker.ts";
 import { MANAGER_SLUG } from "../core/manager.ts";
 import { pluralize } from "../core/text.ts";
 import { REVIEW_BOT_NONE, StatusKind } from "../core/types.ts";
-import { isGated, workStatusSuffix, type WorkState } from "../core/work-status.ts";
+import {
+  isGated,
+  verificationOverdue,
+  workStatusSuffix,
+  type WorkState,
+} from "../core/work-status.ts";
+import { dayBucketFromMs } from "./day-headers.ts";
 
 import { isCleanCandidate } from "./app-helpers.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
@@ -113,6 +119,14 @@ export type AutomationEvalCtx = {
    * `[[actions]]` def's `target` by the hook, which owns the config.
    */
   audienceOf: (rule: AutomationDef) => FireAudience;
+  /**
+   * Wall clock for this pass. Passed in rather than read here so the
+   * module stays a pure function of its inputs — `status.verification_overdue`
+   * is the first condition whose truth depends on the time of day
+   * (its fire key carries the local day), and a rule engine that
+   * cannot be evaluated twice with the same answer cannot be tested.
+   */
+  nowMs: number;
 };
 
 /**
@@ -357,6 +371,35 @@ function evaluateRowTrigger(
         row,
         `${rule.id}:work:${slug}:${work.at}`,
         `${want}${workStatusSuffix(work)}`,
+      );
+    }
+    case "status.verification_overdue": {
+      // Local (wtstate + the row's own merged/gone signals), so no
+      // freshness gate — but `rowHasLanded` also accepts a MERGED PR,
+      // and that leg is github-derived. Gate only that one: a
+      // boot-stale cache would otherwise nag about a branch whose
+      // merge it has not confirmed this session.
+      const landed =
+        row.status.kind === StatusKind.Merged ||
+        row.status.kind === StatusKind.Gone ||
+        (ctx.githubFresh && row.pr?.state === "MERGED");
+      if (!verificationOverdue(row.work, landed, ctx.nowMs, rule.afterDays)) {
+        return null;
+      }
+      // The one fire key here that is not once-per-instance. The
+      // instance is "this obligation, today": it re-fires each local
+      // day until someone asserts `verified`, because the failure mode
+      // is a check nobody runs and a single reminder that scrolled off
+      // is indistinguishable from no reminder at all. It ends the
+      // moment the obligation is discharged — nothing the recipient
+      // writes can silence it, which is what separates this from the
+      // needs-human echo the `by` stamp exists to stop.
+      const day = dayBucketFromMs(ctx.nowMs);
+      return singleRowFire(
+        rule,
+        row,
+        `${rule.id}:unverified:${slug}:${day}`,
+        `merged, verification still owed — ${row.work!.verifyAfterMerge!}`,
       );
     }
     case "stack.parent_merged":

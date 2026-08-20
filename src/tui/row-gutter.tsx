@@ -10,7 +10,8 @@
  * the old git status badge, so folding a section silently changed what
  * every row's first glyph meant.
  */
-import { isWorkStatusStale } from "../core/work-status.ts";
+import { isWorkStatusStale, owesPostMergeVerification } from "../core/work-status.ts";
+import { rowHasLanded } from "./app-helpers.ts";
 import {
   STACK_CONNECTOR,
   spineLayout,
@@ -56,9 +57,17 @@ export function StatusMarker({
   row: WorktreeRow;
   sessionState: DerivedState | undefined;
 }) {
-  const base = statusKeepsMarker(row.status.kind)
-    ? statusBadge(row.status)
-    : workStatusBadge(row.work, sessionState, rowWorkStale(row));
+  // A landed row normally wears the git merge/gone glyph, which is the
+  // most important thing about it — unless something is still owed, in
+  // which case it is precisely NOT: "merged" reads as finished, and a
+  // finished-looking row is how a post-merge check stops happening. So
+  // an outstanding verification takes the slot back for the work dot.
+  const landed = rowHasLanded(row);
+  const owes = owesPostMergeVerification(row.work, landed);
+  const base =
+    !owes && statusKeepsMarker(row.status.kind)
+      ? statusBadge(row.status)
+      : workStatusBadge(row.work, sessionState, rowWorkStale(row), landed);
   const fg = row.archived ? theme.fgDim : base.fg;
   return (
     <box flexShrink={0} flexDirection="row">

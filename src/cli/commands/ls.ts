@@ -123,6 +123,13 @@ export async function run(argv: string[]): Promise<number> {
           // change: a gate visible on one and absent on another is a
           // consumer reading `ready` off the surface that dropped it.
           work_blocked_on: slugStates[w.slug]?.work?.blockedOn ?? null,
+          // A deployed-environment check this branch owes once it
+          // lands. Same rule as the gate: every surface carrying a
+          // work status carries it, in the same change, because one
+          // that drops it silently releases a merged worktree back to
+          // the remote host's clean sweep.
+          work_verify_after_merge:
+            slugStates[w.slug]?.work?.verifyAfterMerge ?? null,
           work_at: slugStates[w.slug]?.work?.at ?? null,
         };
       }),

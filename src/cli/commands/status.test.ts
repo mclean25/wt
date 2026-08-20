@@ -317,3 +317,84 @@ describe("examinedCurrent", () => {
     expect(examinedCurrent({ sha: "row1" }, "row1", "base1")).toBe(false);
   });
 });
+
+describe("--verify-after-merge", () => {
+  test("rides a ready assertion and lands on the record", () => {
+    const a = parseStatusArgs([
+      "ready",
+      "--risk",
+      "low",
+      "--verify-after-merge",
+      "connect gcal, cancel a meeting",
+    ]);
+    expect(a.kind).toBe("set");
+    if (a.kind !== "set") return;
+    expect(a.verifyAfterMerge).toBe("connect gcal, cancel a meeting");
+  });
+
+  // Unlike a gate, it is dormant until the branch lands, so there is
+  // nothing to protect by restricting which state may carry it —
+  // recording it the moment it is known beats remembering at `ready`.
+  test("any live state may carry one", () => {
+    for (const state of ["todo", "working", "review", "needs-testing"]) {
+      const a = parseStatusArgs([state, "-m", "n", "--verify-after-merge", "x"]);
+      expect(a.kind).toBe("set");
+    }
+  });
+
+  // The two exclusions are contradictions, not policy.
+  test("verified and dropped refuse one", () => {
+    expect(parseStatusArgs(["verified", "-m", "n", "--verify-after-merge", "x"]).kind).toBe(
+      "error",
+    );
+    expect(parseStatusArgs(["dropped", "-m", "n", "--verify-after-merge", "x"]).kind).toBe(
+      "error",
+    );
+  });
+
+  test("with no state it amends rather than re-asserting", () => {
+    const a = parseStatusArgs(["--verify-after-merge", "x"]);
+    expect(a.kind).toBe("amend");
+    if (a.kind !== "amend") return;
+    expect(a.verifyAfterMerge).toBe("x");
+    // The amend must not disturb anything it was not asked about.
+    expect(a.risk).toBeNull();
+    expect(a.blockedOn).toBeUndefined();
+  });
+
+  test("an empty value is an error, not a silent no-op", () => {
+    expect(parseStatusArgs(["ready", "--risk", "low", "--verify-after-merge", "   "]).kind).toBe(
+      "error",
+    );
+  });
+
+  test("it does not combine with --clear/--all/--examined/--note-only", () => {
+    for (const argv of [
+      ["--clear", "--verify-after-merge", "x"],
+      ["--all", "--verify-after-merge", "x"],
+      ["--examined", "v", "--verify-after-merge", "x"],
+      ["--note-only", "n", "--verify-after-merge", "x"],
+    ]) {
+      expect(parseStatusArgs(argv).kind).toBe("error");
+    }
+  });
+});
+
+describe("verified", () => {
+  test("resolves from its unique prefix", () => {
+    const a = parseStatusArgs(["v", "-m", "checked on staging"]);
+    expect(a.kind).toBe("set");
+    if (a.kind !== "set") return;
+    expect(a.state).toBe("verified");
+  });
+
+  // A bare `verified` is the same unevidenced claim the obligation
+  // existed to replace.
+  test("requires a note", () => {
+    expect(parseStatusArgs(["verified"]).kind).toBe("error");
+  });
+
+  test("takes no risk — the merge already happened", () => {
+    expect(parseStatusArgs(["verified", "-m", "n", "--risk", "low"]).kind).toBe("error");
+  });
+});

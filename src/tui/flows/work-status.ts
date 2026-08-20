@@ -20,8 +20,33 @@ import { theme } from "../theme.ts";
 
 export type StatusPickerItem = { label: string; state: WorkState | null };
 
-/** What `m` in the status picker parked while the footer collects a note. */
-export type PendingStatusNote = { slug: string; state: WorkState };
+/**
+ * The `verifyAfterMerge` a new pick inherits from the record it
+ * replaces, if any. Exported for the same reason it exists: two write
+ * paths in this file, and an obligation that survives one but not the
+ * other would be worse than one that survives neither.
+ */
+export function carriedVerify(
+  prev: WorkStatusRecord | null | undefined,
+  next: WorkState,
+): { verifyAfterMerge?: string } {
+  if (!prev?.verifyAfterMerge) return {};
+  if (next === "verified" || next === "dropped") return {};
+  return { verifyAfterMerge: prev.verifyAfterMerge };
+}
+
+/**
+ * What `m` in the status picker parked while the footer collects a
+ * note. The obligation is FROZEN here at pick time rather than re-read
+ * at commit time: typing a note is human-paced and the selection can
+ * move under it, and re-reading whatever row is current by then would
+ * either carry another row's obligation or silently drop this one.
+ */
+export type PendingStatusNote = {
+  slug: string;
+  state: WorkState;
+  verifyAfterMerge?: string;
+};
 
 /**
  * Direct chords inside the `u` picker (`u t` → todo, `u y` → ready).
@@ -37,6 +62,9 @@ export const WORK_STATE_CHORDS: Record<WorkState, string> = {
   "needs-testing": "n",
   "needs-human": "h",
   ready: "y",
+  // `v` for verified; `d` was already dropped's and the two terminal
+  // states are the pair most worth keeping distinguishable.
+  verified: "v",
   dropped: "d",
 };
 
@@ -63,6 +91,16 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     setPendingStatusNote,
     isSlugLive,
   } = ctx;
+
+  /**
+   * The selected row's record, but only when the selection is still
+   * the row being written to. Both write paths take a slug and the
+   * modal can outlive a selection change; carrying a neighbour's
+   * obligation onto this row would be worse than carrying none.
+   */
+  function workFor(slug: string): WorkStatusRecord | undefined {
+    return current?.wt.slug === slug ? (current.work ?? undefined) : undefined;
+  }
 
   function openStatusPicker(): void {
     if (!current) return;
@@ -97,7 +135,18 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     // gate the narrow way instead (`wt status --unblock`, which keeps
     // the state, risk, note and timestamp).
     const record: WorkStatusRecord | null = item.state
-      ? { state: item.state, at: new Date().toISOString() }
+      ? {
+          state: item.state,
+          at: new Date().toISOString(),
+          // Carried, not dropped — the one exception to the sentence
+          // above, and for the same reason the CLI carries it: this
+          // describes the BRANCH, not the assertion, and letting a
+          // stray pick release a merged worktree back to the sweep
+          // would lose the obligation with nothing printed anywhere.
+          // `verified` and `dropped` are its two honest exits, here as
+          // there.
+          ...carriedVerify(workFor(slug), item.state),
+        }
       : null;
     // The toast below is this pick's ack; mute the narration's default
     // toast for exactly the write we're about to make (the attention
@@ -130,7 +179,11 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
       return;
     }
     setModal(null);
-    setPendingStatusNote({ slug, state: item.state });
+    setPendingStatusNote({
+      slug,
+      state: item.state,
+      ...carriedVerify(workFor(slug), item.state),
+    });
     setFooter({
       kind: "input",
       prompt: `${slug} → ${item.state} · note: `,
@@ -153,6 +206,9 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
       state: pending.state,
       at: new Date().toISOString(),
       ...(trimmed ? { note: trimmed } : {}),
+      ...(pending.verifyAfterMerge
+        ? { verifyAfterMerge: pending.verifyAfterMerge }
+        : {}),
     };
     markSelfStatusWrite(pending.slug, record.at);
     setWorkStatus(pending.slug, record).then(

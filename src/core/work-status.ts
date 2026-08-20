@@ -35,6 +35,14 @@ import type { DerivedState } from "./harness/status.ts";
  *                      Carries a merge `risk` and, when notable, a
  *                      note saying what the human should know before
  *                      merging. The human merges — never the agent.
+ *  - `verified`      — merged AND confirmed in the environment the
+ *                      change actually deploys to. The only honest
+ *                      exit from a `--verify-after-merge` obligation,
+ *                      and the point at which the checkout is finally
+ *                      safe to sweep. Note required: what you checked
+ *                      and where, because "someone said they did it"
+ *                      is the whole thing being replaced. No risk —
+ *                      the merge already happened.
  *  - `dropped`       — this branch will never land: superseded,
  *                      duplicate, or deliberately not pursued. The
  *                      OTHER terminal state — where `ready` asks for
@@ -65,6 +73,7 @@ export const WORK_STATES = [
   "needs-testing",
   "needs-human",
   "ready",
+  "verified",
   "dropped",
 ] as const;
 
@@ -171,6 +180,43 @@ export type WorkStatusRecord = {
    * record's `at` age is what flags one worth re-checking.
    */
   blockedOn?: string;
+  /**
+   * A verification this branch owes that can only be run once the
+   * change is DEPLOYED — an OAuth consent screen against the real
+   * provider, a live webhook callback, a third-party SDK that has no
+   * local double. Free text: the exact steps, because the agent that
+   * eventually runs them is not the one that wrote this.
+   *
+   * Set alongside `ready`, and deliberately DORMANT until the branch
+   * lands: it does not gate the merge, does not touch the merge band,
+   * and does not change how the row sorts before merging. That is the
+   * whole difference from `blockedOn`, which exists to say "do not
+   * merge". Merging this is not just safe, it is the prerequisite.
+   *
+   * What it does instead is survive the merge. Once the branch lands,
+   * the row would otherwise sink to `LANDED_RANK` and become a `wt
+   * clean` candidate, taking the checkout and every scrap of context
+   * with it — which is exactly when the verification stops happening.
+   * So a landed row with this field outstanding renders and sorts as
+   * `needs-testing` (`owesPostMergeVerification`) and reads as a
+   * destroy hazard, until someone asserts `verified`.
+   *
+   * It is a field rather than a line in the note for the same reason
+   * `blockedOn` is: prose beside a field loses to the field. It is a
+   * field rather than a STATE because `ready` is still true — the work
+   * is done and it should be merged — and a state can only carry one
+   * fact. And it is not `UNTESTED:` in the ready note, which describes
+   * what was left unverified at merge time and asks nothing of anyone;
+   * this asks for a specific action, later, from whoever is holding
+   * the row.
+   *
+   * A standing obligation about the BRANCH, not a claim inside one
+   * assertion — so unlike `note`/`risk`/`blockedOn` it is carried
+   * across later assertions rather than dropped by them. `verified`
+   * discharges it, `dropped` voids it (nothing lands, nothing to
+   * verify), and `--clear` removes the whole record.
+   */
+  verifyAfterMerge?: string;
 };
 
 /**
@@ -212,6 +258,13 @@ const RANK: Record<WorkState, number> = {
   review: 3,
   working: 4,
   todo: 7,
+  // Both terminal, both asking to be stopped looking at, and peers on
+  // purpose: `verified` landed and was confirmed, `dropped` never
+  // landed at all, and neither wants any of the human's attention. The
+  // usual rank for a `verified` row is `LANDED_RANK` anyway — it is
+  // merged by definition — and this entry only decides where a
+  // hand-asserted one sits.
+  verified: 9,
   // Will never land: below even todo — future work outranks no work.
   dropped: 9,
 };
@@ -304,14 +357,76 @@ export function isGated(record: WorkStatusRecord | null | undefined): boolean {
 export function effectiveWorkState(
   record: WorkStatusRecord | null | undefined,
   sessionState: DerivedState | undefined,
+  landed = false,
 ): { state: WorkState; derived: boolean; blocked: boolean } | null {
   if (sessionState === "asking") {
     return { state: "needs-human", derived: true, blocked: false };
+  }
+  // A landed branch that still owes a deployed-environment check reads
+  // as `needs-testing`, which is precisely what it is: built, manual
+  // verification pending, and the AGENT owns that testing. Derived at
+  // render time rather than written at merge time — a status is what
+  // its owner asserted, and there is no process guaranteed to be
+  // running at the moment a branch lands to do the writing.
+  if (owesPostMergeVerification(record, landed)) {
+    return { state: "needs-testing", derived: true, blocked: false };
   }
   if (record) {
     return { state: record.state, derived: false, blocked: isGated(record) };
   }
   return null;
+}
+
+/**
+ * Is a deployed-environment verification still outstanding on this row?
+ * True only once the branch has LANDED — before that the obligation
+ * exists but nothing can act on it, and treating it as live would drag
+ * a mergeable row out of the merge band, which is the one thing
+ * `verifyAfterMerge` must never do.
+ *
+ * `verified` is the discharge. `dropped` voids it, because a branch
+ * that will never land has nothing deployed to check — that leg only
+ * fires on a row asserted `dropped` after landing anyway, which is
+ * contradictory, and reading a contradiction as "still owed" would
+ * strand the row forever.
+ */
+export function owesPostMergeVerification(
+  record: WorkStatusRecord | null | undefined,
+  landed: boolean,
+): boolean {
+  if (!record || !landed || !record.verifyAfterMerge) return false;
+  return record.state !== "verified" && record.state !== "dropped";
+}
+
+/**
+ * How long an outstanding post-merge verification may sit before it is
+ * shouting rather than waiting. Deliberately short: the failure this
+ * whole field exists to prevent is a check nobody runs, and a row that
+ * looks covered while nothing happens is worse than one that was never
+ * tracked. Two days spans a weekend edge without spanning a week.
+ */
+export const VERIFY_OVERDUE_DAYS = 2;
+
+/**
+ * An outstanding verification that has aged past the window. Measured
+ * from the ASSERTION (`at`), not from the merge: wt has no merge
+ * timestamp for a branch it did not watch land, and the assertion is
+ * always the earlier of the two, so this fails toward shouting sooner
+ * rather than later — the right direction for a reminder.
+ *
+ * Unparsable `at` reads as overdue for the same reason: a record whose
+ * age cannot be established must not be the one that goes quiet.
+ */
+export function verificationOverdue(
+  record: WorkStatusRecord | null | undefined,
+  landed: boolean,
+  nowMs: number = Date.now(),
+  days: number = VERIFY_OVERDUE_DAYS,
+): boolean {
+  if (!owesPostMergeVerification(record, landed)) return false;
+  const at = Date.parse(record!.at);
+  if (Number.isNaN(at)) return true;
+  return nowMs - at >= days * 86_400_000;
 }
 
 /**
@@ -383,6 +498,7 @@ export function workStatusSuffix(record: {
   risk?: WorkRisk;
   note?: string;
   blockedOn?: string;
+  verifyAfterMerge?: string;
 }): string {
   const risk = record.risk ? ` (risk: ${record.risk})` : "";
   // Ahead of the note, and unconditionally: every surface that renders
@@ -390,8 +506,14 @@ export function workStatusSuffix(record: {
   // for the last cells of a truncated line is the original failure in
   // miniature.
   const gate = record.blockedOn ? ` [blocked on: ${record.blockedOn}]` : "";
+  // Same reasoning as the gate, one notch quieter: it changes what the
+  // reader must eventually DO with the row, so it cannot lose a race
+  // with a long note for the last cells of a truncated line.
+  const verify = record.verifyAfterMerge
+    ? ` [verify after merge: ${record.verifyAfterMerge}]`
+    : "";
   const note = record.note ? ` — ${record.note}` : "";
-  return `${risk}${gate}${note}`;
+  return `${risk}${gate}${verify}${note}`;
 }
 
 /**
@@ -427,6 +549,15 @@ export function parseWorkStatus(raw: unknown): WorkStatusRecord | null {
     // rather than half-honoured.
     const gate = sanitizeWorkNote(rec.blockedOn);
     if (gate !== "") out.blockedOn = gate;
+  }
+  if (typeof rec.verifyAfterMerge === "string") {
+    // Same sanitization as the note and the gate — it travels to the
+    // same places. Kept whatever the state says: unlike a gate, this
+    // one legitimately outlives the assertion that created it, and
+    // `owesPostMergeVerification` is the single place that decides
+    // whether it is still owed.
+    const verify = sanitizeWorkNote(rec.verifyAfterMerge);
+    if (verify !== "") out.verifyAfterMerge = verify;
   }
   if (typeof rec.sha === "string" && rec.sha.trim() !== "") out.sha = rec.sha;
   if (typeof rec.by === "string" && rec.by.trim() !== "") out.by = rec.by.trim();

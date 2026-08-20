@@ -549,6 +549,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       githubFresh: ctx.githubFresh,
       isPausedSlug: (slug: string) => ctx.pausedSlugs.has(slug),
       audienceOf,
+      nowMs: Date.now(),
     };
     const fires = evaluateAutomations(rules, ctx.rows, evalCtx);
     const byId = new Map(fires.map((f) => [fireIdentity(f), f] as const));

@@ -80,7 +80,12 @@ export const CACHE_DB = config.paths.cacheDb;
 // badge red for the life of the branch on a PR that was actually green.
 // The derivation now collapses to the newest run per context, and a
 // restored v18 "fail" is indistinguishable from a fresh one.
-const CACHE_BUSTER = "v19";
+// v20: `RemoteWorktreeSummary` gained `workVerifyAfterMerge` — a check
+// the branch owes once it is deployed. A restored v19 entry has it
+// absent, which reads as "nothing owed"; on a merged remote row that is
+// the one answer that releases the checkout to the sweep, taking the
+// context the check needed with it.
+const CACHE_BUSTER = "v20";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

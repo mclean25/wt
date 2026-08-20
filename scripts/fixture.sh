@@ -228,7 +228,21 @@ ENV
   land_in_trunk landed-dirty
   echo "uncommitted follow-up" >> "$FX/wts/landed-dirty/notes.md"
   echo "new file nobody committed" > "$FX/wts/landed-dirty/scratch.md"
-  wtfx section mv landed-clean landed-dirty "Landed" >/dev/null
+  # The third landed shape, and the only one where LANDING is what makes
+  # the row loud: a merged branch still owing a check that could not run
+  # until it deployed. It renders the work dot instead of the merge
+  # glyph, sorts as needs-testing instead of sinking, and is kept by the
+  # sweep — none of which any other row on a local board can show.
+  new_wt landed-unverified
+  commit_in landed-unverified "Landed work whose proof lives in staging"
+  land_in_trunk landed-unverified
+  wtfx section mv landed-clean landed-dirty landed-unverified "Landed" >/dev/null
+  wtfx status landed-unverified ready --risk low \
+    --verify-after-merge "sign in with Google on staging, revoke the grant, confirm the reconnect prompt" \
+    -m "Sample landed-unverified note.
+OPS:      none
+REVERT:   safe
+IF WRONG: nothing real is behind this row" >/dev/null
 
   # --- Every work status, so the dot column shows its whole palette ----
   for s in todo working review needs-testing needs-human ready-low ready-high blocked; do
@@ -296,9 +310,10 @@ IF WRONG: nothing real is behind this row" >/dev/null
 board:
   Inbox                 plain / dirty / no-commit rows, plus the two split
                         children (no rail, "-> Hold: Verify on Dev" reference)
-  Landed                two merged rows = the `c` sweep's candidate set;
-                        landed-dirty holds uncommitted work and must be
-                        KEPT by the sweep, not destroyed
+  Landed                three merged rows = the `c` sweep's candidate set;
+                        landed-dirty holds uncommitted work and
+                        landed-unverified still owes a post-merge check,
+                        so both must be KEPT by the sweep, not destroyed
   Statuses              one row per work state, ready at low and high risk
   Chain                 depth 0/1/2 co-located: rail steps right per level,
                         plus a stacked row with zero commits of its own

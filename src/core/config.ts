@@ -34,6 +34,9 @@ import {
   REPOSITORY_CONFIG_ENV,
   type RawConfig,
 } from "./config-layer.ts";
+// Pure leaf module (types + arithmetic, no config, no IO), so this
+// import cannot participate in the loader's startup cycle.
+import { VERIFY_OVERDUE_DAYS } from "./work-status.ts";
 
 const HOME = homedir();
 
@@ -575,7 +578,22 @@ export type AutomationTrigger =
   // timestamp, so re-asserting the same state re-fires.
   | "status.needs_human"
   | "status.needs_testing"
-  | "status.ready";
+  | "status.ready"
+  /**
+   * A branch has LANDED still owing a deployed-environment check
+   * (`wt status --verify-after-merge`) and has owed it for longer than
+   * `after_days`. The one trigger here that fires REPEATEDLY: its fire
+   * key carries the local day, so it re-fires once a day until someone
+   * asserts `verified`.
+   *
+   * That is deliberate and is the opposite of the echo problem the
+   * `by`-stamp exists for. A daily reminder is only noise when the
+   * recipient can clear it by writing something; this one clears only
+   * by the check actually happening, and the failure it exists to
+   * catch — a post-merge verification nobody runs — is silent by
+   * construction, because the row otherwise reads as merged and done.
+   */
+  | "status.verification_overdue";
 
 /**
  * What to do when the target worktree isn't quiescent at delivery time
@@ -610,6 +628,16 @@ export type AutomationDef = {
   busy: AutomationBusyPolicy;
   /** Minimum minutes between dispatches per (rule, worktree). Null = none. */
   cooldownMinutes: number | null;
+  /**
+   * `status.verification_overdue` only: how long an outstanding
+   * post-merge verification may sit before it starts firing. A knob
+   * because deploy cadence is the one thing wt cannot guess — a fleet
+   * that deploys on merge wants 1, one that batches a weekly release
+   * wants 7, and a default that is wrong in either direction turns the
+   * reminder into noise or into nothing. Ignored by every other
+   * trigger.
+   */
+  afterDays: number;
   /**
    * Quiescence window: the intent must be at least this old AND the
    * worktree free of edits for this long before delivery. Doubles as
@@ -1418,6 +1446,7 @@ const VALID_TRIGGERS = new Set<AutomationTrigger>([
   "status.needs_human",
   "status.needs_testing",
   "status.ready",
+  "status.verification_overdue",
 ]);
 /** Legacy/alternate trigger spellings, normalized before validation. */
 const TRIGGER_ALIASES: Record<string, AutomationTrigger> = {
@@ -1443,6 +1472,10 @@ const STATUS_TRIGGERS: ReadonlySet<AutomationTrigger> = new Set([
   "status.needs_human",
   "status.needs_testing",
   "status.ready",
+  // Not an assertion, but the same reasoning applies twice over: this
+  // condition is days old by the time it holds, so a settle window
+  // measured in minutes would delay a reminder that is already late.
+  "status.verification_overdue",
 ]);
 function defaultSettleSeconds(on: AutomationTrigger): number {
   if (STATUS_TRIGGERS.has(on)) return 0;
@@ -1548,6 +1581,20 @@ function parseAutomations(
       errs.add(`${tag}.cooldown_minutes must be a positive number`);
       continue;
     }
+    const afterDaysRaw = entry.after_days;
+    if (
+      afterDaysRaw !== undefined &&
+      !(typeof afterDaysRaw === "number" && Number.isFinite(afterDaysRaw) && afterDaysRaw >= 0)
+    ) {
+      errs.add(`${tag}.after_days must be a non-negative number`);
+      continue;
+    }
+    if (afterDaysRaw !== undefined && on !== "status.verification_overdue") {
+      errs.add(
+        `${tag}.after_days only applies to on = "status.verification_overdue" (got "${on}")`,
+      );
+      continue;
+    }
     const settleRaw = entry.settle_seconds;
     if (
       settleRaw !== undefined &&
@@ -1563,6 +1610,7 @@ function parseAutomations(
       run,
       busy,
       cooldownMinutes: typeof cooldownRaw === "number" ? cooldownRaw : null,
+      afterDays: typeof afterDaysRaw === "number" ? afterDaysRaw : VERIFY_OVERDUE_DAYS,
       settleSeconds:
         typeof settleRaw === "number" ? settleRaw : defaultSettleSeconds(on as AutomationTrigger),
     });
