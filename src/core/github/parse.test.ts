@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { countUntickedBoxes, hasMarker } from "./parse.ts";
+import { countUntickedBoxes, hasMarker, rollupChecks } from "./parse.ts";
 
 /**
  * `hasMarker` decides which of a PR's comments IS the review bot's
@@ -80,5 +80,83 @@ describe("countUntickedBoxes", () => {
   test("counts indented (nested) checkboxes outside fences — GitHub renders them as real boxes", () => {
     const body = ["- [ ] parent item", "  - [ ] nested sub-item"].join("\n");
     expect(countUntickedBoxes(body)).toBe(2);
+  });
+});
+
+
+/**
+ * `statusCheckRollup` is history: GitHub keeps every check run recorded
+ * against a head sha, so a re-run leaves the failed original beside the
+ * green retry under the same context name.
+ */
+describe("rollupChecks superseded-run dedupe", () => {
+  const run = (name: string, conclusion: string, startedAt?: string) => ({
+    __typename: "CheckRun" as const,
+    name,
+    status: "COMPLETED",
+    conclusion,
+    ...(startedAt ? { startedAt } : {}),
+  });
+
+  test("a green re-run supersedes the failure it replaced", () => {
+    // The reported case: a job failed while the PR was a draft, was
+    // re-run green on the same sha, and the badge stayed red forever on
+    // a PR whose mergeStateStatus was CLEAN.
+    expect(
+      rollupChecks([
+        run("Codex review complete", "FAILURE", "2026-08-20T10:00:00Z"),
+        run("Codex review complete", "SUCCESS", "2026-08-20T11:00:00Z"),
+      ]),
+    ).toBe("pass");
+  });
+
+  test("order in the array does not decide it — the timestamp does", () => {
+    expect(
+      rollupChecks([
+        run("build", "SUCCESS", "2026-08-20T11:00:00Z"),
+        run("build", "FAILURE", "2026-08-20T10:00:00Z"),
+      ]),
+    ).toBe("pass");
+  });
+
+  test("a genuinely newer failure still fails", () => {
+    // The dedupe must not become a way to lose real red.
+    expect(
+      rollupChecks([
+        run("build", "SUCCESS", "2026-08-20T10:00:00Z"),
+        run("build", "FAILURE", "2026-08-20T11:00:00Z"),
+      ]),
+    ).toBe("fail");
+  });
+
+  test("different contexts are never collapsed into each other", () => {
+    expect(
+      rollupChecks([
+        run("lint", "SUCCESS", "2026-08-20T11:00:00Z"),
+        run("build", "FAILURE", "2026-08-20T10:00:00Z"),
+      ]),
+    ).toBe("fail");
+  });
+
+  test("undated entries keep the old any-failure-counts behaviour", () => {
+    // A pre-v19 persisted entry carries no startedAt. Unknown ordering
+    // must fail toward red: a false red costs a look, a false green is
+    // a broken branch reported as fine.
+    expect(rollupChecks([run("build", "FAILURE"), run("build", "SUCCESS")])).toBe("fail");
+  });
+
+  test("a pending re-run of a failed context reads as pending", () => {
+    expect(
+      rollupChecks([
+        run("build", "FAILURE", "2026-08-20T10:00:00Z"),
+        {
+          __typename: "CheckRun" as const,
+          name: "build",
+          status: "IN_PROGRESS",
+          conclusion: null,
+          startedAt: "2026-08-20T11:00:00Z",
+        },
+      ]),
+    ).toBe("pending");
   });
 });

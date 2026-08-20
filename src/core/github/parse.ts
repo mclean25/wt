@@ -48,12 +48,56 @@ function checkName(c: RawCheck): string | null | undefined {
   return c.__typename === "CheckRun" ? c.name : c.context;
 }
 
+function checkStartedAt(c: RawCheck): string | null | undefined {
+  return c.__typename === "CheckRun" ? c.startedAt : c.createdAt;
+}
+
+/**
+ * `statusCheckRollup` is HISTORY, not state: GitHub keeps every check
+ * run recorded against a head sha forever, so a run that failed and was
+ * then re-run green leaves BOTH entries in the rollup for the same
+ * context name. Reading it undeduped means one superseded failure pins
+ * the badge red for the life of the branch, on a PR whose
+ * `mergeStateStatus` is CLEAN and whose `gh pr checks` is all green.
+ *
+ * That is not a rare shape. A retried flake, a cancelled run, a draft
+ * that failed a job gated on non-draft and was then marked ready — all
+ * produce it, and the PR can never come back green on its own. It also
+ * pushes an agent toward the worst available remedy: an empty commit to
+ * move the sha and silence the badge, which spends a CI run to clear a
+ * false alarm.
+ *
+ * So collapse to the newest run per context. **Ordering is only applied
+ * where it is KNOWN**: entries whose timestamp is missing (an older
+ * persisted cache, or a context type that does not carry one) are all
+ * kept, which preserves the previous any-failure-counts behaviour for
+ * them. That direction is deliberate — a false red costs a look, while
+ * a false green is a broken branch reported as fine.
+ */
+function latestPerContext(raw: readonly RawCheck[]): RawCheck[] {
+  const newest = new Map<string, { at: number; check: RawCheck }>();
+  const undated: RawCheck[] = [];
+  for (const c of raw) {
+    const name = checkName(c);
+    const at = Date.parse(checkStartedAt(c) ?? "");
+    if (!name || !Number.isFinite(at)) {
+      undated.push(c);
+      continue;
+    }
+    const prev = newest.get(name);
+    if (!prev || at >= prev.at) newest.set(name, { at, check: c });
+  }
+  // Undated first so the caller's order is stable-ish for name lists;
+  // nothing downstream depends on the exact order.
+  return [...undated, ...[...newest.values()].map((v) => v.check)];
+}
+
 export function rollupChecks(raw: RawCheck[] | null | undefined): PrChecks {
   if (!raw || raw.length === 0) return "none";
   let pending = false;
   let fail = false;
   let counted = 0;
-  for (const c of raw) {
+  for (const c of latestPerContext(raw)) {
     if (isIgnoredCheck(checkName(c))) continue;
     counted++;
     if (c.__typename === "CheckRun") {
@@ -80,7 +124,9 @@ export function rollupChecks(raw: RawCheck[] | null | undefined): PrChecks {
 function failingCheckNames(raw: RawCheck[] | null | undefined): string[] {
   if (!raw) return [];
   const out: string[] = [];
-  for (const c of raw) {
+  // Same dedupe as `rollupChecks`, and it must be: a name listed here
+  // that the badge does not count reads as wt contradicting itself.
+  for (const c of latestPerContext(raw)) {
     const name = checkName(c);
     if (isIgnoredCheck(name)) continue;
     const failed =

@@ -10,8 +10,21 @@ import type {
 
 /** One raw status-check node off the GraphQL statusCheckRollup. */
 export type RawCheck =
-  | { __typename: "CheckRun"; name?: string | null; status?: string | null; conclusion?: string | null }
-  | { __typename: "StatusContext"; context?: string | null; state?: string | null };
+  | {
+      __typename: "CheckRun";
+      name?: string | null;
+      status?: string | null;
+      conclusion?: string | null;
+      /** Ordering key for superseded-run dedupe; absent on cached pre-v19 entries. */
+      startedAt?: string | null;
+    }
+  | {
+      __typename: "StatusContext";
+      context?: string | null;
+      state?: string | null;
+      /** Ordering key for superseded-run dedupe; absent on cached pre-v19 entries. */
+      createdAt?: string | null;
+    };
 
 export type GqlReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
 

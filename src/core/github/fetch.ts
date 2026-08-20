@@ -190,8 +190,8 @@ fragment PrFields on PullRequest {
           contexts(first: 50) {
             nodes {
               __typename
-              ... on CheckRun { name status conclusion }
-              ... on StatusContext { context state }
+              ... on CheckRun { name status conclusion startedAt }
+              ... on StatusContext { context state createdAt }
             }
           }
         }

@@ -73,7 +73,14 @@ export const CACHE_DB = config.paths.cacheDb;
 // never rendered. A restored v17 entry's empty map is indistinguishable
 // from a fresh "nothing is queued", which is exactly the case the buster
 // exists for.
-const CACHE_BUSTER = "v18";
+// v19: `PullRequest.checks` / `failedChecks` changed MEANING without
+// changing shape. The rollup is HISTORY — GitHub keeps every check run
+// for a head sha forever — so a superseded failure (a retried flake, a
+// cancelled run, a job that failed while the PR was a draft) pinned the
+// badge red for the life of the branch on a PR that was actually green.
+// The derivation now collapses to the newest run per context, and a
+// restored v18 "fail" is indistinguishable from a fresh one.
+const CACHE_BUSTER = "v19";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
