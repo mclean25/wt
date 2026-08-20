@@ -94,7 +94,9 @@ Once the branch lands the row stops sinking, renders ${bold("needs-testing")}, a
 becomes a destroy hazard — so the ${bold("c")} sweep keeps the worktree instead of
 taking the checkout and every scrap of context with it. That is the actual
 job: the check that never happens is the one whose worktree was cleaned.
-Carried across later assertions (it describes the BRANCH, not one claim);
+Carried across later assertions (it describes the BRANCH, not one claim) —
+but not frozen by them: pass ${bold("--verify-after-merge")} again to REPLACE the
+steps, with or without a state, as the branch changes what needs checking.
 ${bold("verified")} discharges it and ${bold("dropped")} voids it.
 
 ${bold("DEPLOYS LAG MERGES.")} Before believing a NEGATIVE result, confirm the deploy
@@ -1069,7 +1071,7 @@ export async function run(argv: string[]): Promise<number> {
     if (args.verifyAfterMerge !== undefined) {
       next.verifyAfterMerge = args.verifyAfterMerge;
     }
-    setSlugWorkStatus(target.slug, next);
+    const wrote = setSlugWorkStatus(target.slug, next);
     const changed = [
       args.risk ? "risk" : null,
       args.note ? "note" : null,
@@ -1077,14 +1079,20 @@ export async function run(argv: string[]): Promise<number> {
       args.verifyAfterMerge === undefined ? null : "post-merge verification",
     ].filter(Boolean);
     const what = changed.join(" + ") || "note";
+    // Report what was STORED, never the argument. The old guard silently
+    // dropped writes that touched only a gate or only the post-merge
+    // steps, and this line confirmed them anyway — so the only way to
+    // find out was to read the row back, which nobody does after a tick.
     createLogger(target.slug).info(
-      `work status ${what} amended${workStatusSuffix(next)}`,
+      wrote
+        ? `work status ${what} amended${workStatusSuffix(next)}`
+        : `work status ${what} amend was a no-op (already that value)`,
     );
     const color = stateColor(prev.state);
     console.log(
       `${green("✓")} ${cyan(target.slug)} ${color(prev.state)}${
         next.risk ? `  ${dim("risk:")} ${color(next.risk)}` : ""
-      }  ${dim(`${what} amended (state + timestamp kept)`)}`,
+      }  ${dim(wrote ? `${what} amended (state + timestamp kept)` : `${what} already had that value — nothing changed`)}`,
     );
     if (next.blockedOn) console.log(`  ${red("blocked on:")} ${next.blockedOn}`);
     if (next.verifyAfterMerge) {
@@ -1151,7 +1159,7 @@ export async function run(argv: string[]): Promise<number> {
   if (by) record.by = by;
   const sha = await revParse("HEAD", target.path);
   if (sha) record.sha = sha;
-  setSlugWorkStatus(target.slug, record);
+  const wrote = setSlugWorkStatus(target.slug, record);
 
   // File-only audit trail (the TUI derives its own attention-feed
   // entries from the wtstate change; this line is for grepping).
@@ -1160,7 +1168,9 @@ export async function run(argv: string[]): Promise<number> {
 
   const color = stateColor(args.state);
   console.log(
-    `${green("✓")} ${cyan(target.slug)} → ${color(args.state)}${args.risk ? `  ${dim("risk:")} ${color(args.risk)}` : ""}`,
+    `${green("✓")} ${cyan(target.slug)} → ${color(args.state)}${
+      args.risk ? `  ${dim("risk:")} ${color(args.risk)}` : ""
+    }${wrote ? "" : `  ${dim("(unchanged — same claim, original timestamp kept)")}`}`,
   );
   if (record.blockedOn) console.log(`  ${red("blocked on:")} ${record.blockedOn}`);
   if (record.verifyAfterMerge) {

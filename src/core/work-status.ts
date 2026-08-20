@@ -251,6 +251,51 @@ export function resolveWorkState(input: string): WorkState | null {
  * congregating where they always were rather than being punished to
  * the bottom.
  */
+/**
+ * Which fields make two records THE SAME CLAIM, for the idempotent
+ * re-assert guard in `setSlugWorkStatus`.
+ *
+ * Typed as a total `Record` over the record's keys ON PURPOSE: adding a
+ * field to `WorkStatusRecord` fails the typecheck here until it is
+ * classified. The guard used to hand-list four fields, and the list
+ * drifted the moment a fifth existed — `blockedOn` and then
+ * `verifyAfterMerge` were both invisible to it, so amending ONLY a gate
+ * or ONLY the post-merge steps was swallowed as a duplicate assertion.
+ * Silently: the CLI echoes the record it built in memory, so the write
+ * that never happened was confirmed on stdout, and the only way to
+ * notice was to read the row back afterwards.
+ *
+ * `at` is excluded because preserving it IS the point of the guard.
+ * `by` is excluded because a second author asserting an unchanged claim
+ * is not news for the board, and letting it through would bump the
+ * timestamp and re-narrate in every watching TUI — the exact churn the
+ * guard exists to stop.
+ */
+const CLAIM_FIELDS: Record<keyof WorkStatusRecord, boolean> = {
+  state: true,
+  note: true,
+  risk: true,
+  sha: true,
+  blockedOn: true,
+  verifyAfterMerge: true,
+  at: false,
+  by: false,
+};
+
+/**
+ * Do two records assert the same thing? Compares every field
+ * `CLAIM_FIELDS` marks, treating absent and undefined alike, so a
+ * record that merely drops an optional key still compares equal to one
+ * that never had it.
+ */
+export function sameWorkClaim(a: WorkStatusRecord, b: WorkStatusRecord): boolean {
+  for (const field of Object.keys(CLAIM_FIELDS) as (keyof WorkStatusRecord)[]) {
+    if (!CLAIM_FIELDS[field]) continue;
+    if ((a[field] ?? null) !== (b[field] ?? null)) return false;
+  }
+  return true;
+}
+
 const RANK: Record<WorkState, number> = {
   ready: 0,
   "needs-human": 1,

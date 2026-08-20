@@ -16,6 +16,7 @@ import {
   resolveWorkState,
   workAge,
   workStateRank,
+  sameWorkClaim,
 } from "./work-status.ts";
 
 describe("resolveWorkState", () => {
@@ -369,5 +370,58 @@ describe("verificationOverdue", () => {
     expect(
       verificationOverdue({ state: "ready", at: new Date(now).toISOString() }, true, now),
     ).toBe(false);
+  });
+});
+
+/**
+ * The idempotent re-assert guard's equality test. It used to hand-list
+ * four fields in `setSlugWorkStatus`, and the list drifted the moment a
+ * fifth existed: amending ONLY a gate, or ONLY the post-merge steps,
+ * compared equal and the write was dropped — while the CLI echoed the
+ * record it had built in memory, confirming a store that never
+ * happened. `CLAIM_FIELDS` is now total over the record type, so a new
+ * field cannot compile until it is classified; these pin the semantics
+ * that classification produces.
+ */
+describe("sameWorkClaim", () => {
+  const base = {
+    state: "ready",
+    risk: "low",
+    note: "n",
+    at: "2026-08-20T12:00:00.000Z",
+    sha: "abc",
+  } as const;
+
+  test("the two fields the drifted list missed each break equality", () => {
+    expect(sameWorkClaim(base, { ...base, verifyAfterMerge: "check the grant" })).toBe(false);
+    expect(sameWorkClaim(base, { ...base, blockedOn: "mobile release" })).toBe(false);
+  });
+
+  test("REPLACING either one breaks equality too — not just adding it", () => {
+    // The reported bug: a row that already owed a check could not have
+    // those steps corrected, which made the only exits `verified` (a
+    // lie) or `dropped` (worse).
+    const owed = { ...base, verifyAfterMerge: "old steps" };
+    expect(sameWorkClaim(owed, { ...owed, verifyAfterMerge: "new steps" })).toBe(false);
+    const gated = { ...base, blockedOn: "old gate" };
+    expect(sameWorkClaim(gated, { ...gated, blockedOn: "new gate" })).toBe(false);
+  });
+
+  test("dropping an optional field is a change", () => {
+    const owed = { ...base, verifyAfterMerge: "steps" };
+    expect(sameWorkClaim(owed, base)).toBe(false);
+  });
+
+  test("absent and undefined compare alike", () => {
+    expect(sameWorkClaim(base, { ...base, verifyAfterMerge: undefined })).toBe(true);
+  });
+
+  test("at and by are excluded — preserving `at` IS the point", () => {
+    expect(sameWorkClaim(base, { ...base, at: "2026-01-01T00:00:00.000Z" })).toBe(true);
+    expect(sameWorkClaim(base, { ...base, by: "someone-else" })).toBe(true);
+  });
+
+  test("a genuinely identical re-assert still compares equal", () => {
+    expect(sameWorkClaim(base, { ...base })).toBe(true);
   });
 });

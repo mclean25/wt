@@ -1,4 +1,4 @@
-import type { WorkStatusRecord } from "../work-status.ts";
+import { sameWorkClaim, type WorkStatusRecord } from "../work-status.ts";
 import { readWtState, withWtStateLock, writeWtState } from "./io.ts";
 import { GROUP_INBOX, stackIdFromSectionKey } from "./types.ts";
 import type { WtSlugState, WtState } from "./types.ts";
@@ -308,26 +308,22 @@ export function setSlugSection(slug: string, section: string | null): void {
 export function setSlugWorkStatus(
   slug: string,
   record: WorkStatusRecord | null,
-): void {
+): boolean {
+  let wrote = false;
   withWtStateLock(() => {
     const state = readWtState();
     const prev = state.slugs[slug];
     if (!prev && record === null) return;
-    // Idempotent re-assert: same state, note, risk, and sha as the
-    // current record is a no-op that KEEPS the original `at`. Agents
-    // (and their hooks) re-assert freely; without this every repeat
-    // bumps the timestamp, and each bump re-narrates + re-toasts the
-    // same news in every watching TUI.
-    if (record !== null && prev?.work) {
-      const w = prev.work;
-      if (
-        w.state === record.state &&
-        (w.note ?? null) === (record.note ?? null) &&
-        (w.risk ?? null) === (record.risk ?? null) &&
-        (w.sha ?? null) === (record.sha ?? null)
-      ) {
-        return;
-      }
+    // Idempotent re-assert: a record asserting the same claim as the
+    // current one is a no-op that KEEPS the original `at`. Agents (and
+    // their hooks) re-assert freely; without this every repeat bumps
+    // the timestamp, and each bump re-narrates + re-toasts the same
+    // news in every watching TUI. Which fields count is decided by
+    // `sameWorkClaim`, whose classification is exhaustive over the
+    // record type — a hand-written list here is what let two later
+    // fields become unwritable.
+    if (record !== null && prev?.work && sameWorkClaim(prev.work, record)) {
+      return;
     }
     const next: WtState = { ...state, slugs: { ...state.slugs } };
     const entry: WtSlugState = { section: null, order: 0, ...prev };
@@ -335,7 +331,13 @@ export function setSlugWorkStatus(
     if (record !== null) entry.work = record;
     next.slugs[slug] = entry;
     writeWtState(next);
+    wrote = true;
   });
+  // Whether anything was STORED, not whether the call succeeded. A call
+  // that can legitimately do nothing has to say which happened, or
+  // every caller downstream reports its own argument back as fact —
+  // which is exactly how the drifted guard above stayed invisible.
+  return wrote;
 }
 
 /**
