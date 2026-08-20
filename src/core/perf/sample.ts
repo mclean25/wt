@@ -113,10 +113,14 @@ export type PerfSnapshot = {
   outsiders: PerfProc[];
   /**
    * wt TUI instances reparented to launchd — a terminal died and the
-   * process survived. Always a leak (a headless TUI serves nobody):
-   * each one keeps polling GitHub and duplicating attention lines.
-   * One probe sweep left 33 of these; the overlay exists to make a
-   * recurrence visible instead of a mystery CPU tax.
+   * process survived. A headless TUI serves nobody: each one keeps
+   * polling GitHub and duplicating attention lines. One probe sweep
+   * left 33 of these; the overlay exists to make a recurrence visible
+   * instead of a mystery CPU tax.
+   *
+   * Excludes pids launchd is deliberately supervising under a
+   * `com.wt.*` label, which look identical from the process table and
+   * are the opposite of a leak — see `isOrphanedWtInstance`.
    */
   orphans: PerfProc[];
 };
@@ -282,13 +286,57 @@ export function isWtInstanceCommand(command: string): boolean {
  * A wt TUI process whose parent is launchd (ppid 1) lost its terminal
  * and should have exited — SIGHUP handling makes new builds do so, but
  * older builds (and a wedged teardown) survive headless.
+ *
+ * `ownedPids` is the escape hatch, and it is not optional in spirit:
+ * ppid 1 means "lost its parent" for a TUI and "supervised, exactly as
+ * designed" for a daemon, and the two are indistinguishable from the
+ * command line alone. `wt events serve` runs under launchd forever by
+ * design, and without this it reads as a textbook leak — long-lived,
+ * headless, parented to launchd, talking to GitHub. It was reported as
+ * one, with a `kill` line attached, against a daemon the user had
+ * deliberately installed.
+ *
+ * Deliberately a set of pids resolved from launchd at sample time
+ * rather than a list of daemon subcommands remembered here: the
+ * supervisor is the thing that actually knows what it owns, the answer
+ * expires on its own when the job goes, and a new wt daemon needs no
+ * edit to this file to be classified correctly.
  */
 export function isOrphanedWtInstance(
   p: { pid: number; ppid: number; command: string },
   selfPid: number = process.pid,
+  ownedPids: ReadonlySet<number> = new Set(),
 ): boolean {
   if (p.ppid !== 1 || p.pid === selfPid) return false;
+  if (ownedPids.has(p.pid)) return false;
   return isWtInstanceCommand(p.command);
+}
+
+/**
+ * Pids launchd is supervising under a `com.wt.*` label. `launchctl
+ * list` prints `PID\tStatus\tLabel`, with `-` for a job that is loaded
+ * but not running.
+ *
+ * Failure returns an EMPTY set, which fails toward reporting an orphan
+ * rather than hiding one. That direction is chosen: a false orphan
+ * costs a look (and now names the daemon it found), while a hidden one
+ * is the leak this whole list exists to surface.
+ */
+async function launchdOwnedWtPids(signal?: AbortSignal): Promise<Set<number>> {
+  const out = new Set<number>();
+  try {
+    const r = await run(["launchctl", "list"], { timeoutMs: 5_000, signal });
+    if (r.exitCode !== 0) return out;
+    for (const line of r.stdout.split("\n")) {
+      const [pidField, , label] = line.split("\t");
+      if (!label?.startsWith("com.wt.")) continue;
+      const pid = Number(pidField);
+      if (Number.isInteger(pid) && pid > 0) out.add(pid);
+    }
+  } catch {
+    // launchctl missing (non-macOS) or the sample was aborted.
+  }
+  return out;
 }
 
 export function classifyProcess(command: string): PerfCategory {
@@ -441,11 +489,12 @@ export async function samplePerf(
   // for exactly one sample (wrong session tag, or landing outside wt's
   // tree); at a 2s cadence it self-corrects on the next tick, which is
   // cheaper than serialising the helpers to get a consistent instant.
-  const [procs, panePids, serverPid, memUsedMb] = await Promise.all([
+  const [procs, panePids, serverPid, memUsedMb, ownedPids] = await Promise.all([
     sampleProcesses(signal),
     tmuxPanePids(signal),
     tmuxServerPid(signal),
     macMemoryUsedMb(signal),
+    launchdOwnedWtPids(signal),
   ]);
 
   const kids = childIndex(procs);
@@ -521,7 +570,7 @@ export async function samplePerf(
     // Checked against ALL processes: an orphan is by definition outside
     // wt's live descendant tree (its parent is launchd).
     orphans: procs
-      .filter((p) => isOrphanedWtInstance(p))
+      .filter((p) => isOrphanedWtInstance(p, process.pid, ownedPids))
       .map((p) => ({
         ...p,
         category: "wt" as const,

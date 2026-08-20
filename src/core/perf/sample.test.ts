@@ -91,6 +91,34 @@ describe("isOrphanedWtInstance", () => {
     ).toBe(true);
   });
 
+  test("a launchd-supervised wt daemon is not an orphan", () => {
+    // The real one: `wt events serve` runs under launchd forever by
+    // design, so from the process table it is indistinguishable from a
+    // leaked headless TUI — long-lived, ppid 1, talking to GitHub. It
+    // was reported as a leak with a kill line attached, against a
+    // daemon the user had deliberately installed.
+    const daemon = {
+      pid: 80525,
+      ppid: 1,
+      command: "/opt/homebrew/Cellar/bun/1.3.14/bin/bun /Users/u/.wt/src/main.ts events serve",
+    };
+    expect(isOrphanedWtInstance(daemon, SELF, new Set([80525]))).toBe(false);
+    // Same process, not claimed by launchd: still a leak. The pid set
+    // is the ONLY thing that distinguishes them.
+    expect(isOrphanedWtInstance(daemon, SELF, new Set())).toBe(true);
+  });
+
+  test("an unowned headless instance stays an orphan when others are owned", () => {
+    // Ownership must be per-pid, not "launchd supervises something".
+    expect(
+      isOrphanedWtInstance(
+        { pid: 8562, ppid: 1, command: "bun src/main.ts" },
+        SELF,
+        new Set([80525]),
+      ),
+    ).toBe(true);
+  });
+
   test("live-parented instances and self are never orphans", () => {
     expect(
       isOrphanedWtInstance({ pid: 8562, ppid: 61353, command: "bun src/main.ts" }, SELF),

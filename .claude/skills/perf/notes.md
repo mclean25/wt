@@ -55,6 +55,17 @@ Failure signatures (check these first):
   keeps polling GitHub and duplicating attention lines. One sweep found
   33. `wt perf` hunts these itself — LEAKED section with a ready `kill`
   line. Propose the kill, don't run it unasked.
+  **Confirm what the pid IS before proposing it**, because ppid 1 means
+  two opposite things: a TUI that lost its terminal, and a daemon
+  launchd is supervising exactly as designed. `wt events serve` is
+  long-lived, headless, parented to launchd and talks to GitHub, i.e.
+  every surface marker of a leak. It was reported as one, with a kill
+  line, against a daemon the user had deliberately installed the day
+  before. The sampler now excludes pids launchd claims under a
+  `com.wt.*` label (asked at sample time, not a remembered list of
+  daemon names), so a clean orphan list is trustworthy again — but
+  `launchctl list <label>` and `ps -o ppid,command` are two seconds and
+  settle it either way.
 - **Heavy parsing on the render thread.** Codex-events JSONL tailing
   used to block the TUI's single JS thread; moved to a worker in
   61634bc (`core/harness/codex-events-worker.ts`). If the loop-lag
