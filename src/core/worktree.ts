@@ -3,7 +3,7 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import { listRiftWorktreePaths } from "./backend.ts";
 import { config } from "./config.ts";
-import { git, branchIsGone, branchIsMerged, effectiveBaseOrTrunk, freshBaseRev, gitQuiet, gitRun, invalidateMainFirstParents, localBranchExists, originBranchExists } from "./git.ts";
+import { git, branchIsGone, branchIsMerged, effectiveBaseOrTrunk, freshBaseRev, gitQuiet, gitRun, invalidateMainFirstParents, localBranchExists, originBranchExists, revParse } from "./git.ts";
 import { resolveMainSyncInstall } from "./install.ts";
 import { lockAge, lockLabel, lockStatus, tryAcquireLock, type LockHandle } from "./locks.ts";
 import { createLogger } from "./logger.ts";
@@ -495,8 +495,100 @@ async function fetchOriginLocked(opts: { onWarn?: (msg: string) => void } = {}):
         onWarn: opts.onWarn,
       });
     }
+    await freshenWorktreeTrunkRefs(main);
   } finally {
     handle.release();
+  }
+}
+
+/**
+ * Point every worktree's OWN `origin/<trunk>` at the tip the main clone
+ * just fetched.
+ *
+ * Under `rift` a worktree is an independent clone whose remote-tracking
+ * refs are only as fresh as the last fetch inside it, and nothing was
+ * fetching there — `fetchOrigin` runs in the main clone. The ref decays
+ * quietly from the moment the clone is created, and EVERYTHING keyed to
+ * the base reads it: the ahead/behind counts, the pre-PR row title (the
+ * oldest commit in `base..HEAD`, which becomes a colleague's commit),
+ * the diff context the AI summary is generated from, the git row's
+ * files/insertions, the merge-conflict probe (which then reports clean
+ * against a trunk several merges old — a false green), the `{{base}}`
+ * handed to the diff tool, and the agent's own `git log
+ * origin/<trunk>..HEAD` inside the checkout. Measured on this fleet: a
+ * branch with no commits of its own showed 3 ahead and an 11-file diff
+ * of somebody else's work, and one real branch showed 304 files changed
+ * against a true 24.
+ *
+ * That last reader is the reason this fixes the REF instead of each
+ * caller. A read-side substitution (`freshBaseRev`) can only correct
+ * what goes through wt, and `{{base}}` has to stay a ref NAME anyway —
+ * a sha that moved with trunk would kill the live diff session on every
+ * merge.
+ *
+ * Cheap in the shape it actually runs: the value comparison exits
+ * first, which is every checkout under `git-worktree` (one shared ref
+ * store) and every already-current rift clone. When it does lag, the
+ * object is almost always here already — rift CoW-copies the main
+ * clone's object db at create, and a clone's own `git fetch` drags
+ * GitHub's merge-queue branches in ahead of the merge — so it is a ref
+ * write, not a transfer (0 of 19 live checkouts needed the fetch).
+ */
+async function freshenWorktreeTrunkRefs(main: string): Promise<void> {
+  const trunk = config.branch.base;
+  const tip = await revParse(`origin/${trunk}`, main);
+  if (!tip) return;
+  let worktrees: Worktree[];
+  try {
+    worktrees = (await listWorktrees()).filter((w) => !w.isMain);
+  } catch (err) {
+    log.debug(`could not list worktrees to freshen origin/${trunk}`, {
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+  await Promise.all(
+    worktrees.map((wt) => freshenTrunkRef(wt, trunk, tip, main)),
+  );
+}
+
+/**
+ * One checkout's trunk ref. Never throws: a directory removed
+ * out-of-band between the listing and here must not fail the fetch that
+ * every caller of `fetchOrigin` is actually waiting on.
+ */
+async function freshenTrunkRef(
+  wt: Worktree,
+  trunk: string,
+  tip: string,
+  main: string,
+): Promise<void> {
+  const ref = `refs/remotes/origin/${trunk}`;
+  try {
+    const have = await revParse(`origin/${trunk}`, wt.path);
+    if (have === tip) return;
+    if (!(await gitQuiet(["cat-file", "-e", `${tip}^{commit}`], wt.path))) {
+      // Not here yet. The fetch brings the object and moves the ref in
+      // one step, over the filesystem from the main clone — no network.
+      await gitRun(
+        ["fetch", "--no-tags", "--quiet", main, `+refs/remotes/origin/${trunk}:${ref}`],
+        wt.path,
+      );
+      return;
+    }
+    // Fast-forward only. A clone that ran its own `git fetch` can be
+    // AHEAD of the main clone's last one, and rewinding its ref is the
+    // same lie pointing the other way.
+    if (have && !(await gitQuiet(["merge-base", "--is-ancestor", have, tip], wt.path))) {
+      return;
+    }
+    await gitRun(["update-ref", ref, tip], wt.path);
+    log.debug(`freshened ${ref}`, { slug: wt.slug, from: have ?? "(none)", to: tip });
+  } catch (err) {
+    log.debug(`could not freshen ${ref}`, {
+      slug: wt.slug,
+      err: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

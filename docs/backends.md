@@ -157,21 +157,45 @@ worktree advances its copy — measured on a live fleet of 28 rows,
 merges behind and none of them the tip. Two rules fall out of that, and
 both have shipped as bugs:
 
+**Fix the REF, not each reader.** `fetchOrigin` ends by pointing every
+worktree's own `origin/<trunk>` at the tip the main clone just fetched
+(`freshenWorktreeTrunkRefs`). Everything keyed to the base reads that
+ref: the ahead/behind counts, the pre-PR row title (the oldest commit
+in `base..HEAD`, which otherwise becomes a colleague's commit), the
+diff context the AI summary is generated from, the git row's
+files/insertions, the merge-conflict probe (which reports clean against
+a trunk several merges old, a false green), the `{{base}}` handed to
+the diff tool — and the agent's own `git log origin/<trunk>..HEAD`
+inside the checkout, which is the reader no wt-side substitution can
+reach. Measured before the fix: a branch with no commits of its own
+showed 3 ahead and an 11-file diff of somebody else's work; a real
+branch showed 304 files changed against a true 24; 17 of 18 checkouts
+were stale across three generations.
+
+It is cheap in the shape it runs. The value comparison exits first,
+which covers every checkout under `git-worktree` (one shared ref store)
+and every already-current rift clone, and the object is nearly always
+present already, so it is a ref write rather than a transfer (0 of 19
+live checkouts needed the fetch fallback). Steady-state cost is ~75ms
+for 18 checkouts against a `git fetch origin --prune` that already
+costs 1.6-2.3s. **Fast-forward only**: a clone runs its own `git fetch`
+too and can be ahead of the main clone's last one, and rewinding its
+ref is the same lie pointing the other way.
+
 **Resolve a ref in the frame the question is about.** "Where is trunk
 now" resolves in the main clone (`baseTipSha`); "what does this checkout
 see" resolves in the worktree. A comparison that spans both needs the
 same helper on each side, or it compares reference frames rather than
-commits. Sync counts (`syncState`, `pushCounts`) go through
+commits. Sync counts (`syncState`, `pushCounts`) additionally go through
 `freshBaseRev`, which swaps the trunk ref for the main clone's SHA when
-the checkout already holds that object — it counts, it never fetches,
-and anything that is not the trunk ref (a stacked parent, an external
-base) is left alone, because there the local copy genuinely is the
-freshest. Left unswapped, the counts charged a branch for every trunk
-commit that landed after its clone froze: one live row read **3 commits
-ahead with no commits of its own**, another **156** where the true
-answer was 14. That number is not cosmetic — before the branch is
-pushed it is also `pushCounts().unpushed`, which is what the destroy
-guards read, so an empty worktree claimed to be holding work at risk.
+the checkout already holds that object — a floor under the freshen
+above, for the window between a merge landing and the next fetch. It
+counts, it never fetches, and anything that is not the trunk ref (a
+stacked parent, an external base) is left alone, because there the
+local copy genuinely is the freshest. That number is not cosmetic —
+before the branch is pushed it is also `pushCounts().unpushed`, which
+is what the destroy guards read, so an empty worktree claimed to be
+holding work at risk.
 
 **"Do I have the object" is not "is my ref current".** The restack's
 trunk-root freshen (`resolveNewBaseSha`) used object presence as its

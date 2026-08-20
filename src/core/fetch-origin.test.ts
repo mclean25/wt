@@ -198,3 +198,84 @@ test("a branch with no commits of its own counts 0 ahead through a stale clone r
   );
   expect(JSON.parse(out.trim())).toEqual({ ahead: 0, behind: 0, unpushed: 0 });
 });
+
+/**
+ * The same staleness at its source: nothing was fetching INSIDE a rift
+ * checkout, so its `origin/<trunk>` decayed from the moment it was
+ * created — and every base-derived surface reads it, including the ones
+ * no read-side substitution can reach (`{{base}}` handed to the diff
+ * tool, and the agent's own `git log origin/<trunk>..HEAD`). Measured on
+ * a live fleet: 17 of 18 checkouts stale across three generations.
+ */
+function riftCheckout(worktreeRoot: string, name: string, origin: string): string {
+  mkdirSync(worktreeRoot, { recursive: true });
+  const path = join(worktreeRoot, name);
+  git(worktreeRoot, ["clone", "-q", "-b", "staging", origin, name]);
+  writeFileSync(join(path, ".rift"), "");
+  return path;
+}
+
+test("fetchOrigin advances a lagging checkout's own trunk ref", async () => {
+  const { origin, seed } = buildOrigin();
+  const root = tmp("wt-fo-root-fresh-");
+  const main = tmp("wt-fo-main-fresh-");
+  git(main, ["clone", "-q", "-b", "staging", origin, "."]);
+
+  const wts = join(root, "wts");
+  // `withObject` will already hold the commit (the merge-queue path);
+  // `needsFetch` will not, so it exercises the local transfer instead.
+  const withObject = riftCheckout(wts, "with-object", origin);
+  const needsFetch = riftCheckout(wts, "needs-fetch", origin);
+  const stale = git(withObject, ["rev-parse", "origin/staging"]);
+
+  git(seed, ["commit", "-q", "--allow-empty", "-m", "S2"]);
+  git(seed, ["push", "-q", "origin", "staging"]);
+  git(seed, ["push", "-q", "origin", "staging:refs/heads/gh-readonly-queue/staging/pr-1"]);
+  git(withObject, [
+    "fetch", "-q", "--no-tags", "origin",
+    "+refs/heads/gh-readonly-queue/staging/pr-1:refs/remotes/origin/queued",
+  ]);
+
+  expect(git(withObject, ["rev-parse", "origin/staging"])).toBe(stale);
+  expect(git(needsFetch, ["rev-parse", "origin/staging"])).toBe(stale);
+
+  const cfg = writeConfig(root, main, "");
+  runWithConfig(
+    root,
+    cfg,
+    `const m = await import(${WORKTREE_MOD}); await m.fetchOrigin();`,
+  );
+
+  const tip = git(main, ["rev-parse", "origin/staging"]);
+  expect(tip).not.toBe(stale);
+  expect(git(withObject, ["rev-parse", "origin/staging"])).toBe(tip);
+  expect(git(needsFetch, ["rev-parse", "origin/staging"])).toBe(tip);
+});
+
+test("fetchOrigin never REWINDS a checkout that fetched for itself", async () => {
+  // A clone runs its own `git fetch` too, so it can be ahead of the main
+  // clone's last one. Moving its ref back is the same lie pointing the
+  // other way, and it would flap every time the two interleave.
+  const { origin, seed } = buildOrigin();
+  const root = tmp("wt-fo-root-ahead-");
+  const main = tmp("wt-fo-main-ahead-");
+  git(main, ["clone", "-q", "-b", "staging", origin, "."]);
+
+  const wt = riftCheckout(join(root, "wts"), "ahead", origin);
+  git(seed, ["commit", "-q", "--allow-empty", "-m", "S2"]);
+  git(seed, ["push", "-q", "origin", "staging"]);
+  // Only the checkout fetches; the main clone is deliberately left behind
+  // (`fetchOrigin` will catch it up, so pin the AHEAD-ness by sha).
+  git(wt, ["fetch", "-q", "origin", "--prune"]);
+  const ahead = git(wt, ["rev-parse", "origin/staging"]);
+  expect(git(main, ["rev-parse", "origin/staging"])).not.toBe(ahead);
+
+  const cfg = writeConfig(root, main, "");
+  runWithConfig(
+    root,
+    cfg,
+    `const m = await import(${WORKTREE_MOD}); await m.fetchOrigin();`,
+  );
+
+  expect(git(wt, ["rev-parse", "origin/staging"])).toBe(ahead);
+});
