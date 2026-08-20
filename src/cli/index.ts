@@ -76,6 +76,7 @@ const RUNNERS: Record<string, Loader> = {
   claude: () => import("./commands/claude.ts"),
   dev: () => import("./commands/dev.ts"),
   _destroy: () => import("./commands/_destroy.ts"),
+  "_dev-giveup": () => import("./commands/_dev-giveup.ts"),
   "_claude-hook": () => import("./commands/_claude-hook.ts"),
 };
 

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import net from "node:net";
 
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { run } from "./proc.ts";
+
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +13,7 @@ import {
   devServerCrashSummary,
   probePort,
   readDevWaiters,
+  supervisorScript,
   type DevSlotHolder,
 } from "./dev-server.ts";
 
@@ -268,5 +271,62 @@ describe("devServerCrashSummary", () => {
     expect(summary).not.toContain("\x07");
     expect(summary!.length).toBe(180);
     expect(summary!.endsWith("…")).toBe(true);
+  });
+});
+
+describe("supervisorScript", () => {
+  const script = supervisorScript("demo-slug", "pnpm dev --port {{port}}", 8123);
+
+  test("is valid POSIX sh", async () => {
+    // A syntax error here breaks EVERY dev server on the machine, and it
+    // would surface as "the pane exits instantly" rather than as
+    // anything naming this file. `sh -n` parses without executing.
+    const f = join(tmpdir(), `wt-supervisor-${process.pid}.sh`);
+    writeFileSync(f, script);
+    try {
+      const r = await run(["sh", "-n", f]);
+      expect(`${r.exitCode} ${r.stderr}`.trim()).toBe("0");
+    } finally {
+      rmSync(f, { force: true });
+    }
+  });
+
+  test("captures the failure signature before wt echoes anything of its own", () => {
+    // The ordering bug this guards: if the supervisor prints its restart
+    // notice first, the next pass compares wt's own line with itself,
+    // every failure looks deterministic, and the early-park fires on a
+    // genuine flake.
+    const sigAt = script.indexOf("sig=\"$code|");
+    const echoAt = script.indexOf("wt: dev server exited");
+    expect(sigAt).toBeGreaterThan(-1);
+    expect(echoAt).toBeGreaterThan(-1);
+    expect(sigAt).toBeLessThan(echoAt);
+  });
+
+  test("addresses the pane with a window-qualified target", () => {
+    // `-t =name` is a SESSION target and capture-pane rejects it with
+    // "can't find pane". It fails silently in the supervisor (stderr is
+    // dropped), so the signature was always empty, every failure looked
+    // unknown, and the early-park could never fire — a feature that
+    // reads as shipped and does nothing. paneTarget's trailing colon is
+    // the whole difference.
+    expect(script).toContain("capture-pane -p -t '=demo-slug-dev:'");
+  });
+
+  test("hands off to _dev-giveup before exiting the park branch", () => {
+    const handoff = script.indexOf("_dev-giveup");
+    expect(handoff).toBeGreaterThan(-1);
+    // Must come after the marker write, so a crash-log capture that
+    // races the marker still sees `crashed`.
+    expect(script.indexOf("printf crashed")).toBeLessThan(handoff);
+    // `|| true` so cleanup trouble can never mask the park itself.
+    expect(script.slice(handoff, handoff + 200)).toContain("|| true");
+  });
+
+  test("a long healthy run clears the deterministic-failure memory", () => {
+    // Otherwise a failure from before a successful multi-hour run could
+    // pair with an unrelated one after it and park on first failure.
+    const elseBranch = script.slice(script.indexOf("    fails=0"));
+    expect(elseBranch.slice(0, 120)).toContain("prev_sig=''");
   });
 });
