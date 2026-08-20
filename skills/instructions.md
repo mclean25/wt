@@ -244,3 +244,15 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   `wt manager send "papercut: <what you ran, what misled you, what you
   expected>"`. Fire and forget: nothing comes back, don't wait for a reply,
   keep working. A papercut is never a reason to sit in `needs-human`.
+  **Report the OBSERVATION, and mark the mechanism as a guess.** That
+  shape is not modesty, it is what makes the report usable: what you ran
+  and what you saw is first-hand and stays true, while why-it-happened
+  and what-would-fix-it are inferences from outside the system, and
+  those are where these reports actually go wrong. Measured across a
+  run of them: symptoms held up every time, stated mechanisms often did
+  not, and twice a confidently-suggested fix would have made things
+  worse — freeing a crashed dev slot whose twelve containers were still
+  running, and stripping an environment variable that IS the session's
+  message transport. Never attach a `kill` line or a destructive step
+  as though it were established; name the process and let the reader
+  confirm what it is.

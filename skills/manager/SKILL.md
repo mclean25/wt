@@ -230,3 +230,23 @@ forget and is already back at work. Log it, batch it with the others, and
 raise the batch where it can be fixed (the wt session under the feedback
 brief above; otherwise the human, as a group, not one at a time). Never
 answer it back to the worker, and never let it become a status change.
+
+**Relay the observation; do not inherit the conclusion.** A papercut's
+first-hand half (what was run, what was printed, what was expected) is
+reliable and is the part worth carrying. Its explanatory half (why this
+happened, what would fix it) is an inference made from outside the
+system that broke, and that is the half that is wrong. Measured across
+one run of them: every symptom held up, several mechanisms did not, and
+twice the suggested fix would have made things worse — freeing a
+crashed dev-server slot whose twelve containers were still running, and
+un-exporting the variable that IS a session's message transport. Two
+others traced to wt's own tooling asserting something false, which is
+worth knowing precisely because it means a confident report can be
+sincerely and completely wrong.
+
+So when you batch them, pass the evidence and label the theory as
+theirs. **A destructive suggestion is never relayed as established** —
+a `kill` line, a delete, a restart. Name the thing and let whoever
+acts confirm what it is first: one report proposed killing a pid that
+turned out to be the user's own webhook daemon, installed the day
+before, which every surface marker made look like a leak.
