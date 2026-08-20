@@ -14,6 +14,7 @@ import {
   type WorkState,
 } from "../../../core/work-status.ts";
 import type { WorktreeRow } from "../../hooks/useWorktreeRows.ts";
+import { rowHasLanded } from "../../app-helpers.ts";
 import { workStateColor, workStateGlyph } from "../../badges.ts";
 import { BadgeCluster, badgeClusterCells } from "../../badge-cluster.tsx";
 import { NF } from "../../icons.ts";
@@ -69,10 +70,16 @@ export type SectionDetail = {
   pausedCount: number;
 };
 
-/** Effective state of a member — the record plus the session override,
- *  the same resolution the list dot renders. */
+/** Effective state of a member — the record plus the session override
+ *  plus the post-merge verification override, the same resolution the
+ *  list dot renders. The third argument is not optional in practice:
+ *  this summary and the list share `StatusMarker`, and a member reading
+ *  `ready` here while its own glyph two panes over reads needs-testing
+ *  is exactly the drift this module exists to prevent. */
 function memberState(m: SectionMember): WorkState | null {
-  return effectiveWorkState(m.row.work, m.sessionState)?.state ?? null;
+  return (
+    effectiveWorkState(m.row.work, m.sessionState, rowHasLanded(m.row))?.state ?? null
+  );
 }
 
 /** Risk a member row shows: the merge decision, and only once the work
