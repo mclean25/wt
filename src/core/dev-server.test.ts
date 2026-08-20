@@ -284,7 +284,12 @@ describe("supervisorScript", () => {
     const f = join(tmpdir(), `wt-supervisor-${process.pid}.sh`);
     writeFileSync(f, script);
     try {
-      const r = await run(["sh", "-n", f]);
+      // Explicit cwd: `run` defaults to `config.paths.mainClone`, and CI
+      // points that at a synthetic path that does not exist, where
+      // Bun.spawn fails on the cwd before `sh` ever runs. Passing 0
+      // locally and failing in CI is exactly the shape that invariant
+      // exists to prevent.
+      const r = await run(["sh", "-n", f], { cwd: tmpdir() });
       expect(`${r.exitCode} ${r.stderr}`.trim()).toBe("0");
     } finally {
       rmSync(f, { force: true });
