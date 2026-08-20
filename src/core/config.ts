@@ -696,6 +696,19 @@ export type Config = {
     /** Regex (no flags) matching an issue ID at the start of a slug. */
     idPattern: string;
     slugMaxLen: number;
+    /**
+     * Extra local branches the MAIN CLONE keeps current, alongside
+     * `base`. Nobody forks from these — they exist so `git log main` or
+     * a diff against main in the main clone answers about the world
+     * rather than about the last time somebody remembered to fetch.
+     * (`git fetch --prune` already freshens every `origin/<branch>`;
+     * what goes stale is the local head, which nothing was advancing.)
+     *
+     * Fast-forward only: created if absent, advanced if behind, and
+     * left alone with a warning if it has diverged. wt never rewrites
+     * local history here.
+     */
+    keepFresh: readonly string[];
   };
   stage: {
     prefix: string;
@@ -1088,6 +1101,10 @@ function build(raw: Raw, errs: Errors): Config {
     errs.add(`branch.id_pattern: invalid regex (${(err as Error).message})`);
   }
   const slugMaxLen = errs.optNum(branch, "slug_max_len", GENERIC_DEFAULTS.branch.slugMaxLen);
+  // Blank entries dropped rather than rejected: the cost of a stray ""
+  // in a list is a git call that fails on every fetch, and the value of
+  // failing the whole load over one is nil.
+  const keepFresh = strArr(branch?.keep_fresh, []).filter((b) => b.trim() !== "");
 
   const mainClone = expandHome(errs.reqStr(paths, "paths", "main_clone"));
   const worktreeRoot = expandHome(errs.reqStr(paths, "paths", "worktree_root"));
@@ -1414,7 +1431,7 @@ function build(raw: Raw, errs: Errors): Config {
       dotfiles,
     },
     tmux: { socket: tmuxSocket },
-    branch: { prefix: branchPrefix, base: branchBase, idPattern, slugMaxLen },
+    branch: { prefix: branchPrefix, base: branchBase, idPattern, slugMaxLen, keepFresh },
     stage: { prefix: stagePrefix, defaultPersonal: stageDefault, domain: stageDomain },
     lifecycle: { envFilesToCopy: envFiles, copyGlobs, installCommand, destroyCommand },
     backend: { kind: backendKind },

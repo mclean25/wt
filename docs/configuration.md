@@ -92,6 +92,43 @@ Pick it with `WT_CONFIG=/path/to/config.toml` (or let a repo `.wt.toml` supply t
 | `base` | no | `"main"` | Trunk branch name. Diff bases, sync counts, merge detection all resolve against `origin/<base>`. |
 | `id_pattern` | no | `"^[a-z]+-(\\d+)(?:-|$)"` | Regex (no flags) matching an issue ID at the start of a slug. The default matches Linear/Jira/Shortcut-style ids (`eng-1234`, `inf-99`). |
 | `slug_max_len` | no | `50` | Slugs generated from issue titles are truncated to this length. |
+| `keep_fresh` | no | `[]` | Extra local branches the **main clone** keeps current, alongside `base`. See below. |
+
+### `keep_fresh` — reference branches nobody forks from
+
+```toml
+[branch]
+base       = "staging"
+keep_fresh = ["main"]
+```
+
+When you fork from `staging`, `main` is still the branch you check
+against to see what is in production — and nothing was keeping it
+current. `git fetch --prune` (which `fetchOrigin` runs every few
+minutes) moves every `origin/<branch>`, but only the local head named by
+`base` was being advanced, so `git log main` in the main clone answered
+about the last time somebody typed `git fetch origin main:main` by hand.
+
+Each named branch is advanced in the main clone on every fetch:
+
+- Not checked out → `git branch --force <branch> origin/<branch>`, which
+  also **creates** it when the clone never had it. A `keep_fresh` entry
+  is a request for a local head that tracks origin, so absent is the
+  condition it exists to fix. (`base` keeps its historical
+  skip-if-absent behaviour — it is a branch wt assumes the clone already
+  manages.) `branch --force` rather than a raw ref write because it
+  refuses to move a branch checked out in another worktree.
+- Checked out and clean → `git merge --ff-only`.
+- Checked out and dirty → skipped. `origin/<branch>` is fresh either
+  way, and that is what the semantic checks read.
+
+**Fast-forward only, in every branch of it.** A local head that has
+diverged is left exactly where it is, with a warning in the app log.
+This runs unattended; the one thing it must never do is pick a winner.
+
+Only the main clone is touched. Under the `rift` backend each worktree
+is an independent clone with its own refs — see
+[backends.md](backends.md#stale-remote-tracking-refs).
 
 ## `[remote]` — optional SSH worktree host
 

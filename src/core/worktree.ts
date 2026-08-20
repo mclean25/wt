@@ -3,7 +3,7 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import { listRiftWorktreePaths } from "./backend.ts";
 import { config } from "./config.ts";
-import { git, branchIsGone, branchIsMerged, effectiveBaseOrTrunk, gitQuiet, gitRun, invalidateMainFirstParents, localBranchExists } from "./git.ts";
+import { git, branchIsGone, branchIsMerged, effectiveBaseOrTrunk, freshBaseRev, gitQuiet, gitRun, invalidateMainFirstParents, localBranchExists, originBranchExists } from "./git.ts";
 import { resolveMainSyncInstall } from "./install.ts";
 import { lockAge, lockLabel, lockStatus, tryAcquireLock, type LockHandle } from "./locks.ts";
 import { createLogger } from "./logger.ts";
@@ -270,7 +270,7 @@ export async function syncState(
   wtPath: string,
   effectiveBase?: string | null,
 ): Promise<SyncState> {
-  const base = await effectiveBaseOrTrunk(wtPath, effectiveBase);
+  const base = await freshBaseRev(wtPath, await effectiveBaseOrTrunk(wtPath, effectiveBase));
   const main = await countsFor(wtPath, `${base}...HEAD`);
   const branch = (
     await runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
@@ -338,12 +338,25 @@ export async function worktreeHasTrackedChanges(wtPath: string): Promise<boolean
  */
 export async function unpushedCommits(wtPath: string): Promise<number | null> {
   try {
-    const hasUpstream = await runQuiet(
+    // `@{u}` is resolved to its ref NAME rather than used directly, so
+    // the trunk case is recognizable to `freshBaseRev` — wt points a
+    // worktree's upstream at its base, so for an unstacked worktree
+    // `@{u}` IS `origin/<trunk>`, and that is exactly the ref a rift
+    // clone holds a stale copy of.
+    const upstream = (await runQuiet(
       ["git", "rev-parse", "--abbrev-ref", "@{u}"],
       { cwd: wtPath },
+    ))
+      ? (await runOk(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wtPath })).trim()
+      : "";
+    const base = await freshBaseRev(
+      wtPath,
+      upstream || `origin/${config.branch.base}`,
     );
-    const ref = hasUpstream ? "@{u}..HEAD" : `origin/${config.branch.base}..HEAD`;
-    const ahead = await runOk(["git", "rev-list", "--count", ref], { cwd: wtPath });
+    const ahead = await runOk(
+      ["git", "rev-list", "--count", `${base}..HEAD`],
+      { cwd: wtPath },
+    );
     return parseInt(ahead, 10) || 0;
   } catch (err) {
     log.error(err instanceof Error ? err : String(err), { wtPath });
@@ -435,20 +448,6 @@ export async function worktreeStatus(wt: Worktree): Promise<Status> {
   return { kind: StatusKind.Clean, label: "clean" };
 }
 
-/**
- * Fetch + prune from origin, then advance local main in the main clone
- * so it tracks origin/main.
- *
- * - On main + clean → `git merge --ff-only`
- * - Not on main → `git update-ref refs/heads/main`
- * - On main + dirty → skip (origin/main is fresh, which is what the
- *   semantic checks consume; update-ref on a checked-out branch creates
- *   phantom staged changes).
- *
- * Auto-regen files (`sst-env.d.ts`) get restored before the dirty check
- * so a routine `sst deploy/delete` write doesn't push us into the skip
- * path.
- */
 async function acquireFetchOriginLock(): Promise<LockHandle> {
   const deadline = Date.now() + 15_000;
   for (;;) {
@@ -472,49 +471,104 @@ async function fetchOriginLocked(opts: { onWarn?: (msg: string) => void } = {}):
         `git fetch origin failed: ${(fetch.stderr || fetch.stdout).trim() || `exit ${fetch.exitCode}`}`,
       );
     }
-    const base = config.branch.base;
     const main = config.paths.mainClone;
-    const localRef = `refs/heads/${base}`;
-    const remoteRef = `origin/${base}`;
-    if (!(await localBranchExists(base, main))) {
-      return;
-    }
-    if (
-      !(await gitQuiet([
-        "merge-base",
-        "--is-ancestor",
-        base,
-        remoteRef,
-      ], main))
-    ) {
-      opts.onWarn?.(
-        `Local ${base} has diverged from ${remoteRef}; not updating.`,
-      );
-      return;
-    }
-
-    let onMain = false;
+    // Resolved ONCE, not per branch: at most one of them can be the
+    // checked-out head, and only that one needs the dirty-tree dance.
+    let head: string | null = null;
     if (await gitQuiet(["symbolic-ref", "--quiet", "HEAD"], main)) {
-      const head = await git(["symbolic-ref", "--quiet", "--short", "HEAD"], main);
-      onMain = head.trim() === base;
+      head = (await git(["symbolic-ref", "--quiet", "--short", "HEAD"], main)).trim();
     }
-
-    if (onMain) {
-      await restoreAutoRegen(main);
-      const status = await runOk(["git", "status", "--porcelain"], { cwd: main });
-      if (!status.trim()) {
-        const before = (await runOk(["git", "rev-parse", "HEAD"], { cwd: main })).trim();
-        await gitRun(["merge", "--ff-only", "--quiet", remoteRef], main);
-        await syncMainDeps(main, before);
-      }
-      // else: genuinely dirty — leave local main behind; origin/main is
-      // already up-to-date from the fetch.
-    } else {
-      await gitRun(["update-ref", localRef, remoteRef], main);
+    // Trunk first, then whatever else the user wants current. Deduped,
+    // so naming the base in `keep_fresh` is redundant rather than a
+    // double fast-forward.
+    for (const branch of new Set([config.branch.base, ...config.branch.keepFresh])) {
+      await syncLocalBranch(branch, {
+        main,
+        checkedOut: head === branch,
+        // `base` keeps its historical skip-if-absent semantics — it is a
+        // branch wt assumes the clone already manages, and creating one
+        // that has never existed there is not this function's call. A
+        // `keep_fresh` entry is the opposite: the user asked for a local
+        // head that tracks origin, so ABSENT is the condition it exists
+        // to fix, and skipping would make the option a silent no-op.
+        create: branch !== config.branch.base,
+        onWarn: opts.onWarn,
+      });
     }
   } finally {
     handle.release();
   }
+}
+
+/**
+ * Fast-forward one local branch in the main clone onto the
+ * `origin/<branch>` the fetch just refreshed.
+ *
+ * - Not checked out → `git update-ref refs/heads/<branch>`
+ * - Checked out + clean → `git merge --ff-only`
+ * - Checked out + dirty → skip. `origin/<branch>` is already fresh, and
+ *   that is what the semantic checks consume; `update-ref` on a
+ *   checked-out branch would invent phantom staged changes.
+ *
+ * Auto-regen files (`sst-env.d.ts`) get restored before the dirty check
+ * so a routine `sst deploy/delete` write doesn't push us into the skip
+ * path.
+ *
+ * Fast-forward ONLY, in every branch of it. A local head that has
+ * diverged holds commits `origin` does not, and this runs unattended
+ * every few minutes — the one thing it must never do is decide which
+ * copy wins.
+ */
+async function syncLocalBranch(
+  branch: string,
+  opts: {
+    main: string;
+    checkedOut: boolean;
+    create: boolean;
+    onWarn?: (msg: string) => void;
+  },
+): Promise<void> {
+  const { main, checkedOut, create } = opts;
+  const remoteRef = `origin/${branch}`;
+  const exists = await localBranchExists(branch, main);
+  if (!exists && !create) return;
+  if (!(await originBranchExists(branch, main))) {
+    // Only worth saying for a branch the user named: a missing
+    // `origin/<base>` is a broken clone that everything else already
+    // shouts about, while a typo in `keep_fresh` has no other symptom.
+    if (create) {
+      log.warn(`keep_fresh: no ${remoteRef} to track`, { branch });
+    }
+    return;
+  }
+  if (
+    exists &&
+    !(await gitQuiet(["merge-base", "--is-ancestor", branch, remoteRef], main))
+  ) {
+    const msg = `Local ${branch} has diverged from ${remoteRef}; not updating.`;
+    opts.onWarn?.(msg);
+    log.warn(msg, { branch });
+    return;
+  }
+  if (!checkedOut) {
+    // `git branch -f` rather than `update-ref`: it refuses to move a
+    // branch that is checked out in some OTHER worktree, where a bare
+    // ref write would silently invent phantom staged changes in a
+    // checkout nobody is looking at. wt's own worktrees carry
+    // `branch.prefix` names so this can't collide with them, but a
+    // hand-made one on `main` is exactly what `keep_fresh` invites.
+    const r = await gitRun(["branch", "--force", branch, remoteRef], main);
+    if (r.exitCode !== 0) {
+      log.warn(`could not advance ${branch}: ${(r.stderr || r.stdout).trim()}`, { branch });
+    }
+    return;
+  }
+  await restoreAutoRegen(main);
+  const status = await runOk(["git", "status", "--porcelain"], { cwd: main });
+  if (status.trim()) return;
+  const before = (await runOk(["git", "rev-parse", "HEAD"], { cwd: main })).trim();
+  await gitRun(["merge", "--ff-only", "--quiet", remoteRef], main);
+  await syncMainDeps(main, before);
 }
 
 /**

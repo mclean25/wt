@@ -148,6 +148,47 @@ and it drives the rest of the design:
   untracked file and is left. OpenCode has no such gate. (Both mirror the
   `unseamless-coop` fleet.)
 
+## Stale remote-tracking refs
+
+A rift clone's `origin/<trunk>` is frozen at clone time. `fetchOrigin`
+runs `git fetch` in the **main clone** only, so nothing inside a
+worktree advances its copy — measured on a live fleet of 28 rows,
+`git rev-parse origin/staging` gave 10 distinct answers, one of them 9
+merges behind and none of them the tip. Two rules fall out of that, and
+both have shipped as bugs:
+
+**Resolve a ref in the frame the question is about.** "Where is trunk
+now" resolves in the main clone (`baseTipSha`); "what does this checkout
+see" resolves in the worktree. A comparison that spans both needs the
+same helper on each side, or it compares reference frames rather than
+commits. Sync counts (`syncState`, `pushCounts`) go through
+`freshBaseRev`, which swaps the trunk ref for the main clone's SHA when
+the checkout already holds that object — it counts, it never fetches,
+and anything that is not the trunk ref (a stacked parent, an external
+base) is left alone, because there the local copy genuinely is the
+freshest. Left unswapped, the counts charged a branch for every trunk
+commit that landed after its clone froze: one live row read **3 commits
+ahead with no commits of its own**, another **156** where the true
+answer was 14. That number is not cosmetic — before the branch is
+pushed it is also `pushCounts().unpushed`, which is what the destroy
+guards read, so an empty worktree claimed to be holding work at risk.
+
+**"Do I have the object" is not "is my ref current".** The restack's
+trunk-root freshen (`resolveNewBaseSha`) used object presence as its
+gate, and the object routinely arrives early by another name: a plain
+`git fetch origin` in the clone pulls GitHub's merge-queue branches
+(`gh-readonly-queue/<base>/pr-N-<sha>`), whose tip *is* the commit that
+becomes trunk minutes later. The gate read "already fresh", the ref
+never moved, and the rebase landed on the right commit while every later
+reader in that clone — counts, the conflict probe, the agent's own
+`git log origin/<trunk>..HEAD` — kept measuring against a tip several
+merges behind. It compares ref VALUES now.
+
+Neither is reproducible in `scripts/fixture.sh`, which writes no
+`[backend]` section and therefore runs `git-worktree`, where the ref
+store is shared and every clone's answer is the same answer. See
+`src/core/fetch-origin.test.ts` for fixtures that model separate clones.
+
 ## Self-healing registry
 
 rift's registry is a global SQLite db that outlives directories. A

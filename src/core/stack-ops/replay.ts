@@ -416,9 +416,20 @@ export async function resolveNewBaseSha(
     // time — the run's `fetchOrigin` only freshens the MAIN clone — so a
     // rift root would otherwise rebase onto stale trunk. Freshen this
     // clone's `origin/<trunk>` from the main clone when it lags (a no-op
-    // when they share a db, so git-worktree is unchanged).
+    // when they share a ref store, so git-worktree is unchanged).
+    //
+    // Gated on the REF's value, not on whether the object is present.
+    // Those are different questions and the difference is not academic:
+    // a plain `git fetch origin` in the clone pulls GitHub's merge-queue
+    // branches (`gh-readonly-queue/<base>/pr-N-<sha>`), whose tip IS the
+    // commit that becomes trunk minutes later. So the object arrives
+    // early, an object-presence gate reads "already fresh", and the ref
+    // never moves — leaving the rebase target correct and every later
+    // reader in that clone (ahead/behind counts, the conflict probe, the
+    // agent's own `git log origin/<trunk>..HEAD`) measuring against a
+    // tip that is now several merges behind.
     const mainTrunk = await revParse(`origin/${trunk}`, config.paths.mainClone);
-    if (mainTrunk && !(await hasCommit(cwd, mainTrunk))) {
+    if (mainTrunk && (await revParse(`origin/${trunk}`, cwd)) !== mainTrunk) {
       await run(
         [
           "git", "fetch", "--no-tags", config.paths.mainClone,

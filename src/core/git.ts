@@ -52,6 +52,44 @@ export async function effectiveBaseOrTrunk(
 }
 
 /**
+ * Swap a trunk base ref for the main clone's SHA when the checkout can
+ * resolve it, so a count is taken in a reference frame that means
+ * "where the world is now".
+ *
+ * Under the `rift` backend a worktree is an independent clone whose
+ * `origin/<trunk>` is frozen at clone time and only moves when
+ * something inside that clone fetches. Every ahead/behind count then
+ * measures against whatever that checkout last saw, and the error is
+ * one-directional and invisible: commits that landed on trunk AFTER the
+ * clone's stale ref, but are already in HEAD, get counted as the
+ * branch's own work. Measured on a live fleet of 10, two rows were
+ * wrong — one reporting 3 commits ahead on a branch with no commits at
+ * all (rebased onto a tip its own `origin/staging` had never heard of),
+ * and one reporting 156 where the true answer was 14.
+ *
+ * That number is not cosmetic: with no `origin/<branch>` yet, it is
+ * also the answer `pushCounts` gives for `unpushed`, which is what the
+ * destroy guards read. An empty worktree that claims to hold three
+ * commits of unpushed work is a guard crying wolf, and those get forced
+ * past by reflex.
+ *
+ * Only the trunk ref is swapped, and only when `wtPath` already has the
+ * object — this counts, it never fetches. Anything else (a stacked
+ * slice's parent, an external base) is left exactly as resolved: its
+ * freshest copy genuinely is the local one. Returns a SHA, so callers
+ * that need a stable ref NAME for display (the `{{base}}` substitution,
+ * whose change kills a live diff session) must not route through here.
+ */
+export async function freshBaseRev(wtPath: string, base: string): Promise<string> {
+  if (base !== `origin/${config.branch.base}`) return base;
+  const fresh = await revParse(base, config.paths.mainClone);
+  if (!fresh) return base;
+  return (await gitQuiet(["cat-file", "-e", `${fresh}^{commit}`], wtPath))
+    ? fresh
+    : base;
+}
+
+/**
  * Is a rebase actually in progress in `cwd`? This is the authoritative test —
  * the presence of git's per-worktree `rebase-merge`/`rebase-apply` state dir —
  * NOT the exit code of `git rebase --abort` (which also fails when there's

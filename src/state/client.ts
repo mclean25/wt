@@ -85,7 +85,14 @@ export const CACHE_DB = config.paths.cacheDb;
 // absent, which reads as "nothing owed"; on a merged remote row that is
 // the one answer that releases the checkout to the sweep, taking the
 // context the check needed with it.
-const CACHE_BUSTER = "v20";
+// v21: `SyncState`'s shape is unchanged and its MEANING is not. Both
+// counts now measure against the main clone's trunk tip when the
+// checkout holds that commit, instead of against the checkout's own
+// `origin/<trunk>` — which under `rift` is frozen at clone time and was
+// inflating "ahead" by every trunk commit that landed after it (156 vs
+// a true 14 on one live row). A restored v20 entry carries the old
+// number in the new shape, and nothing distinguishes them.
+const CACHE_BUSTER = "v21";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
