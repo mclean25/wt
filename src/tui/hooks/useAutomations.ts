@@ -66,7 +66,7 @@ import {
   tripBreaker,
 } from "../../core/automations.ts";
 import { config, type AutomationTrigger } from "../../core/config.ts";
-import { closeGithubIssue } from "../../core/github.ts";
+import { closeGithubIssue, deleteRemoteBranch } from "../../core/github.ts";
 import { lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { notifyMacos } from "../../core/notify.ts";
@@ -175,6 +175,26 @@ function pairTarget(fire: AutomationFire): string {
   return fire.stackId ?? fire.slug;
 }
 
+/**
+ * Builtins that fire on a LANDING and write somewhere outside the
+ * worktree. They share three properties, and every one of them is
+ * load-bearing below:
+ *
+ *  - their fire carries everything delivery needs (issue number, branch),
+ *    so a row that died before dispatch is NOT a superseded intent;
+ *  - they cannot clear the condition that fired them — the branch stays
+ *    merged forever — so the breaker must not count them or a couple of
+ *    reused-slug landings would trip the rule off;
+ *  - they touch nothing in the checkout, so quiescence is meaningless
+ *    and their fires carry an empty `quiesceSlugs`.
+ *
+ * A future post-merge builtin that DOES touch the worktree must not join
+ * this set; it would need the quiescence half split back out.
+ */
+function isPostMergeExternalRun(run: string): boolean {
+  return run === "builtin:close-issue" || run === "builtin:delete-branch";
+}
+
 function resolveActionDef(runId: string): ActionDef | null {
   return (
     config.actions.find((d) => d.id === runId) ??
@@ -188,7 +208,7 @@ function resolveActionDef(runId: string): ActionDef | null {
  * of the echo guard in `automation-rules.ts`. Only a prompt action
  * aimed at a persistent session has one: `headless` spawns a fresh run
  * that wrote nothing, and every builtin (notify, clean, restack,
- * close-issue) talks to the human or to git, neither of which asserts a
+ * post-merge write) talks to the human or to git, neither of which asserts a
  * work status.
  */
 function audienceOf(rule: AutomationDef): FireAudience {
@@ -459,6 +479,31 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       }
       return { declined: null };
     }
+    if (rule.run === "builtin:delete-branch") {
+      // Frozen onto the fire at evaluation, same as close-issue: the
+      // row is routinely gone by delivery, and a live re-read could
+      // resolve a recreated slug to a branch that has NOT landed.
+      const branch = fire.deleteBranch;
+      if (branch === null) {
+        wtLog.event.dim(`auto ${rule.id}: fire carried no branch — nothing to delete`);
+        return { declined: null };
+      }
+      const r = await deleteRemoteBranch(branch);
+      if (r.ok) {
+        // ATTENTION for the same reason close-issue takes it: this
+        // writes to a system outside wt, where wt's undo does not
+        // reach and the board shows nothing.
+        wtLog.attention.info(`auto ${rule.id}: deleted remote branch ${branch}`);
+      } else {
+        // Non-fatal and usually not even a failure: a repo with
+        // GitHub's own "automatically delete head branches" enabled,
+        // or anyone deleting it by hand, gets there first and GitHub
+        // answers "Reference does not exist". That is the end state we
+        // wanted. Log, never retry.
+        wtLog.event.dim(`auto ${rule.id}: delete branch ${branch}: ${r.error}`);
+      }
+      return { declined: null };
+    }
     const def = resolveActionDef(rule.run);
     if (!def) throw new Error(`action "${rule.run}" not found in config`);
     const outcome = await latest.current.launchAction(slug, def, "", undefined, {
@@ -590,17 +635,17 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     }
 
     // Drop superseded intents — the condition cleared while queued.
-    // close-issue intents get a narrower rule: a merge can't un-happen,
-    // and the row routinely dies right after one (a clean/restack
-    // pre-clean archives at dispatch; a manual `c` easily beats the
-    // 10s settle window), so "row gone/archived/busy" must NOT count
-    // as superseded — the close still has to run, off the number
-    // frozen into the fire. Only a genuine clear (the row still
+    // Post-merge external intents get a narrower rule: a merge can't
+    // un-happen, and the row routinely dies right after one (a clean or
+    // restack pre-clean archives at dispatch; a manual `c` easily beats
+    // the 10s settle window), so "row gone/archived/busy" must NOT count
+    // as superseded — the run still has to happen, off the value frozen
+    // into the fire. Only a genuine clear (the row still
     // evaluable but no longer firing — e.g. the issue was detached)
     // or an explicit per-slug pause drops one.
     for (const [id, intent] of intents.current) {
       if (byId.has(id)) continue;
-      if (intent.fire.rule.run === "builtin:close-issue") {
+      if (isPostMergeExternalRun(intent.fire.rule.run)) {
         const row = ctx.rows.find((r) => r.wt.slug === intent.fire.slug);
         const cleared = row !== undefined && isEligible(row, evalCtx);
         if (!cleared && !evalCtx.isPausedSlug(intent.fire.slug)) continue;
@@ -646,12 +691,12 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // briefings, and issue closes don't CLEAR anything — the
       // condition legitimately stays true until the human (or the
       // clean flow) acts — so counting them would swallow the 3rd+
-      // needs-human ping exactly when it matters, or trip close-issue
-      // after a couple of reused-slug landings. Cooldowns still apply
+      // needs-human ping exactly when it matters, or trip a post-merge
+      // run after a couple of reused-slug landings. Cooldowns still apply
       // for spacing.
       const breakerExempt =
         rule.run === "builtin:notify" ||
-        rule.run === "builtin:close-issue" ||
+        isPostMergeExternalRun(rule.run) ||
         isManagerRun;
       if (fire.quiesceSlugs.some((s) => occupiedSlugs.has(s))) continue;
       if (
@@ -693,8 +738,8 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // happens exactly while the session is non-quiescent (asking).
       // Bypass, don't wait. The two flags coincide today because every
       // exempt run is exempt for the same reason (it can't clear or
-      // disturb anything in the worktree — close-issue's fires even
-      // carry an empty quiesceSlugs); a future run that's breaker-
+      // disturb anything in the worktree — the post-merge runs' fires
+      // even carry an empty quiesceSlugs); a future run that's breaker-
       // exempt but does touch the worktree must split them.
       const bypassQuiesce = breakerExempt;
       const blocked = bypassQuiesce ? null : quiesceBlockReason(fire, now);

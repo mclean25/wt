@@ -12,6 +12,7 @@ export { fetchRepoContributors } from "./github/contributors.ts";
 export {
   AUTO_MERGE_METHOD,
   closeGithubIssue,
+  deleteRemoteBranch,
   enableAutoMerge,
   disableAutoMerge,
   editReviewers,

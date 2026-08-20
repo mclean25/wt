@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { config } from "../core/config.ts";
 import type { AutomationDef } from "../core/config.ts";
 import { StatusKind, type PullRequest } from "../core/types.ts";
 
@@ -484,5 +485,66 @@ describe("stack.parent_merged", () => {
       isPausedSlug: (s) => s === "a-tip",
     });
     expect(fires).toHaveLength(0);
+  });
+});
+
+describe("wt.merged → builtin:delete-branch", () => {
+  const r = rule({ id: "rm-branch", on: "wt.merged", run: "builtin:delete-branch" });
+
+  test("freezes the branch onto the fire with an empty quiesce set", () => {
+    const row = makeRow("a", { pr: makePr({ state: "MERGED" }) });
+    const fires = evaluateAutomations([r], [row], FRESH);
+    expect(fires).toHaveLength(1);
+    // Frozen for the same reason close-issue freezes its number, and it
+    // matters more here: a live re-read at delivery could resolve a
+    // recreated slug to a branch that has not landed, and a deleted ref
+    // is the one thing wt cannot undo.
+    expect(fires[0]!.deleteBranch).toBe("michael/a");
+    expect(fires[0]!.closeIssue).toBeNull();
+    // Empty on purpose: this touches GitHub, never the checkout, so a
+    // racing clean/restack must not be able to starve it.
+    expect(fires[0]!.quiesceSlugs).toEqual([]);
+    expect(fires[0]!.detail).toContain("michael/a");
+  });
+
+  test("does not need an attached issue (unlike close-issue)", () => {
+    const row = makeRow("a", { pr: makePr({ state: "MERGED" }) });
+    expect(evaluateAutomations([r], [row], FRESH)[0]!.deleteBranch).toBe("michael/a");
+  });
+
+  test("evaluates stacked members too", () => {
+    // A merged stack member is normally skipped so a clean can't race a
+    // whole-stack restack, but deleting a remote ref touches no
+    // worktree — and skipping would miss every stacked landing, which
+    // is most of them on a stacked fleet.
+    const row = makeRow("eng-1", {
+      pr: makePr({ state: "MERGED" }),
+      stack: stackInfo("eng-1", 1),
+    });
+    expect(evaluateAutomations([r], [row], FRESH)).toHaveLength(1);
+  });
+
+  test("never fires for a branch that has not landed", () => {
+    const open = makeRow("a", { pr: makePr({ state: "OPEN" }) });
+    expect(evaluateAutomations([r], [open], FRESH)).toHaveLength(0);
+  });
+
+  test("refuses the trunk branch even if a row somehow carries it", () => {
+    // Defence in depth, not a live worry: no worktree branch is ever the
+    // trunk. It is here because this is the one mutation in the codebase
+    // whose blast radius is the repo's mainline rather than a retry.
+    const row = makeRow("a", { pr: makePr({ state: "MERGED" }) });
+    const onTrunk = {
+      ...row,
+      wt: { ...row.wt, branch: config.branch.base },
+    };
+    expect(evaluateAutomations([r], [onTrunk], FRESH)).toHaveLength(0);
+  });
+
+  test("shares the merged fire key shape, so one landing fires once", () => {
+    const row = makeRow("a", { pr: makePr({ state: "MERGED" }) });
+    expect(evaluateAutomations([r], [row], FRESH)[0]!.fireKeys).toEqual([
+      "rm-branch:merged:a:101",
+    ]);
   });
 });

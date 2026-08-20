@@ -239,6 +239,40 @@ export async function closeGithubIssue(issue: number): Promise<GhActionResult> {
 }
 
 /**
+ * Delete a landed branch's ref on the origin repo. Used by the
+ * `builtin:delete-branch` automation once a worktree's branch merges —
+ * the same effect as GitHub's "Automatically delete head branches"
+ * setting, for repos that have not enabled it.
+ *
+ * The trunk refusal is defence in depth rather than a live worry: the
+ * only branch that ever reaches here is a worktree's own, frozen onto a
+ * fire that already required the branch to have LANDED. It is here
+ * because the blast radius is asymmetric — every other failure in this
+ * file costs a retry, and this one costs the repo's mainline.
+ *
+ * Failure is advisory, exactly like `closeGithubIssue`: a repo with the
+ * GitHub setting on, or anyone who deleted it by hand, gets there first
+ * and GitHub answers `Reference does not exist`. That is the desired
+ * end state, not an error, so callers log and move on rather than
+ * retrying into a ref that is already gone.
+ */
+export async function deleteRemoteBranch(branch: string): Promise<GhActionResult> {
+  if (!branch) return { ok: false, error: "missing branch" };
+  if (branch === config.branch.base) {
+    return { ok: false, error: `refusing to delete the trunk branch ${branch}` };
+  }
+  const slug = await repoSlug();
+  if (!slug) return { ok: false, error: "could not resolve the origin repo" };
+  // Nested refs (`user/feature`) need no escaping — the REST path takes
+  // the rest of the ref verbatim after `heads/`.
+  return runGhMutation(
+    ["gh", "api", "--method", "DELETE", `repos/${slug}/git/refs/heads/${branch}`],
+    "delete branch failed",
+    { branch },
+  );
+}
+
+/**
  * Stream the failed-job logs of the most recent failed CI run for
  * `branch` to `onLine`, via `gh run view <id> --log-failed`. Resolves
  * the count of lines emitted, or a reason when gh is missing, no failed

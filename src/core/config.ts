@@ -592,6 +592,7 @@ export const AUTOMATION_BUILTINS = [
   "builtin:clean",
   "builtin:notify",
   "builtin:close-issue",
+  "builtin:delete-branch",
 ] as const;
 export type AutomationBuiltin = (typeof AUTOMATION_BUILTINS)[number];
 
@@ -1514,6 +1515,21 @@ function parseAutomations(
       }
       if (out.some((a) => a.run === "builtin:close-issue")) {
         errs.add(`${tag}: only one builtin:close-issue rule is allowed`);
+        continue;
+      }
+    }
+    // Same shape and the same two reasons as close-issue above, and the
+    // stakes are higher: the landing is what makes deleting the branch
+    // safe, so any other trigger would delete the ref for work still in
+    // flight — and a second rule would just race the first to a DELETE
+    // that can only succeed once.
+    if (run === "builtin:delete-branch") {
+      if (on !== "wt.merged") {
+        errs.add(`${tag}: run "builtin:delete-branch" requires on = "wt.merged"`);
+        continue;
+      }
+      if (out.some((a) => a.run === "builtin:delete-branch")) {
+        errs.add(`${tag}: only one builtin:delete-branch rule is allowed`);
         continue;
       }
     }

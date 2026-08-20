@@ -18,7 +18,7 @@ Fire keys embed the PR's head SHA where relevant: a new push produces a new key 
 | `review_bot.unresolved` | the configured [`[review_bot]`](configuration.md#review_bot--the-bot-review-track) has unresolved findings — unresolved threads (CodeRabbit) or unticked checklist boxes, per `unresolved_via`. `rabbit.unresolved` is accepted as a legacy alias |
 | `review.changes_requested` | a human review requested changes |
 | `pr.conflict` | the merge-tree probe says the branch conflicts with its effective base |
-| `wt.merged` | a non-stacked worktree's branch landed (merged / upstream gone / PR merged — the same set the `c` clean sweep uses). A branch with no commits of its own never counts as landed, however contained it looks — see the vacuous-containment guard in `branchIsMerged`. Rules running `builtin:close-issue` also evaluate stack members — that run never touches the worktree, so the clean-vs-restack race the exclusion protects against doesn't apply |
+| `wt.merged` | a non-stacked worktree's branch landed (merged / upstream gone / PR merged — the same set the `c` clean sweep uses). A branch with no commits of its own never counts as landed, however contained it looks — see the vacuous-containment guard in `branchIsMerged`. Rules running `builtin:close-issue` or `builtin:delete-branch` also evaluate stack members — those runs never touch the worktree, so the clean-vs-restack race the exclusion protects against doesn't apply |
 | `stack.parent_merged` | a stack (worktrees chained by their recorded fork bases — see [stacked-prs.md](stacked-prs.md)) has a merged member with open members stacked on it |
 | `status.needs_human` / `status.needs_testing` / `status.ready` | the worktree's asserted [work status](cli.md#wt-status-slug-state--m-note---risk-r) is that state. Local (wtstate), so no GitHub-freshness gate; the fire key carries the assertion timestamp, so one assertion fires once and re-asserting fires again — unless the re-assert is identical (same state/note/risk/sha), in which case `setSlugWorkStatus` is a no-op that keeps the original `at`, so it doesn't refire, or the asserter is the session the rule would brief (below). Hyphenated spellings (`status.needs-human`) are accepted aliases. **`status.ready` does not fire while the record carries a [`--blocked-on` gate](cli.md#wt-status-slug-state--m-note---risk-r---blocked-on-gate)**: every documented use of it says "this is yours to merge", and firing that at a branch that must not be merged is the misread the gate exists to prevent, amplified to a macOS banner. The fire is not lost — `--unblock` amends in place, so `at` is unchanged and the fire key was never consumed. Settle defaults to 0 — an assertion is a deliberate write, not flappy derived state |
 
@@ -56,6 +56,21 @@ run = "builtin:notify"
 id  = "close-issue-on-merge"
 on  = "wt.merged"
 run = "builtin:close-issue"
+```
+
+- `builtin:delete-branch` — delete the branch's ref on the origin repo once it lands (requires `on = "wt.merged"`; one rule max — a second would race the first to a DELETE that can only succeed once). This is GitHub's **"Automatically delete head branches"** setting, for repos that have not enabled it, and it exists for the same reason `builtin:close-issue` does: the repo-level feature is not always available to you, and the landing is a signal wt already computes.
+
+  It is the second builtin that writes OUTSIDE wt, so it inherits close-issue's whole shape and for identical reasons: it fires for stack members too, bypasses quiescence, is breaker-exempt (deleting a branch cannot clear the merged condition — only cleanup does), survives the row's death because the branch name is frozen onto the fire at evaluation, and narrates a success on the ATTENTION feed rather than the firehose. `isPostMergeExternalRun` in `hooks/useAutomations.ts` is where the two share that behaviour; a future post-merge builtin that *does* touch the worktree must not join it.
+
+  Two things are specific to this one. Failure is usually not failure: a repo with GitHub's own setting on, or anyone deleting by hand, wins the race and GitHub answers `Reference does not exist`, which is the end state we wanted — logged as advisory, never retried. And it refuses `branch.base` outright. No worktree branch is ever the trunk, so that guard is defence in depth rather than a live worry; it is there because this is the one mutation in the codebase whose blast radius is the repo's mainline rather than a retry.
+
+  Deleting a merged parent's ref is safe for a stack on both sides: GitHub retargets an open child PR onto the deleted base's own base, and wt's restack replays from the `baseSha` anchor in wtstate, never from the remote ref. It is also already accounted for locally — `localOnlyCommits` treats "no `origin/<branch>` and the branch landed" as a squash merge's pre-squash originals, not as unpushed work, so the destroy guards do not start crying wolf once the ref is gone.
+
+```toml
+[[automations]]
+id  = "delete-branch-on-merge"
+on  = "wt.merged"
+run = "builtin:delete-branch"
 ```
 
 ## Dispatch pipeline

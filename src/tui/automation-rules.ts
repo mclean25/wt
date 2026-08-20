@@ -21,6 +21,7 @@
  * first-fire on dead data). Locally-computed fields (conflict probe,
  * merged/gone) only need their own query to have loaded.
  */
+import { config } from "../core/config.ts";
 import type { AutomationDef, AutomationTrigger } from "../core/config.ts";
 import { githubIssueNumberFromSlug } from "../core/issue-tracker.ts";
 import { MANAGER_SLUG } from "../core/manager.ts";
@@ -58,6 +59,14 @@ export type AutomationFire = {
    * hit a recreated slug's fresh state and close the wrong issue.
    */
   closeIssue: number | null;
+  /**
+   * Branch a `builtin:delete-branch` run deletes on the origin repo,
+   * FROZEN at fire time; null for every other run. Frozen for the
+   * same reason as `closeIssue`, and it matters more here: a stale
+   * re-read at delivery would delete a ref, which nothing in wt can
+   * undo.
+   */
+  deleteBranch: string | null;
   /** Human-readable trigger summary for the activity-pane event line. */
   detail: string;
 };
@@ -171,6 +180,7 @@ function singleRowFire(
     fireKeys: [fireKey],
     stackId: null,
     closeIssue: null,
+    deleteBranch: null,
     detail,
   };
 }
@@ -250,13 +260,18 @@ function evaluateRowTrigger(
     }
     case "wt.merged": {
       const closesIssue = rule.run === "builtin:close-issue";
+      const deletesBranch = rule.run === "builtin:delete-branch";
       // Non-stacked worktrees only — merged stack members are cleaned
       // by the stack.parent_merged → builtin:restack path, and letting
       // both fire would race a clean against a whole-stack restack.
-      // Exception: a close-issue run never touches the worktree (no
-      // race to protect against) and would otherwise miss every
-      // stacked landing, so it evaluates stack members too.
-      if (row.stack && !closesIssue) return null;
+      // Exception: runs that never touch the WORKTREE have no race to
+      // protect against and would otherwise miss every stacked landing,
+      // so they evaluate stack members too. Deleting a merged parent's
+      // remote ref is safe for its children on both sides: GitHub
+      // retargets an open child PR onto the deleted base's own base,
+      // and wt's restack replays from the `baseSha` anchor in wtstate,
+      // never from the remote ref.
+      if (row.stack && !closesIssue && !deletesBranch) return null;
       // The PR-merged leg of isCleanCandidate needs fresh github data;
       // the merged/gone legs are local. Split the check accordingly.
       const localDone =
@@ -286,7 +301,28 @@ function evaluateRowTrigger(
           fireKeys: [`${rule.id}:merged:${slug}:${row.pr?.number ?? "local"}`],
           stackId: null,
           closeIssue: issue,
+          deleteBranch: null,
           detail: `${landed} — closing issue #${issue}`,
+        };
+      }
+      if (deletesBranch) {
+        // The branch rides the fire for the same reason the issue
+        // number does: the row is routinely destroyed before dispatch
+        // (a clean, a restack pre-clean, a manual `c`), and re-reading
+        // at delivery could hit a recreated slug and delete the wrong
+        // ref. Quiescence is empty for the same reason too — this
+        // touches GitHub, never the checkout.
+        const branch = row.wt.branch;
+        if (!branch || branch === config.branch.base) return null;
+        return {
+          rule,
+          slug,
+          quiesceSlugs: [],
+          fireKeys: [`${rule.id}:merged:${slug}:${row.pr?.number ?? "local"}`],
+          stackId: null,
+          closeIssue: null,
+          deleteBranch: branch,
+          detail: `${landed} — deleting remote branch ${branch}`,
         };
       }
       return singleRowFire(
@@ -448,6 +484,7 @@ function evaluateStackTrigger(
       fireKeys,
       stackId,
       closeIssue: null,
+      deleteBranch: null,
       detail: `${parts.join(" + ")} under ${pluralize(open.length, "open member")}`,
     });
   }
