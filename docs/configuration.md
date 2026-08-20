@@ -192,6 +192,8 @@ Preview-stage naming, used by the SST integration and stage URLs.
 
 ### `destroy_command` — what it is for
 
+The reaper's `lsof` scans get an 8s budget each (76ms on an idle box, so only a saturated machine reaches it). A blown budget is treated as **unknown**, never as "nothing is listening" — lsof buffers, so a SIGKILLed scan returns zero bytes that parse as a clean empty answer, and reading that as complete skipped the reap and leaked the port block. It retries once and then logs an attention warning naming the worktree.
+
 The destroy-time **process** reaper kills anything holding a listening TCP socket whose cwd is inside the worktree. That covers a hand-started `pnpm preview` or a stray watch runner, and nothing else. Resources a dev server creates *outside* the process tree are invisible to it — **docker containers above all**: a container has no cwd in the worktree, and its published host ports are held by the docker daemon, so neither half of the reaper's match ever fires.
 
 The failure that follows is indirect enough to be hard to read. A stack left running after its worktree is destroyed keeps its host ports; wt frees the slug's dev port and hands it to the next worktree (correctly — it probes, and the *dev* port really is free); that worktree derives the same downstream ports from it and dies on a `port is already allocated` error naming a container wt has never heard of.

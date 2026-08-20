@@ -28,6 +28,20 @@ export type RunResult = {
   stdout: string;
   stderr: string;
   exitCode: number;
+  /**
+   * The `timeoutMs` budget fired and the process was SIGKILLed.
+   *
+   * Whatever had been captured is still returned, and for a command
+   * that buffers its output that is NOTHING — which parses as a clean
+   * empty result, indistinguishable from a completed scan that found
+   * nothing. So any caller reading a command's output as an answer
+   * ABOUT THE WORLD has to check this: a timeout on our own clock is
+   * not evidence about anything out there. Measured on the destroy
+   * reaper's `lsof`, which takes 76ms on an idle box against an 8000ms
+   * budget: when the box was loaded enough to blow it, the reaper read
+   * the empty stdout as "nothing is listening" and skipped the reap.
+   */
+  timedOut?: boolean;
 };
 
 export type RunOptions = {
@@ -134,8 +148,12 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
   }
 
   let timer: Timer | undefined;
+  let timedOut = false;
   if (timeoutMs) {
-    timer = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
+    timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGKILL");
+    }, timeoutMs);
   }
 
   // Abort plumbing: SIGTERM on signal, but let the drains complete so
@@ -158,7 +176,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
-    return { stdout, stderr, exitCode };
+    return { stdout, stderr, exitCode, timedOut };
   } finally {
     if (timer) clearTimeout(timer);
     cleanupAbort();

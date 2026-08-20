@@ -90,6 +90,47 @@ export function isUnderPath(cwd: string, root: string): boolean {
   return cwd === r || cwd.startsWith(`${r}/`);
 }
 
+/**
+ * How long one `lsof` scan gets. Generous on purpose: the full listener
+ * scan measures 76ms on an idle box, so this is a ~100x margin and only
+ * a genuinely saturated machine reaches it.
+ */
+const LSOF_TIMEOUT_MS = 8000;
+
+/**
+ * One `lsof` scan, with the outcome that matters made explicit.
+ *
+ * A blown budget SIGKILLs lsof mid-run, and lsof buffers — so the
+ * result is zero bytes with exit 137, which parses to an empty list
+ * that reads exactly like "nothing is listening". That is the wrong
+ * answer in the expensive direction: the reap is skipped, a dev server
+ * survives its worktree's destroy, and it keeps the port block that the
+ * next worktree then fails to bind (see `[lifecycle] destroy_command`
+ * in docs/configuration.md for how that presents). Nothing anywhere
+ * said so.
+ *
+ * Retried once, because the load spikes that cause it are usually
+ * brief — a fleet of worktrees running test suites is exactly how this
+ * box gets there. Two blown budgets means the answer is UNKNOWN, and
+ * `attention` is right for it: unknown here means a leak the human will
+ * meet later, wearing a bind error that names nothing wt knows.
+ */
+async function lsofScan(
+  argv: string[],
+  label: string,
+  wtPath: string,
+): Promise<{ out: string; complete: boolean }> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const r = await run(argv, { cwd: "/", timeoutMs: LSOF_TIMEOUT_MS });
+    if (!r.timedOut) return { out: r.stdout, complete: true };
+    log.warn(`lsof ${label} scan exceeded ${LSOF_TIMEOUT_MS}ms`, { attempt, path: wtPath });
+  }
+  log.attention.warn(
+    `could not scan listeners for ${wtPath} — a dev server may still hold its ports`,
+  );
+  return { out: "", complete: false };
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -113,26 +154,28 @@ export async function reapWorktreeListeners(wtPath: string): Promise<ReapedProce
     if (wtPath === config.paths.mainClone || wtPath.split("/").length < 3) return [];
     if (!Bun.which("lsof")) return [];
 
-    // Explicit cwd: `run()` defaults to the main clone, and a destroy
-    // must not depend on that directory existing (it also doesn't on
-    // CI's synthetic config, where the default cwd made this spawn
-    // throw and the reaper silently no-op).
-    const listeners = await run(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"], {
-      cwd: "/",
-      timeoutMs: 8000,
-    });
+    const listeners = await lsofScan(
+      ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"],
+      "listener",
+      wtPath,
+    );
+    if (!listeners.complete) return [];
     // lsof exits 1 for "no matches" (and for harmless per-fd warnings)
     // while still printing what it found — parse stdout, ignore the code.
-    const all = parseListeners(listeners.stdout).filter(
+    // That is true of exit 1 and NOT of the 137 a blown budget produces,
+    // which is what `lsofScan` is for.
+    const all = parseListeners(listeners.out).filter(
       (p) => p.pid !== process.pid && p.pid !== process.ppid,
     );
     if (all.length === 0) return [];
 
-    const cwds = await run(
+    const cwds = await lsofScan(
       ["lsof", "-a", "-p", all.map((p) => p.pid).join(","), "-d", "cwd", "-Fpn"],
-      { cwd: "/", timeoutMs: 8000 },
+      "cwd",
+      wtPath,
     );
-    const cwdByPid = parseCwdMap(cwds.stdout);
+    if (!cwds.complete) return [];
+    const cwdByPid = parseCwdMap(cwds.out);
     const mine = all.filter((p) => {
       const cwd = cwdByPid.get(p.pid);
       return cwd !== undefined && isUnderPath(cwd, wtPath);

@@ -10,7 +10,13 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { isUnderPath, parseCwdMap, parseListeners, reapWorktreeListeners } from "./reaper.ts";
+import {
+  isUnderPath,
+  parseCwdMap,
+  parseListeners,
+  type ReapedProcess,
+  reapWorktreeListeners,
+} from "./reaper.ts";
 
 describe("parseListeners", () => {
   test("groups fields into one record per pid, deduping ports", () => {
@@ -88,9 +94,19 @@ describe.skipIf(!Bun.which("lsof"))("reapWorktreeListeners (live)", () => {
       'const s = Bun.serve({ port: 0, fetch: () => new Response("ok") });\n' +
         "console.log(s.port);\n",
     );
-    const proc = Bun.spawn(["bun", script], { cwd, stdout: "pipe", stderr: "ignore" });
+    // `BUN_INSPECT` is inherited by every bun descendant and this child
+    // touches the `Bun` global, which under an occupied socket exits 1
+    // with its body unrun. wt's PATH shim already scrubs it and CI never
+    // sets it, so the test passes in both worlds — by two different
+    // mechanisms, neither of which is this test's business.
+    const env = { ...process.env };
+    delete env.BUN_INSPECT;
+    const proc = Bun.spawn(["bun", script], { cwd, env, stdout: "pipe", stderr: "ignore" });
     // stdout closes only at exit; readiness is the first byte (the port
-    // print happens after Bun.serve is accepting).
+    // print happens after Bun.serve is accepting). A child that DIED
+    // also resolves this (`done: true`), so callers check `exitCode`
+    // after — otherwise a listener that never started reads downstream
+    // as a reaper that failed to find it.
     const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
     const ready = reader.read().then(() => reader.releaseLock());
     return { proc, ready };
@@ -104,9 +120,25 @@ describe.skipIf(!Bun.which("lsof"))("reapWorktreeListeners (live)", () => {
     const target = spawnListener(wtDir);
     const bystander = spawnListener(otherDir);
     await Promise.all([target.ready, bystander.ready]);
+    expect(target.proc.exitCode, "listener died before it could be reaped").toBe(null);
+    expect(bystander.proc.exitCode, "bystander died before the reap").toBe(null);
 
     try {
-      const reaped = await reapWorktreeListeners(wtDir);
+      // Retry while the result is EMPTY, because empty is also what an
+      // inconclusive scan produces: `lsof` buffers, so a blown budget
+      // returns zero bytes that parse as "nothing is listening". On a
+      // saturated box (a fleet of worktrees running suites is how this
+      // one gets there) the 8s budget is reachable, and the old
+      // single-shot assert failed at 8028ms looking like a code defect.
+      //
+      // This cannot manufacture a pass: empty is exactly the case where
+      // nothing was killed, so a retry re-asks the same question, and a
+      // genuinely broken reaper returns empty every time and still
+      // fails below.
+      let reaped: ReapedProcess[] = [];
+      for (let attempt = 1; attempt <= 3 && reaped.length === 0; attempt++) {
+        reaped = await reapWorktreeListeners(wtDir);
+      }
       expect(reaped.map((p) => p.pid)).toContain(target.proc.pid);
       expect(reaped.map((p) => p.pid)).not.toContain(bystander.proc.pid);
 
@@ -117,5 +149,5 @@ describe.skipIf(!Bun.which("lsof"))("reapWorktreeListeners (live)", () => {
       bystander.proc.kill();
       target.proc.kill();
     }
-  }, 20_000);
+  }, 90_000);
 });
