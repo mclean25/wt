@@ -5,12 +5,14 @@
  * stripped-down glyph + label + age, mirroring the review-request rows.
  * Entries whose slug is live again are filtered out by the parent.
  */
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
+import type React from "react";
 import { TextAttributes } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
 import type { RemovedWorktree } from "../../core/wtstate.ts";
 import { capitalizeFirst, slugLabel } from "../../core/stage.ts";
+import { dayBucket, dayLabel } from "../day-headers.ts";
 import { NF } from "../icons.ts";
 import { scrollCursorIntoView, WtScrollbox } from "../scrollbox.tsx";
 import { ageMsToText, truncateEnd } from "../text.ts";
@@ -96,6 +98,28 @@ const RemovedRowView = memo(function RemovedRowView({
   );
 });
 
+/** A dim day header ("today", "yesterday", "Sat 15 Aug") above its group. */
+const DayHeader = memo(function DayHeader({
+  text,
+  spaced,
+}: {
+  text: string;
+  spaced: boolean;
+}) {
+  return (
+    <box
+      flexDirection="row"
+      paddingLeft={1}
+      paddingRight={1}
+      marginTop={spaced ? 1 : 0}
+    >
+      <text fg={theme.fgDim} attributes={TextAttributes.BOLD}>
+        {text}
+      </text>
+    </box>
+  );
+});
+
 export function RemovedList({
   entries,
   selectedIndex,
@@ -106,6 +130,46 @@ export function RemovedList({
   width: number;
 }) {
   const listRef = useRef<ScrollBoxRenderable>(null);
+  // Interleave a header wherever the day-bucket changes. `entries` is
+  // stored newest-first (`recordRemovedWorktrees` sorts on write), so
+  // comparing against the previous entry is enough — no regrouping, and
+  // the rows keep their original indices, which is what `selectedIndex`
+  // and the cursor-scroll child id are addressed by.
+  //
+  // One `now` for the whole pass so every "today"/"yesterday" in a
+  // single render agrees, even if the clock crosses 04:00 mid-render.
+  const rendered = useMemo(() => {
+    const now = Date.now();
+    const out: React.ReactNode[] = [];
+    let prev: string | null = null;
+    entries.forEach((entry, i) => {
+      const bucket = dayBucket(entry.removedAt);
+      // A null bucket (unparsable `removedAt`) gets no header rather
+      // than a fabricated day, matching the age cell's behaviour. It
+      // still resets `prev`, so the next real day re-announces itself.
+      if (bucket !== null && bucket !== prev) {
+        out.push(
+          <DayHeader
+            key={`day:${bucket}`}
+            text={dayLabel(bucket, now)}
+            // The scrollbox already opens with a blank line, so the
+            // first header must not add a second one.
+            spaced={out.length > 0}
+          />,
+        );
+      }
+      prev = bucket;
+      out.push(
+        <RemovedRowView
+          key={entry.slug}
+          entry={entry}
+          selected={i === selectedIndex}
+          panelWidth={width}
+        />,
+      );
+    });
+    return out;
+  }, [entries, selectedIndex, width]);
   const selectedChildId = entries[selectedIndex]
     ? `removed:${entries[selectedIndex]!.slug}`
     : undefined;
@@ -135,14 +199,7 @@ export function RemovedList({
       ) : (
         <WtScrollbox scrollRef={listRef}>
           <box height={1} flexShrink={0} />
-          {entries.map((entry, i) => (
-            <RemovedRowView
-              key={entry.slug}
-              entry={entry}
-              selected={i === selectedIndex}
-              panelWidth={width}
-            />
-          ))}
+          {rendered}
         </WtScrollbox>
       )}
     </box>
