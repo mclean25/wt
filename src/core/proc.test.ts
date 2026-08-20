@@ -54,6 +54,13 @@ describe("runStreaming killAfterMs", () => {
  * server outlived its worktree, holding the port block the next one
  * then failed to bind.
  */
+// Every `run()` here passes an explicit cwd. `run` defaults it to
+// `config.paths.mainClone`, which in CI is a synthetic path that is
+// never created — and `Bun.spawn` fails on a bad cwd before it ever
+// reaches the binary, so all three of these failed in under a
+// millisecond with exit -1 and no flag set. Note the asymmetry that
+// makes it easy to walk into: `runStreaming`, tested directly above,
+// leaves cwd undefined and inherits the process's.
 describe("run timedOut", () => {
   test("a blown budget is flagged, and its empty stdout is not an answer", async () => {
     // Bare `sleep`, not `sh -c "sleep …; echo …"`: sh FORKS, so
@@ -61,7 +68,7 @@ describe("run timedOut", () => {
     // and the drain blocks until the child exits on its own. lsof, the
     // real caller, does not fork — and buffers, so its stdout is empty
     // here for the same reason this one's is.
-    const r = await run(["sleep", "5"], { timeoutMs: 200 });
+    const r = await run(["sleep", "5"], { cwd: "/", timeoutMs: 200 });
     expect(r.timedOut).toBe(true);
     expect(r.exitCode).not.toBe(0);
     // The trap in one line: indistinguishable from a completed scan of
@@ -70,14 +77,14 @@ describe("run timedOut", () => {
   });
 
   test("a command that finishes inside its budget is not flagged", async () => {
-    const r = await run(["echo", "hi"], { timeoutMs: 30_000 });
+    const r = await run(["echo", "hi"], { cwd: "/", timeoutMs: 30_000 });
     expect(r.timedOut).toBe(false);
     expect(r.exitCode).toBe(0);
     expect(r.stdout.trim()).toBe("hi");
   });
 
   test("no budget at all leaves the flag off", async () => {
-    const r = await run(["echo", "hi"]);
+    const r = await run(["echo", "hi"], { cwd: "/" });
     expect(r.timedOut).toBe(false);
   });
 });
