@@ -92,12 +92,16 @@ export const CACHE_DB = config.paths.cacheDb;
 // inflating "ahead" by every trunk commit that landed after it (156 vs
 // a true 14 on one live row). A restored v20 entry carries the old
 // number in the new shape, and nothing distinguishes them.
-// v22: `firstCommit` entries changed MEANING without changing shape.
-// They are still a commit subject, but one measured against a base a
-// stale clone ref could no longer poison — so persisted entries from
-// before hold titles belonging to other people's commits, and a
-// restored one is indistinguishable from a fresh one.
-const CACHE_BUSTER = "v22";
+// v23: every BASE-DERIVED entry changed meaning without changing shape.
+// `effectiveBaseOrTrunk` was resolving the bare trunk name a fork-base
+// record stores (`"staging"`) to the checkout's LOCAL branch of that
+// name, which under rift is frozen at clone time — so the sync counts,
+// the first-commit title, the conflict probe and the diff context were
+// all measured against a base 97 to 383 commits behind. A restored
+// entry is indistinguishable from a fresh one, which is what makes this
+// a bust rather than a shape bump. (v22 busted `firstCommit` alone for
+// the narrower stale-remote-ref version of the same failure.)
+const CACHE_BUSTER = "v23";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

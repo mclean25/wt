@@ -221,6 +221,53 @@ test("a branch with no commits of its own counts 0 ahead through a stale clone r
   expect(JSON.parse(title.trim())).toBeNull();
 });
 
+test("the BARE trunk name normalizes to the remote ref, not a frozen local branch", async () => {
+  // What the fork-base record actually stores for an ordinary trunk
+  // worktree is `baseBranch: "staging"`, and a clone made with
+  // `clone -b staging` carries a LOCAL branch of that name. Nothing
+  // ever moves it — the freshen above fast-forwards
+  // `refs/remotes/origin/<trunk>` — so resolving to it measures the
+  // branch against clone time forever. Live fleet: 15 of 15 rows, local
+  // trunks 97 to 383 commits behind, nine of them titled with the same
+  // colleague's commit.
+  const { origin, seed } = buildOrigin();
+  const root = tmp("wt-fo-root-bare-");
+  const main = tmp("wt-fo-main-bare-");
+  git(main, ["clone", "-q", "-b", "staging", origin, "."]);
+
+  const wt = tmp("wt-fo-wt-bare-");
+  git(wt, ["clone", "-q", "-b", "staging", origin, "."]);
+  git(wt, ["checkout", "-q", "-b", "feature"]);
+  const frozen = git(wt, ["rev-parse", "staging"]);
+
+  for (const msg of ["S2", "S3"]) {
+    git(seed, ["commit", "-q", "--allow-empty", "-m", msg]);
+  }
+  git(seed, ["push", "-q", "origin", "staging"]);
+  git(main, ["fetch", "-q", "origin", "--prune"]);
+  git(wt, ["fetch", "-q", "origin", "--prune"]);
+  git(wt, ["reset", "--hard", "-q", "origin/staging"]);
+
+  // The local branch is a clone-time artifact and stays put.
+  expect(git(wt, ["rev-parse", "staging"])).toBe(frozen);
+  expect(git(wt, ["rev-parse", "origin/staging"])).not.toBe(frozen);
+  // Which is what makes resolving to it so expensive: a branch with
+  // NOTHING of its own reads as two commits of somebody else's work,
+  // and the oldest of them becomes this row's title.
+  expect(git(wt, ["rev-list", "--count", "staging..HEAD"])).toBe("2");
+
+  const cfg = writeConfig(root, main, "");
+  const out = runWithConfig(
+    root,
+    cfg,
+    `const g = await import(${GIT_MOD});
+     const eff = await g.effectiveBaseOrTrunk(${JSON.stringify(wt)}, "staging");
+     const title = await g.firstCommitSubject(${JSON.stringify(wt)}, await g.freshBaseRev(${JSON.stringify(wt)}, eff));
+     console.log(JSON.stringify({ eff, title }));`,
+  );
+  expect(JSON.parse(out.trim())).toEqual({ eff: "origin/staging", title: null });
+});
+
 /**
  * The same staleness at its source: nothing was fetching INSIDE a rift
  * checkout, so its `origin/<trunk>` decayed from the moment it was

@@ -182,6 +182,22 @@ costs 1.6-2.3s. **Fast-forward only**: a clone runs its own `git fetch`
 too and can be ahead of the main clone's last one, and rewinding its
 ref is the same lie pointing the other way.
 
+**The trunk has two spellings and only one of them was normalized.**
+A fork-base record is written for trunk forks too, storing the BARE
+branch name (`baseBranch: "staging"`). `effectiveBaseOrTrunk` recognized
+`origin/staging` and fell through on `staging` — into a preference for a
+LOCAL branch of that name, which exists in every rift clone (`clone -b
+staging` leaves one) and which nothing ever moves: the freshen above
+fast-forwards `refs/remotes/origin/<trunk>`, not the local head. So an
+ordinary trunk worktree measured itself against clone time, permanently,
+and the fallback that was supposed to catch this could not: `freshBaseRev`
+keys on the trunk string as well, saw a base that was not it, and
+returned it untouched. Measured on a live fleet of 15: every row resolved
+to a local trunk 97 to 383 commits behind, one reporting 383 commits
+ahead against a true 1. Nine rows shared a single colleague's commit
+subject as their title, because that commit was the oldest in all nine
+ranges. Both spellings now normalize.
+
 **Resolve a ref in the frame the question is about.** "Where is trunk
 now" resolves in the main clone (`baseTipSha`); "what does this checkout
 see" resolves in the worktree. A comparison that spans both needs the

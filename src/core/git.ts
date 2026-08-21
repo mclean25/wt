@@ -37,7 +37,25 @@ export async function effectiveBaseOrTrunk(
   effectiveBase?: string | null,
 ): Promise<string> {
   const trunk = `origin/${config.branch.base}`;
-  if (!effectiveBase || effectiveBase === trunk) return trunk;
+  // Both spellings of the trunk normalize to the remote-tracking ref.
+  // The BARE one is what is actually stored: the fork-base record is
+  // written for trunk forks too (`baseBranch: "staging"`), and every
+  // reader is supposed to normalize that to "no parent". This one only
+  // recognised `origin/staging`, so an ordinary trunk worktree fell
+  // through to the local-branch preference below — and under `rift` a
+  // clone's local `staging` is a clone-time artifact that NOTHING ever
+  // moves (`freshenWorktreeTrunkRefs` fast-forwards
+  // `refs/remotes/origin/<trunk>`, not the local head). Measured on a
+  // live fleet of 15: every row resolved to a local trunk 97 to 383
+  // commits behind, so `base..HEAD` was that whole run of somebody
+  // else's commits. Its oldest became the row TITLE (nine rows sharing
+  // one colleague's commit subject), and the same range fed the sync
+  // counts, the conflict probe and the diff the AI summary reads.
+  // `freshBaseRev` could not rescue any of it: it keys on the trunk
+  // string too, so it saw a non-trunk base and returned it untouched.
+  if (!effectiveBase || effectiveBase === trunk || effectiveBase === config.branch.base) {
+    return trunk;
+  }
   // Prefer the local branch: the git-worktree backend shares the main
   // clone's object db, so a sibling slice's branch is a local ref (and
   // carries any not-yet-pushed commits). A rift checkout is an independent
