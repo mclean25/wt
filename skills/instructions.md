@@ -192,6 +192,28 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   Record it the moment you know, on any state — it is dormant until
   the branch lands, and it is carried across later assertions rather
   than dropped by them.
+  **It has a shape too, and unlike the note it has no length budget:**
+
+      <one line: what only the deployed environment can prove>
+      <why a local run cannot, when that is not obvious>
+      STEPS: 1. <first thing to do> 2. <the next> ...
+
+  Write the steps in full. This is the one field that is deliberately
+  verbose, because it is an executable contract for an agent that is
+  not you and may be reading it after a compaction — the literal
+  strings are the payload (`guest_<name>_<epochms>-<16 hex>`, the exact
+  log line, the error code), and a tidier summary of them is a lossy
+  rewrite of a spec. Never summarize it and never let anything
+  summarize it for you.
+  The shape is what lets the surfaces stay readable without touching
+  the text: a headline that can stand alone on a scan line, and steps
+  a reader can be shown on request rather than by default. The details
+  pane collapses this to its opening lines until the branch lands (`V`
+  expands it), the feed and the list footers carry the first sentence
+  only, and every one of those recovers the full field from the record.
+  Which is why the opening line has to work as a headline on its own,
+  and why the steps have to be numbered from 1: an unnumbered wall
+  cannot be counted, previewed, or resumed halfway.
   **If you are holding a row that has landed and owes one, it is
   yours** — `needs-testing` means YOU verify, exactly as everywhere
   else. Confirm the deploy carrying the change actually landed BEFORE

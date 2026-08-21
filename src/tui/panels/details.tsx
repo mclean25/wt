@@ -98,6 +98,13 @@ type Props = {
    * resolved" tint — same signal the list cluster reads.
    */
   sessionState?: DerivedState;
+  /**
+   * `V`'s override of the work-status steps block: `null` follows the
+   * row's own default. Lives in the composition root rather than here
+   * because the key handler that flips it is global, and it resets on
+   * cursor movement so a row is never judged by the last row's choice.
+   */
+  verifyExpanded?: boolean | null;
 };
 
 const RESOLVED_ROWS: readonly RowModule[] = resolveRows(config.ui.rows);
@@ -403,11 +410,13 @@ const DetailsBody = memo(function DetailsBody({
   width,
   scrollRef,
   sessionState,
+  verifyExpanded,
 }: {
   row: WorktreeRow;
   width: number;
   scrollRef?: RefObject<ScrollBoxRenderable | null>;
   sessionState?: DerivedState;
+  verifyExpanded?: boolean | null;
 }) {
   // Subscribe to the combined GitHub fetch so per-row indicators
   // reflect its fetch state. Observers dedupe by key — this doesn't
@@ -504,7 +513,11 @@ const DetailsBody = memo(function DetailsBody({
         <TitleLine title={row.title} source={row.titleSource} />
         {/* Asserted work status, full width — the note is the payload
             (merge impacts, needs-human asks) and must never truncate. */}
-        <WorkStatusBlock row={row} contentWidth={Math.max(0, width - PANE_CHROME_WIDTH)} />
+        <WorkStatusBlock
+          row={row}
+          contentWidth={Math.max(0, width - PANE_CHROME_WIDTH)}
+          verifyExpanded={verifyExpanded ?? null}
+        />
         {RESOLVED_ROWS.map((m) => (
           <RenderedRow key={m.id} module={m} ctx={ctx} />
         ))}
@@ -608,6 +621,7 @@ export const Details = memo(function Details({
   height,
   scrollRef,
   sessionState,
+  verifyExpanded,
 }: Props) {
   // Ages ("· 17s ago", "committed 54s") are computed at render time;
   // tick so they don't freeze on a quiet instance.
@@ -676,6 +690,7 @@ export const Details = memo(function Details({
       width={width}
       scrollRef={scrollRef}
       sessionState={sessionState}
+      verifyExpanded={verifyExpanded}
     />
   );
 });

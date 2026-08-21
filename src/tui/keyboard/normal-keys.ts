@@ -41,6 +41,7 @@ import {
   sessionLaunchBlockedReason,
 } from "../app-helpers.ts";
 import { events as activityEvents } from "../activity-log.ts";
+import { verifyStepsOpenByDefault } from "../panels/details/work-status-block.tsx";
 import { activityScroll } from "../panels/activity.tsx";
 import { SCROLL_STEP } from "../scrollbox.tsx";
 import { firstYankIndex, sectionYankItems, yankItemsFor } from "../panels/yank.tsx";
@@ -136,6 +137,9 @@ export type NormalKeysCtx = {
   setSection: (slug: string, section: string | null) => Promise<void>;
   toggleSectionFold: (key: string) => Promise<boolean>;
   refreshAiSummary: (slug: string) => Promise<boolean>;
+  /** `V`'s override of the details pane's post-merge-steps block. */
+  verifyExpanded: boolean | null;
+  setVerifyExpanded: (v: boolean | null) => void;
   refreshTmuxSessions: () => Promise<void>;
   // Feedback
   toast: (message: string, color?: string, ms?: number) => void;
@@ -190,6 +194,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     setSection,
     toggleSectionFold,
     refreshAiSummary,
+    verifyExpanded,
+    setVerifyExpanded,
     refreshTmuxSessions,
     toast,
     reportActionError,
@@ -1195,6 +1201,21 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     }
     if (isPlainLetter(k, "u")) {
       openStatusPicker();
+      return;
+    }
+    // Expand/collapse the details pane's post-merge verification
+    // steps. The field is dormant until the branch lands, so the block
+    // starts closed on an unmerged row and open once the check is due;
+    // this flips whichever of those applies. Toasting on a row with no
+    // steps is the only discovery affordance the key has — the block
+    // it acts on renders nothing at all when the field is absent.
+    if (isShiftedLetter(k, "v")) {
+      const steps = current.work?.verifyAfterMerge;
+      if (!steps) {
+        toast("no verify-after-merge steps on this row", theme.warn, 2000);
+        return;
+      }
+      setVerifyExpanded(!(verifyExpanded ?? verifyStepsOpenByDefault(current)));
       return;
     }
     if (isPlainLetter(k, "t")) {

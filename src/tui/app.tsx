@@ -383,6 +383,12 @@ export function App({ onExit }: Props) {
   // in place of events) and the `!`-key dispatch (open kill-confirm
   // when running, open picker otherwise).
   const currentSlug = current?.wt.slug;
+  // `V`'s override of the details pane's post-merge-steps block.
+  // `null` follows the row's own default (open once the check is due),
+  // and it resets below on every cursor move — a display choice made
+  // about one row is not a claim about the next one.
+  const [verifyExpanded, setVerifyExpanded] = useState<boolean | null>(null);
+  useEffect(() => setVerifyExpanded(null), [currentSlug]);
   const currentRun = useAction(currentSlug);
   // Per-current-row harness session discovery: combines per-harness
   // discoverSessions queries with the live tmux name set. The hook
@@ -844,6 +850,8 @@ export function App({ onExit }: Props) {
       visualItems,
       cursorIndex,
       currentSlug,
+      verifyExpanded,
+      setVerifyExpanded,
       setSel,
       advanceCursorPast,
       setModal,
@@ -958,6 +966,7 @@ export function App({ onExit }: Props) {
               ? activeSessionBySlug.get(current.wt.slug)?.state ?? undefined
               : undefined
           }
+          verifyExpanded={verifyExpanded}
         />
       </box>
       <OutputViewer output={displayedOutput} height={activityHeight} />

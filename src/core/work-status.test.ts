@@ -8,6 +8,7 @@ import {
   WORK_STATES,
   workRecordRank,
   workStatusSuffix,
+  verifyStepsHeadline,
   isWorkStatusStale,
   BLOCKED_RANK,
   LANDED_RANK,
@@ -259,6 +260,53 @@ describe("workStatusSuffix with a gate", () => {
 
   test("omits it entirely when there is no gate", () => {
     expect(workStatusSuffix({ risk: "low", note: "n" })).toBe(" (risk: low) — n");
+  });
+});
+
+describe("workStatusSuffix clamping", () => {
+  // The line this builds is rendered many-at-a-time on shared
+  // surfaces. A 1896-character `verifyAfterMerge` word-wrapped to
+  // fourteen lines in the attention feed and evicted every other
+  // row's signal from it.
+  const long = (n: number) => "x".repeat(n);
+
+  test("a note written to the shape it is taught is untouched", () => {
+    const note = long(399);
+    expect(workStatusSuffix({ note })).toBe(` — ${note}`);
+  });
+
+  test("an over-budget note is clamped and marked", () => {
+    const s = workStatusSuffix({ note: long(900) });
+    expect(s.endsWith("...")).toBe(true);
+    expect(s.length).toBeLessThan(420);
+  });
+
+  test("the steps are clamped hardest — only a headline belongs on a scan line", () => {
+    const s = workStatusSuffix({ verifyAfterMerge: long(2000) });
+    expect(s.length).toBeLessThan(150);
+    expect(s).toContain("...");
+  });
+
+  test("it cuts at a sentence end when one falls inside the budget", () => {
+    const steps =
+      "Only a real Twilio callback can prove this. " + long(300);
+    expect(verifyStepsHeadline(steps)).toBe(
+      "Only a real Twilio callback can prove this...",
+    );
+  });
+
+  test("a short opening sentence does not clamp the field to nothing", () => {
+    // Cutting at the FIRST sentence end would leave "Yes..." — the
+    // sentence has to be worth at least half the budget to win.
+    const steps = `Yes. ${"word ".repeat(60)}`;
+    const out = verifyStepsHeadline(steps);
+    expect(out.startsWith("Yes. word word")).toBe(true);
+  });
+
+  test("it never cuts mid-word", () => {
+    const out = verifyStepsHeadline("alpha bravo charlie delta ".repeat(20));
+    expect(out.endsWith("...")).toBe(true);
+    expect(/(alpha|bravo|charlie|delta)\.\.\.$/.test(out)).toBe(true);
   });
 });
 

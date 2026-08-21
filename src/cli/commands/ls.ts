@@ -1,7 +1,7 @@
 import { config } from "../../core/config.ts";
 import { fetchPrs } from "../../core/github.ts";
 import { githubIssueUrl, issueIdForSlug, issueUrlForSlug } from "../../core/issue-tracker.ts";
-import { workAge } from "../../core/work-status.ts";
+import { verifyStepsHeadline, workAge } from "../../core/work-status.ts";
 import {
   isMergedRemoval,
   readWtState,
@@ -181,7 +181,9 @@ export async function run(argv: string[]): Promise<number> {
       // checkout the check needed is gone, and nothing else anywhere
       // says it was owed. Loud, not dim.
       if (verificationOwedAtRemoval(e)) {
-        console.log(yellow(`    UNVERIFIED — owed: ${e.work!.verifyAfterMerge}`));
+        console.log(
+          yellow(`    UNVERIFIED — owed: ${verifyStepsHeadline(e.work!.verifyAfterMerge!)}`),
+        );
       } else if (e.work?.state === "verified") {
         console.log(dim(`    verified${e.work.note ? `: ${e.work.note}` : ""}`));
       }

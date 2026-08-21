@@ -23,6 +23,7 @@ import type {
 } from "../../core/types.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import {
+  verifyStepsHeadline,
   workAge,
   isGated,
   owesPostMergeVerification,
@@ -431,7 +432,9 @@ export async function run(argv: string[]): Promise<number> {
       // deployed-environment check was still owed has nowhere else left
       // to be reported.
       if (entry.verification_owed) {
-        console.log(yellow(`    UNVERIFIED — owed: ${entry.verify_after_merge}`));
+        console.log(
+          yellow(`    UNVERIFIED — owed: ${verifyStepsHeadline(entry.verify_after_merge!)}`),
+        );
       }
     }
   }

@@ -22,7 +22,7 @@ import {
   WT_SOURCE_SLUG,
 } from "../../core/tmux.ts";
 import { listWorktrees } from "../../core/worktree.ts";
-import { workAge } from "../../core/work-status.ts";
+import { verifyStepsHeadline, workAge } from "../../core/work-status.ts";
 import {
   isMergedRemoval,
   readWtState,
@@ -116,7 +116,9 @@ function explainMissingTarget(slugOrBranch: string): void {
     // a check that had already been run and recorded.
     if (verificationOwedAtRemoval(removed)) {
       console.error(
-        yellow(`  UNVERIFIED — still owed: ${removed.work!.verifyAfterMerge}`),
+        yellow(
+          `  UNVERIFIED — still owed: ${verifyStepsHeadline(removed.work!.verifyAfterMerge!)}`,
+        ),
       );
     } else if (removed.work) {
       const note = removed.work.note ? `: ${removed.work.note}` : "";

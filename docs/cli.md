@@ -177,6 +177,18 @@ Some claims can only be proved by the deployed environment: an OAuth consent scr
 
 The test for asserting it: **is there a claim in this branch that only the deployed environment can prove?** If so, name the exact STEPS in the field, not in the note. The agent that eventually runs them is not the one that wrote it, and may be reading it after a compaction.
 
+**It has a shape, and no length budget** — an opening line that works as a headline on its own, optionally why a local run cannot prove the claim, then `STEPS: 1. … 2. …` numbered from 1:
+
+```
+Only a real Twilio callback can prove this. Local dev holds TEST credentials
+that cannot reach the Video API (error 20008).
+STEPS: 1. Confirm the deploy landed BEFORE believing any negative. 2. Create a
+guest-only meeting and open its guest link. 3. Assert the ParticipantIdentity
+is guest_<name>_<epochms>-<16 hex>.
+```
+
+Write the steps in full: this is the one field deliberately allowed to be verbose, because the literal strings *are* the payload (the exact identity format, the exact log line, the error code) and a tidier summary of them is a lossy rewrite of a spec. Nothing in wt ever summarizes it. The shape is instead what lets the surfaces stay readable **without touching the text**: the details pane collapses it to its opening lines until the branch lands (`V` expands, see [tui.md](tui.md)), while the attention feed, the `wt status` confirmation and the `UNVERIFIED — owed:` footers in `wt ls` / `wt fleet` / `wt claude` carry the first sentence and mark the cut with `...`. Every one of those recovers the full field from the record — `wt status <slug>`, `--json`, and the log file always print it whole. Which is also why the opening line has to stand alone, and the steps have to be numbered: an unnumbered wall cannot be counted, previewed, or resumed halfway.
+
 **It is the opposite of `--blocked-on`, and confusing the two would destroy it.** A gate holds a row OUT of the merge band; this changes nothing before the merge. The row sorts and renders exactly as `ready`, because merging is not what it gates — merging is the *prerequisite*. If it ever sinks a mergeable row it has become a second `--blocked-on`, which is the failure it exists to avoid.
 
 What it does instead is survive the merge, and that is the whole job:

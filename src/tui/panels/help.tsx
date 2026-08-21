@@ -100,6 +100,11 @@ const KEY_BLOCKS: Block[] = [
         label: "on a folded section: yank the batch — name (n), slugs (s), branches (b), list (l)",
       },
       { key: "t", label: "regenerate AI summary" },
+      {
+        key: "V",
+        label:
+          "expand / collapse the row's verify-after-merge steps (open by default once the branch has landed and the check is due)",
+      },
       { key: "a", label: "archive / restore" },
       { key: "d", label: "remove worktree" },
     ],

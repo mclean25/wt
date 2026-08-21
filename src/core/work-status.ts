@@ -533,10 +533,80 @@ export function sanitizeWorkNote(s: string): string {
 }
 
 /**
+ * Per-field budgets for a one-line status rendering.
+ *
+ * Each field is capped at ITS OWN documented budget rather than the
+ * line getting one shared cap, because the fields are not
+ * interchangeable: the note is the payload every scan surface exists
+ * to show (its ~400 is the shape `wt status` already teaches, so a
+ * note written to spec is never touched), the gate is meant to be a
+ * short phrase, and the steps have no budget at all — which is
+ * precisely why they get the tightest one. Only a headline of a
+ * verification belongs on a line someone is scanning; the steps are
+ * for an agent reading the record, not for the feed.
+ */
+const LINE_BUDGET_NOTE = 400;
+const LINE_BUDGET_GATE = 120;
+const LINE_BUDGET_VERIFY = 120;
+
+/**
+ * Shortest sentence `clampForLine` will accept as a clean cut, per
+ * field. The note and the gate default to half their budget because
+ * their job is to carry as much of the PAYLOAD as fits — clamping a
+ * 400-character note to its 50-character opening would throw away the
+ * merge impacts the feed exists to show. The steps are the opposite
+ * job: only a headline of a verification belongs on a scan line, so a
+ * short clean sentence beats a longer cut through the middle of one.
+ */
+const VERIFY_SENTENCE_FLOOR = 35;
+
+/**
+ * Shortest prefix of `s` that still reads as a whole thought, within
+ * `max` characters, marked so the reader knows it was cut.
+ *
+ * Prefers the last sentence end inside the budget — the opening
+ * sentence of a long field is nearly always its headline, and cutting
+ * there reads as a summary rather than as damage. Falls back to a word
+ * boundary. Requires the sentence to be at least half the budget, or a
+ * field opening with something like "Yes." would clamp to nothing.
+ *
+ * The marker is never optional. A field that simply stops reads as a
+ * rendering fault and, worse, reads as the WHOLE field to anyone who
+ * doesn't know a cap exists — the same reasoning as `clipLines` in the
+ * TUI, which this deliberately mirrors rather than imports (core must
+ * not depend on the tui layer).
+ */
+function clampForLine(s: string, max: number, sentenceFloor = max / 2): string {
+  if (s.length <= max) return s;
+  const head = s.slice(0, max);
+  // Greedy, so this is the LAST sentence end inside the budget rather
+  // than the first — more of the field, still a clean cut.
+  const sentence = head.match(/^[\s\S]*[.!?](?=\s)/);
+  const cut =
+    sentence && sentence[0].length >= sentenceFloor
+      ? sentence[0]
+      : head.replace(/\s+\S*$/, "").trimEnd() || head.trimEnd();
+  // Drop a trailing full stop either way, or the marker reads as four
+  // dots. Other terminators carry meaning and are kept.
+  return `${cut.endsWith(".") ? cut.slice(0, -1) : cut}...`;
+}
+
+/**
  * The shared `(risk: X) — note` suffix every surface appends after its
  * own lead word (CLI confirmation, automation fire detail, attention
  * narration). One implementation so a format tweak or a new field
  * can't drift across them.
+ *
+ * Every field is clamped, because this builds a line for a surface
+ * that renders MANY of them. Putting the gate and the verify ahead of
+ * the note fixed which field loses a truncation race but left the
+ * length unbounded, and the attention feed word-wraps — so instead of
+ * truncating, one record flooded it: a 1896-character `verifyAfterMerge`
+ * rendered as fourteen wrapped lines and evicted every other row's
+ * signal from the pane it shares. A feed whose job is "worth
+ * interrupting a scan" cannot be spendable by one writer. The full
+ * text is always one keystroke away in the details pane, and always in
+ * `wt status <slug>`, `--json` and the log file.
  */
 export function workStatusSuffix(record: {
   state?: WorkState;
@@ -550,15 +620,35 @@ export function workStatusSuffix(record: {
   // a status inherits this, and the gate losing a race with a long note
   // for the last cells of a truncated line is the original failure in
   // miniature.
-  const gate = record.blockedOn ? ` [blocked on: ${record.blockedOn}]` : "";
+  const gate = record.blockedOn
+    ? ` [blocked on: ${clampForLine(record.blockedOn, LINE_BUDGET_GATE)}]`
+    : "";
   // Same reasoning as the gate, one notch quieter: it changes what the
   // reader must eventually DO with the row, so it cannot lose a race
   // with a long note for the last cells of a truncated line.
   const verify = record.verifyAfterMerge
-    ? ` [verify after merge: ${record.verifyAfterMerge}]`
+    ? ` [verify after merge: ${clampForLine(
+        record.verifyAfterMerge,
+        LINE_BUDGET_VERIFY,
+        VERIFY_SENTENCE_FLOOR,
+      )}]`
     : "";
-  const note = record.note ? ` — ${record.note}` : "";
+  const note = record.note ? ` — ${clampForLine(record.note, LINE_BUDGET_NOTE)}` : "";
   return `${risk}${gate}${verify}${note}`;
+}
+
+/**
+ * A `verifyAfterMerge` clamped for a one-line list surface — the
+ * `UNVERIFIED — owed:` footers in `wt ls`, `wt fleet` and `wt claude`,
+ * which print one per removed row and inherit the same flooding
+ * problem the suffix had.
+ *
+ * Exported separately because those callers build their own line
+ * rather than going through `workStatusSuffix`, and a second hand-rolled
+ * cap would be a third budget to keep in step.
+ */
+export function verifyStepsHeadline(steps: string): string {
+  return clampForLine(steps, LINE_BUDGET_VERIFY, VERIFY_SENTENCE_FLOOR);
 }
 
 /**
