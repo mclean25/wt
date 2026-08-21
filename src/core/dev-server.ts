@@ -1048,8 +1048,42 @@ done
 export async function startDevServer(wt: {
   slug: string;
   path: string;
-}): Promise<{ port: number; url: string }> {
+}): Promise<{ port: number; url: string; adopted?: boolean }> {
   const dev = requireDevServer();
+  // ADOPT a start already in flight rather than killing it.
+  //
+  // `start` is also `restart`, and killing a RUNNING server to bring it
+  // back on new config is the point of that. A supervisor still in its
+  // STARTUP phase is a different thing, and killing one is destructive
+  // in a way nothing downstream can see. `wt dev reset` ends by
+  // launching, returns 0, and the banner then recommended `wt dev start
+  // --wait` to wait for it — so wt walked the reader into killing the
+  // launch it had just made, mid-`supabase start`, against a database
+  // whose volumes the reset had just dropped.
+  //
+  // The two reported faces are what a kill at two different moments
+  // looks like: `SqlError: Connection error` while the baseline
+  // migration applies, and "did not return the local URL and
+  // service-role key" with every service stopped. The residue is worse
+  // than the crash. A half-initialised database VOLUME survives, so the
+  // next start finds an existing database, takes its reuse path, and
+  // never re-provisions what only a fresh initialisation creates — a
+  // storage catalog reading 0 of 22 buckets while the migration ledger
+  // reports fully migrated, because the migrations really did apply.
+  // That also explains why it is intermittent: a kill after the
+  // database is up leaves a complete volume and costs nothing, and only
+  // a kill DURING initialisation leaves the broken one.
+  //
+  // Deliberately keyed on `starting` rather than "a session exists":
+  // restarting a running server and recycling a parked/crashed one both
+  // stay exactly as they were.
+  const inFlight = await devServerStatus(wt.slug, { path: wt.path });
+  if (inFlight.starting && inFlight.port !== null) {
+    log.event.info(
+      `dev server already starting on port ${inFlight.port} — joined it (${wt.slug})`,
+    );
+    return { port: inFlight.port, url: devUrl(inFlight.port), adopted: true };
+  }
   // The cap is enforced here rather than in the CLI so a future caller
   // inherits it — the whole point of a load governor is that there is
   // no path around it. `wt dev start --wait` queues first and lands
@@ -1382,7 +1416,7 @@ export async function waitForDevReady(
 export async function resetDevServer(
   wt: { slug: string; path: string },
   onLog?: (line: string) => void,
-): Promise<{ port: number; url: string }> {
+): Promise<{ port: number; url: string; adopted?: boolean }> {
   const stopped = await stopDevServer(wt);
   // `reset_command` DISCARDS the environment's state (volumes, caches,
   // a migrated database). Doing that on top of an environment that is

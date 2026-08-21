@@ -149,7 +149,7 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
   // have historically had no reason to suspect anything.
   const priorStale = rebuild ? false : (await devServerStatus(wt.slug, { path: wt.path })).rebasedSince;
   try {
-    const { port, url } = rebuild
+    const { port, url, adopted } = rebuild
       ? await resetDevServer(wt, (line) => console.error(dim(`  ${line}`)))
       : await startDevServer(wt);
     if (priorStale) {
@@ -180,11 +180,21 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
       // that way: two worktrees took these three lines as a healthy
       // environment. So the banner says what is true — launched, not
       // ready — and names the flag that does wait.
-      console.log(`${yellow("→")} dev server launching for ${cyan(wt.slug)}`);
+      console.log(
+        adopted
+          ? `${yellow("→")} dev server already starting for ${cyan(wt.slug)} — joined it`
+          : `${yellow("→")} dev server launching for ${cyan(wt.slug)}`,
+      );
       console.log(`  ${dim("port:")} ${port}`);
       console.log(`  ${dim("url:")}  ${url}`);
+      // Name THIS command's own `--wait`, never a follow-up `wt dev
+      // start --wait`. Suggesting the latter after a reset is what sent
+      // readers into issuing a second start against a launch already in
+      // flight; a start now joins that launch rather than killing it,
+      // but the advice was still telling them to run the wrong command.
+      const self = rebuild ? `wt dev reset ${wt.slug}` : `wt dev start ${wt.slug}`;
       console.log(
-        dim("  still coming up — `wt dev start --wait` blocks until it is usable,"),
+        dim(`  still coming up — re-run as \`${self} --wait\` to block until usable,`),
       );
       console.log(dim("  `wt dev status` asks now, `wt dev logs` shows the boot"));
       return 0;
