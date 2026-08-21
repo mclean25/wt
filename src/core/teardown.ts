@@ -74,7 +74,7 @@ export async function runTeardownCommand(opts: {
   cwd: string;
   slug: string;
   onLog?: (line: string) => void;
-}): Promise<void> {
+}): Promise<boolean> {
   const { label, command, cwd, slug, onLog } = opts;
   onLog?.(`${label}: ${command}`);
   try {
@@ -86,10 +86,13 @@ export async function runTeardownCommand(opts: {
     if (exit !== 0) {
       onLog?.(`${label} failed (exit ${exit}) — continuing`);
       log.warn(`${label} failed`, { slug, exit });
+      return false;
     }
+    return true;
   } catch (err) {
     onLog?.(
       `${label} errored: ${err instanceof Error ? err.message : String(err)} — continuing`,
     );
+    return false;
   }
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { resolveTeardownCommand } from "./teardown.ts";
+import { resolveTeardownCommand, runTeardownCommand } from "./teardown.ts";
 
 // The shared resolver behind `[lifecycle] destroy_command` and
 // `[dev_server] stop_command`.
@@ -39,4 +39,30 @@ test("resolveTeardownCommand still runs a port-independent command with no port"
   expect(
     resolveTeardownCommand("docker rm -f {{slug}}", { path: "/p", slug: "s", port: null }),
   ).toBe("docker rm -f s");
+});
+
+// `runTeardownCommand` reports whether the teardown TOOK. A destroy
+// ignores it on purpose (refusing to delete a worktree because its
+// teardown broke is a bigger leak than the one it prevents); a dev
+// RESET must not, because discarding an environment's state on top of
+// an environment that is still up is what leaves it unstartable.
+test("runTeardownCommand reports success and failure", async () => {
+  expect(
+    await runTeardownCommand({
+      label: "stop_command",
+      command: "exit 0",
+      cwd: "/",
+      slug: "s",
+      onLog: () => {},
+    }),
+  ).toBe(true);
+  expect(
+    await runTeardownCommand({
+      label: "stop_command",
+      command: "exit 7",
+      cwd: "/",
+      slug: "s",
+      onLog: () => {},
+    }),
+  ).toBe(false);
 });

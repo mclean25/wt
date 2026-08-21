@@ -200,14 +200,33 @@ async function runMove(positional: string[], only: boolean): Promise<number> {
     }
   }
   const wts = (await listWorktrees()).filter((w) => !w.isMain);
+  // A batch moves what it CAN and names what it could not, rather than
+  // abandoning the whole thing on the first bad name. The case this is
+  // for is not a typo: a fleet manager reads `wt section`, builds an mv
+  // from it, and one of those rows archives on merge in between — a
+  // race that is routine at fleet scale and costs a re-run every time.
+  //
+  // Bailing was also worse than it looked. It printed one slug and
+  // moved NOTHING, so the output read as "that one failed" while the
+  // valid ones had silently not moved either — the reader's next move
+  // is to check the rows that appear to have worked, and they haven't.
   const slugs: string[] = [];
+  const unresolved: string[] = [];
   for (const arg of slugArgs) {
     const slug = resolveSlug(wts, arg);
-    if (!slug) {
-      console.error(red(`no such worktree: ${arg}`));
-      return 1;
-    }
-    slugs.push(slug);
+    if (slug) slugs.push(slug);
+    else unresolved.push(arg);
+  }
+  const reportSkipped = (): void => {
+    if (unresolved.length === 0) return;
+    console.error(
+      red(`no such worktree: ${unresolved.join(", ")}`),
+    );
+    console.error(dim("  (removed since you listed them? `wt ls --all` shows recent removals)"));
+  };
+  if (slugs.length === 0) {
+    reportSkipped();
+    return 1;
   }
   // An existing section wins over the literal spelling so `mv x "to
   // merge"` lands in "To Merge" instead of forking a near-duplicate.
@@ -230,7 +249,11 @@ async function runMove(positional: string[], only: boolean): Promise<number> {
     console.log(
       `${dim("·")} ${slugs.map((s) => cyan(s)).join(", ")} ${dim(`already in ${section === null ? "the inbox" : section}`)}`,
     );
-    return 0;
+    reportSkipped();
+    // Non-zero whenever the command did not do everything it was asked,
+    // even though what it COULD do it did. Re-running is idempotent, so
+    // a caller that retries the whole batch loses nothing.
+    return unresolved.length > 0 ? 1 : 0;
   }
   const where = section === null ? "the inbox" : bold(section);
   console.log(
@@ -243,7 +266,10 @@ async function runMove(positional: string[], only: boolean): Promise<number> {
     );
     console.log(`  ${dim("--only moves just the named worktrees; splitting a stack is legitimate")}`);
   }
-  return 0;
+  // After the success line, never before: what MOVED is the answer, and
+  // a skip printed first reads as the whole command failing.
+  reportSkipped();
+  return unresolved.length > 0 ? 1 : 0;
 }
 
 function runRename(positional: string[]): number {

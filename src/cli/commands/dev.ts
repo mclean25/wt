@@ -12,6 +12,7 @@ import {
   devHealth,
   readDevCrashLog,
   readDevWaiters,
+  DevResetStopFailedError,
   resetDevServer,
   setDevWaiterPriority,
   startDevServer,
@@ -226,6 +227,23 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
     if (outcome.health) console.log(`  ${dim("health:")} ${outcome.health.message}`);
     return 0;
   } catch (err) {
+    if (err instanceof DevResetStopFailedError) {
+      // The environment is still up and its state is intact — nothing
+      // was discarded, which is the whole point of stopping here. wt
+      // cannot name the remedy because it does not know what the
+      // environment IS; the project's own teardown does.
+      console.error(red(`stop_command failed — refusing to reset ${wt.slug}`));
+      console.error(
+        dim("  the environment is still up and its state is untouched; resetting"),
+      );
+      console.error(
+        dim("  on top of a live environment is what leaves it unstartable"),
+      );
+      console.error(
+        dim(`  clear it with the project's own teardown, then ${bold(`wt dev reset ${wt.slug}`)}`),
+      );
+      return 1;
+    }
     if (!(err instanceof DevSlotFullError)) throw err;
     if (err.yieldingTo.length > 0) {
       // A slot IS free — saying "full" here would send the reader

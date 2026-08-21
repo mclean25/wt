@@ -633,19 +633,25 @@ export async function devSlotReport(): Promise<DevSlotReport> {
  * The teardown still has the slug and the port, which is what a
  * container-name or port-block filter needs.
  */
+/**
+ * Returns whether the environment is believed DOWN: the hook succeeded,
+ * or there is no hook to run. The distinction only matters to
+ * `resetDevServer` — a plain stop reports the failure and moves on,
+ * exactly as a destroy does.
+ */
 async function runDevStopCommand(
   slug: string,
   path: string | null,
   onLog?: (line: string) => void,
-): Promise<void> {
+): Promise<boolean> {
   const template = config.devServer?.stopCommand ?? null;
   const command = resolveTeardownCommand(template, {
     path: path ?? config.paths.mainClone,
     slug,
     port: readWtState().slugs[slug]?.devPort ?? null,
   });
-  if (!command) return;
-  await runTeardownCommand({
+  if (!command) return true;
+  return runTeardownCommand({
     label: "stop_command",
     command,
     cwd: path ?? config.paths.mainClone,
@@ -687,6 +693,19 @@ export async function reclaimDevSlots(): Promise<string[]> {
     await runDevStopCommand(slug, null);
   }
   return orphans;
+}
+
+/**
+ * Thrown by `resetDevServer` when `stop_command` failed, so the
+ * environment is still believed to be UP and its state must not be
+ * discarded underneath it. Carries the slug for the message; the
+ * remedy is always the project's own teardown, which wt cannot name.
+ */
+export class DevResetStopFailedError extends Error {
+  constructor(readonly slug: string) {
+    super(`stop_command failed for ${slug} — refusing to discard the environment`);
+    this.name = "DevResetStopFailedError";
+  }
 }
 
 /**
@@ -1179,7 +1198,9 @@ export function reapDevServerFiles(liveSlugs: ReadonlySet<string>): void {
  * project's chance to say what else to take down; without it, "stopped"
  * means the vite process is gone and the twelve containers are not.
  */
-export async function stopDevServer(wt: { slug: string; path: string }): Promise<void> {
+export async function stopDevServer(
+  wt: { slug: string; path: string },
+): Promise<boolean> {
   const slug = wt.slug;
   await killByName(sessionName(slug, "dev"));
   try {
@@ -1190,7 +1211,7 @@ export async function stopDevServer(wt: { slug: string; path: string }): Promise
   }
   // After the kill, so the teardown isn't racing a supervisor that is
   // about to restart the command it just tore down.
-  await runDevStopCommand(slug, wt.path);
+  const stopped = await runDevStopCommand(slug, wt.path);
   log.event.info(`dev server stopped (${slug})`);
   // The tabs pointed at this server are stranded on a refused port the
   // moment it goes down, so they go with it — same reflex as destroy,
@@ -1208,6 +1229,7 @@ export async function stopDevServer(wt: { slug: string; path: string }): Promise
       log.event.info(`closed ${browser.tabs} browser tab${s} on port ${port} (${slug})`);
     }
   }
+  return stopped;
 }
 
 
@@ -1361,7 +1383,23 @@ export async function resetDevServer(
   wt: { slug: string; path: string },
   onLog?: (line: string) => void,
 ): Promise<{ port: number; url: string }> {
-  await stopDevServer(wt);
+  const stopped = await stopDevServer(wt);
+  // `reset_command` DISCARDS the environment's state (volumes, caches,
+  // a migrated database). Doing that on top of an environment that is
+  // still up is worse than not resetting at all: whatever survived the
+  // failed stop keeps running against state that just vanished, and the
+  // rebuild then fails in a way that reads as a broken tree rather than
+  // a failed teardown. wt supervises a PROCESS — the thing holding that
+  // state is usually not its child — so a failed `stop_command` is the
+  // only signal it has that the environment is still there.
+  //
+  // The asymmetry with a destroy is deliberate: refusing to delete a
+  // worktree because its teardown broke is a bigger leak than the one
+  // it prevents, but refusing to DISCARD STATE is the safe direction —
+  // nothing is lost, and the environment is still whatever it was.
+  if (!stopped) {
+    throw new DevResetStopFailedError(wt.slug);
+  }
   const command = resolveTeardownCommand(config.devServer?.resetCommand ?? null, {
     path: wt.path,
     slug: wt.slug,
