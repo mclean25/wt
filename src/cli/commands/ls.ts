@@ -8,6 +8,7 @@ import {
   recentlyRemovedWorktrees,
   recentRemovalsSummary,
   removedJsonEntry,
+  verificationOwedAtRemoval,
 } from "../../core/wtstate.ts";
 import type { Worktree } from "../../core/types.ts";
 import { StatusKind } from "../../core/types.ts";
@@ -18,7 +19,7 @@ import {
   worktreeStatus,
 } from "../../core/worktree.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
-import { dim, red } from "../colors.ts";
+import { dim, red, yellow } from "../colors.ts";
 import {
   renderPrCell,
   renderSlugCell,
@@ -175,6 +176,15 @@ export async function run(argv: string[]): Promise<number> {
       const pr = e.prNumber !== undefined ? `#${e.prNumber} ` : "";
       const age = workAge(e.removedAt);
       console.log(dim(`  ${e.slug}  ${pr}merged${age ? `, archived ${age} ago` : ""}`));
+      // A row that went away still owing a deployed-environment check
+      // is the one thing in this footer worth reading twice: the
+      // checkout the check needed is gone, and nothing else anywhere
+      // says it was owed. Loud, not dim.
+      if (verificationOwedAtRemoval(e)) {
+        console.log(yellow(`    UNVERIFIED — owed: ${e.work!.verifyAfterMerge}`));
+      } else if (e.work?.state === "verified") {
+        console.log(dim(`    verified${e.work.note ? `: ${e.work.note}` : ""}`));
+      }
     }
   }
   return 0;

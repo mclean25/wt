@@ -23,10 +23,14 @@ import {
 } from "../../core/tmux.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import { workAge } from "../../core/work-status.ts";
-import { isMergedRemoval, readWtState } from "../../core/wtstate.ts";
+import {
+  isMergedRemoval,
+  readWtState,
+  verificationOwedAtRemoval,
+} from "../../core/wtstate.ts";
 import type { Worktree } from "../../core/types.ts";
 import { hasHelpFlag } from "../args.ts";
-import { dim, green, red } from "../colors.ts";
+import { dim, green, red, yellow } from "../colors.ts";
 
 const USAGE = `usage: wt claude send <slug> [text...]   send a prompt to the worktree's claude session
        wt claude ls [--json]             list live claude sessions
@@ -106,6 +110,18 @@ function explainMissingTarget(slugOrBranch: string): void {
       ? `archived on merge (${removed.prNumber !== undefined ? `#${removed.prNumber}` : "PR merged"}${ageSuffix})`
       : `worktree removed${age ? ` ${age} ago` : ""}`;
     console.error(red(`no live worktree: ${slug} — ${detail}`));
+    // The asker is usually a coordinator wondering where a row went,
+    // and the next question is always whether anything was left owing.
+    // Saying nothing here is what sent one to file an issue preserving
+    // a check that had already been run and recorded.
+    if (verificationOwedAtRemoval(removed)) {
+      console.error(
+        yellow(`  UNVERIFIED — still owed: ${removed.work!.verifyAfterMerge}`),
+      );
+    } else if (removed.work) {
+      const note = removed.work.note ? `: ${removed.work.note}` : "";
+      console.error(dim(`  last status: ${removed.work.state}${note}`));
+    }
     return;
   }
   console.error(red(`no worktree: ${slugOrBranch}`));

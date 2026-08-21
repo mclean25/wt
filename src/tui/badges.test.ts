@@ -8,7 +8,8 @@
 import { describe, expect, test } from "bun:test";
 
 import type { MergeQueueEntry, PullRequest } from "../core/types.ts";
-import { armedFromPr, prStateBadge } from "./badges.ts";
+import { armedFromPr, prSlotBadge, prStateBadge } from "./badges.ts";
+import { NF } from "./icons.ts";
 import { theme } from "./theme.ts";
 
 const pr = (over: Partial<PullRequest> = {}): PullRequest =>
@@ -42,26 +43,37 @@ describe("armedFromPr", () => {
   });
 });
 
-describe("prStateBadge", () => {
-  test("an armed open PR is lit, an unarmed one is not", () => {
-    expect(prStateBadge(pr(), queued).fg).toBe(theme.accent);
-    expect(prStateBadge(pr(), null).fg).toBe(theme.accentAlt);
+describe("prSlotBadge", () => {
+  // The details pane has room for a dedicated auto-merge segment; the
+  // list slot does not, so it swaps — same icon the queue uses, minus a
+  // position, in the same colour the details segment already wears.
+  test("armed but not queued takes the merge-queue icon", () => {
+    const armed = pr({ autoMerge: { enabledAt: "z", mergeMethod: "SQUASH" } });
+    expect(prSlotBadge(armed, null)).toEqual({ glyph: NF.mergeQueue, fg: theme.info });
   });
 
-  // The glyph still says "open", because it is. Only the colour moves.
-  test("arming never changes the glyph", () => {
-    expect(prStateBadge(pr(), queued).glyph).toBe(prStateBadge(pr(), null).glyph);
+  test("unarmed keeps the PR glyph", () => {
+    expect(prSlotBadge(pr(), null)).toEqual(prStateBadge(pr()));
   });
 
-  // A draft can carry an armed flag; it is still a draft, and the dim
-  // draft glyph is the more important thing about it.
-  test("draft/merged/closed are unaffected by arming", () => {
-    expect(prStateBadge(pr({ isDraft: true }), queued).fg).toBe(theme.fgDim);
-    expect(prStateBadge(pr({ state: "MERGED" }), queued).fg).toBe(theme.info);
-    expect(prStateBadge(pr({ state: "CLOSED" }), queued).fg).toBe(theme.err);
+  // Callers render the position themselves when there is a queue entry;
+  // the guard is here so one that forgets degrades to the position
+  // rather than silently dropping it.
+  test("a queue entry outranks the armed icon", () => {
+    expect(prSlotBadge(pr(), queued)).toEqual(prStateBadge(pr()));
   });
 
-  test("the mq argument is optional — callers without one get unarmed", () => {
-    expect(prStateBadge(pr()).fg).toBe(theme.accentAlt);
+  // A draft can carry an armed flag. It is still a draft, and that is
+  // the more important thing about it.
+  test("draft/merged/closed never take the swap", () => {
+    const am = { enabledAt: "z", mergeMethod: "SQUASH" } as PullRequest["autoMerge"];
+    expect(prSlotBadge(pr({ isDraft: true, autoMerge: am }), null).fg).toBe(theme.fgDim);
+    expect(prSlotBadge(pr({ state: "MERGED", autoMerge: am }), null).fg).toBe(theme.info);
+    expect(prSlotBadge(pr({ state: "MERGED", autoMerge: am }), null).glyph).toBe(NF.prMerged);
+    expect(prSlotBadge(pr({ state: "CLOSED", autoMerge: am }), null).fg).toBe(theme.err);
+  });
+
+  test("mq is optional — callers without one get the unarmed glyph", () => {
+    expect(prSlotBadge(pr())).toEqual(prStateBadge(pr()));
   });
 });

@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 9;
+export const WT_STATE_VERSION = 10;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -108,6 +108,17 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // board for a verification nobody asked for. Absent means "nothing
     // owed", which is the honest state of every row that predates it.
     to: 9,
+    up: (raw) => raw,
+  },
+  {
+    // v10: additive — `work` on a removed-history entry (the work
+    // status the row held when its checkout went away). Nothing to
+    // backfill and nothing recoverable: the per-slug record is reaped
+    // with the worktree, so for entries written before this the answer
+    // is genuinely gone. Absent reads as "unknown", never as "nothing
+    // was owed" — the whole point of the field is that those two were
+    // indistinguishable.
+    to: 10,
     up: (raw) => raw,
   },
 ];

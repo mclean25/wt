@@ -47,6 +47,7 @@ export {
   recentlyRemovedWorktrees,
   recentRemovalsSummary,
   removedJsonEntry,
+  verificationOwedAtRemoval,
   recordRemovedWorktrees,
 } from "./wtstate/removed.ts";
 

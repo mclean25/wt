@@ -283,6 +283,9 @@ export function parseWtState(raw: unknown): WtState {
       const rec = v as Partial<RemovedWorktree>;
       if (typeof rec.slug !== "string" || rec.slug.trim() === "") continue;
       if (typeof rec.branch !== "string" || rec.branch.trim() === "") continue;
+      // Same normalizer the live per-slug record uses, so a status
+      // cannot mean one thing on a row and another in the history.
+      const work = parseWorkStatus(rec.work);
       removed.push({
         slug: rec.slug,
         branch: rec.branch,
@@ -291,6 +294,7 @@ export function parseWtState(raw: unknown): WtState {
         ...(typeof rec.prNumber === "number" && Number.isFinite(rec.prNumber) ? { prNumber: rec.prNumber } : {}),
         ...(typeof rec.prUrl === "string" && rec.prUrl.trim() !== "" ? { prUrl: rec.prUrl } : {}),
         ...(typeof rec.prState === "string" && rec.prState.trim() !== "" ? { prState: rec.prState } : {}),
+        ...(work ? { work } : {}),
       });
     }
   }

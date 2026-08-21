@@ -194,31 +194,38 @@ export function armedFromPr(
   return pr.autoMerge != null || mq != null;
 }
 
-/**
- * Glyph + color for a PR's state — used by row badge cluster AND
- * details pr line.
- *
- * An armed open PR takes `accent` instead of `accentAlt`. The queue
- * segment already says WHERE in the queue a PR sits, but it is tier 2
- * and compacts away, arrives a fetch later than the arming, and does
- * not exist at all for classic auto-merge — so between pressing the key
- * and the position landing there was nothing on the row to say the
- * keystroke took. Colouring the glyph the row already has costs no
- * columns, survives every compaction tier, and covers both features
- * from one predicate. Deliberately not a new glyph: the PR is still
- * open, and a shape that says otherwise would be the dishonest version.
- */
-export function prStateBadge(
-  pr: PullRequest,
-  mq?: MergeQueueEntry | null,
-): Badge {
+/** Glyph + color for a PR's state — used by row badge cluster AND details pr line. */
+export function prStateBadge(pr: PullRequest): Badge {
   if (pr.state === "MERGED") return { glyph: NF.prMerged, fg: theme.info };
   if (pr.state === "CLOSED") return { glyph: NF.prClosed, fg: theme.err };
   if (pr.isDraft) return { glyph: NF.prDraft, fg: theme.fgDim };
-  return {
-    glyph: NF.prOpen,
-    fg: armedFromPr(pr, mq) ? theme.accent : theme.accentAlt,
-  };
+  return { glyph: NF.prOpen, fg: theme.accentAlt };
+}
+
+/**
+ * What the LIST's PR slot shows. That slot already swaps between the PR
+ * glyph and the merge-queue indicator (icon + position, 4 cells);
+ * armed-but-not-queued is the third case and renders the same icon
+ * without a position, in the same colour the details pane's own
+ * auto-merge segment uses.
+ *
+ * It lives here rather than inside `prStateBadge` because armed is not
+ * a PR STATE — the PR is open either way — and because the details
+ * pane must NOT take the swap: it has room for a dedicated auto-merge
+ * segment, and swapping there would print the same icon twice on one
+ * line. The list has no such room, which is the whole reason the slot
+ * swaps at all.
+ *
+ * Only reachable with no queue entry in practice (callers render the
+ * position when there is one), but it takes `mq` and checks it anyway,
+ * so a caller that forgets the branch degrades to the position rather
+ * than silently dropping it.
+ */
+export function prSlotBadge(pr: PullRequest, mq?: MergeQueueEntry | null): Badge {
+  if (!mq && pr.state === "OPEN" && !pr.isDraft && armedFromPr(pr, mq)) {
+    return { glyph: NF.mergeQueue, fg: theme.info };
+  }
+  return prStateBadge(pr);
 }
 
 /**

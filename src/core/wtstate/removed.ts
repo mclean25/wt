@@ -72,6 +72,18 @@ export function recordRemovedWorktrees(
     const bySlug = new Map(state.removed.map((e) => [e.slug, e]));
     for (const e of entries) {
       const prev = bySlug.get(e.slug);
+      // The work status is read HERE rather than threaded in by the
+      // caller: this function already holds the whole state under the
+      // lock, so the knowledge is first-hand, and a removal path added
+      // later cannot forget to pass it. `reapWtState` drops the
+      // per-slug record along with the worktree, so this copy is the
+      // only place the answer survives. Explicit caller value wins (a
+      // dispatch-time snapshot is closer to the truth than a record
+      // that may have been re-asserted since); `prev?.work` covers the
+      // later minimal confirm from `removeWorktree`, which arrives
+      // after the reap and would otherwise blank what the dispatch
+      // recorded.
+      const work = e.work ?? state.slugs[e.slug]?.work ?? prev?.work;
       bySlug.set(e.slug, {
         ...prev,
         slug: e.slug,
@@ -81,6 +93,7 @@ export function recordRemovedWorktrees(
         ...(e.prNumber !== undefined ? { prNumber: e.prNumber } : {}),
         ...(e.prUrl !== undefined ? { prUrl: e.prUrl } : {}),
         ...(e.prState !== undefined ? { prState: e.prState } : {}),
+        ...(work !== undefined ? { work } : {}),
       });
     }
     const cutoff = Date.now() - REMOVED_MAX_AGE_MS;
@@ -135,6 +148,9 @@ export function removedJsonEntry(e: RemovedWorktree): {
   pr_url: string | null;
   title: string | null;
   archived_at: string;
+  work_state: string | null;
+  verify_after_merge: string | null;
+  verification_owed: boolean;
 } {
   return {
     slug: e.slug,
@@ -144,5 +160,34 @@ export function removedJsonEntry(e: RemovedWorktree): {
     pr_url: e.prUrl ?? null,
     title: e.title ?? null,
     archived_at: e.removedAt,
+    // The status the row held when it went away. Flat here, matching
+    // `wt status --all --json`'s convention rather than `wt fleet
+    // --json`'s nested `work` object, because all three commands append
+    // this same entry and it has to read identically on each.
+    work_state: e.work?.state ?? null,
+    verify_after_merge: e.work?.verifyAfterMerge ?? null,
+    // The question anyone actually asks of a removed row, precomputed
+    // so three consumers can't each derive it slightly differently.
+    // False for an entry with no record at all, which is UNKNOWN rather
+    // than fine — `work_state: null` is the tell, and it is why this
+    // is not the only field.
+    verification_owed: verificationOwedAtRemoval(e),
   };
+}
+
+/**
+ * Did this row still owe a post-merge verification when its checkout
+ * was taken? `verified` is the discharge and `dropped` voids it, same
+ * as everywhere else; anything else with steps recorded means the check
+ * never happened and the context is gone.
+ *
+ * Deliberately NOT `owesPostMergeVerification`: that one gates on the
+ * branch having landed, which is a live-row question. By the time a row
+ * is in this history the checkout is gone either way, and an obligation
+ * on a branch that never landed is exactly as unresolved.
+ */
+export function verificationOwedAtRemoval(e: RemovedWorktree): boolean {
+  const work = e.work;
+  if (!work?.verifyAfterMerge) return false;
+  return work.state !== "verified" && work.state !== "dropped";
 }

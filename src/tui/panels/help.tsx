@@ -317,12 +317,6 @@ const WORK_STATUS_GLYPHS: GlyphItem[] = [
 const BADGES: GlyphItem[] = [
   { glyph: NF.pencil, color: theme.warn, label: "uncommitted changes", search: "dirty uncommitted" },
   { glyph: NF.prOpen, color: theme.accentAlt, label: "PR open" },
-  {
-    glyph: NF.prOpen,
-    color: theme.accent,
-    label: "PR open · merge when ready armed",
-    search: "auto-merge armed queued merge when ready",
-  },
   { glyph: NF.prDraft, color: theme.fgDim, label: "PR draft" },
   { glyph: NF.prMerged, color: theme.info, label: "PR merged" },
   { glyph: NF.prClosed, color: theme.err, label: "PR closed" },
@@ -332,7 +326,12 @@ const BADGES: GlyphItem[] = [
   { glyph: `${NF.mergeQueue} N`, color: theme.ok, label: "merge queue pos N · mergeable" },
   { glyph: `${NF.mergeQueue} N`, color: theme.warn, label: "merge queue pos N · awaiting/queued" },
   { glyph: `${NF.mergeQueue} N`, color: theme.err, label: "merge queue pos N · blocked" },
-  { glyph: NF.mergeQueue, color: theme.info, label: "auto-merge armed (waiting)" },
+  {
+    glyph: NF.mergeQueue,
+    color: theme.info,
+    label: "merge when ready armed, not queued yet — takes the PR slot",
+    search: "auto-merge armed waiting merge when ready",
+  },
   { glyph: NF.bolt, color: theme.warn, label: "SST stage deployed / dev server running" },
   { glyph: NF.restack, color: theme.accent, label: "restack running (whole chain)", search: "restack rebase running" },
   { glyph: NF.restack, color: theme.warn, label: "conflict being resolved / mid-rebase", search: "rebase in progress conflict resolving session" },

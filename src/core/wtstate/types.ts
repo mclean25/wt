@@ -189,6 +189,19 @@ export type RemovedWorktree = {
   prNumber?: number;
   prUrl?: string;
   prState?: string;
+  /**
+   * The work status the row held when its checkout went away, copied
+   * from `slugs[slug].work` by `recordRemovedWorktrees`.
+   *
+   * The per-slug record is reaped along with the worktree, so without
+   * this a merged-and-swept row and a row swept while still owing a
+   * post-merge verification are the same empty answer — and that
+   * silence cost a fleet manager an issue filed to preserve a check
+   * that had in fact already been run and recorded. Absent means
+   * UNKNOWN (the row predates this field, or held no status), never
+   * "nothing was owed".
+   */
+  work?: WorkStatusRecord;
 };
 
 /**

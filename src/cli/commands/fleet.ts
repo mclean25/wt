@@ -427,6 +427,12 @@ export async function run(argv: string[]): Promise<number> {
       console.log(
         dim(`  ${entry.slug}  ${entry.kind}${pr}${age ? `, ${age} ago` : ""}`),
       );
+      // Loud, and only here: a row whose checkout is gone while a
+      // deployed-environment check was still owed has nowhere else left
+      // to be reported.
+      if (entry.verification_owed) {
+        console.log(yellow(`    UNVERIFIED — owed: ${entry.verify_after_merge}`));
+      }
     }
   }
   return 0;
