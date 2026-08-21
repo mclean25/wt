@@ -469,6 +469,21 @@ type ActionUi = {
    * template vars, no `[re: <slug>]` prefix (see `launchSlotCommand`).
    */
   fleet?: boolean;
+  /**
+   * This action's effect LEAVES THE REPOSITORY — it closes a ticket,
+   * moves an issue, posts a message. Terminal success and failure then
+   * narrate on the attention feed instead of the firehose.
+   *
+   * Same rule `builtin:close-issue` follows and for the same reason:
+   * wt's undo does not reach outside, and the board shows nothing, so a
+   * write nobody saw is a write nobody can find. It names the PROPERTY
+   * rather than the consequence, because the property is what a config
+   * author can actually check about their own command.
+   *
+   * Deliberately not implied by `affects`: that says which of wt's
+   * caches to invalidate, which is a statement about the INSIDE.
+   */
+  external?: boolean;
 };
 
 /**
@@ -1701,9 +1716,15 @@ function parseActions(raw: unknown, errs: Errors): readonly ActionDef[] {
       errs.add(`${tag}.group must be a non-empty string`);
       continue;
     }
-    const ui: { key?: string; group?: string } = {};
+    const externalRaw = entry.external;
+    if (externalRaw !== undefined && typeof externalRaw !== "boolean") {
+      errs.add(`${tag}.external must be true or false`);
+      continue;
+    }
+    const ui: { key?: string; group?: string; external?: boolean } = {};
     if (typeof keyRaw === "string") ui.key = keyRaw;
     if (typeof groupRaw === "string") ui.group = groupRaw;
+    if (externalRaw === true) ui.external = true;
     // `target` is prompt-action-only: it selects a supervised headless
     // primary-harness run (default) vs sending to the live F12 session.
     // Reject it on shell actions so a misplaced field fails loud instead

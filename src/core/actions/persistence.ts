@@ -89,6 +89,7 @@ export function materializeRun(
     lines,
     runDir,
     affects: meta.affects,
+    ...(meta.external ? { external: true } : {}),
     ...(meta.autoFireKeys && meta.autoFireKeys.length > 0
       ? { autoFireKeys: meta.autoFireKeys }
       : {}),

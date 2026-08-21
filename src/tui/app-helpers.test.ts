@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { StatusKind } from "../core/types.ts";
 
 import {
+  buildActionVars,
   cursorSuccessor,
   destroyHazard,
   destroyHazardLabel,
@@ -296,5 +297,34 @@ describe("an unverified landing is a destroy hazard", () => {
   test("it sorts below actual loss", () => {
     const row = makeRow({ status: merged, work: owed, dirty: ["a.ts"] });
     expect(destroyHazards(row).map((h) => h.kind)).toEqual(["dirty", "unverified"]);
+  });
+});
+
+// `{{issue_id}}` exists so a shell action never has to re-implement
+// `branch.id_pattern` in sed — two definitions of one convention drift
+// the first time the pattern changes.
+describe("buildActionVars issue_id", () => {
+  const varsFor = (slug: string) =>
+    buildActionVars(
+      { ...makeRow({}), wt: { ...makeRow({}).wt, slug } } as WorktreeRow,
+      "/",
+    );
+
+  test("pulls the tracker id out of the slug, upper-cased", () => {
+    expect(varsFor("coz-2176-active-louse").issue_id).toBe("COZ-2176");
+  });
+
+  // Empty, never the slug: an action templating a tracker call wants a
+  // substitution that produces an obviously-wrong request over one that
+  // produces a plausible request against the wrong issue.
+  test("a slug with no id yields an empty string", () => {
+    expect(varsFor("meetings-frontend-cleanup").issue_id).toBe("");
+  });
+
+  // Not anchored to the start, matching every other surface that reads
+  // an id out of a slug (the row's issue link, `wt ls --json`). A slug
+  // someone prefixed by hand still names its issue.
+  test("the id need not lead the slug", () => {
+    expect(varsFor("fix-coz-2176-later").issue_id).toBe("COZ-2176");
   });
 });

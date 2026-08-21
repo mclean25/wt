@@ -217,6 +217,7 @@ class ActionRegistry {
       actionName: def.name,
       prompt: promptForRun,
       affects: def.affects,
+      ...(def.external ? { external: true } : {}),
       ...(opts.autoFireKeys && opts.autoFireKeys.length > 0
         ? { autoFireKeys: opts.autoFireKeys }
         : {}),
@@ -259,6 +260,7 @@ class ActionRegistry {
       lines: [initialLine],
       runDir,
       affects: def.affects,
+      ...(def.external ? { external: true } : {}),
       ...(opts.autoFireKeys && opts.autoFireKeys.length > 0
         ? { autoFireKeys: opts.autoFireKeys }
         : {}),
@@ -859,12 +861,21 @@ class ActionRegistry {
     // launched it (keystroke or automation), so the pane line alone is
     // easy to miss. A kill is the immediate echo of the user's own
     // keystroke — no toast.
+    //
+    // An `external = true` action goes to the ATTENTION feed for both
+    // terminal outcomes. Its effect left the repository, so wt's undo
+    // does not reach it and the board will never show it: a success
+    // nobody saw is a change nobody can find, and a failure nobody saw
+    // is a change everybody assumes happened. Same rule
+    // `builtin:close-issue` follows. A kill stays on the firehose
+    // either way — the user pressed the key, and nothing ran.
+    const feed = cur.external ? log.attention : log.event;
     if (status === "succeeded") {
-      log.event.ok(`${slug}: ${cur.actionName} succeeded (${dur})`, { toast: true });
+      feed.ok(`${slug}: ${cur.actionName} succeeded (${dur})`, { toast: true });
     } else if (status === "killed") {
       log.event.warn(`${slug}: ${cur.actionName} killed (${dur})`);
     } else {
-      log.event.err(`${slug}: ${cur.actionName} failed (${dur})`, { toast: true });
+      feed.err(`${slug}: ${cur.actionName} failed (${dur})`, { toast: true });
     }
     this.scheduleCleanup();
   }

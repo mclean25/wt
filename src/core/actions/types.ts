@@ -29,7 +29,8 @@ export type ActionAvailability =
  *
  * Currently produced at `tui/hooks/useActionDispatch.ts`'s `launchAction` from the row +
  * config. The full set: `base`, `base_branch`, `branch`, `slug`, `cwd`,
- * `pr`, `stage`, `arg` (when the action collects one), and
+ * `pr`, `issue_id` (the tracker id in the slug, `""` when it has none),
+ * `stage`, `arg` (when the action collects one), and
  * `skill_prefix` (the harness skill-invocation prefix — `/` for Claude
  * Code, `$` for OpenCode / Codex; see `actionSkillPrefix` in
  * `tui/hooks/useActionDispatch.ts` for how the target harness is picked per launch).
@@ -67,6 +68,13 @@ export type ActionRun = {
    */
   affects: readonly EffectTag[];
   /**
+   * Snapshot of the def's `external` at start time: this run's effect
+   * leaves the repository, so its terminal narration belongs on the
+   * attention feed. Snapshotted for the same reason `affects` is — a
+   * config edit mid-run must not change how the run reports itself.
+   */
+  external?: boolean;
+  /**
    * Fire keys of the automation dispatch that launched this run, when
    * it was auto-launched (absent for manual runs). Persisted in
    * meta.json so the automation ledger's boot reconciliation can match
@@ -94,6 +102,13 @@ export type ActionMeta = {
   actionName: string;
   prompt: string;
   affects: readonly EffectTag[];
+  /**
+   * Snapshot of the def's `external` at start time: this run's effect
+   * leaves the repository, so its terminal narration belongs on the
+   * attention feed. Snapshotted for the same reason `affects` is — a
+   * config edit mid-run must not change how the run reports itself.
+   */
+  external?: boolean;
   autoFireKeys?: readonly string[];
   startedAt: number;
   endedAt?: number;

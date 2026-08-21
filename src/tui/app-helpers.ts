@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import type { ActionDef, ActionLine, ActionVars } from "../core/actions.ts";
 import { config } from "../core/config.ts";
 import { getHarness, type HarnessId } from "../core/harness/index.ts";
+import { issueIdForSlug } from "../core/issue-tracker.ts";
 import { lockLabel, lockStatus } from "../core/locks.ts";
 import { canEnterSessionDuringLock } from "../core/session-readiness.ts";
 import { expectedStage } from "../core/stage-safety.ts";
@@ -525,6 +526,12 @@ export function buildActionVars(row: WorktreeRow, skillPrefix: string): ActionVa
     slug: row.wt.slug,
     cwd: row.wt.path,
     pr: row.pr ? String(row.pr.number) : "",
+    // The tracker id in the slug (`coz-2176-…` → `COZ-2176`), empty when
+    // the slug carries none. Derivable from `{{slug}}` by any shell
+    // action, and supplied here anyway: a config re-implementing
+    // `branch.id_pattern` in sed is a second definition of the same
+    // convention, and the two drift the first time the pattern changes.
+    issue_id: issueIdForSlug(row.wt.slug) ?? "",
     // The stage this worktree owns — the pinned `.sst/stage` (prefix-
     // guarded), else the slug-derived default. Any user shell action that
     // wants a stage handle (e.g. `sst remove --stage {{stage}}`) reads this.
