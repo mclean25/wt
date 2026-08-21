@@ -3,7 +3,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { config } from "../../core/config.ts";
 import { devServerStatus, type DevServerStatus } from "../../core/dev-server.ts";
 import { claudeStatus, type ClaudeStatus } from "../../core/harness/claude/jsonl.ts";
-import { branchIsGone, branchIsMerged, effectiveBaseOrTrunk, firstCommitSubject, invalidateMainFirstParents, mergeConflictProbe, type MergeConflictProbe } from "../../core/git.ts";
+import { branchIsGone, branchIsMerged, effectiveBaseOrTrunk, firstCommitSubject, freshBaseRev, invalidateMainFirstParents, mergeConflictProbe, type MergeConflictProbe } from "../../core/git.ts";
 import { gitActivity, type GitActivity } from "../../core/git-activity.ts";
 import { lockStatus } from "../../core/locks.ts";
 import type {
@@ -200,6 +200,19 @@ export const wtConflictQuery = (
  * range is empty, the title falls back to the slug, and the rows are
  * telling apart again. The base is part of the query key so a `wt base`
  * edit or a restack reconcile refetches.
+ *
+ * The same failure has a second cause with nothing to do with stacking,
+ * and it reaches ORDINARY trunk worktrees: under `rift` a checkout's
+ * own `origin/<trunk>` is only as fresh as its last fetch, so
+ * `origin/<trunk>..HEAD` on a branch with NO commits of its own is the
+ * run of trunk commits it is behind by — and the oldest of those is a
+ * colleague's. Measured live: a row with 0 files and 0 lines changed
+ * titled itself "Make the pgTAP suite green and seed-independent",
+ * another worktree's work. So the base resolves through `freshBaseRev`,
+ * which substitutes the main clone's tip when this checkout already has
+ * the object. It is the read-side floor under `freshenWorktreeTrunkRefs`
+ * rather than a replacement for it: a title is a claim about THIS
+ * branch, and a wrong one is indistinguishable from a right one.
  */
 export const wtFirstCommitQuery = (
   wt: Pick<Worktree, "slug" | "path">,
@@ -208,6 +221,9 @@ export const wtFirstCommitQuery = (
   queryOptions({
     queryKey: qk.wt(wt.slug).firstCommit(baseBranch ?? null),
     queryFn: async (): Promise<string | null> =>
-      firstCommitSubject(wt.path, await effectiveBaseOrTrunk(wt.path, baseBranch)),
+      firstCommitSubject(
+        wt.path,
+        await freshBaseRev(wt.path, await effectiveBaseOrTrunk(wt.path, baseBranch)),
+      ),
     staleTime: STALE.mid,
   });

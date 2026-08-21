@@ -186,7 +186,8 @@ ref is the same lie pointing the other way.
 now" resolves in the main clone (`baseTipSha`); "what does this checkout
 see" resolves in the worktree. A comparison that spans both needs the
 same helper on each side, or it compares reference frames rather than
-commits. Sync counts (`syncState`, `pushCounts`) additionally go through
+commits. Sync counts (`syncState`, `pushCounts`) and the pre-PR row title
+(`wtFirstCommitQuery`) additionally go through
 `freshBaseRev`, which swaps the trunk ref for the main clone's SHA when
 the checkout already holds that object — a floor under the freshen
 above, for the window between a merge landing and the next fetch. It

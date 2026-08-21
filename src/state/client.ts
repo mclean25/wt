@@ -92,7 +92,12 @@ export const CACHE_DB = config.paths.cacheDb;
 // inflating "ahead" by every trunk commit that landed after it (156 vs
 // a true 14 on one live row). A restored v20 entry carries the old
 // number in the new shape, and nothing distinguishes them.
-const CACHE_BUSTER = "v21";
+// v22: `firstCommit` entries changed MEANING without changing shape.
+// They are still a commit subject, but one measured against a base a
+// stale clone ref could no longer poison — so persisted entries from
+// before hold titles belonging to other people's commits, and a
+// restored one is indistinguishable from a fresh one.
+const CACHE_BUSTER = "v22";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

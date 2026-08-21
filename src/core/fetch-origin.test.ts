@@ -94,6 +94,10 @@ const WORKTREE_MOD = JSON.stringify(
   pathToFileURL(join(import.meta.dir, "worktree.ts")).href,
 );
 
+const GIT_MOD = JSON.stringify(
+  pathToFileURL(join(import.meta.dir, "git.ts")).href,
+);
+
 test("keep_fresh CREATES a local head the clone never had, and advances it", async () => {
   const { origin, seed } = buildOrigin();
   const root = tmp("wt-fo-root-");
@@ -197,6 +201,24 @@ test("a branch with no commits of its own counts 0 ahead through a stale clone r
      console.log(JSON.stringify({ ahead: s.main.ahead, behind: s.main.behind, unpushed: p.unpushed }));`,
   );
   expect(JSON.parse(out.trim())).toEqual({ ahead: 0, behind: 0, unpushed: 0 });
+
+  // Same frame error, a surface further away and much harder to spot:
+  // the pre-PR row TITLE is the oldest commit in `base..HEAD`, so a
+  // branch with nothing of its own titles itself with whichever trunk
+  // commit it happens to be behind by — a colleague's work, rendered as
+  // this row's, with nothing anywhere to say it is wrong. Measured live
+  // on a row showing 0 files and 0 lines changed.
+  expect(git(wt, ["log", "--reverse", "--format=%s", "origin/staging..HEAD"]).split("\n")[0]).toBe(
+    "S2",
+  );
+  const title = runWithConfig(
+    root,
+    cfg,
+    `const g = await import(${GIT_MOD});
+     const base = await g.freshBaseRev(${JSON.stringify(wt)}, "origin/staging");
+     console.log(JSON.stringify(await g.firstCommitSubject(${JSON.stringify(wt)}, base)));`,
+  );
+  expect(JSON.parse(title.trim())).toBeNull();
 });
 
 /**
