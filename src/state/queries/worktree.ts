@@ -3,7 +3,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { config } from "../../core/config.ts";
 import { devServerStatus, type DevServerStatus } from "../../core/dev-server.ts";
 import { claudeStatus, type ClaudeStatus } from "../../core/harness/claude/jsonl.ts";
-import { branchIsGone, branchIsMerged, effectiveBaseOrTrunk, firstCommitSubject, freshBaseRev, invalidateMainFirstParents, mergeConflictProbe, type MergeConflictProbe } from "../../core/git.ts";
+import { branchIsGone, branchIsMerged, effectiveBaseOrTrunk, firstCommitSubject, freshBaseRev, invalidateMainFirstParents, mergeConflictProbe, revParse, type MergeConflictProbe } from "../../core/git.ts";
 import { gitActivity, type GitActivity } from "../../core/git-activity.ts";
 import { lockStatus } from "../../core/locks.ts";
 import type {
@@ -214,6 +214,33 @@ export const wtConflictQuery = (
  * rather than a replacement for it: a title is a claim about THIS
  * branch, and a wrong one is indistinguishable from a right one.
  */
+/**
+ * Current tip of every branch a `branch.advanced` automation watches.
+ *
+ * Resolved in the MAIN CLONE, never in a worktree: the question is
+ * "where is this branch now", and only the clone that fetches can
+ * answer it — a rift checkout's copy is as old as its last fetch. wt
+ * advances these branches itself (`[branch] base` and everything in
+ * `keep_fresh`), which the config loader already requires of any
+ * watched branch, so this reads what `fetchOrigin` just wrote.
+ *
+ * Empty (and free) when no rule watches anything.
+ */
+export const watchedBranchTipsQuery = (branches: readonly string[]) =>
+  queryOptions({
+    queryKey: qk.watchedBranchTips([...branches].sort()),
+    queryFn: async (): Promise<Record<string, string>> => {
+      const out: Record<string, string> = {};
+      for (const b of branches) {
+        const sha = await revParse(b, config.paths.mainClone);
+        if (sha) out[b] = sha;
+      }
+      return out;
+    },
+    enabled: branches.length > 0,
+    staleTime: STALE.mid,
+  });
+
 export const wtFirstCommitQuery = (
   wt: Pick<Worktree, "slug" | "path">,
   baseBranch?: string | null,

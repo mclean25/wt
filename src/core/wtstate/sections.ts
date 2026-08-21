@@ -567,3 +567,32 @@ export function reapWtState(liveSlugs: ReadonlySet<string>): void {
     writeWtState(next);
   });
 }
+
+/**
+ * Record a watched branch's tip, the watermark behind the
+ * `branch.advanced` trigger.
+ *
+ * Called on two occasions and only two: the FIRST time a branch is
+ * seen (recording it without firing, so an absent mark can never be
+ * read as "everything up to here"), and after a fire has been
+ * dispatched. Never on mere observation — the range between two tips is
+ * consumed exactly once, and advancing the mark before the run is
+ * delivered would drop it with nothing anywhere to say so.
+ *
+ * Returns whether it wrote, on the same reasoning as
+ * `setSlugWorkStatus`: a call that can legitimately succeed by doing
+ * nothing has to say which happened.
+ */
+export function setBranchTip(branch: string, sha: string): boolean {
+  let wrote = false;
+  withWtStateLock(() => {
+    const state = readWtState();
+    if (state.branchTips[branch] === sha) return;
+    writeWtState({
+      ...state,
+      branchTips: { ...state.branchTips, [branch]: sha },
+    });
+    wrote = true;
+  });
+  return wrote;
+}

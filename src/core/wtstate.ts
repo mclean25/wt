@@ -39,6 +39,7 @@ export {
   setSlugWorkStatus,
   swapOrders,
   toggleSectionFolded,
+  setBranchTip,
 } from "./wtstate/sections.ts";
 
 export {

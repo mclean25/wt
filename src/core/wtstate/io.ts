@@ -298,6 +298,16 @@ export function parseWtState(raw: unknown): WtState {
       });
     }
   }
+  // Branch → last observed tip. String values only; a malformed entry
+  // drops to "not seen yet", which costs one skipped range rather than
+  // a fire against a sha nothing can resolve.
+  const branchTips: Record<string, string> = {};
+  const rawTips = data?.branchTips;
+  if (rawTips && typeof rawTips === "object" && !Array.isArray(rawTips)) {
+    for (const [k, v] of Object.entries(rawTips as Record<string, unknown>)) {
+      if (typeof v === "string" && v.trim() !== "") branchTips[k] = v;
+    }
+  }
   const edges: MergeEdge[] = [];
   if (Array.isArray(data?.edges)) {
     for (const v of data.edges) {
@@ -320,6 +330,7 @@ export function parseWtState(raw: unknown): WtState {
         : 0,
     removed,
     edges,
+    branchTips,
   };
 }
 
@@ -334,6 +345,7 @@ export function emptyWtState(): WtState {
     attentionSeenTs: 0,
     removed: [],
     edges: [],
+    branchTips: {},
   };
 }
 

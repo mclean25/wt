@@ -262,6 +262,18 @@ export type WtState = {
    */
   removed: RemovedWorktree[];
   /**
+   * Last tip wt observed for each branch a `branch.advanced` automation
+   * watches. Advanced only when a fire is DISPATCHED, never on mere
+   * observation: the range between two tips is consumed exactly once,
+   * and moving the mark before the run is delivered would drop it.
+   *
+   * An absent entry means the branch has not been seen yet, and the
+   * first sight records it WITHOUT firing — reading absence as "the
+   * beginning of history" would fire once for every commit the branch
+   * has ever carried.
+   */
+  branchTips: Record<string, string>;
+  /**
    * Merge edges — pairwise, self-expiring ordering assertions between
    * worktrees (`wt edge`). Vocabulary and design rules live in
    * `core/merge-edges.ts`; writers in `wtstate/edges.ts`. Edges with a

@@ -44,6 +44,14 @@ export const qk = {
   github: (branches: readonly string[]) =>
     ["github", [...branches].sort()] as const,
   /**
+   * Tips of the branches a `branch.advanced` automation watches. Keyed
+   * on the sorted branch list, like `github` — a config edit that adds
+   * or drops a watched branch produces a new key rather than a stale
+   * entry answering about a set nobody asked for.
+   */
+  watchedBranchTips: (branches: readonly string[]) =>
+    ["watchedBranchTips", [...branches].sort()] as const,
+  /**
    * Pull requests where the authenticated user has been requested as
    * reviewer. Single global key — the GraphQL `search` doesn't take a
    * worktree-keyed parameter. Intentionally NOT under the `["github"]`

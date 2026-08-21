@@ -608,7 +608,21 @@ export type AutomationTrigger =
    * catch — a post-merge verification nobody runs — is silent by
    * construction, because the row otherwise reads as merged and done.
    */
-  | "status.verification_overdue";
+  | "status.verification_overdue"
+  /**
+   * A watched branch's tip MOVED. Fleet-level: it targets no worktree,
+   * because by the time it fires the worktrees whose work is in that
+   * range are long gone — which is exactly why it exists. The run is
+   * launched in the main clone with `{{branch}}`, `{{from}}` and
+   * `{{to}}`, and the range walk is the run's job.
+   *
+   * `from` comes from a watermark wt advances on dispatch. The FIRST
+   * observation of a branch records the sha and fires nothing: there is
+   * no range yet, and treating an absent watermark as "the beginning of
+   * history" would fire once for every commit ever made. Absence means
+   * unknown, never fire-for-everything.
+   */
+  | "branch.advanced";
 
 /**
  * What to do when the target worktree isn't quiescent at delivery time
@@ -662,6 +676,14 @@ export type AutomationDef = {
    * enough to ride out CI/review churn.
    */
   settleSeconds: number;
+  /**
+   * `branch.advanced` only: which branch to watch. Required there and
+   * rejected everywhere else — a trigger whose subject is a branch has
+   * no sensible default, and guessing the trunk would silently watch
+   * the wrong thing on the fleets this exists for (two-tier trunks,
+   * where the release branch is precisely NOT the one you fork from).
+   */
+  branch: string | null;
 };
 
 export type Config = {
@@ -1431,7 +1453,7 @@ function build(raw: Raw, errs: Errors): Config {
   // [[automations]] has NO defaults — automation is strictly opt-in.
   // Parsed after actions so `run` references validate against the
   // final action list.
-  const automations = parseAutomations(raw.automations, actions, errs);
+  const automations = parseAutomations(raw.automations, actions, { base: branchBase, keepFresh }, errs);
 
   return {
     paths: {
@@ -1479,6 +1501,7 @@ const VALID_TRIGGERS = new Set<AutomationTrigger>([
   "status.needs_testing",
   "status.ready",
   "status.verification_overdue",
+  "branch.advanced",
 ]);
 /** Legacy/alternate trigger spellings, normalized before validation. */
 const TRIGGER_ALIASES: Record<string, AutomationTrigger> = {
@@ -1496,6 +1519,9 @@ const MERGED_SETTLE_SECONDS = 10;
 const MERGE_TRIGGERS: ReadonlySet<AutomationTrigger> = new Set([
   "wt.merged",
   "stack.parent_merged",
+  // A branch tip does not move back, so there is nothing to ride out —
+  // the window is only a cancellation grace period.
+  "branch.advanced",
 ]);
 // Status assertions are deliberate writes (an agent ran `wt status`),
 // not flappy derived state — and their typical run is a notification,
@@ -1517,6 +1543,8 @@ function defaultSettleSeconds(on: AutomationTrigger): number {
 function parseAutomations(
   raw: unknown,
   actions: readonly ActionDef[],
+  /** Branches wt actually advances — the set `branch.advanced` may watch. */
+  fetched: { base: string; keepFresh: readonly string[] },
   errs: Errors,
 ): readonly AutomationDef[] {
   if (raw === undefined) return [];
@@ -1635,6 +1663,32 @@ function parseAutomations(
       errs.add(`${tag}.settle_seconds must be a non-negative number`);
       continue;
     }
+    const branchRaw = entry.branch;
+    if (branchRaw !== undefined && !(typeof branchRaw === "string" && branchRaw.trim() !== "")) {
+      errs.add(`${tag}.branch must be a non-empty string`);
+      continue;
+    }
+    if (branchRaw !== undefined && on !== "branch.advanced") {
+      errs.add(`${tag}.branch only applies to on = "branch.advanced" (got "${on}")`);
+      continue;
+    }
+    if (branchRaw === undefined && on === "branch.advanced") {
+      errs.add(`${tag}: on = "branch.advanced" requires branch = "<name>"`);
+      continue;
+    }
+    const branchName = typeof branchRaw === "string" ? branchRaw.trim() : null;
+    // Fail fast on a branch nothing fetches. wt advances a worktree's
+    // trunk ref and the main clone's `[branch] base`; every other local
+    // head moves only because `keep_fresh` names it. Watching one that
+    // is never fetched is a rule that can never fire, and a rule that
+    // never fires is indistinguishable from one that is working.
+    if (branchName !== null && branchName !== fetched.base && !fetched.keepFresh.includes(branchName)) {
+      errs.add(
+        `${tag}.branch "${branchName}" is neither [branch] base nor in [branch] keep_fresh — ` +
+          `nothing would advance it, so the rule could never fire`,
+      );
+      continue;
+    }
     seenIds.add(id);
     out.push({
       id,
@@ -1645,6 +1699,7 @@ function parseAutomations(
       afterDays: typeof afterDaysRaw === "number" ? afterDaysRaw : VERIFY_OVERDUE_DAYS,
       settleSeconds:
         typeof settleRaw === "number" ? settleRaw : defaultSettleSeconds(on as AutomationTrigger),
+      branch: branchName,
     });
   }
   return out;

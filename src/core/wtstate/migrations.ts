@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 10;
+export const WT_STATE_VERSION = 11;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -119,6 +119,15 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // was owed" — the whole point of the field is that those two were
     // indistinguishable.
     to: 10,
+    up: (raw) => raw,
+  },
+  {
+    // v11: additive — `branchTips`, the per-branch watermark behind the
+    // `branch.advanced` trigger. Nothing to backfill and deliberately
+    // so: an invented mark would either fire a rule across history it
+    // never saw, or silently swallow the first real range. Absent means
+    // "not seen yet", and the first pass records the tip without firing.
+    to: 11,
     up: (raw) => raw,
   },
 ];

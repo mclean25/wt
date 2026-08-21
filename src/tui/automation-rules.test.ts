@@ -7,7 +7,9 @@ import { StatusKind, type PullRequest } from "../core/types.ts";
 import {
   evaluateAutomations,
   fireIdentity,
+  FLEET_SLUG,
   type AutomationEvalCtx,
+  type FireAudience,
 } from "./automation-rules.ts";
 import type {
   FieldState,
@@ -94,6 +96,7 @@ function rule(overrides: Partial<AutomationDef>): AutomationDef {
     cooldownMinutes: null,
     afterDays: 2,
     settleSeconds: 0,
+  branch: null,
     ...overrides,
   };
 }
@@ -102,6 +105,7 @@ const FRESH: AutomationEvalCtx = {
   githubFresh: true,
   isPausedSlug: () => false,
   audienceOf: () => null,
+      branchTips: new Map(),
   nowMs: Date.parse("2026-08-20T12:00:00Z"),
 };
 
@@ -258,6 +262,7 @@ describe("status.* (work-status triggers)", () => {
     githubFresh: false,
     isPausedSlug: () => false,
     audienceOf: () => null,
+      branchTips: new Map(),
     nowMs: Date.parse("2026-08-20T12:00:00Z"),
   };
 
@@ -616,5 +621,62 @@ describe("status.verification_overdue", () => {
       evaluateAutomations([r], [row], { ...ctx, githubFresh: false }),
     ).toHaveLength(0);
     expect(evaluateAutomations([r], [row], ctx)).toHaveLength(1);
+  });
+});
+
+describe("branch.advanced", () => {
+  const r = rule({ id: "release", on: "branch.advanced", branch: "main" });
+  const ctxWith = (tips: [string, { now: string; seen: string | null }][]) => ({
+    githubFresh: true,
+    isPausedSlug: () => false,
+    audienceOf: () => null as FireAudience,
+    branchTips: new Map(tips),
+    nowMs: 0,
+  });
+
+  // The whole reason the trigger is fleet-level: by release time the
+  // rows whose work is in the range have been swept, so it must fire
+  // with no rows at all.
+  test("fires with an empty board", () => {
+    const fires = evaluateAutomations([r], [], ctxWith([["main", { now: "bbb", seen: "aaa" }]]));
+    expect(fires).toHaveLength(1);
+    expect(fires[0]!.slug).toBe(FLEET_SLUG);
+    expect(fires[0]!.branchRange).toEqual({ branch: "main", from: "aaa", to: "bbb" });
+  });
+
+  // The dangerous case. An absent watermark is "not seen yet", never
+  // "everything up to here" — the latter would fire once across the
+  // branch's entire history, which for the run this exists for means
+  // marking every issue ever shipped.
+  test("first sight fires NOTHING", () => {
+    expect(
+      evaluateAutomations([r], [], ctxWith([["main", { now: "bbb", seen: null }]])),
+    ).toEqual([]);
+  });
+
+  test("an unmoved tip fires nothing", () => {
+    expect(
+      evaluateAutomations([r], [], ctxWith([["main", { now: "aaa", seen: "aaa" }]])),
+    ).toEqual([]);
+  });
+
+  test("an unresolvable branch fires nothing", () => {
+    expect(evaluateAutomations([r], [], ctxWith([]))).toEqual([]);
+  });
+
+  // Keyed on the DESTINATION, so a branch that moves again while the
+  // first fire is still pending gets its own key rather than being
+  // swallowed as a duplicate.
+  test("the fire key carries the destination sha", () => {
+    const a = evaluateAutomations([r], [], ctxWith([["main", { now: "bbb", seen: "aaa" }]]));
+    const b = evaluateAutomations([r], [], ctxWith([["main", { now: "ccc", seen: "aaa" }]]));
+    expect(a[0]!.fireKeys).not.toEqual(b[0]!.fireKeys);
+  });
+
+  // Nothing to wait on: the run touches no checkout, and quiescing on a
+  // fleet would mean a busy fleet never releases.
+  test("waits on no worktree", () => {
+    const fires = evaluateAutomations([r], [], ctxWith([["main", { now: "bbb", seen: "aaa" }]]));
+    expect(fires[0]!.quiesceSlugs).toEqual([]);
   });
 });

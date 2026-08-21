@@ -38,6 +38,13 @@ import { dayBucketFromMs } from "./day-headers.ts";
 import { isCleanCandidate } from "./app-helpers.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
 
+/**
+ * Target of a fleet-level fire — one that belongs to no worktree. Leads
+ * with `_` because a slug cannot: `wt new` derives slugs from branch
+ * names, so no real row can ever collide with this one.
+ */
+export const FLEET_SLUG = "_fleet";
+
 export type AutomationFire = {
   rule: AutomationDef;
   /** Worktree the run targets (for stack triggers: the first open member). */
@@ -73,6 +80,13 @@ export type AutomationFire = {
    * undo.
    */
   deleteBranch: string | null;
+  /**
+   * `branch.advanced` only: the branch and the commit range its tip
+   * moved across, FROZEN at fire time for the same reason `closeIssue`
+   * is — the watermark advances on dispatch, so a re-read at delivery
+   * would compute a range that has already been consumed.
+   */
+  branchRange: { branch: string; from: string; to: string } | null;
   /** Human-readable trigger summary for the activity-pane event line. */
   detail: string;
 };
@@ -119,6 +133,13 @@ export type AutomationEvalCtx = {
    * `[[actions]]` def's `target` by the hook, which owns the config.
    */
   audienceOf: (rule: AutomationDef) => FireAudience;
+  /**
+   * Current tip of each branch a `branch.advanced` rule watches, and
+   * the last tip wt recorded for it (absent on first sight). Resolved
+   * by the caller in the MAIN CLONE — "where the world is now" is a
+   * question about the clone that fetches, never about a checkout.
+   */
+  branchTips: ReadonlyMap<string, { now: string; seen: string | null }>;
   /**
    * Wall clock for this pass. Passed in rather than read here so the
    * module stays a pure function of its inputs — `status.verification_overdue`
@@ -195,6 +216,7 @@ function singleRowFire(
     stackId: null,
     closeIssue: null,
     deleteBranch: null,
+    branchRange: null,
     detail,
   };
 }
@@ -316,6 +338,7 @@ function evaluateRowTrigger(
           stackId: null,
           closeIssue: issue,
           deleteBranch: null,
+    branchRange: null,
           detail: `${landed} — closing issue #${issue}`,
         };
       }
@@ -336,6 +359,7 @@ function evaluateRowTrigger(
           stackId: null,
           closeIssue: null,
           deleteBranch: branch,
+          branchRange: null,
           detail: `${landed} — deleting remote branch ${branch}`,
         };
       }
@@ -404,6 +428,12 @@ function evaluateRowTrigger(
     }
     case "stack.parent_merged":
       // Stack-level; handled in evaluateStackTrigger.
+      return null;
+    case "branch.advanced":
+      // Fleet-level; handled in evaluateBranchTrigger. It targets no
+      // row on purpose — the worktrees whose work is in the range are
+      // gone by the time a release branch moves, which is the whole
+      // reason the trigger is not per-row.
       return null;
     default: {
       const _exhaustive: never = trigger;
@@ -528,6 +558,7 @@ function evaluateStackTrigger(
       stackId,
       closeIssue: null,
       deleteBranch: null,
+    branchRange: null,
       detail: `${parts.join(" + ")} under ${pluralize(open.length, "open member")}`,
     });
   }
@@ -552,6 +583,11 @@ export function evaluateAutomations(
       fires.push(...evaluateStackTrigger(rule, rows, ctx));
       continue;
     }
+    if (rule.on === "branch.advanced") {
+      const fire = evaluateBranchTrigger(rule, ctx);
+      if (fire) fires.push(fire);
+      continue;
+    }
     for (const row of rows) {
       if (!isEligible(row, ctx)) continue;
       const fire = evaluateRowTrigger(rule.on, rule, row, ctx);
@@ -559,6 +595,45 @@ export function evaluateAutomations(
     }
   }
   return fires;
+}
+
+/**
+ * `branch.advanced`: a watched branch's tip moved.
+ *
+ * Fleet-level, so it produces at most one fire per rule per pass and
+ * targets `FLEET_SLUG` rather than a worktree — every row that
+ * contributed to the range has usually been swept by now.
+ *
+ * FIRST SIGHT FIRES NOTHING. With no recorded tip there is no range,
+ * and the tempting reading of an absent watermark ("everything up to
+ * here") would fire once for the entire history of the branch — which
+ * for the run this exists for means marking every issue ever shipped.
+ * The caller records the tip instead, and the next move produces a real
+ * range. Absence is unknown, never all.
+ */
+function evaluateBranchTrigger(
+  rule: AutomationDef,
+  ctx: AutomationEvalCtx,
+): AutomationFire | null {
+  const branch = rule.branch;
+  if (!branch) return null;
+  const tip = ctx.branchTips.get(branch);
+  if (!tip || !tip.seen || tip.seen === tip.now) return null;
+  return {
+    rule,
+    slug: FLEET_SLUG,
+    // Nothing to quiesce: the run touches no worktree, and waiting on a
+    // fleet to fall idle would mean a busy fleet never releases.
+    quiesceSlugs: [],
+    // Keyed on the DESTINATION sha: one fire per tip, and a branch that
+    // moves again while this one is still pending gets its own.
+    fireKeys: [`${rule.id}:branch:${branch}:${tip.now}`],
+    stackId: null,
+    closeIssue: null,
+    deleteBranch: null,
+    branchRange: { branch, from: tip.seen, to: tip.now },
+    detail: `${branch} advanced ${tip.seen.slice(0, 7)}..${tip.now.slice(0, 7)}`,
+  };
 }
 
 /** Stable identity for an intent: one live intent per (rule, target). */

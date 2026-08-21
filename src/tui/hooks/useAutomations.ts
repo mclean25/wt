@@ -41,7 +41,7 @@
  * dispatches (contention with a manual launch) are different: those
  * un-consume the fire and retry once the contention clears.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -71,12 +71,13 @@ import { lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { notifyMacos } from "../../core/notify.ts";
 import { StatusKind } from "../../core/types.ts";
-import { toggleGlobalAutomationsPaused } from "../../core/wtstate.ts";
-import { wtStateQuery } from "../../state/queries.ts";
+import { setBranchTip, toggleGlobalAutomationsPaused } from "../../core/wtstate.ts";
+import { watchedBranchTipsQuery, wtStateQuery } from "../../state/queries.ts";
 
 import {
   evaluateAutomations,
   fireIdentity,
+  FLEET_SLUG,
   isEligible,
   statusTriggerState,
   type AutomationFire,
@@ -224,6 +225,53 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
 
   const qc = useQueryClient();
   const wtState = useQuery(wtStateQuery());
+  // Branches any `branch.advanced` rule watches. Derived from config,
+  // which is loaded once at module init, so this list is stable for the
+  // life of the process — and empty for every fleet using none, where
+  // the query below is disabled and costs nothing.
+  const watchedBranches = useMemo(
+    () => [
+      ...new Set(
+        (config.automations ?? [])
+          .filter((r) => r.on === "branch.advanced" && r.branch)
+          .map((r) => r.branch!),
+      ),
+    ],
+    [],
+  );
+  const branchTipsQ = useQuery(watchedBranchTipsQuery(watchedBranches));
+  // Record a watched branch the first time it resolves, WITHOUT firing.
+  // Without this the trigger could never fire at all: the evaluator
+  // needs a previous tip to form a range, and nothing else ever writes
+  // the first one. Doing it here rather than in the evaluator keeps
+  // that module a pure function of its inputs, and `setBranchTip`
+  // no-ops when the value is unchanged, so this settles after one pass.
+  useEffect(() => {
+    const seen = wtState.data?.branchTips;
+    if (!seen || !branchTipsQ.data) return;
+    for (const [branch, sha] of Object.entries(branchTipsQ.data)) {
+      if (seen[branch] === undefined) {
+        setBranchTip(branch, sha);
+        log.event.dim(`watching ${branch} from ${sha.slice(0, 7)}`);
+      }
+    }
+  }, [branchTipsQ.data, wtState.data?.branchTips]);
+  // Pair each watched branch's CURRENT tip with the last one wt
+  // recorded. Both halves must come from the same pass: comparing a
+  // fresh tip against a watermark read at some other moment is the
+  // reference-frame mistake that makes a range either repeat or vanish.
+  const branchTips = useRef<
+    ReadonlyMap<string, { now: string; seen: string | null }>
+  >(new Map());
+  branchTips.current = useMemo(() => {
+    const seen: Record<string, string> = wtState.data?.branchTips ?? {};
+    const out = new Map<string, { now: string; seen: string | null }>();
+    for (const b of watchedBranches) {
+      const now = branchTipsQ.data?.[b];
+      if (now) out.set(b, { now, seen: seen[b] ?? null });
+    }
+    return out;
+  }, [watchedBranches, branchTipsQ.data, wtState.data?.branchTips]);
   // Global pause lives in wtstate (persisted across restarts, toggled
   // via Shift+A). Until the state file loads, treat as paused — the
   // engine must not fire before it knows the pause flags.
@@ -506,6 +554,30 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     }
     const def = resolveActionDef(rule.run);
     if (!def) throw new Error(`action "${rule.run}" not found in config`);
+    // A fleet-level fire belongs to no worktree, so it cannot go
+    // through `launchAction` (row guards, row template vars, a row
+    // cwd). It runs in the MAIN CLONE — the only checkout that is
+    // guaranteed to exist, and the one whose refs the range was
+    // measured against.
+    const range = fire.branchRange;
+    if (range) {
+      const started = await actionRegistry.start(
+        def,
+        FLEET_SLUG,
+        config.paths.mainClone,
+        "",
+        { branch: range.branch, from: range.from, to: range.to },
+        "claude",
+        { autoFireKeys: fire.fireKeys },
+      );
+      if (!started.ok) return { declined: started.reason };
+      // Advance the watermark only now. The range is consumed exactly
+      // once, so moving the mark before the run is launched would drop
+      // it with nothing anywhere to say so — and moving it on mere
+      // OBSERVATION would drop every range whose dispatch was declined.
+      setBranchTip(range.branch, range.to);
+      return { declined: null };
+    }
     const outcome = await latest.current.launchAction(slug, def, "", undefined, {
       autoFireKeys: fire.fireKeys,
     });
@@ -549,6 +621,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       githubFresh: ctx.githubFresh,
       isPausedSlug: (slug: string) => ctx.pausedSlugs.has(slug),
       audienceOf,
+      branchTips: branchTips.current,
       nowMs: Date.now(),
     };
     const fires = evaluateAutomations(rules, ctx.rows, evalCtx);
