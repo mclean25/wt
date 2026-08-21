@@ -50,6 +50,7 @@ import type { MergeConflictProbe } from "../core/git.ts";
 import type { DerivedState } from "../core/harness/status.ts";
 import {
   type LockMeta,
+  type MergeQueueEntry,
   type MergeQueueState,
   type PrChecks,
   type PrReview,
@@ -177,12 +178,47 @@ export function workStatusBadge(
   };
 }
 
-/** Glyph + color for a PR's state — used by row badge cluster AND details pr line. */
-export function prStateBadge(pr: PullRequest): Badge {
+/**
+ * Is "merge when ready" armed, given the two places the answer hides?
+ *
+ * Only one of the two GitHub features behind that one button sets
+ * `autoMerge`: on a base branch with a merge queue, arming ENQUEUES and
+ * `autoMergeRequest` stays null forever, so the queue entry is the only
+ * evidence there will ever be. `mergeWhenReadyArmed` in app-helpers is
+ * this same question asked of a row.
+ */
+export function armedFromPr(
+  pr: PullRequest,
+  mq: MergeQueueEntry | null | undefined,
+): boolean {
+  return pr.autoMerge != null || mq != null;
+}
+
+/**
+ * Glyph + color for a PR's state — used by row badge cluster AND
+ * details pr line.
+ *
+ * An armed open PR takes `accent` instead of `accentAlt`. The queue
+ * segment already says WHERE in the queue a PR sits, but it is tier 2
+ * and compacts away, arrives a fetch later than the arming, and does
+ * not exist at all for classic auto-merge — so between pressing the key
+ * and the position landing there was nothing on the row to say the
+ * keystroke took. Colouring the glyph the row already has costs no
+ * columns, survives every compaction tier, and covers both features
+ * from one predicate. Deliberately not a new glyph: the PR is still
+ * open, and a shape that says otherwise would be the dishonest version.
+ */
+export function prStateBadge(
+  pr: PullRequest,
+  mq?: MergeQueueEntry | null,
+): Badge {
   if (pr.state === "MERGED") return { glyph: NF.prMerged, fg: theme.info };
   if (pr.state === "CLOSED") return { glyph: NF.prClosed, fg: theme.err };
   if (pr.isDraft) return { glyph: NF.prDraft, fg: theme.fgDim };
-  return { glyph: NF.prOpen, fg: theme.accentAlt };
+  return {
+    glyph: NF.prOpen,
+    fg: armedFromPr(pr, mq) ? theme.accent : theme.accentAlt,
+  };
 }
 
 /**

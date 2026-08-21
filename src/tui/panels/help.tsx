@@ -317,6 +317,12 @@ const WORK_STATUS_GLYPHS: GlyphItem[] = [
 const BADGES: GlyphItem[] = [
   { glyph: NF.pencil, color: theme.warn, label: "uncommitted changes", search: "dirty uncommitted" },
   { glyph: NF.prOpen, color: theme.accentAlt, label: "PR open" },
+  {
+    glyph: NF.prOpen,
+    color: theme.accent,
+    label: "PR open · merge when ready armed",
+    search: "auto-merge armed queued merge when ready",
+  },
   { glyph: NF.prDraft, color: theme.fgDim, label: "PR draft" },
   { glyph: NF.prMerged, color: theme.info, label: "PR merged" },
   { glyph: NF.prClosed, color: theme.err, label: "PR closed" },

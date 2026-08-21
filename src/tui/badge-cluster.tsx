@@ -221,7 +221,7 @@ export function BadgeCluster({
   sessionState: DerivedState | undefined;
 }) {
   const prb = row.pr
-    ? prStateBadge(row.pr)
+    ? prStateBadge(row.pr, row.mq)
     : { glyph: "  ", fg: theme.fgDim };
   const prFg = row.archived ? theme.fgDim : prb.fg;
   const c = checkGlyph(row);
@@ -383,7 +383,7 @@ export function RemoteBadgeCluster({
     : null;
   const showPr = shows("pr");
   const showChecks = shows("checks") && pr.state === "OPEN" && pr.checks !== "none";
-  const prBadge = prStateBadge(pr);
+  const prBadge = prStateBadge(pr, mq);
   const checks = checkBadge(pr.checks);
   const dim = archived ? theme.fgDim : undefined;
   const mqText = mq

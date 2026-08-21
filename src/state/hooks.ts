@@ -83,6 +83,7 @@ import { useMemo } from "react";
 import {
   MutationObserver,
   matchQuery,
+  replaceEqualDeep,
   useQuery,
   useQueryClient,
   type QueryFilters,
@@ -226,16 +227,46 @@ export function useGithub(): UseQueryResult<GithubData, Error> {
  * call time — a background refetch that STARTS during the await
  * window (e.g. an action-completion subscriber firing
  * `refreshGithub()` mid-mutation) can resolve with pre-mutation
- * server data and overwrite the patch. While `run` is in flight we
+ * server data and overwrite the patch. While the guard is up we
  * subscribe to the query cache and re-apply the patch on top of any
  * matching fetch-driven update (`manual` updates — i.e. our own
  * `setQueryData` — are skipped, which is also what prevents the
- * guard from recursing on itself). The settling invalidate still
- * reconciles against true server state afterwards.
+ * guard from recursing on itself).
+ *
+ * **The guard outlives `run`, and it has to.** `run` resolving means
+ * GitHub ACCEPTED the mutation, not that GitHub will now serve it: its
+ * GraphQL reads lag its own writes by a beat, so the settling
+ * invalidate — which fires immediately after — routinely lands
+ * pre-mutation data. The badge then flips back to the value the user
+ * just changed, and self-corrects a few seconds later on the next
+ * fetch. That reads as "it didn't work", which is the opposite of what
+ * an optimistic patch is for, and it is worst on exactly the mutations
+ * with a webhook behind them, because the extra fetch is another
+ * chance to land stale.
+ *
+ * So the guard runs until one of three things happens: a fetch arrives
+ * that the patch no longer CHANGES (the server has caught up — the
+ * only real end condition, and it self-terminates so a later genuine
+ * change by someone else isn't suppressed), the mutation fails (the
+ * patch is rolled back and must not be re-applied), or
+ * `SETTLE_GUARD_MS` elapses. The deadline is a backstop, not the
+ * mechanism: some patches are never confirmable by the field they
+ * patched — arming merge-when-ready on a queue base leaves
+ * `autoMergeRequest` null forever and shows up as a queue entry
+ * instead — and a guard with no deadline would pin those until the
+ * process died.
  *
  * `run` must throw on failure; mutations that return `{ ok: false,
  * error }` should be wrapped to throw at the call site.
  */
+/**
+ * How long the clobber guard keeps re-applying the patch after `run`
+ * resolves. Long enough to cover GitHub's read-after-write lag plus the
+ * settling refetch it triggers; short enough that a patch the server
+ * will never echo back stops pinning the cache. See the docstring.
+ */
+const SETTLE_GUARD_MS = 12_000;
+
 export async function runOptimisticMutation<TData>(
   qc: import("@tanstack/react-query").QueryClient,
   opts: {
@@ -252,6 +283,17 @@ export async function runOptimisticMutation<TData>(
     ? JSON.stringify(filter.queryKey)
     : "__nokey__";
   let snapshots: Array<readonly [readonly unknown[], TData | undefined]> = [];
+  let unsubscribe: (() => void) | null = null;
+  let guardTimer: ReturnType<typeof setTimeout> | null = null;
+  let failed = false;
+  const stopGuard = (): void => {
+    if (guardTimer !== null) {
+      clearTimeout(guardTimer);
+      guardTimer = null;
+    }
+    unsubscribe?.();
+    unsubscribe = null;
+  };
   const observer = new MutationObserver<void, Error, void>(qc, {
     scope: { id: scopeId },
     // No `navigator.onLine` signal in a TUI — never let the retryer
@@ -265,29 +307,49 @@ export async function runOptimisticMutation<TData>(
       // Clobber guard (see docstring). `matchQuery` is the same
       // predicate `invalidateQueries` uses, so guard coverage is
       // exactly the entries the patch covered.
-      const unsubscribe = qc.getQueryCache().subscribe((event) => {
+      unsubscribe = qc.getQueryCache().subscribe((event) => {
         if (event.type !== "updated") return;
         if (event.action.type !== "success") return;
         if ((event.action as { manual?: boolean }).manual) return;
         if (!matchQuery(filter, event.query)) return;
+        const data = event.query.state.data as TData | undefined;
+        // The server has caught up the moment a fetch lands that the
+        // patch would not change. Structural compare rather than
+        // identity: `patch` builds fresh objects every call, so it is
+        // never `===` its input even when it changes nothing.
+        if (replaceEqualDeep(data, patch(data)) === data) {
+          stopGuard();
+          return;
+        }
         qc.setQueryData<TData>(event.query.queryKey, patch);
       });
-      try {
-        await run();
-      } finally {
-        unsubscribe();
-      }
+      await run();
     },
     onError: () => {
+      failed = true;
+      // Stop before the rollback, or the guard re-applies the patch on
+      // top of the snapshot it just restored.
+      stopGuard();
       for (const [key, value] of snapshots) {
         qc.setQueryData([...key], value);
       }
     },
     onSettled: () => {
+      // Runs after onError too, so the deadline must not re-arm a guard
+      // a failure already took down.
+      if (!failed && unsubscribe) guardTimer = setTimeout(stopGuard, SETTLE_GUARD_MS);
       void qc.invalidateQueries(filter);
     },
   });
-  await observer.mutate();
+  try {
+    await observer.mutate();
+  } catch (err) {
+    // `observer.mutate()` rejects on failure; onError has already
+    // stopped the guard, but a throw from anywhere else must not leave
+    // a subscription pinned to a patch nobody is tracking.
+    stopGuard();
+    throw err;
+  }
 }
 
 /** Imperative helpers that wrap the raw QueryClient for common ops. */

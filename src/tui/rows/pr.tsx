@@ -91,7 +91,7 @@ function buildPrSegments(
   mq: MergeQueueEntry | undefined,
 ): Segment[] {
   const segs: Segment[] = [];
-  const badge = prStateBadge(pr);
+  const badge = prStateBadge(pr, mq);
   const num = `#${pr.number}`;
   const numW = Bun.stringWidth(num);
 

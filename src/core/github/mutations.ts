@@ -108,32 +108,79 @@ export async function enableAutoMerge(
   // the global id of ''" toast is useless — fail with a named reason.
   if (!prId) return { ok: false, error: "missing PR node id" };
 
-  const queueId = opts.baseRefName ? await mergeQueueIdForBranch(opts.baseRefName) : null;
-  if (queueId) {
-    // `expectedHeadOid` makes this fail rather than enqueue a commit we
-    // never saw, if the branch moved between the poll and the keystroke.
-    // The merge queue's own configuration decides the merge method, so
-    // AUTO_MERGE_METHOD deliberately plays no part here.
-    const argv = [
-      "gh", "api", "graphql",
-      "-f",
-      "query=mutation($prId: ID!, $oid: GitObjectID) { enqueuePullRequest(input: {pullRequestId: $prId, expectedHeadOid: $oid}) { mergeQueueEntry { position } } }",
-      "-f", `prId=${prId}`,
-    ];
-    if (opts.headRefOid) argv.push("-f", `oid=${opts.headRefOid}`);
-    return runGhMutation(argv, "enqueue failed", { prId, base: opts.baseRefName });
-  }
+  const classic = (): Promise<GhActionResult> =>
+    runGhMutation(
+      [
+        "gh", "api", "graphql",
+        "-f",
+        "query=mutation($prId: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $prId, mergeMethod: $method}) { pullRequest { number } } }",
+        "-f", `prId=${prId}`,
+        "-f", `method=${AUTO_MERGE_METHOD}`,
+      ],
+      "auto-merge failed",
+      { prId },
+    );
 
-  return runGhMutation(
-    [
-      "gh", "api", "graphql",
-      "-f",
-      "query=mutation($prId: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $prId, mergeMethod: $method}) { pullRequest { number } } }",
-      "-f", `prId=${prId}`,
-      "-f", `method=${AUTO_MERGE_METHOD}`,
-    ],
-    "auto-merge failed",
-    { prId },
+  const queueId = opts.baseRefName ? await mergeQueueIdForBranch(opts.baseRefName) : null;
+  if (!queueId) return classic();
+
+  // `expectedHeadOid` makes this fail rather than enqueue a commit we
+  // never saw, if the branch moved between the poll and the keystroke.
+  // The merge queue's own configuration decides the merge method, so
+  // AUTO_MERGE_METHOD deliberately plays no part here.
+  const argv = [
+    "gh", "api", "graphql",
+    "-f",
+    "query=mutation($prId: ID!, $oid: GitObjectID) { enqueuePullRequest(input: {pullRequestId: $prId, expectedHeadOid: $oid}) { mergeQueueEntry { position } } }",
+    "-f", `prId=${prId}`,
+  ];
+  if (opts.headRefOid) argv.push("-f", `oid=${opts.headRefOid}`);
+  const enqueued = await runGhMutation(argv, "enqueue failed", {
+    prId,
+    base: opts.baseRefName,
+  });
+  if (enqueued.ok || !notYetEnqueueable(enqueued.error)) return enqueued;
+
+  // A queue will not take a PR whose required checks haven't reported
+  // yet — but "arm it and merge it when they do" is the whole point of
+  // the keystroke, and it is what GitHub's own button offers in that
+  // window. Classic auto-merge is that arming: on a queue base GitHub
+  // enqueues the PR itself once the requirements are met.
+  //
+  // Second, not first, so the ready case still gets a queue POSITION
+  // back rather than an armed flag. And the enqueue error is kept when
+  // the fallback also fails: "Auto merge is not allowed for this
+  // repository" alone sends the reader to the wrong setting, when what
+  // actually happened is a queue refusing an unready PR.
+  const armed = await classic();
+  if (armed.ok) return armed;
+  return {
+    ok: false,
+    error: `${enqueued.error} (arming instead also failed: ${armed.error})`,
+  };
+}
+
+/**
+ * Did the merge queue refuse this PR because it is not READY yet, as
+ * opposed to something the caller could not fix by waiting?
+ *
+ * Matched on GitHub's wording because the API gives nothing else: every
+ * `enqueuePullRequest` refusal comes back as type `UNPROCESSABLE` with
+ * a prose message, so an unready PR ("2 of 4 required status checks
+ * have not succeeded: 1 expected") and a genuinely broken call ("expected
+ * head oid does not match") are the same error code. Fails CLOSED — an
+ * unrecognised message reports the enqueue error as-is rather than
+ * silently arming a different feature, because the fallback changes
+ * which GitHub feature the keystroke drove and that should never happen
+ * on a guess.
+ */
+export function notYetEnqueueable(error: string | undefined): boolean {
+  const msg = (error ?? "").toLowerCase();
+  return (
+    msg.includes("status checks have not succeeded") ||
+    msg.includes("required status check") ||
+    msg.includes("not in a mergeable state") ||
+    msg.includes("is not mergeable")
   );
 }
 

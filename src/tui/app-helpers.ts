@@ -17,6 +17,7 @@ import { StatusKind } from "../core/types.ts";
 import { owesPostMergeVerification } from "../core/work-status.ts";
 import type { SyncState } from "../core/worktree.ts";
 
+import { armedFromPr } from "./badges.ts";
 import { GROUP_INBOX, type WorktreeRow } from "./hooks/useWorktreeRows.ts";
 import { visualKey, type VisualItem } from "./hooks/useVisualItems.ts";
 
@@ -325,7 +326,10 @@ export function parseNewInput(raw: string, defaultBase?: string): NewInput {
  */
 export function mergeWhenReadyArmed(row: WorktreeRow | undefined): boolean {
   if (!row?.pr) return false;
-  return row.pr.autoMerge != null || row.mq != null;
+  // Shared with the PR glyph's armed colour (`prStateBadge`), so the
+  // badge and the keystroke's guard can never disagree about whether
+  // this row is already armed.
+  return armedFromPr(row.pr, row.mq);
 }
 
 export function isCleanCandidate(row: WorktreeRow): boolean {
