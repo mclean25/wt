@@ -70,6 +70,24 @@ describe("statusPickerItems", () => {
     expect(ready.map((it) => it.verify ?? false)).toEqual([false, true]);
   });
 
+  // The picker is the legend for the list's dots, and the two `ready`
+  // rows would otherwise be indistinguishable at a glance — which is
+  // the one thing a separate row exists to avoid.
+  test("the verify row wears the dot the board will show it", () => {
+    const [plain, verify] = statusPickerItems(null).filter(
+      (it) => it.state === "ready",
+    );
+    expect(plain!.glyphState).toBeUndefined();
+    expect(verify!.glyphState).toBe("needs-testing");
+  });
+
+  test("every other row's dot is its own state", () => {
+    for (const it of statusPickerItems(null)) {
+      if (it.verify) continue;
+      expect(it.glyphState).toBeUndefined();
+    }
+  });
+
   test("no record marks nothing current", () => {
     expect(statusPickerItems(null).filter((it) => it.current)).toEqual([]);
   });

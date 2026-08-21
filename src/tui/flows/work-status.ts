@@ -10,7 +10,7 @@
  * not a merge of two authors).
  */
 import type { WorkState, WorkStatusRecord } from "../../core/work-status.ts";
-import { WORK_STATES } from "../../core/work-status.ts";
+import { effectiveWorkState, WORK_STATES } from "../../core/work-status.ts";
 import type { Modal, StatusPickerItem } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { markSelfStatusWrite } from "../../state/self-writes.ts";
@@ -77,6 +77,19 @@ export const WORK_STATE_CHORDS: Record<WorkState, string> = {
 export const VERIFY_CHORD = "a";
 
 /**
+ * What the verify row's dot shows. NOT `ready`'s green: a row owing a
+ * post-merge check renders as `needs-testing` on the board the moment
+ * it lands, and the picker is the legend for those glyphs — two `ready`
+ * rows wearing the same dot would also hide the only difference between
+ * them. Run through the real derivation on a throwaway record rather
+ * than hardcoded, so the picker can't promise a colour the list stopped
+ * using. Landed, because that is when the obligation is visible at all.
+ */
+const VERIFY_GLYPH_STATE: WorkState =
+  effectiveWorkState({ state: "ready", at: "", verifyAfterMerge: "probe" }, undefined, true)
+    ?.state ?? "ready";
+
+/**
  * The `u` picker's rows for a record. Pure, so the ready/ready+verify
  * split and the "(current)" marking are testable without a TUI.
  *
@@ -111,6 +124,7 @@ export function statusPickerItems(
       state: "ready",
       chord: VERIFY_CHORD,
       verify: true,
+      glyphState: VERIFY_GLYPH_STATE,
       ...(verifyCurrent ? { current: true } : {}),
     });
   }

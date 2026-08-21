@@ -29,6 +29,13 @@ export type StatusPickerItem = {
   chord: string;
   /** Collect `verifyAfterMerge` steps in the footer before writing. */
   verify?: boolean;
+  /**
+   * The state whose dot the LIST will show for this pick, when that
+   * isn't the row's own state. The picker doubles as the legend for
+   * those glyphs, so a row promising a green dot the board never
+   * renders is worse than no glyph at all.
+   */
+  glyphState?: WorkState;
   /** This row is what the record already says (picker opens on it). */
   current?: boolean;
 };

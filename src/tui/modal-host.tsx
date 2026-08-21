@@ -192,7 +192,10 @@ export function PostFooterModals({
           itemGlyphs={modal.items.map((it) =>
             it.state === null
               ? null
-              : { glyph: workStateGlyph(it.state), color: workStateColor(it.state) },
+              : {
+                  glyph: workStateGlyph(it.glyphState ?? it.state),
+                  color: workStateColor(it.glyphState ?? it.state),
+                },
           )}
           extraHints={[["m", "pick + note"]]}
         />
