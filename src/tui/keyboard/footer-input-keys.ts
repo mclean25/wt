@@ -8,7 +8,7 @@ import type { KeyEvent } from "@opentui/core";
 
 import { createLogger } from "../../core/logger.ts";
 import { printableText } from "../app-helpers.ts";
-import type { PendingStatusNote } from "../flows/work-status.ts";
+import type { PendingStatusText } from "../flows/work-status.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { applyEditKey, insertText, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
@@ -35,9 +35,9 @@ export type FooterInputKeysCtx = {
   // failure instead of leaving the user to retype it.
   doNew: (raw: string, defaultBase?: string) => Promise<boolean>;
   doRemoteNew: (raw: string) => Promise<boolean>;
-  pendingStatusNote: PendingStatusNote | null;
-  setPendingStatusNote: (v: PendingStatusNote | null) => void;
-  commitStatusWithNote: (pending: PendingStatusNote, note: string) => void;
+  pendingStatusText: PendingStatusText | null;
+  setPendingStatusText: (v: PendingStatusText | null) => void;
+  commitStatusText: (pending: PendingStatusText, text: string) => void;
 };
 
 export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void {
@@ -51,15 +51,16 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
     toast,
     doNew,
     doRemoteNew,
-    pendingStatusNote,
-    setPendingStatusNote,
-    commitStatusWithNote,
+    pendingStatusText,
+    setPendingStatusText,
+    commitStatusText,
   } = ctx;
       if (k.name === "escape" || (k.ctrl && k.name === "c")) {
         setFooter({ kind: "legend" });
         setPendingRename(null);
-        // Esc during a status-note cancels the whole pick — no write.
-        setPendingStatusNote(null);
+        // Esc during a status pick's text entry cancels the whole
+        // pick — no write.
+        setPendingStatusText(null);
         return;
       }
       if (k.name === "return") {
@@ -67,11 +68,12 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
         const base = footer.base;
         const purpose = footer.purpose;
         setFooter({ kind: "legend" });
-        if (purpose === "status-note") {
-          const pending = pendingStatusNote;
-          setPendingStatusNote(null);
-          // Empty note = plain pick; the flow drops the note field.
-          if (pending) commitStatusWithNote(pending, raw);
+        if (purpose === "status-text") {
+          const pending = pendingStatusText;
+          setPendingStatusText(null);
+          // An empty line is meaningful and field-dependent —
+          // `statusTextRecord` owns that decision.
+          if (pending) commitStatusText(pending, raw);
           return;
         }
         if (purpose === "rename-section") {
@@ -120,7 +122,7 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
       // Backspace on empty input exits, matching the filter convention.
       if (k.name === "backspace" && footer.edit.value.length === 0) {
         setFooter({ kind: "legend" });
-        setPendingStatusNote(null);
+        setPendingStatusText(null);
         return;
       }
       // Cursor movement / deletion (arrows, word jumps, home/end,

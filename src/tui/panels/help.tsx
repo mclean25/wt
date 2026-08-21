@@ -147,7 +147,11 @@ const KEY_BLOCKS: Block[] = [
       { key: "l n", label: "new section (chord)" },
       { key: "L", label: "rename current section" },
       { key: "b", label: "set fork base (picker · b b confirms) · record only, never rebases" },
-      { key: "u", label: "set work status (picker · t/w/r/n/h/y/d quick-set, x clears, m adds a note) — same record as `wt status`" },
+      {
+        key: "u",
+        label:
+          "set work status (picker · t/w/r/n/h/y/v/d quick-set, a = ready + verify after merge, x clears, m adds a note) — same record as `wt status`",
+      },
       { key: "R", label: "rebase/restack row — whole stack, or standalone onto base/main (/restack on conflict)" },
       { key: "J / K", label: "move row · stack/folded section: move whole group (status sort: within same status)" },
     ],

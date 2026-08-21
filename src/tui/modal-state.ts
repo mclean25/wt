@@ -15,6 +15,24 @@ import type { TextEdit } from "./text-edit.tsx";
  * time (or `null`); keyboard handling dispatches by `kind` and JSX renders by
  * `kind`.
  */
+/**
+ * One row of the `u` work-status picker. Defined here rather than in
+ * the flow because three files read it (flow, key handler, renderer)
+ * and a hand-copied shape is how a new field ends up invisible to one
+ * of them.
+ */
+export type StatusPickerItem = {
+  label: string;
+  /** `null` is the clear row. */
+  state: WorkState | null;
+  /** Direct chord letter; every row has one. */
+  chord: string;
+  /** Collect `verifyAfterMerge` steps in the footer before writing. */
+  verify?: boolean;
+  /** This row is what the record already says (picker opens on it). */
+  current?: boolean;
+};
+
 export type Modal =
   | { kind: "help"; query: TextEdit; searching: boolean }
   /**
@@ -73,7 +91,7 @@ export type Modal =
   | {
       kind: "statusPicker";
       slug: string;
-      items: Array<{ label: string; state: WorkState | null }>;
+      items: StatusPickerItem[];
       index: number;
     }
   | {

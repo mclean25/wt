@@ -11,14 +11,14 @@
  */
 import type { WorkState, WorkStatusRecord } from "../../core/work-status.ts";
 import { WORK_STATES } from "../../core/work-status.ts";
-import type { Modal } from "../modal-state.ts";
+import type { Modal, StatusPickerItem } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { markSelfStatusWrite } from "../../state/self-writes.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
-import { emptyEdit } from "../text-edit.tsx";
+import { emptyEdit, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
 
-export type StatusPickerItem = { label: string; state: WorkState | null };
+export type { StatusPickerItem };
 
 /**
  * The `verifyAfterMerge` a new pick inherits from the record it
@@ -36,15 +36,20 @@ export function carriedVerify(
 }
 
 /**
- * What `m` in the status picker parked while the footer collects a
- * note. The obligation is FROZEN here at pick time rather than re-read
- * at commit time: typing a note is human-paced and the selection can
- * move under it, and re-reading whatever row is current by then would
- * either carry another row's obligation or silently drop this one.
+ * What a footer-collecting pick parked while the human types. The
+ * obligation is FROZEN here at pick time rather than re-read at commit
+ * time: typing is human-paced and the selection can move under it, and
+ * re-reading whatever row is current by then would either carry another
+ * row's obligation or silently drop this one.
+ *
+ * `field` says where the typed line lands. Both rows collect one line
+ * into the same footer; only the destination and the empty-line
+ * semantics differ (see `statusTextRecord`).
  */
-export type PendingStatusNote = {
+export type PendingStatusText = {
   slug: string;
   state: WorkState;
+  field: "note" | "verifyAfterMerge";
   verifyAfterMerge?: string;
 };
 
@@ -68,6 +73,88 @@ export const WORK_STATE_CHORDS: Record<WorkState, string> = {
   dropped: "d",
 };
 
+/** `ready + verify After merge`. `v` and `y` were both already spoken for. */
+export const VERIFY_CHORD = "a";
+
+/**
+ * The `u` picker's rows for a record. Pure, so the ready/ready+verify
+ * split and the "(current)" marking are testable without a TUI.
+ *
+ * `ready` appears TWICE on purpose. A post-merge verification is not a
+ * shade of `ready` — it is a standing obligation that outlives the
+ * merge, keeps the row out of the `c` sweep until someone asserts
+ * `verified`, and needs steps written down for whoever runs it. That is
+ * a different thing to assert, so it gets a row of its own rather than
+ * hiding behind a modifier key nobody would find. Exactly one of the
+ * pair ever reads "(current)".
+ */
+export function statusPickerItems(
+  record: WorkStatusRecord | null | undefined,
+): StatusPickerItem[] {
+  const recorded = record?.state ?? null;
+  const owed = Boolean(record?.verifyAfterMerge);
+  const items: StatusPickerItem[] = [];
+  for (const state of WORK_STATES) {
+    const isCurrent = recorded === state && !(state === "ready" && owed);
+    items.push({
+      label: isCurrent ? `${state} (current)` : state,
+      state,
+      chord: WORK_STATE_CHORDS[state],
+      ...(isCurrent ? { current: true } : {}),
+    });
+    if (state !== "ready") continue;
+    const verifyCurrent = recorded === "ready" && owed;
+    items.push({
+      label: verifyCurrent
+        ? "ready + verify after merge (current)"
+        : "ready + verify after merge",
+      state: "ready",
+      chord: VERIFY_CHORD,
+      verify: true,
+      ...(verifyCurrent ? { current: true } : {}),
+    });
+  }
+  items.push({ label: "clear — no status", state: null, chord: "x" });
+  return items;
+}
+
+/**
+ * The record a footer-collected line produces. Pure, because the
+ * empty-line semantics differ per field and that difference is the
+ * whole reason the verify row exists.
+ *
+ * A note is optional decoration on the state, so an empty one is just a
+ * plain pick and whatever obligation the record carried survives. The
+ * verify row is the opposite: its only job is to set that obligation
+ * and its input is PRE-FILLED with the current steps, so the box is
+ * authoritative — clearing it is how a human takes an obligation back
+ * off a branch without claiming `verified`. That is the one place a
+ * `verifyAfterMerge` may be dropped without one of its two exits, and
+ * it is safe here only because it is neither silent nor inferred: the
+ * human is looking at the steps as they delete them, and the toast says
+ * what was stored.
+ */
+export function statusTextRecord(
+  pending: PendingStatusText,
+  text: string,
+  at: string,
+): WorkStatusRecord {
+  const trimmed = text.trim();
+  if (pending.field === "verifyAfterMerge") {
+    return {
+      state: pending.state,
+      at,
+      ...(trimmed ? { verifyAfterMerge: trimmed } : {}),
+    };
+  }
+  return {
+    state: pending.state,
+    at,
+    ...(trimmed ? { note: trimmed } : {}),
+    ...(pending.verifyAfterMerge ? { verifyAfterMerge: pending.verifyAfterMerge } : {}),
+  };
+}
+
 type WorkStatusFlowsCtx = {
   current: WorktreeRow | undefined;
   setModal: (m: Modal | null) => void;
@@ -75,7 +162,7 @@ type WorkStatusFlowsCtx = {
   reportActionError: (label: string, err: unknown) => void;
   setWorkStatus: (slug: string, record: WorkStatusRecord | null) => Promise<void>;
   setFooter: (f: FooterMode) => void;
-  setPendingStatusNote: (v: PendingStatusNote | null) => void;
+  setPendingStatusText: (v: PendingStatusText | null) => void;
   /** Is the slug still a live worktree? Note-typing time is unbounded. */
   isSlugLive: (slug: string) => boolean;
 };
@@ -88,7 +175,7 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     reportActionError,
     setWorkStatus,
     setFooter,
-    setPendingStatusNote,
+    setPendingStatusText,
     isSlugLive,
   } = ctx;
 
@@ -108,15 +195,8 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
       toast("archived rows don't track a work status", theme.fgDim, 2000);
       return;
     }
-    const recorded = current.work?.state ?? null;
-    const items: StatusPickerItem[] = [
-      ...WORK_STATES.map((s) => ({
-        label: s === recorded ? `${s} (current)` : s,
-        state: s as WorkState | null,
-      })),
-      { label: "clear — no status", state: null },
-    ];
-    const idx = recorded ? items.findIndex((it) => it.state === recorded) : 0;
+    const items = statusPickerItems(current.work);
+    const idx = items.findIndex((it) => it.current);
     setModal({
       kind: "statusPicker",
       slug: current.wt.slug,
@@ -126,6 +206,12 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
   }
 
   function commitStatusPick(item: StatusPickerItem, slug: string): void {
+    // The verify row never writes from here — it has a line to collect
+    // first, on every path that reaches it (chord, Enter, digit).
+    if (item.verify && item.state) {
+      beginVerifySteps(item.state, slug);
+      return;
+    }
     setModal(null);
     // A fresh record, so a pick DROPS whatever the previous assertion
     // carried — note, risk, and any `--blocked-on` gate. Deliberate and
@@ -166,10 +252,27 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
   }
 
   /**
+   * The `ready + verify after merge` row: hand off to the footer to
+   * collect the STEPS. Pre-filled with whatever the row already owes,
+   * so the same row doubles as the amend path — Enter unchanged is a
+   * no-op on the field, and the box shows the truth either way.
+   */
+  function beginVerifySteps(state: WorkState, slug: string): void {
+    setModal(null);
+    setPendingStatusText({ slug, state, field: "verifyAfterMerge" });
+    setFooter({
+      kind: "input",
+      prompt: `${slug} → ${state} · verify after merge: `,
+      edit: makeEdit(workFor(slug)?.verifyAfterMerge ?? ""),
+      purpose: "status-text",
+    });
+  }
+
+  /**
    * `m` in the status picker: pick the highlighted state AND attach a
    * note — the fast path (chords / Enter) never pays for this. Closes
    * the picker and hands off to the footer input; the actual write
-   * happens in `commitStatusWithNote` once the note is typed. Esc there
+   * happens in `commitStatusText` once the line is typed. Esc there
    * cancels the whole pick (no write), matching "the record describes
    * one moment" — there's no half-committed state to clean up.
    */
@@ -178,46 +281,62 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
       toast("clear takes no note", theme.fgDim, 1500);
       return;
     }
+    // `m` on the verify row collects its steps rather than a note —
+    // same gesture, and a prompt saying "note" that stored steps (or
+    // dropped them) would be the worse of the two surprises.
+    if (item.verify) {
+      beginVerifySteps(item.state, slug);
+      return;
+    }
     setModal(null);
-    setPendingStatusNote({
+    setPendingStatusText({
       slug,
       state: item.state,
+      field: "note",
       ...carriedVerify(workFor(slug), item.state),
     });
     setFooter({
       kind: "input",
       prompt: `${slug} → ${item.state} · note: `,
       edit: emptyEdit,
-      purpose: "status-note",
+      purpose: "status-text",
     });
   }
 
-  /** Footer-input Enter for a pending `m` pick. Empty note = plain pick. */
-  function commitStatusWithNote(pending: PendingStatusNote, note: string): void {
-    // The note took human-paced time to type; the worktree can be gone
+  /** Footer-input Enter for a pending `m` / verify pick. */
+  function commitStatusText(pending: PendingStatusText, text: string): void {
+    // The line took human-paced time to type; the worktree can be gone
     // by now (destroy, clean, another instance). Writing anyway would
     // resurrect a ghost wtstate entry until the next boot reap.
     if (!isSlugLive(pending.slug)) {
       toast(`${pending.slug} is gone — status not written`, theme.warn, 2500);
       return;
     }
-    const trimmed = note.trim();
-    const record: WorkStatusRecord = {
-      state: pending.state,
-      at: new Date().toISOString(),
-      ...(trimmed ? { note: trimmed } : {}),
-      ...(pending.verifyAfterMerge
-        ? { verifyAfterMerge: pending.verifyAfterMerge }
-        : {}),
-    };
+    const record = statusTextRecord(pending, text, new Date().toISOString());
     markSelfStatusWrite(pending.slug, record.at);
     setWorkStatus(pending.slug, record).then(
       () => {
-        toast(`${pending.slug} → ${record.state}`, theme.info, 2000);
+        if (pending.field !== "verifyAfterMerge") {
+          toast(`${pending.slug} → ${record.state}`, theme.info, 2000);
+          return;
+        }
+        // Say which happened. An empty box on the verify row is a real
+        // pick with no obligation attached, and the row it just wrote
+        // is one the `c` sweep may take — the difference is invisible
+        // on the board until the branch lands, so it gets said here.
+        if (record.verifyAfterMerge) {
+          toast(`${pending.slug} → ${record.state} · verification owed`, theme.info, 2000);
+        } else {
+          toast(
+            `${pending.slug} → ${record.state} — no steps, nothing held back`,
+            theme.warn,
+            3000,
+          );
+        }
       },
       (err) => reportActionError("set status", err),
     );
   }
 
-  return { openStatusPicker, commitStatusPick, beginStatusNote, commitStatusWithNote };
+  return { openStatusPicker, commitStatusPick, beginStatusNote, commitStatusText };
 }

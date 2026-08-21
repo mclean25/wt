@@ -7,7 +7,7 @@
  *
  * Division of labor with call sites: `applyEditKey` owns cursor
  * movement and deletion (arrows, home/end, ctrl+a/e, word jumps,
- * backspace/delete); insertion goes through `insertText` AFTER the
+ * backspace/delete, ctrl+u/ctrl+k line kills); insertion goes through `insertText` AFTER the
  * site's own printable filter (`printableText`, `printableMultiline`,
  * or the session-name charset) — the filters differ per input, the
  * editing does not. Submit/cancel/empty-backspace semantics stay at
@@ -19,7 +19,8 @@
  * ctrl+arrow (`CSI 1;5D` → `ctrl`) as word jumps; ESC b / ESC f
  * (`meta` + name `b`/`f`, the readline forms macOS terminals send for
  * option+arrow); home/end in their CSI/SS3/`~` forms (all parse to
- * name `home`/`end`); ctrl+a/ctrl+e; backspace (0x7f and 0x08);
+ * name `home`/`end`); ctrl+a/ctrl+e; ctrl+u/ctrl+k; backspace (0x7f
+ * and 0x08);
  * alt+backspace as word-delete; forward delete (`CSI 3~`).
  */
 import type { KeyEvent } from "@opentui/core";
@@ -111,6 +112,14 @@ export function applyEditKey(k: EditKey, te: TextEdit): TextEdit | null {
       k.name === "b" ? wordLeft(value, cursor) : wordRight(value, cursor),
     );
   }
+  // Readline's line kills. `ctrl+u` is the one that matters here: the
+  // status picker's verify row pre-fills its input with the steps the
+  // row already owes, and clearing that box is how a human takes the
+  // obligation back off a branch — reachable by backspace alone only if
+  // you stop on exactly the right keystroke, since one more exits the
+  // prompt entirely (the backspace-on-empty convention).
+  if (k.ctrl && k.name === "u") return { value: value.slice(cursor), cursor: 0 };
+  if (k.ctrl && k.name === "k") return { value: value.slice(0, cursor), cursor };
   if (k.name === "home" || (k.ctrl && k.name === "a")) return withCursor(te, 0);
   if (k.name === "end" || (k.ctrl && k.name === "e")) {
     return withCursor(te, value.length);

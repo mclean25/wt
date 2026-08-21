@@ -2,7 +2,6 @@ import type { KeyEvent } from "@opentui/core";
 
 import type { Modal } from "../modal-state.ts";
 import { previewFocusPatch } from "../picker-preview.ts";
-import { WORK_STATE_CHORDS } from "../flows/work-status.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleListPickerKey } from "./list-picker.ts";
 
@@ -51,12 +50,14 @@ export function handleStatusPickerKey(
   modal: Extract<Modal, { kind: "statusPicker" }>,
   { setModal, commitStatusPick, beginStatusNote }: SimpleModalContext,
 ): boolean {
-  // Every state has a direct chord (`u t` → todo, …, `x` clears) —
-  // the letters render dim in the picker rows.
+  // Every row carries its own direct chord (`u t` → todo, …, `x`
+  // clears) — the letters render dim in the picker rows. Read off the
+  // item rather than derived from its state, because `ready` appears
+  // twice (plain, and + verify-after-merge): a derivation would give
+  // both the same letter and silently make one unreachable.
   const chords: Record<string, (index: number) => void> = {};
   for (const item of modal.items) {
-    const letter = item.state === null ? "x" : WORK_STATE_CHORDS[item.state];
-    chords[letter] = () => commitStatusPick(item, modal.slug);
+    chords[item.chord] = () => commitStatusPick(item, modal.slug);
   }
   // `m` — pick the HIGHLIGHTED state and attach a note via the footer
   // input. Off the chord letters so the fast path stays one keystroke.

@@ -3,10 +3,9 @@ import type { KeyEvent } from "@opentui/core";
 
 import type { ActionDef } from "../../core/actions.ts";
 import type { HarnessId } from "../../core/harness/index.ts";
-import type { WorkState } from "../../core/work-status.ts";
 import type { Output } from "../../core/outputs.ts";
 import type { RemovedWorktree } from "../../core/wtstate.ts";
-import type { Modal } from "../modal-state.ts";
+import type { Modal, StatusPickerItem } from "../modal-state.ts";
 import type { PickerItem } from "../panels/action-picker.tsx";
 import type { PickerRow } from "../panels/sessions-picker.tsx";
 import type { SectionPickerItem } from "../panels/section-picker.tsx";
@@ -28,15 +27,12 @@ export type SimpleModalContext = {
     item: { label: string; branch: string | null },
     slug: string,
   ) => void;
-  commitStatusPick: (
-    item: { label: string; state: WorkState | null },
-    slug: string,
-  ) => void;
-  /** `m` in the status picker: pick highlight + collect a note. */
-  beginStatusNote: (
-    item: { label: string; state: WorkState | null },
-    slug: string,
-  ) => void;
+  commitStatusPick: (item: StatusPickerItem, slug: string) => void;
+  /**
+   * `m` in the status picker: pick highlight + collect a note (or, on
+   * the `ready + verify after merge` row, its steps).
+   */
+  beginStatusNote: (item: StatusPickerItem, slug: string) => void;
   /** Set when the cursor is on a folded section header — `y` yanks the
    *  batch (name, member slugs) instead of a row. */
   selectedSection: SelectedSection | undefined;

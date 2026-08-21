@@ -165,6 +165,21 @@ describe("applyEditKey — deletion", () => {
     const s = te("abc", 3);
     expect(applyEditKey(key("delete"), s)).toBe(s);
   });
+  // The status picker's verify row pre-fills its prompt, and emptying
+  // it is a meaningful assertion — backspacing there stops one key
+  // short of exiting the prompt entirely.
+  test("ctrl+u kills to the start of the line", () => {
+    expect(applyEditKey(key("u", { ctrl: true }), te("foo bar", 4))).toEqual(
+      te("bar", 0),
+    );
+    expect(applyEditKey(key("u", { ctrl: true }), te("foo bar", 7))).toEqual(te("", 0));
+  });
+  test("ctrl+k kills to the end of the line", () => {
+    expect(applyEditKey(key("k", { ctrl: true }), te("foo bar", 4))).toEqual(
+      te("foo ", 4),
+    );
+    expect(applyEditKey(key("k", { ctrl: true }), te("foo bar", 0))).toEqual(te("", 0));
+  });
 });
 
 describe("applyEditKey — unhandled keys pass through", () => {

@@ -60,7 +60,7 @@ import { handleNormalKey, type NormalKeysCtx } from "./keyboard/normal-keys.ts";
 import { handleRemovedViewKey } from "./keyboard/removed-view-keys.ts";
 import { makeActionPickerFlows } from "./flows/action-picker.ts";
 import { makeBaseFlows } from "./flows/base.ts";
-import { makeWorkStatusFlows, type PendingStatusNote } from "./flows/work-status.ts";
+import { makeWorkStatusFlows, type PendingStatusText } from "./flows/work-status.ts";
 import { makeDestroyFlows } from "./flows/destroy.ts";
 import { makeErrorFlows } from "./flows/error-report.ts";
 import { makeGithubPrFlows } from "./flows/github-pr.ts";
@@ -198,10 +198,11 @@ export function App({ onExit }: Props) {
   // identity of the thing being renamed). Not folded into `modal`
   // because the rename UX uses the footer, not an overlay.
   const [pendingRename, setPendingRename] = useState<string | null>(null);
-  // The status picker's `m` pick parks {slug, state} here while the
-  // footer input collects the note; Esc there clears it (no write).
-  const [pendingStatusNote, setPendingStatusNote] =
-    useState<PendingStatusNote | null>(null);
+  // The status picker's `m` pick and its `ready + verify after merge`
+  // row park {slug, state, field} here while the footer input collects
+  // the line; Esc there clears it (no write).
+  const [pendingStatusText, setPendingStatusText] =
+    useState<PendingStatusText | null>(null);
 
   // Auto-tail every busy worktree so logs surface in the activity pane
   // without user intervention. Returns the active set so rows can flag
@@ -516,7 +517,7 @@ export function App({ onExit }: Props) {
   });
 
   // Work-status picker flow (`u`) — extracted to `flows/work-status.ts`.
-  const { openStatusPicker, commitStatusPick, beginStatusNote, commitStatusWithNote } =
+  const { openStatusPicker, commitStatusPick, beginStatusNote, commitStatusText } =
     makeWorkStatusFlows({
       current,
       setModal,
@@ -524,7 +525,7 @@ export function App({ onExit }: Props) {
       reportActionError,
       setWorkStatus,
       setFooter,
-      setPendingStatusNote,
+      setPendingStatusText,
       isSlugLive: (slug) => rows.some((r) => r.wt.slug === slug),
     });
 
@@ -801,9 +802,9 @@ export function App({ onExit }: Props) {
         toast,
         doNew,
         doRemoteNew,
-        pendingStatusNote,
-        setPendingStatusNote,
-        commitStatusWithNote,
+        pendingStatusText,
+        setPendingStatusText,
+        commitStatusText,
       });
       return;
     }
