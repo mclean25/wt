@@ -3,16 +3,15 @@
  * check has not REGISTERED yet.
  *
  * This exists because of a refusal that reads like a verdict and is
- * actually a race. A merge queue happily accepts a PR whose required
- * checks are running — verified against a live PR with six of them
- * `IN_PROGRESS` and `mergeStateStatus: BLOCKED`. What it refuses is a
- * PR where a required context has reported *nothing at all*, which
- * GitHub words as `Required status check "X" is expected.` On the PR
- * that produced this, wt armed at 23:55:21Z and the workflow created
- * that check run at 23:56:23Z — a 62-second window in which the answer
- * is "ask again shortly", and the only thing standing between the
- * keystroke and success was a human noticing and pressing it again.
- * Absorbing that is the whole job.
+ * actually a clock. A merge queue refuses a PR whose required check has
+ * not REPORTED for its head sha, in two wordings that are the same
+ * situation at two ages: `is expected` (the workflow has not created
+ * the check run yet — 62 seconds on the PR that exposed it, armed
+ * 23:55:21Z, created 23:56:23Z) and `is in progress` (created, still
+ * running — 51s to 5min on this repo's suite). Both clear on their own,
+ * and the only thing standing between the keystroke and success was a
+ * human noticing and pressing it again. Absorbing that is the whole
+ * job.
  *
  * Two properties make the retry safe rather than merely convenient:
  *
@@ -29,15 +28,23 @@
  */
 import type { GhActionResult } from "../../core/github/types.ts";
 
-/** Gap between attempts. The observed window was ~1 minute. */
-const RETRY_EVERY_MS = 15_000;
+/**
+ * Gap between attempts. Sized for the LONGER of the two waits: a
+ * registration gap is ~1 minute, but a running suite is minutes, and
+ * noticing 30 seconds late costs nothing against a 6-minute CI run.
+ */
+const RETRY_EVERY_MS = 30_000;
 
 /**
  * How long to keep asking. Past this the check genuinely is not coming
  * — a workflow that never ran, a required context nothing produces —
- * and continuing would turn a wrong config into silent inaction.
+ * and continuing would turn a wrong config into silent inaction. It has
+ * to clear a whole CI run plus a queued runner, since `is in progress`
+ * means the budget starts when the suite does: this repo's required
+ * checks land in ~6 minutes, so 20 gives room for a slow queue without
+ * waiting out a workflow that will never report.
  */
-export const RETRY_LIMIT_MS = 5 * 60_000;
+export const RETRY_LIMIT_MS = 20 * 60_000;
 
 type Pending = { timer: ReturnType<typeof setTimeout>; startedAt: number };
 

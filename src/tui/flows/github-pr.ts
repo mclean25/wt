@@ -110,7 +110,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       toast("merge when ready already armed", theme.info, 2000);
       return;
     }
-    // Nothing is armed while a registration-gap retry is waiting, so
+    // Nothing is armed while a pending-checks retry is waiting, so
     // without this the disarm leg would report "not armed" and leave
     // the loop running to arm it a minute later — the worst possible
     // answer to someone who just asked for it to stop.
@@ -120,7 +120,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       return;
     }
     if (action === "enable" && autoMergeRetryPending(row.pr.number)) {
-      toast("already waiting for checks to register", theme.info, 2000);
+      toast("already waiting on checks", theme.info, 2000);
       return;
     }
     if (action === "disable" && !armed) {
@@ -179,11 +179,11 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       const msg = err instanceof Error ? err.message : String(err);
       const verb = action === "enable" ? "auto-merge" : "disable auto-merge";
       if (retryable) {
-        // A required check the workflow has not created yet. Measured
-        // at 62 seconds, and nothing about it needs a human — pressing
-        // the key again in a minute is exactly the work wt exists to
-        // absorb. The retry re-sends the SAME `expectedHeadOid`, so a
-        // push during the wait makes GitHub refuse rather than arming
+        // A required check that has not reported yet — unregistered or
+        // still running. Nothing about it needs a human, and pressing
+        // the key again when CI finishes is exactly the work wt exists
+        // to absorb. The retry re-sends the SAME `expectedHeadOid`, so
+        // a push during the wait makes GitHub refuse rather than arming
         // a commit nobody saw.
         startAutoMergeRetry(
           prNumber,
@@ -194,7 +194,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
             }),
           {
             onArmed: () => {
-              log.event.ok(`merge when ready armed for #${prNumber} once its checks registered`, {
+              log.event.ok(`merge when ready armed for #${prNumber} once its checks reported`, {
                 toast: true,
               });
               void refreshGithub();
@@ -204,7 +204,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
             },
             onGaveUp: () => {
               log.event.err(
-                `#${prNumber}: gave up arming merge when ready — a required check never reported in ${
+                `#${prNumber}: gave up arming merge when ready — a required check still had not reported after ${
                   RETRY_LIMIT_MS / 60_000
                 } min, so check the workflow actually runs for this branch`,
                 { toast: true },
@@ -213,9 +213,9 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
           },
         );
         log.event.warn(
-          `#${prNumber}: required checks have not registered yet — will arm merge when ready as soon as they do`,
+          `#${prNumber}: required checks have not reported yet — will arm merge when ready as soon as they do`,
         );
-        toast(`#${prNumber}: waiting for checks to register`, theme.warn, 3500);
+        toast(`#${prNumber}: waiting on checks, will arm`, theme.warn, 3500);
         return;
       }
       log.event.err(`${verb} failed for #${prNumber}: ${msg}`);

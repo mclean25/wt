@@ -140,17 +140,17 @@ export async function enableAutoMerge(
     base: opts.baseRefName,
   });
   if (enqueued.ok) return enqueued;
-  // A required check that has not been CREATED for this sha is a
-  // registration gap, not a verdict — measured at 62 seconds on a live
-  // PR — so it is retryable where the other refusals are not.
-  const gap = checksNotRegistered(enqueued.error);
-  if (!gap && !notYetEnqueueable(enqueued.error)) return enqueued;
+  // A required check that has not REPORTED yet — never created, or
+  // created and still running — is a clock, not a verdict, so it is
+  // retryable where the other refusals are not.
+  const pending = checksStillPending(enqueued.error);
+  if (!pending && !notYetEnqueueable(enqueued.error)) return enqueued;
 
   // "Arm it and merge it when the checks pass" is the whole point of
   // the keystroke, and classic auto-merge is that arming: on a queue
   // base GitHub enqueues the PR itself once the requirements are met.
-  // It is worth trying even for the gap, because on a repo that allows
-  // auto-merge it turns a "come back in a minute" into a done thing.
+  // It is worth trying even while checks are pending, because on a repo
+  // that allows auto-merge it turns a wait into a done thing.
   //
   // Second, not first, so the ready case still gets a queue POSITION
   // back rather than an armed flag. And the enqueue error is kept when
@@ -161,36 +161,48 @@ export async function enableAutoMerge(
   if (armed.ok) return armed;
   return {
     ok: false,
-    retryable: gap,
-    error: gap
-      ? `${enqueued.error} That check has not been created for this commit yet — the queue takes a PR whose checks are merely running, so this clears itself. (arming instead also failed: ${armed.error})`
+    retryable: pending,
+    error: pending
+      ? `${enqueued.error} That check has not reported for this commit yet, so the refusal clears itself once CI does. (arming instead also failed: ${armed.error})`
       : `${enqueued.error} (arming instead also failed: ${armed.error})`,
   };
 }
 
 /**
- * Did the merge queue refuse this PR because a required check has not
- * been CREATED for its head sha yet?
+ * Did the merge queue refuse this PR for a reason a CLOCK will fix?
  *
- * Distinct from every other refusal, and the distinction is the whole
- * point: a queue happily takes a PR whose required checks are merely
- * RUNNING — verified against a live PR with six required checks
- * `IN_PROGRESS` and `mergeStateStatus: BLOCKED`, which enqueued fine.
- * What it will not take is one where a required context has reported
- * nothing at all, which GitHub words as `Required status check "X" is
- * expected.` That is a race with the workflow registering its own
- * check runs (62 seconds on the PR that produced this), so it clears
- * on its own and is the one refusal worth retrying.
+ * Two wordings, one situation, and they arrive minutes apart on the
+ * same PR: `Required status check "X" is expected.` (the context has
+ * reported nothing at all — a race with the workflow registering its
+ * own check runs, 62 seconds on the PR that exposed it) and
+ * `Required status check "X" is in progress.` (it registered and is
+ * still running — 51s to 5min on this repo's suite). Neither needs a
+ * human and neither survives CI finishing.
+ *
+ * An earlier version of this matched only `is expected`, on the belief
+ * that a queue accepts a PR whose required checks are merely RUNNING.
+ * That belief came from a probe carrying a deliberately-wrong
+ * `expectedHeadOid`, which GitHub validates FIRST — so the probe never
+ * reached check validation, and a green-looking result vouched for a
+ * claim it had not tested. `is in progress` on PR #1424 refuted it
+ * directly. An instrument that answers about a world it was not in
+ * does not merely fail to catch the bug; it certifies it.
  *
  * Getting this wrong is expensive in a specific way: lumped in with
- * the durable refusals, a 62-second gap drove a fallback to classic
+ * the durable refusals, a transient wait drives a fallback to classic
  * auto-merge on a repo with `allow_auto_merge: false`, and the
- * reported error named that repo setting — sending the reader to
- * a setting that had nothing to do with the failure, on a repo where
+ * reported error names that repo setting — sending the reader to a
+ * setting that had nothing to do with the failure, on a repo where
  * "merge when ready" demonstrably works from the web UI.
+ *
+ * Positive list, so it fails CLOSED: `has failed`, `was cancelled` and
+ * the aggregate `have not succeeded` all need someone to DO something,
+ * and a retry loop would hide that behind a spinner.
  */
-export function checksNotRegistered(error: string | undefined): boolean {
-  return /required status check\b[^]*?\bis expected/i.test(error ?? "");
+export function checksStillPending(error: string | undefined): boolean {
+  return /required status check\b[^]*?\bis (?:expected|in progress|queued|pending|waiting)/i.test(
+    error ?? "",
+  );
 }
 
 /**

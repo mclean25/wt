@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import { checksNotRegistered, notYetEnqueueable } from "./mutations.ts";
+import { checksStillPending, notYetEnqueueable } from "./mutations.ts";
 
 describe("notYetEnqueueable", () => {
   // Observed verbatim on a live queue base while a required check had
@@ -42,42 +42,61 @@ describe("notYetEnqueueable", () => {
   });
 });
 
-describe("checksNotRegistered", () => {
+describe("checksStillPending", () => {
   // Verbatim from the refusal that produced this: wt armed at
   // 23:55:21Z and the workflow created "Unit tests (Vitest)" at
   // 23:56:23Z, 62 seconds later.
   const REAL = 'gh: Pull request Required status check "Unit tests (Vitest)" is expected.';
+  // Verbatim from PR #1424, the SAME check name minutes later in its
+  // life. This one refuted the belief that a queue takes a PR whose
+  // required checks are merely running.
+  const RUNNING =
+    'gh: Pull request Required status check "Unit tests (Vitest)" is in progress.';
 
   test("recognises a required check that has not reported at all", () => {
-    expect(checksNotRegistered(REAL)).toBe(true);
+    expect(checksStillPending(REAL)).toBe(true);
+  });
+
+  test("recognises a required check that is still running", () => {
+    expect(checksStillPending(RUNNING)).toBe(true);
   });
 
   test("does NOT claim a merely-unsuccessful check", () => {
+    // The aggregate wording mixes pending with failed, so it cannot say
+    // whether waiting helps — and an ambiguous message must fail closed.
     // Verified against a live PR: six required checks IN_PROGRESS and
     // mergeStateStatus BLOCKED still enqueued, so "have not succeeded"
     // is a different situation and must not be called retryable.
     expect(
-      checksNotRegistered(
+      checksStillPending(
         "Pull request 2 of 4 required status checks have not succeeded: 1 expected.",
       ),
     ).toBe(false);
   });
 
+  test("a check that FAILED is never retryable — someone has to re-run it", () => {
+    expect(
+      checksStillPending('Pull request Required status check "Unit tests (Vitest)" has failed.'),
+    ).toBe(false);
+  });
+
   test("does not fire on the wrong-commit refusal", () => {
     expect(
-      checksNotRegistered("expected head oid does not match the current head oid"),
+      checksStillPending("expected head oid does not match the current head oid"),
     ).toBe(false);
   });
 
   test("absent and unrecognised messages are not retryable", () => {
-    expect(checksNotRegistered(undefined)).toBe(false);
-    expect(checksNotRegistered("Auto merge is not allowed for this repository")).toBe(false);
+    expect(checksStillPending(undefined)).toBe(false);
+    expect(checksStillPending("Auto merge is not allowed for this repository")).toBe(false);
   });
 
-  test("the gap is a subset of not-yet-enqueueable, so ordering is what separates them", () => {
-    // Both match the real message; `enableAutoMerge` therefore has to
+  test("pending is a subset of not-yet-enqueueable, so ordering is what separates them", () => {
+    // Both match the real messages; `enableAutoMerge` therefore has to
     // test the narrower one FIRST or the retryable flag is never set.
-    expect(notYetEnqueueable(REAL)).toBe(true);
-    expect(checksNotRegistered(REAL)).toBe(true);
+    for (const msg of [REAL, RUNNING]) {
+      expect(notYetEnqueueable(msg)).toBe(true);
+      expect(checksStillPending(msg)).toBe(true);
+    }
   });
 });

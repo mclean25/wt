@@ -4,6 +4,7 @@ import type { GhActionResult } from "../../core/github/types.ts";
 import {
   autoMergeRetryPending,
   cancelAutoMergeRetry,
+  RETRY_LIMIT_MS,
   startAutoMergeRetry,
 } from "./auto-merge-retry.ts";
 
@@ -58,8 +59,10 @@ describe("startAutoMergeRetry", () => {
       3,
       async () => gap,
       { onArmed: () => {}, onFailed: () => {}, onGaveUp: () => void gaveUp++ },
-      // Clock jumps past the 5-minute budget on the second reading.
-      { everyMs: 1, now: () => (t++ === 0 ? 0 : 10 * 60_000) },
+      // Clock jumps past RETRY_LIMIT_MS on the second reading, derived
+      // rather than hardcoded so widening the budget can't quietly turn
+      // this into a test that never reaches the give-up branch.
+      { everyMs: 1, now: () => (t++ === 0 ? 0 : RETRY_LIMIT_MS + 1) },
     );
     await tick(30);
     expect(gaveUp).toBe(1);
