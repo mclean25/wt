@@ -569,7 +569,7 @@ Fields:
 | `prompt` / `shell` | — | — | Exactly one must be set; picks the kind. |
 | `target` | prompt only | `"headless"` | `"headless"`, `"session"`, or `"manager"` (see above). |
 | `affects` | both | prompt: `["git", "github"]`, shell: `[]` | State domains the action mutates; the matching caches are refreshed when the run exits. Tags: `git`, `github`, `dev` (the worktree's `[dev_server]` state). Explicit `[]` opts out. |
-| `requires` | both | `[]` | Preconditions; unmet entries gray out in the picker with the reason. Tags: `pr` (any PR exists), `pr.ready` (open non-draft PR), `deployed` (this worktree's SST stage is live). |
+| `requires` | both | `[]` | Preconditions; unmet entries gray out in the picker with the reason. Tags: `pr` (any PR exists), `pr.ready` (open non-draft PR), `deployed` (this worktree's SST stage is live), `issue.tracker` (the slug carries a tracker id, i.e. `{{issue_id}}` renders non-empty). |
 | `key` | both | auto-derived | Single-char quick-pick letter in the `!` menu. Lowercase only — keys are case-folded and the picker matches `a-z`, so an uppercase key silently degrades to auto-derivation. With `[dev_server]` configured, `d` and `s` are claimed by the pinned built-ins. |
 | `group` | both | ungrouped | Section label; same-group actions cluster under one header. |
 | `arg_prompt` | both | *(unset)* | Label for a per-launch value prompt. Picking the action first shows recent values (from `~/.cache/wt/action-history.json`) plus a "new…" input; the value substitutes `{{arg}}`. |

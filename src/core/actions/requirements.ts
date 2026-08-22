@@ -1,4 +1,5 @@
 import type { RequireTag } from "../config.ts";
+import { issueIdForSlug } from "../issue-tracker.ts";
 import type { ActionAvailability, ActionRowState } from "./types.ts";
 
 /**
@@ -25,6 +26,24 @@ export function evaluateActionRequirements(
         break;
       case "deployed":
         if (!row.deployed) return { ok: false, reason: "no stage deployed" };
+        break;
+      // An action templated on `{{issue_id}}` renders an EMPTY string
+      // for a slug carrying no tracker id, so without this it runs a
+      // command with a hole in its argument list — which fails, but as
+      // a usage error naming nothing the reader can act on. Worse
+      // where it is bound to an automation: `wt.merged` holds for
+      // every landing, so a fleet whose worktrees are keyed to GitHub
+      // issues rather than tracker tasks (0 of 6 live rows here) earns
+      // a red attention line on every single merge. A guard that cries
+      // wolf on 100% of a population is not a guard.
+      //
+      // Derived from the slug, so unlike `pr` and `deployed` this one
+      // can never become true for a row that lacks it. That is fine
+      // for the picker (permanently grayed with a reason) and is the
+      // intended outcome for an automation (the intent stays pending
+      // and dies with the row) — the rule simply does not apply here.
+      case "issue.tracker":
+        if (!issueIdForSlug(row.slug)) return { ok: false, reason: "no tracker id in slug" };
         break;
       default: {
         // Exhaustiveness check, adding a new RequireTag without

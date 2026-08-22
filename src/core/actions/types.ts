@@ -10,6 +10,11 @@ import type { PullRequest } from "../types.ts";
  * full surface.
  */
 export type ActionRowState = {
+  /**
+   * The worktree's slug. Carries the tracker id for `issue.tracker`,
+   * which is derived rather than stored — see `issueIdForSlug`.
+   */
+  slug: string;
   pr: PullRequest | undefined;
   /**
    * `isOurStageDeployed` result for the row. Strict gate (matches

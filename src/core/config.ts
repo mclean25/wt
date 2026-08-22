@@ -440,7 +440,7 @@ export type AiConfig = OpenAiAiConfig | GeminiAiConfig;
  * in `state/hooks.ts` for the rules these tags participate in.
  */
 export type EffectTag = "git" | "github" | "dev";
-export type RequireTag = "pr" | "pr.ready" | "deployed";
+export type RequireTag = "pr" | "pr.ready" | "deployed" | "issue.tracker";
 
 /**
  * Optional picker affordances shared by both action kinds. `key` is the
@@ -997,7 +997,7 @@ export const DEFAULT_CLAUDE_AFFECTS: readonly EffectTag[] = ["git", "github"];
 export const DEFAULT_SHELL_AFFECTS: readonly EffectTag[] = [];
 export const DEFAULT_REQUIRES: readonly RequireTag[] = [];
 const VALID_EFFECT_TAGS = new Set<EffectTag>(["git", "github", "dev"]);
-const VALID_REQUIRE_TAGS = new Set<RequireTag>(["pr", "pr.ready", "deployed"]);
+const VALID_REQUIRE_TAGS = new Set<RequireTag>(["pr", "pr.ready", "deployed", "issue.tracker"]);
 
 function configPath(): { path: string; present: boolean } {
   const explicit = process.env.WT_CONFIG;

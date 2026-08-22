@@ -36,6 +36,7 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
   function buildActionPickerItems(slug: string): PickerItem[] {
     const row = rows.find((r) => r.wt.slug === slug);
     const rowState = {
+      slug,
       pr: row?.pr,
       deployed: row?.fields.deploy.data ?? false,
     };
@@ -95,6 +96,7 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
   function buildManagerPickerItems(rowSlug: string | null): PickerItem[] {
     const row = rowSlug ? rows.find((r) => r.wt.slug === rowSlug) : undefined;
     const rowState = {
+      slug: rowSlug ?? "",
       pr: row?.pr,
       deployed: row?.fields.deploy.data ?? false,
     };

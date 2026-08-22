@@ -831,6 +831,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       if (def) {
         const row = ctx.rows.find((r) => r.wt.slug === fire.slug);
         const avail = evaluateActionRequirements(def.requires, {
+          slug: fire.slug,
           pr: row?.pr,
           deployed: row?.fields.deploy.data ?? false,
         });
