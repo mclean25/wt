@@ -667,6 +667,7 @@ export function App({ onExit }: Props) {
     rows,
     toast,
     mutate,
+    refreshGithub,
   });
 
   // Action-picker (`!`) + manager palette (`M`) + slot palette

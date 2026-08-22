@@ -148,7 +148,15 @@ export type ReviewRequestPr = {
   updatedAt: string;
 };
 
-export type GhActionResult = { ok: true } | { ok: false; error: string };
+/**
+ * `retryable` marks a failure whose CAUSE is transient and clears on
+ * its own, so a caller with a retry budget (the automation engine)
+ * can tell "this will work shortly" from "this will never work".
+ * Absent means unknown, which callers must read as NOT retryable.
+ */
+export type GhActionResult =
+  | { ok: true }
+  | { ok: false; error: string; retryable?: boolean };
 
 export type LivePrInfo = {
   number: number;

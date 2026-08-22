@@ -139,25 +139,58 @@ export async function enableAutoMerge(
     prId,
     base: opts.baseRefName,
   });
-  if (enqueued.ok || !notYetEnqueueable(enqueued.error)) return enqueued;
+  if (enqueued.ok) return enqueued;
+  // A required check that has not been CREATED for this sha is a
+  // registration gap, not a verdict — measured at 62 seconds on a live
+  // PR — so it is retryable where the other refusals are not.
+  const gap = checksNotRegistered(enqueued.error);
+  if (!gap && !notYetEnqueueable(enqueued.error)) return enqueued;
 
-  // A queue will not take a PR whose required checks haven't reported
-  // yet — but "arm it and merge it when they do" is the whole point of
-  // the keystroke, and it is what GitHub's own button offers in that
-  // window. Classic auto-merge is that arming: on a queue base GitHub
-  // enqueues the PR itself once the requirements are met.
+  // "Arm it and merge it when the checks pass" is the whole point of
+  // the keystroke, and classic auto-merge is that arming: on a queue
+  // base GitHub enqueues the PR itself once the requirements are met.
+  // It is worth trying even for the gap, because on a repo that allows
+  // auto-merge it turns a "come back in a minute" into a done thing.
   //
   // Second, not first, so the ready case still gets a queue POSITION
   // back rather than an armed flag. And the enqueue error is kept when
   // the fallback also fails: "Auto merge is not allowed for this
-  // repository" alone sends the reader to the wrong setting, when what
-  // actually happened is a queue refusing an unready PR.
+  // repository" alone sends the reader to a repo setting that is not
+  // why this failed.
   const armed = await classic();
   if (armed.ok) return armed;
   return {
     ok: false,
-    error: `${enqueued.error} (arming instead also failed: ${armed.error})`,
+    retryable: gap,
+    error: gap
+      ? `${enqueued.error} That check has not been created for this commit yet — the queue takes a PR whose checks are merely running, so this clears itself. (arming instead also failed: ${armed.error})`
+      : `${enqueued.error} (arming instead also failed: ${armed.error})`,
   };
+}
+
+/**
+ * Did the merge queue refuse this PR because a required check has not
+ * been CREATED for its head sha yet?
+ *
+ * Distinct from every other refusal, and the distinction is the whole
+ * point: a queue happily takes a PR whose required checks are merely
+ * RUNNING — verified against a live PR with six required checks
+ * `IN_PROGRESS` and `mergeStateStatus: BLOCKED`, which enqueued fine.
+ * What it will not take is one where a required context has reported
+ * nothing at all, which GitHub words as `Required status check "X" is
+ * expected.` That is a race with the workflow registering its own
+ * check runs (62 seconds on the PR that produced this), so it clears
+ * on its own and is the one refusal worth retrying.
+ *
+ * Getting this wrong is expensive in a specific way: lumped in with
+ * the durable refusals, a 62-second gap drove a fallback to classic
+ * auto-merge on a repo with `allow_auto_merge: false`, and the
+ * reported error named that repo setting — sending the reader to
+ * a setting that had nothing to do with the failure, on a repo where
+ * "merge when ready" demonstrably works from the web UI.
+ */
+export function checksNotRegistered(error: string | undefined): boolean {
+  return /required status check\b[^]*?\bis expected/i.test(error ?? "");
 }
 
 /**

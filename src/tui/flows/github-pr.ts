@@ -21,6 +21,12 @@ import { patchPullRequest, type GithubData } from "../../state/index.ts";
 import type { QueryFilters } from "@tanstack/react-query";
 
 import { mergeWhenReadyArmed } from "../app-helpers.ts";
+import {
+  autoMergeRetryPending,
+  cancelAutoMergeRetry,
+  RETRY_LIMIT_MS,
+  startAutoMergeRetry,
+} from "./auto-merge-retry.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
 
@@ -32,10 +38,17 @@ export type GithubPrFlowsCtx = {
     patch: (prev: TData | undefined) => TData | undefined;
     run: () => Promise<void>;
   }) => Promise<void>;
+  /**
+   * Invalidate `["github"]`. Needed by the registration-gap retry,
+   * which arms outside any `mutate` call and so has no settling
+   * refetch of its own — without it the badge stays unarmed until the
+   * slow staleTime expires.
+   */
+  refreshGithub: () => Promise<void>;
 };
 
 export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
-  const { rows, toast, mutate } = ctx;
+  const { rows, toast, mutate, refreshGithub } = ctx;
 
   async function doMarkReady(slug: string): Promise<void> {
     const log = createLogger(slug);
@@ -97,6 +110,19 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       toast("merge when ready already armed", theme.info, 2000);
       return;
     }
+    // Nothing is armed while a registration-gap retry is waiting, so
+    // without this the disarm leg would report "not armed" and leave
+    // the loop running to arm it a minute later — the worst possible
+    // answer to someone who just asked for it to stop.
+    if (action === "disable" && cancelAutoMergeRetry(row.pr.number)) {
+      log.event.ok(`#${row.pr.number}: cancelled the pending merge-when-ready arm`);
+      toast("cancelled pending arm", theme.ok, 2500);
+      return;
+    }
+    if (action === "enable" && autoMergeRetryPending(row.pr.number)) {
+      toast("already waiting for checks to register", theme.info, 2000);
+      return;
+    }
     if (action === "disable" && !armed) {
       toast("merge when ready not armed", theme.info, 2000);
       return;
@@ -117,6 +143,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     // enableAutoMerge). The invalidate that fires on success replaces it
     // with truth on the next refetch — what matters for UX is that the
     // badge flips immediately.
+    let retryable = false;
     const optimisticAutoMerge: PullRequest["autoMerge"] | null =
       action === "enable"
         ? { enabledAt: new Date().toISOString(), mergeMethod: AUTO_MERGE_METHOD }
@@ -140,12 +167,57 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
                   prId,
                   baseRefName: row.pr?.baseRefName,
                 });
-          if (!result.ok) throw new Error(result.error);
+          if (!result.ok) {
+            // The flag dies in the Error otherwise, and it is the one
+            // bit that says whether waiting would help.
+            retryable = result.retryable === true;
+            throw new Error(result.error);
+          }
         },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const verb = action === "enable" ? "auto-merge" : "disable auto-merge";
+      if (retryable) {
+        // A required check the workflow has not created yet. Measured
+        // at 62 seconds, and nothing about it needs a human — pressing
+        // the key again in a minute is exactly the work wt exists to
+        // absorb. The retry re-sends the SAME `expectedHeadOid`, so a
+        // push during the wait makes GitHub refuse rather than arming
+        // a commit nobody saw.
+        startAutoMergeRetry(
+          prNumber,
+          () =>
+            enableAutoMerge(prId ?? "", {
+              baseRefName: row.pr?.baseRefName,
+              headRefOid: row.pr?.headRefOid,
+            }),
+          {
+            onArmed: () => {
+              log.event.ok(`merge when ready armed for #${prNumber} once its checks registered`, {
+                toast: true,
+              });
+              void refreshGithub();
+            },
+            onFailed: (error) => {
+              log.event.err(`auto-merge failed for #${prNumber}: ${error}`, { toast: true });
+            },
+            onGaveUp: () => {
+              log.event.err(
+                `#${prNumber}: gave up arming merge when ready — a required check never reported in ${
+                  RETRY_LIMIT_MS / 60_000
+                } min, so check the workflow actually runs for this branch`,
+                { toast: true },
+              );
+            },
+          },
+        );
+        log.event.warn(
+          `#${prNumber}: required checks have not registered yet — will arm merge when ready as soon as they do`,
+        );
+        toast(`#${prNumber}: waiting for checks to register`, theme.warn, 3500);
+        return;
+      }
       log.event.err(`${verb} failed for #${prNumber}: ${msg}`);
       toast(`${verb} failed: ${msg}`, theme.err, 4000);
       return;
