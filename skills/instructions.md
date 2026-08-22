@@ -244,6 +244,21 @@ itself teaches the vocabulary and rules (bare `wt status` prints them).
   testing, name what wasn't tested; omitting the line when everything
   was is what makes its presence a signal. `IF WRONG` collects into a
   post-release smoke list for free.
+  **Before you write an `UNTESTED` line, check whether it is really a
+  `--verify-after-merge`.** The two answer different questions and this
+  slot is the one you reach first, so it quietly collects things that
+  belong in the field: `UNTESTED` means "nobody exercised this, and
+  nothing is being asked of anyone", while the field means "only the
+  deployed environment can prove this, and someone must run these steps
+  once it ships". The test is whether a specific check remains OWED
+  after the merge. If it does, it belongs in the field — a note line
+  asks nothing, is not carried across later assertions, does not hold
+  the worktree back from the `c` sweep, and vanishes with the checkout,
+  so an obligation written here is an obligation you have decided to
+  lose. A worktree caught itself doing exactly this with a live
+  9-participant call test. Writing both is fine and often right: name
+  the steps in the field, and let the `UNTESTED` line say what was not
+  exercised locally.
 
   The character budget is load-bearing, not style advice. You are
   writing one note; the human reads all of them at once, and "concise"
