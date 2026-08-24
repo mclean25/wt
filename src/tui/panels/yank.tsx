@@ -1,6 +1,6 @@
 import {
-  issueIdForSlug,
-  issueUrlForSlug,
+  issueUrlForId,
+  resolveIssueId,
   specificIssueUrl,
 } from "../../core/issue-tracker.ts";
 import { stageUrl } from "../../core/stage.ts";
@@ -45,13 +45,15 @@ export function yankItemsFor(row: WorktreeRow): Item[] {
       key: "i",
       label: "issue",
       value:
-        specificIssueUrl(row.wt.slug, row.githubIssue) ??
-        issueIdForSlug(row.wt.slug),
+        specificIssueUrl(row.wt.slug, row.githubIssue, row.issueId) ??
+        resolveIssueId(row.wt.slug, row.issueId),
     },
     {
       key: "I",
       label: "primary",
-      value: issueUrlForSlug(row.wt.slug) ?? issueIdForSlug(row.wt.slug),
+      value:
+        issueUrlForId(resolveIssueId(row.wt.slug, row.issueId)) ??
+        resolveIssueId(row.wt.slug, row.issueId),
     },
     { key: "r", label: "pr url", value: prUrlValue },
   ];

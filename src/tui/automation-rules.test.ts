@@ -105,6 +105,8 @@ const FRESH: AutomationEvalCtx = {
   githubFresh: true,
   isPausedSlug: () => false,
   audienceOf: () => null,
+  externalOf: () => false,
+  varsFor: () => ({}) as never,
       branchTips: new Map(),
   nowMs: Date.parse("2026-08-20T12:00:00Z"),
 };
@@ -257,11 +259,60 @@ describe("wt.merged → builtin:close-issue", () => {
   });
 });
 
+describe("wt.merged → an external shell action", () => {
+  // The tracker transition (`issue-in-review` on this fleet): a config
+  // shell action declared `external = true`. Same class as the two
+  // post-merge builtins, and treated as the opposite until every fire
+  // for three days was dropped as superseded.
+  const r = rule({ id: "issue-in-review-on-merge", on: "wt.merged", run: "issue-in-review" });
+  const EXTERNAL: AutomationEvalCtx = {
+    ...FRESH,
+    externalOf: () => true,
+    varsFor: (_rule, row) => ({ slug: row.wt.slug, issue_id: "COZ-2185" }) as never,
+  };
+
+  test("carries an empty quiesce set and its vars frozen", () => {
+    const row = makeRow("a", { pr: makePr({ state: "MERGED" }) });
+    const fires = evaluateAutomations([r], [row], EXTERNAL);
+    expect(fires).toHaveLength(1);
+    // Empty for the same reason close-issue's is: it touches a ticket
+    // tracker, never the checkout. A non-empty set is what queued it
+    // behind the row's own lifetime and lost the race to the `c` sweep.
+    expect(fires[0]!.quiesceSlugs).toEqual([]);
+    // Non-null `frozenVars` is ALSO the dispatcher's marker for "this
+    // outlives its row", so an empty map here would silently restore
+    // the old behaviour.
+    expect(fires[0]!.frozenVars).toEqual({ slug: "a", issue_id: "COZ-2185" });
+  });
+
+  test("fires for stack members, unlike a worktree-touching merge rule", () => {
+    const row = makeRow("a", {
+      pr: makePr({ state: "MERGED" }),
+      stack: stackInfo("eng-1", 1),
+      status: { kind: StatusKind.Merged, label: "merged" },
+    });
+    expect(evaluateAutomations([r], [row], EXTERNAL)).toHaveLength(1);
+  });
+
+  test("a NON-external action on the same trigger keeps the row semantics", () => {
+    // The guard against over-reach: `external` is what earns the
+    // exemption, not the trigger. An ordinary shell action on
+    // wt.merged must still quiesce on its slug and skip stack members.
+    const row = makeRow("a", { pr: makePr({ state: "MERGED" }) });
+    const fires = evaluateAutomations([r], [row], FRESH);
+    expect(fires).toHaveLength(1);
+    expect(fires[0]!.quiesceSlugs).toEqual(["a"]);
+    expect(fires[0]!.frozenVars).toBeNull();
+  });
+});
+
 describe("status.* (work-status triggers)", () => {
   const STALE: AutomationEvalCtx = {
     githubFresh: false,
     isPausedSlug: () => false,
     audienceOf: () => null,
+    externalOf: () => false,
+    varsFor: () => ({}) as never,
       branchTips: new Map(),
     nowMs: Date.parse("2026-08-20T12:00:00Z"),
   };
@@ -630,6 +681,8 @@ describe("branch.advanced", () => {
     githubFresh: true,
     isPausedSlug: () => false,
     audienceOf: () => null as FireAudience,
+    externalOf: () => false,
+    varsFor: () => ({}) as never,
     branchTips: new Map(tips),
     nowMs: 0,
   });

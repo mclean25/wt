@@ -23,6 +23,7 @@
  */
 import { config } from "../core/config.ts";
 import type { AutomationDef, AutomationTrigger } from "../core/config.ts";
+import type { ActionVars } from "../core/actions.ts";
 import { githubIssueNumberFromSlug } from "../core/issue-tracker.ts";
 import { MANAGER_SLUG } from "../core/manager.ts";
 import { pluralize } from "../core/text.ts";
@@ -87,6 +88,21 @@ export type AutomationFire = {
    * would compute a range that has already been consumed.
    */
   branchRange: { branch: string; from: string; to: string } | null;
+  /**
+   * Template vars for a post-merge EXTERNAL shell run, FROZEN at fire
+   * time; null for every other run — and its non-nullness is what
+   * marks the fire as one, so the dispatcher needs no second predicate.
+   *
+   * Same freeze as `closeIssue`/`deleteBranch` and for the same
+   * reason, which merely bites harder here because there are eight
+   * values rather than one: the row a merge fires on is routinely
+   * destroyed inside the settle window (the `c` sweep archived one 7.5
+   * seconds after the merge landed, against a 10-second window), and
+   * an action whose vars are re-read at delivery has nothing to read.
+   * Frozen, the run needs no checkout at all, which is why it can go
+   * to the main clone.
+   */
+  frozenVars: ActionVars | null;
   /** Human-readable trigger summary for the activity-pane event line. */
   detail: string;
 };
@@ -133,6 +149,19 @@ export type AutomationEvalCtx = {
    * `[[actions]]` def's `target` by the hook, which owns the config.
    */
   audienceOf: (rule: AutomationDef) => FireAudience;
+  /**
+   * True when this rule runs a SHELL action declared `external = true`
+   * — its effect leaves the repository, so it needs nothing from the
+   * checkout and must outlive it. Resolved by the hook for the same
+   * reason `audienceOf` is: config ownership lives there.
+   *
+   * Deliberately shell-only. A prompt action can be `external` too (it
+   * posts somewhere), but it is delivered INTO a session in the
+   * worktree, so the checkout is exactly what it does need.
+   */
+  externalOf: (rule: AutomationDef) => boolean;
+  /** Template vars for a row, frozen into an external fire. */
+  varsFor: (rule: AutomationDef, row: WorktreeRow) => ActionVars;
   /**
    * Current tip of each branch a `branch.advanced` rule watches, and
    * the last tip wt recorded for it (absent on first sight). Resolved
@@ -217,6 +246,7 @@ function singleRowFire(
     closeIssue: null,
     deleteBranch: null,
     branchRange: null,
+    frozenVars: null,
     detail,
   };
 }
@@ -297,6 +327,13 @@ function evaluateRowTrigger(
     case "wt.merged": {
       const closesIssue = rule.run === "builtin:close-issue";
       const deletesBranch = rule.run === "builtin:delete-branch";
+      // A config shell action declared `external = true` is the same
+      // KIND of thing as those two builtins — it writes outside the
+      // repository and reads nothing from the checkout — and it was
+      // being treated as the opposite until the fleet noticed that not
+      // one tracker transition had fired in three days. Same three
+      // properties, so the same three exemptions below.
+      const externalRun = !closesIssue && !deletesBranch && ctx.externalOf(rule);
       // Non-stacked worktrees only — merged stack members are cleaned
       // by the stack.parent_merged → builtin:restack path, and letting
       // both fire would race a clean against a whole-stack restack.
@@ -307,7 +344,7 @@ function evaluateRowTrigger(
       // retargets an open child PR onto the deleted base's own base,
       // and wt's restack replays from the `baseSha` anchor in wtstate,
       // never from the remote ref.
-      if (row.stack && !closesIssue && !deletesBranch) return null;
+      if (row.stack && !closesIssue && !deletesBranch && !externalRun) return null;
       // The PR-merged leg of isCleanCandidate needs fresh github data;
       // the merged/gone legs are local. Split the check accordingly.
       const localDone =
@@ -339,6 +376,7 @@ function evaluateRowTrigger(
           closeIssue: issue,
           deleteBranch: null,
     branchRange: null,
+    frozenVars: null,
           detail: `${landed} — closing issue #${issue}`,
         };
       }
@@ -360,7 +398,33 @@ function evaluateRowTrigger(
           closeIssue: null,
           deleteBranch: branch,
           branchRange: null,
+          frozenVars: null,
           detail: `${landed} — deleting remote branch ${branch}`,
+        };
+      }
+      if (externalRun) {
+        return {
+          rule,
+          slug,
+          // Empty for the same reason the two builtins' is: this
+          // touches GitHub or a ticket tracker, never the checkout, so
+          // there is nothing to be quiescent about — and waiting its
+          // turn on the slug is precisely how it lost. It queued
+          // behind the row's own lifetime and the `c` sweep archived
+          // the row 7.5s later, inside the 10s merge settle window, so
+          // the intent was dropped as superseded and the ticket never
+          // moved.
+          quiesceSlugs: [],
+          fireKeys: [`${rule.id}:merged:${slug}:${row.pr?.number ?? "local"}`],
+          stackId: null,
+          closeIssue: null,
+          deleteBranch: null,
+          branchRange: null,
+          // Everything the command needs, taken while the row is still
+          // here. `{{issue_id}}` above all: it is the whole point of
+          // the run and is unrecoverable once the worktree is gone.
+          frozenVars: ctx.varsFor(rule, row),
+          detail: landed,
         };
       }
       return singleRowFire(
@@ -559,6 +623,7 @@ function evaluateStackTrigger(
       closeIssue: null,
       deleteBranch: null,
     branchRange: null,
+    frozenVars: null,
       detail: `${parts.join(" + ")} under ${pluralize(open.length, "open member")}`,
     });
   }
@@ -632,6 +697,7 @@ function evaluateBranchTrigger(
     closeIssue: null,
     deleteBranch: null,
     branchRange: { branch, from: tip.seen, to: tip.now },
+    frozenVars: null,
     detail: `${branch} advanced ${tip.seen.slice(0, 7)}..${tip.now.slice(0, 7)}`,
   };
 }

@@ -1,5 +1,5 @@
 import type { RequireTag } from "../config.ts";
-import { issueIdForSlug } from "../issue-tracker.ts";
+import { resolveIssueId } from "../issue-tracker.ts";
 import type { ActionAvailability, ActionRowState } from "./types.ts";
 
 /**
@@ -37,13 +37,16 @@ export function evaluateActionRequirements(
       // a red attention line on every single merge. A guard that cries
       // wolf on 100% of a population is not a guard.
       //
-      // Derived from the slug, so unlike `pr` and `deployed` this one
-      // can never become true for a row that lacks it. That is fine
-      // for the picker (permanently grayed with a reason) and is the
-      // intended outcome for an automation (the intent stays pending
-      // and dies with the row) — the rule simply does not apply here.
+      // Unlike `pr` and `deployed` this one is not waiting on the
+      // world to change: it is true or false about the worktree's
+      // identity. It IS fixable though — `wt issue <slug> --id COZ-123`
+      // (TUI `I`) stores an override — so the reason names the remedy
+      // rather than just the lack, since a permanently-grayed picker
+      // entry with no way out is the same as a missing feature.
       case "issue.tracker":
-        if (!issueIdForSlug(row.slug)) return { ok: false, reason: "no tracker id in slug" };
+        if (!resolveIssueId(row.slug, row.issueId)) {
+          return { ok: false, reason: "no tracker id (set one with `#`)" };
+        }
         break;
       default: {
         // Exhaustiveness check, adding a new RequireTag without

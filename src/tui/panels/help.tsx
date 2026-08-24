@@ -93,6 +93,11 @@ const KEY_BLOCKS: Block[] = [
       { key: "l p", label: "open PR in Linear" },
       { key: "i", label: "open issue (gh issue when attached, else tracker)" },
       { key: "I", label: "open primary tracker issue" },
+      {
+        key: "#",
+        label:
+          "set the tracker id (empty clears) — overrides the id parsed from the slug; this is what {{issue_id}} renders and what `requires = [\"issue.tracker\"]` tests",
+      },
       { key: "s", label: "open deployed app / dev server" },
       { key: "y", label: "yank picker (direct letters b/s/S/d/p/n/i/I/r · j/k + y/⏎ + 1-9 too)" },
       {

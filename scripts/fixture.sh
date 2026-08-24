@@ -159,11 +159,21 @@ cache_db      = "$FX/cache/cache.sqlite"
 prefix = "$PREFIX"
 base   = "main"
 
+# A real tracker, for the same reason [dev_server] is real below: the
+# issue row hides itself when this section is absent, so without it the
+# fixture cannot show the one shape it is most needed for — a slug that
+# carries NO id (which is every slug here) wearing an id set by hand
+# with \`#\`. A conditional affordance renders nothing when its input is
+# missing, which is indistinguishable from broken.
+[issue_tracker]
+url_template = "https://tracker.invalid/issue/{id}"
+
 [ui]
-# "dev" is in the list because the section below configures a real
-# [dev_server]: without it the row is hidden and the fixture silently
-# stops covering the surface its own comment claims to exercise.
-rows = ["branch", "base", "path", "status", "dev", "git"]
+# "issue" is in the list for the reason given above the [issue_tracker]
+# section; "dev" is there because the section below configures a real
+# [dev_server]. Without either, the row is hidden and the fixture
+# silently stops covering the surface its own comment claims to exercise.
+rows = ["branch", "base", "path", "status", "issue", "dev", "git"]
 
 # A real, supervised, per-worktree dev server — enough to exercise
 # \`wt dev start/stop\`, the row's URL, port allocation, and the browser-tab

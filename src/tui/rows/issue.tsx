@@ -1,5 +1,5 @@
 import { config } from "../../core/config.ts";
-import { issueIdForSlug, issueUrlForSlug } from "../../core/issue-tracker.ts";
+import { issueUrlForId, resolveIssueId } from "../../core/issue-tracker.ts";
 import { theme } from "../theme.ts";
 import type { RowModule } from "./types.ts";
 
@@ -14,7 +14,8 @@ export const issueRow: RowModule = {
     // Primary identity first, secondary GitHub issue after — display
     // reads the primary; the `i` action targets the most specific.
     const gh = row.githubIssue ? ` · #${row.githubIssue}` : "";
-    const url = issueUrlForSlug(row.wt.slug);
+    const id = resolveIssueId(row.wt.slug, row.issueId);
+    const url = issueUrlForId(id);
     if (url) {
       return (
         <text wrapMode="none" truncate>
@@ -23,7 +24,6 @@ export const issueRow: RowModule = {
         </text>
       );
     }
-    const id = issueIdForSlug(row.wt.slug);
     return id || gh ? (
       <text fg={theme.fg} wrapMode="none" truncate>
         {`${id ?? "—"}${gh}`}

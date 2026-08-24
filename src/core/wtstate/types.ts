@@ -111,6 +111,25 @@ export type WtSlugState = {
    */
   githubIssue?: number;
   /**
+   * Tracker id for this worktree when the SLUG does not carry one
+   * (`camera-selection-sticky` with nothing to parse) or carries the
+   * wrong one. Set by `wt issue <slug> --id COZ-2185` or the TUI's
+   * `I` picker; cleared with `--clear-id`.
+   *
+   * An OVERRIDE, never a cache: every reader goes through
+   * `resolveIssueId`, which prefers this and falls back to parsing the
+   * slug. Deliberately not backfilled from slugs by a migration —
+   * a slug-derivable id is free to re-derive and self-expires when the
+   * branch is renamed, so storing it would encode a fact needing
+   * upkeep. What is stored here is exactly the part that CANNOT be
+   * derived, which is why it is safe to store at all.
+   *
+   * Stored uppercased and validated against `ISSUE_ID_RE` at the
+   * boundary, so `{{issue_id}}` renders the same shape whichever half
+   * of `resolveIssueId` answered.
+   */
+  issueId?: string;
+  /**
    * "Someone with fleet context looked at this row and concluded X."
    *
    * The half of coordination nothing recorded. A shepherd sweeping the

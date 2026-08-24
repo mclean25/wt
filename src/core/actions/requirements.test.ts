@@ -21,7 +21,41 @@ describe("issue.tracker", () => {
     // renders empty and the shell action runs with a hole in its argv.
     expect(
       evaluateActionRequirements(["issue.tracker"], rowState({ slug: "codex-delta-reviews" })),
-    ).toEqual({ ok: false, reason: "no tracker id in slug" });
+    ).toEqual({ ok: false, reason: "no tracker id (set one with `#`)" });
+  });
+
+  test("a stored override satisfies it on a slug that parses to nothing", () => {
+    // The whole point of the override: this row is otherwise
+    // permanently ineligible, and that population is the common case.
+    expect(
+      evaluateActionRequirements(
+        ["issue.tracker"],
+        rowState({ slug: "codex-delta-reviews", issueId: "COZ-2185" }),
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  test("the override wins over an id the slug does carry", () => {
+    // Same call, different answer — proving the requirement reads the
+    // override rather than merely tolerating it.
+    expect(
+      evaluateActionRequirements(
+        ["issue.tracker"],
+        rowState({ slug: "coz-1111-wrong", issueId: "COZ-2185" }),
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  test("a blank override is not an id — it falls back, it does not satisfy", () => {
+    // Absence must read as unknown. A stored empty string reaching
+    // this as "true" would render `{{issue_id}}` empty again, which is
+    // the exact hole the tag exists to close.
+    expect(
+      evaluateActionRequirements(
+        ["issue.tracker"],
+        rowState({ slug: "codex-delta-reviews", issueId: "   " }),
+      ).ok,
+    ).toBe(false);
   });
 
   test("an id embedded mid-slug still counts", () => {

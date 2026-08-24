@@ -11,10 +11,12 @@ import type { PullRequest } from "../types.ts";
  */
 export type ActionRowState = {
   /**
-   * The worktree's slug. Carries the tracker id for `issue.tracker`,
-   * which is derived rather than stored — see `issueIdForSlug`.
+   * The worktree's slug. Supplies the FALLBACK tracker id for
+   * `issue.tracker` when no override is stored — see `resolveIssueId`.
    */
   slug: string;
+  /** Stored tracker-id override (`wt issue <slug> --id`), when set. */
+  issueId?: string | null;
   pr: PullRequest | undefined;
   /**
    * `isOurStageDeployed` result for the row. Strict gate (matches

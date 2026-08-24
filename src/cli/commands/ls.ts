@@ -1,6 +1,6 @@
 import { config } from "../../core/config.ts";
 import { fetchPrs } from "../../core/github.ts";
-import { githubIssueUrl, issueIdForSlug, issueUrlForSlug } from "../../core/issue-tracker.ts";
+import { githubIssueUrl, issueUrlForId, resolveIssueId } from "../../core/issue-tracker.ts";
 import { verifyStepsHeadline, workAge } from "../../core/work-status.ts";
 import {
   isMergedRemoval,
@@ -107,8 +107,11 @@ export async function run(argv: string[]): Promise<number> {
           // Commits ahead of the branch's upstream/base — restack
           // pressure, the old meaning of `unpushed`.
           ahead_of_base: push.aheadOfBase,
-          issue_id: issueIdForSlug(w.slug),
-          issue_url: issueUrlForSlug(w.slug),
+          // Resolved, not slug-parsed: a consumer filtering on
+          // `issue_id` is asking which ticket this worktree is, and
+          // the stored override is the answer whenever there is one.
+          issue_id: resolveIssueId(w.slug, slugStates[w.slug]?.issueId),
+          issue_url: issueUrlForId(resolveIssueId(w.slug, slugStates[w.slug]?.issueId)),
           gh_issue: slugStates[w.slug]?.githubIssue ?? null,
           gh_issue_url: slugStates[w.slug]?.githubIssue
             ? githubIssueUrl(slugStates[w.slug]!.githubIssue!)

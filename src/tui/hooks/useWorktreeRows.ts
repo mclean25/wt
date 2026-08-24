@@ -152,6 +152,8 @@ export type WorktreeRow = {
    * is the most-specific link target for `i` / `y i`.
    */
   githubIssue: number | null;
+  /** Stored tracker-id override; null = fall back to parsing the slug. */
+  issueId: string | null;
   /**
    * Agent-asserted work status (`wt status` / the `u` picker), straight
    * from wtstate. `null` = never asserted. The list dot renders the
@@ -839,6 +841,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
       const section = manualSection;
       effectiveOrders.set(wt.slug, stateSlugs[wt.slug]?.order ?? -Infinity);
       const githubIssue = stateSlugs[wt.slug]?.githubIssue ?? null;
+      const issueId = stateSlugs[wt.slug]?.issueId ?? null;
       const work = stateSlugs[wt.slug]?.work ?? null;
       const llmTitle = aiResults[i]?.title ?? null;
       const llmBrief = aiResults[i]?.brief ?? null;
@@ -871,6 +874,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         prev.pr === pr &&
         prev.mq === mq &&
         prev.githubIssue === githubIssue &&
+        prev.issueId === issueId &&
         prev.work === work &&
         prev.archived === archived &&
         prev.title === title &&
@@ -897,6 +901,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         stackedOn: stackedOnOut,
         stack: stackOut,
         githubIssue,
+        issueId,
         work,
         archived,
         title,

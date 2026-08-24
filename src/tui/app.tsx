@@ -60,6 +60,7 @@ import { handleNormalKey, type NormalKeysCtx } from "./keyboard/normal-keys.ts";
 import { handleRemovedViewKey } from "./keyboard/removed-view-keys.ts";
 import { makeActionPickerFlows } from "./flows/action-picker.ts";
 import { makeBaseFlows } from "./flows/base.ts";
+import { useIssueIdFlow } from "./flows/issue-id.ts";
 import { makeWorkStatusFlows, type PendingStatusText } from "./flows/work-status.ts";
 import { makeDestroyFlows } from "./flows/destroy.ts";
 import { makeErrorFlows } from "./flows/error-report.ts";
@@ -119,6 +120,7 @@ export function App({ onExit }: Props) {
     setSection,
     setBase,
     setWorkStatus,
+    setIssueId,
     swapOrder,
     placeSlug,
     renameSection,
@@ -203,6 +205,10 @@ export function App({ onExit }: Props) {
   // the line; Esc there clears it (no write).
   const [pendingStatusText, setPendingStatusText] =
     useState<PendingStatusText | null>(null);
+  // The `#` prompt parks its slug here while the footer collects the
+  // id — same reason the status text does: typing is human-paced and
+  // the cursor can move under it, so the target is frozen at open.
+  const [pendingIssueSlug, setPendingIssueSlug] = useState<string | null>(null);
 
   // Auto-tail every busy worktree so logs surface in the activity pane
   // without user intervention. Returns the active set so rows can flag
@@ -522,6 +528,16 @@ export function App({ onExit }: Props) {
     setBase,
   });
 
+  // Tracker-id flow (`#`) — extracted to `flows/issue-id.ts`.
+  const { openIssueIdPrompt, commitIssueId } = useIssueIdFlow({
+    current,
+    setFooter,
+    setPendingIssueSlug,
+    setIssueId,
+    isSlugLive: (slug) => rows.some((r) => r.wt.slug === slug),
+    toast,
+  });
+
   // Work-status picker flow (`u`) — extracted to `flows/work-status.ts`.
   const { openStatusPicker, commitStatusPick, beginStatusNote, commitStatusText } =
     makeWorkStatusFlows({
@@ -574,6 +590,7 @@ export function App({ onExit }: Props) {
   // defines no rules.
   const automations = useAutomations({
     rows,
+    primaryHarness,
     activeSessionBySlug,
     launchAction,
     doCleanSlugs,
@@ -812,6 +829,9 @@ export function App({ onExit }: Props) {
         pendingStatusText,
         setPendingStatusText,
         commitStatusText,
+        pendingIssueSlug,
+        setPendingIssueSlug,
+        commitIssueId,
       });
       return;
     }
@@ -873,6 +893,7 @@ export function App({ onExit }: Props) {
       doShiftMove,
       openSectionPicker,
       openSectionRename,
+      openIssueIdPrompt,
       openBasePicker,
       openStatusPicker,
       openActionPicker,

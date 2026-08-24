@@ -263,6 +263,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     if (def) {
       const avail = evaluateActionRequirements(def.requires, {
         slug,
+        issueId: row.issueId,
         pr: row.pr,
         deployed: row.fields.deploy.data ?? false,
       });

@@ -58,13 +58,38 @@ function mainRepoWebUrl(): string | null {
 }
 
 /**
- * Deep link for the slug's issue id. `GH-<n>` ids link to the origin
- * repo's GitHub issue; everything else goes through
- * `[issue_tracker].url_template` (or the `[issue_tracker.linear]`
- * preset). Null when no link is derivable or the slug has no id.
+ * The worktree's tracker id: the stored OVERRIDE when one is set,
+ * else the id parsed from the slug.
+ *
+ * Every reader of "which issue is this worktree" goes through here, so
+ * a worktree whose slug carries no id (`camera-selection-sticky`) can
+ * still have one — which is the whole point, since that population is
+ * the common case rather than the exception (0 of 6 live rows carried
+ * a slug id on 2026-08-21) and it is what `{{issue_id}}` renders,
+ * what `requires = ["issue.tracker"]` tests, and what the tracker
+ * automation moves to In Review.
+ *
+ * Pure: the caller supplies the stored value (from wtstate), the same
+ * way `specificIssueUrl` takes `githubIssue`. That keeps this callable
+ * from the automations evaluator and the action-requirement check,
+ * neither of which may do I/O.
  */
-export function issueUrlForSlug(slug: string): string | null {
-  const id = issueIdForSlug(slug);
+export function resolveIssueId(
+  slug: string,
+  stored: string | null | undefined,
+): string | null {
+  const s = stored?.trim();
+  if (s) return s.toUpperCase();
+  return issueIdForSlug(slug);
+}
+
+/**
+ * Deep link for a tracker id. `GH-<n>` ids link to the origin repo's
+ * GitHub issue; everything else goes through
+ * `[issue_tracker].url_template` (or the `[issue_tracker.linear]`
+ * preset). Null when no link is derivable or the id is absent.
+ */
+export function issueUrlForId(id: string | null): string | null {
   if (!id) return null;
   const gh = GH_ID_RE.exec(id);
   if (gh) {
@@ -74,6 +99,15 @@ export function issueUrlForSlug(slug: string): string | null {
   const template = config.issueTracker?.urlTemplate;
   if (!template) return null;
   return template.replaceAll("{id}", id);
+}
+
+/**
+ * Deep link for the id carried in the SLUG, ignoring any stored
+ * override. Only for callers with no access to wtstate; anything
+ * holding a row or a state entry uses `issueUrlForId(resolveIssueId(…))`.
+ */
+export function issueUrlForSlug(slug: string): string | null {
+  return issueUrlForId(issueIdForSlug(slug));
 }
 
 /** Web URL for a GitHub issue number on the origin repo (null = repo underivable). */
@@ -104,7 +138,9 @@ export function githubIssueNumberFromSlug(slug: string): number | null {
 export function specificIssueUrl(
   slug: string,
   githubIssue: number | null | undefined,
+  storedIssueId?: string | null,
 ): string | null {
-  if (githubIssue) return githubIssueUrl(githubIssue) ?? issueUrlForSlug(slug);
-  return issueUrlForSlug(slug);
+  const tracker = issueUrlForId(resolveIssueId(slug, storedIssueId));
+  if (githubIssue) return githubIssueUrl(githubIssue) ?? tracker;
+  return tracker;
 }

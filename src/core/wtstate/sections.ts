@@ -293,6 +293,25 @@ export function setSlugGithubIssue(slug: string, issue: number | null): void {
   });
 }
 
+/**
+ * Set/clear the tracker-id override (`wt issue <slug> --id <ID>` /
+ * `--clear-id`, TUI `I`). Null clears, restoring the slug-parsed
+ * fallback. The id is uppercased here so the store holds one spelling.
+ */
+export function setSlugIssueId(slug: string, id: string | null): void {
+  withWtStateLock(() => {
+    const state = readWtState();
+    const prev = state.slugs[slug];
+    if (!prev && id === null) return;
+    const next: WtState = { ...state, slugs: { ...state.slugs } };
+    const entry: WtSlugState = { section: null, order: 0, ...prev };
+    delete entry.issueId;
+    if (id !== null) entry.issueId = id.trim().toUpperCase();
+    next.slugs[slug] = entry;
+    writeWtState(next);
+  });
+}
+
 export function setSlugSection(slug: string, section: string | null): void {
   placeSlug(slug, section, "bottom");
 }

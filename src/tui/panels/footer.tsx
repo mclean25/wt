@@ -31,7 +31,7 @@ export type FooterMode =
       kind: "input";
       prompt: string;
       edit: TextEdit;
-      purpose: "new" | "new-remote" | "rename-section" | "status-text";
+      purpose: "new" | "new-remote" | "rename-section" | "status-text" | "issue-id";
       /**
        * Optional default `--base` ref for the new-worktree input (set
        * by the `N` keybinding). Not rendered in the prompt; the event

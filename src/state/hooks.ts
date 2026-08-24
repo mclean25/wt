@@ -107,6 +107,7 @@ import {
   renameSection as renameSectionOnDisk,
   setSlugBase as setSlugBaseOnDisk,
   setSlugSection as setSlugSectionOnDisk,
+  setSlugIssueId as setSlugIssueIdOnDisk,
   setSlugWorkStatus as setSlugWorkStatusOnDisk,
   swapOrders as swapOrdersOnDisk,
   toggleSectionFolded as toggleSectionFoldedOnDisk,
@@ -739,6 +740,15 @@ export function useWtActions() {
       record: WorkStatusRecord | null,
     ): Promise<void> {
       setSlugWorkStatusOnDisk(slug, record);
+      await qc.invalidateQueries({ queryKey: qk.wtState() });
+    },
+    /**
+     * Set (or clear, with `null`) a worktree's tracker-id override —
+     * the same per-slug record `wt issue <slug> --id` writes. Pure
+     * wtstate, so the wtState query is the only thing to invalidate.
+     */
+    async setIssueId(slug: string, id: string | null): Promise<void> {
+      setSlugIssueIdOnDisk(slug, id);
       await qc.invalidateQueries({ queryKey: qk.wtState() });
     },
     /**

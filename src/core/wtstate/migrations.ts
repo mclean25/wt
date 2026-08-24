@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 11;
+export const WT_STATE_VERSION = 12;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -128,6 +128,18 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // never saw, or silently swallow the first real range. Absent means
     // "not seen yet", and the first pass records the tip without firing.
     to: 11,
+    up: (raw) => raw,
+  },
+  {
+    // v12: additive — `issueId`, the per-slug tracker-id OVERRIDE
+    // (`wt issue <slug> --id`). Deliberately NOT backfilled from the
+    // slugs, even though most of them parse: the override exists for
+    // the ids that are NOT derivable, and every reader falls back to
+    // parsing the slug anyway (`resolveIssueId`). Backfilling would
+    // copy a free, self-expiring derivation into storage, where a
+    // later branch rename leaves it stale and authoritative-looking —
+    // the one shape this store is not allowed to grow.
+    to: 12,
     up: (raw) => raw,
   },
 ];

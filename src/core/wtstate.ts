@@ -35,6 +35,7 @@ export {
   setSlugDevStartedSha,
   setSlugExamined,
   setSlugGithubIssue,
+  setSlugIssueId,
   setSlugSection,
   setSlugWorkStatus,
   swapOrders,

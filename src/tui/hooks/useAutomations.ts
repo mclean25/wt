@@ -83,7 +83,8 @@ import {
   type AutomationFire,
   type FireAudience,
 } from "../automation-rules.ts";
-import { isCleanCandidate } from "../app-helpers.ts";
+import { actionSkillPrefix, buildActionVars, isCleanCandidate } from "../app-helpers.ts";
+import type { HarnessId } from "../../core/harness/index.ts";
 import { useGithubFresh } from "./useGithubFresh.ts";
 import type { ActiveSessionGlyph } from "./useHarnessSessions.ts";
 import type { LaunchActionOpts, LaunchOutcome } from "./useActionDispatch.ts";
@@ -157,6 +158,8 @@ export type AutomationsOpts = {
   doRestackStack: (stackId: string) => Promise<"clean" | "failed" | "busy">;
   /** Peek at one stack's restack-in-flight state (manual `R` shares it). */
   isRestackBusy: (stackId: string) => boolean;
+  /** Harness whose skill prefix goes into a frozen `{{skill_prefix}}`. */
+  primaryHarness: HarnessId;
 };
 
 export type AutomationsState = {
@@ -177,23 +180,53 @@ function pairTarget(fire: AutomationFire): string {
 }
 
 /**
- * Builtins that fire on a LANDING and write somewhere outside the
+ * Runs that fire on a LANDING and write somewhere outside the
  * worktree. They share three properties, and every one of them is
  * load-bearing below:
  *
- *  - their fire carries everything delivery needs (issue number, branch),
- *    so a row that died before dispatch is NOT a superseded intent;
+ *  - their fire carries everything delivery needs (issue number, branch,
+ *    or a frozen var map), so a row that died before dispatch is NOT a
+ *    superseded intent;
  *  - they cannot clear the condition that fired them — the branch stays
  *    merged forever — so the breaker must not count them or a couple of
  *    reused-slug landings would trip the rule off;
  *  - they touch nothing in the checkout, so quiescence is meaningless
  *    and their fires carry an empty `quiesceSlugs`.
  *
- * A future post-merge builtin that DOES touch the worktree must not join
+ * The two builtins are named; a CONFIG action qualifies by declaring
+ * `external = true`, which the evaluator turns into a frozen var map.
+ * That generalization is the fix for a silent three-day outage: the
+ * tracker action has always had all three properties and none of the
+ * three exemptions, because the set was a hand-written list of run ids
+ * and a list only ever covers what someone remembered. Every merge
+ * queued it and every merge dropped it again, `superseded (condition
+ * cleared)`, when the `c` sweep archived the row inside the settle
+ * window — while `builtin:delete-branch`, queued in the SAME
+ * millisecond, ran fine three seconds later. Two intents from one
+ * event disagreeing about whether their subject still exists is the
+ * tell.
+ *
+ * A future post-merge run that DOES touch the worktree must not join
  * this set; it would need the quiescence half split back out.
  */
+function isPostMergeExternalFire(fire: AutomationFire): boolean {
+  return isPostMergeExternalRun(fire.rule.run) || fire.frozenVars !== null;
+}
+
 function isPostMergeExternalRun(run: string): boolean {
   return run === "builtin:close-issue" || run === "builtin:delete-branch";
+}
+
+/**
+ * Does this rule run a SHELL action whose effect leaves the repository?
+ * `external` is already the config's word for exactly that, so the
+ * property is declared rather than inferred. Shell-only: a prompt
+ * action is delivered into a session in the worktree, so it needs the
+ * checkout however external its eventual effect.
+ */
+function isExternalShellRule(rule: AutomationDef): boolean {
+  const def = resolveActionDef(rule.run);
+  return def?.kind === "shell" && def.external === true;
 }
 
 function resolveActionDef(runId: string): ActionDef | null {
@@ -297,6 +330,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     doCleanSlugs: opts.doCleanSlugs,
     doRestackStack: opts.doRestackStack,
     isRestackBusy: opts.isRestackBusy,
+    primaryHarness: opts.primaryHarness,
     githubFresh,
     pausedSlugs: new Set<string>(),
     paused,
@@ -324,6 +358,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     doCleanSlugs: opts.doCleanSlugs,
     doRestackStack: opts.doRestackStack,
     isRestackBusy: opts.isRestackBusy,
+    primaryHarness: opts.primaryHarness,
     githubFresh,
     pausedSlugs,
     paused,
@@ -578,6 +613,27 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       setBranchTip(range.branch, range.to);
       return { declined: null };
     }
+    // A post-merge EXTERNAL run cannot go through `launchAction`, for
+    // the same reason a fleet-level one cannot: that path resolves the
+    // ROW — its guards, its template vars, its cwd — and the row is
+    // exactly what a landing destroys. It runs in the main clone off
+    // the vars frozen at fire time, which is the only checkout
+    // guaranteed to still be there. (A worktree cwd that no longer
+    // exists is not a soft failure: `Bun.spawn` rejects a bad cwd
+    // before it ever reaches the binary, so the run would report an
+    // exit code without having run.)
+    if (fire.frozenVars) {
+      const started = await actionRegistry.start(
+        def,
+        slug,
+        config.paths.mainClone,
+        "",
+        fire.frozenVars,
+        "claude",
+        { autoFireKeys: fire.fireKeys },
+      );
+      return { declined: started.ok ? null : started.reason };
+    }
     const outcome = await latest.current.launchAction(slug, def, "", undefined, {
       autoFireKeys: fire.fireKeys,
     });
@@ -621,6 +677,11 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       githubFresh: ctx.githubFresh,
       isPausedSlug: (slug: string) => ctx.pausedSlugs.has(slug),
       audienceOf,
+      externalOf: isExternalShellRule,
+      varsFor: (rule: AutomationDef, row: WorktreeRow) => {
+        const def = resolveActionDef(rule.run);
+        return buildActionVars(row, actionSkillPrefix(def, ctx.primaryHarness));
+      },
       branchTips: branchTips.current,
       nowMs: Date.now(),
     };
@@ -719,7 +780,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // or an explicit per-slug pause drops one.
     for (const [id, intent] of intents.current) {
       if (byId.has(id)) continue;
-      if (isPostMergeExternalRun(intent.fire.rule.run)) {
+      if (isPostMergeExternalFire(intent.fire)) {
         const row = ctx.rows.find((r) => r.wt.slug === intent.fire.slug);
         const cleared = row !== undefined && isEligible(row, evalCtx);
         if (!cleared && !evalCtx.isPausedSlug(intent.fire.slug)) continue;
@@ -770,7 +831,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // for spacing.
       const breakerExempt =
         rule.run === "builtin:notify" ||
-        isPostMergeExternalRun(rule.run) ||
+        isPostMergeExternalFire(fire) ||
         isManagerRun;
       if (fire.quiesceSlugs.some((s) => occupiedSlugs.has(s))) continue;
       if (
@@ -830,12 +891,41 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       const def = ruleDef;
       if (def) {
         const row = ctx.rows.find((r) => r.wt.slug === fire.slug);
-        const avail = evaluateActionRequirements(def.requires, {
-          slug: fire.slug,
-          pr: row?.pr,
-          deployed: row?.fields.deploy.data ?? false,
-        });
-        if (!avail.ok) continue;
+        // A FROZEN fire is evaluated against its frozen values, never
+        // against the row: the row is the thing a landing destroys,
+        // and reading `row?.issueId` off a swept worktree answers
+        // "no tracker id" about a run that is holding one.
+        const avail = evaluateActionRequirements(
+          def.requires,
+          fire.frozenVars
+            ? {
+                slug: fire.slug,
+                issueId: fire.frozenVars.issue_id ?? null,
+                pr: row?.pr,
+                deployed: false,
+              }
+            : {
+                slug: fire.slug,
+                issueId: row?.issueId,
+                pr: row?.pr,
+                deployed: row?.fields.deploy.data ?? false,
+              },
+        );
+        if (!avail.ok) {
+          // "Keep it pending, the row may change" is right for a
+          // row-backed fire and is a LEAK for a frozen one: its inputs
+          // cannot change by construction, so the answer is the same
+          // on every future pass and the intent would sit in the queue
+          // for the life of the process — and the supersede guard that
+          // now protects it from the row's death is exactly what stops
+          // anything else clearing it. Drop it, and say why once.
+          if (fire.frozenVars) {
+            markFiresDelivered(fire.fireKeys);
+            intents.current.delete(intent.id);
+            wtLog.event.dim(`auto ${rule.id}: ${avail.reason} — skipped`);
+          }
+          continue;
+        }
       }
       if (!breakerExempt && breaker.count >= BREAKER_LIMIT) {
         tripBreaker(rule.id, target);

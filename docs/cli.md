@@ -234,9 +234,13 @@ Attach the singleton [manager session](manager.md) (create on first use), or sen
 
 `wt manager report` is the reverse channel: it appends a short result line to a spool a running TUI watches and surfaces on the **attention feed** (with a toast). It's how [`M` palette](manager.md#the-command-palette-m) commands hand their outcome back without the human attaching; the level flag (default `info`) picks the line's color/loudness. Reports while no TUI runs aren't replayed later — it's a live-delivery channel, not a log (the daily log records whatever surfaced).
 
-### `wt issue <slug>` / `wt issue <slug> --gh <n>` / `wt issue <slug> --clear-gh`
+### `wt issue <slug>` / `--id <ID>` / `--clear-id` / `--gh <n>` / `--clear-gh`
 
-Show or edit a worktree's issue links. The **primary** id is parsed from the slug (`eng-1935-…` → `ENG-1935`) and is never stored or edited here — it's the worktree's identity. The **secondary** GitHub issue is a per-slug record attached with `--gh <n>` (typically after a spec/breakout issue is created mid-work) and detached with `--clear-gh`; it never changes the branch. The TUI's `i` key and `y i` yank treat an attached GitHub issue as the most-specific link target; `I` / `y I` always target the primary. `<slug>` also accepts a branch name. Both ids appear in `wt ls --json` (`issue_id`/`issue_url`, `gh_issue`/`gh_issue_url`).
+Show or edit a worktree's issue links. The **primary** tracker id is normally parsed from the slug (`eng-1935-…` → `ENG-1935`); `--id COZ-2185` stores an override for a worktree whose slug carries none (or the wrong one), and `--clear-id` drops it back to the parse. Readers resolve override-first, so the override is what the issue row links, what `{{issue_id}}` renders, and what `requires = ["issue.tracker"]` tests — the TUI equivalent is `#`. Neither form touches the branch.
+
+The **secondary** GitHub issue is a separate per-slug record attached with `--gh <n>` (typically after a spec/breakout issue is created mid-work) and detached with `--clear-gh`. The TUI's `i` key and `y i` yank treat an attached GitHub issue as the most-specific link target; `I` / `y I` always target the primary. `<slug>` also accepts a branch name.
+
+Bare `wt issue <slug>` prints both, and marks the primary `(set)` or `(from slug)` — the only question the command exists to answer is whether clearing the override would change anything. Both ids appear in `wt ls --json` (`issue_id`/`issue_url` — resolved, not slug-parsed — and `gh_issue`/`gh_issue_url`).
 
 ## Stacked PRs
 

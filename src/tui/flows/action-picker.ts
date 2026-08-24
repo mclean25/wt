@@ -37,6 +37,7 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
     const row = rows.find((r) => r.wt.slug === slug);
     const rowState = {
       slug,
+      issueId: row?.issueId,
       pr: row?.pr,
       deployed: row?.fields.deploy.data ?? false,
     };
@@ -97,6 +98,7 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
     const row = rowSlug ? rows.find((r) => r.wt.slug === rowSlug) : undefined;
     const rowState = {
       slug: rowSlug ?? "",
+      issueId: row?.issueId,
       pr: row?.pr,
       deployed: row?.fields.deploy.data ?? false,
     };

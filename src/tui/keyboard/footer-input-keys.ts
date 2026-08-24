@@ -38,6 +38,10 @@ export type FooterInputKeysCtx = {
   pendingStatusText: PendingStatusText | null;
   setPendingStatusText: (v: PendingStatusText | null) => void;
   commitStatusText: (pending: PendingStatusText, text: string) => void;
+  /** Slug parked by the `#` prompt while the human types. */
+  pendingIssueSlug: string | null;
+  setPendingIssueSlug: (v: string | null) => void;
+  commitIssueId: (slug: string, raw: string) => void;
 };
 
 export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void {
@@ -54,6 +58,9 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
     pendingStatusText,
     setPendingStatusText,
     commitStatusText,
+    pendingIssueSlug,
+    setPendingIssueSlug,
+    commitIssueId,
   } = ctx;
       if (k.name === "escape" || (k.ctrl && k.name === "c")) {
         setFooter({ kind: "legend" });
@@ -61,6 +68,7 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
         // Esc during a status pick's text entry cancels the whole
         // pick — no write.
         setPendingStatusText(null);
+        setPendingIssueSlug(null);
         return;
       }
       if (k.name === "return") {
@@ -74,6 +82,15 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
           // An empty line is meaningful and field-dependent —
           // `statusTextRecord` owns that decision.
           if (pending) commitStatusText(pending, raw);
+          return;
+        }
+        if (purpose === "issue-id") {
+          const slug = pendingIssueSlug;
+          setPendingIssueSlug(null);
+          // An empty line is meaningful here (it clears the override),
+          // so it goes to the flow rather than being dropped as a
+          // no-input cancel the way the create prompts treat it.
+          if (slug) commitIssueId(slug, raw);
           return;
         }
         if (purpose === "rename-section") {

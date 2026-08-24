@@ -216,6 +216,12 @@ export function parseWtState(raw: unknown): WtState {
       ) {
         slugs[k]!.githubIssue = rec.githubIssue;
       }
+      // Whitelisted like every other field on the entry: a value
+      // written but not parsed round-trips to nothing with every test
+      // still green (the `RemovedWorktree.work` lesson).
+      if (typeof rec.issueId === "string" && rec.issueId.trim() !== "") {
+        slugs[k]!.issueId = rec.issueId.trim().toUpperCase();
+      }
       if (rec.automationsPaused === true) {
         slugs[k]!.automationsPaused = true;
       }

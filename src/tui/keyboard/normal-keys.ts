@@ -20,7 +20,11 @@ import type { WorkState } from "../../core/work-status.ts";
 import { config, type PullRequestTarget } from "../../core/config.ts";
 import { effectiveBaseOrTrunk } from "../../core/git.ts";
 import { getHarness, HARNESSES, type HarnessId } from "../../core/harness/index.ts";
-import { issueUrlForSlug, specificIssueUrl } from "../../core/issue-tracker.ts";
+import {
+  issueUrlForId,
+  resolveIssueId,
+  specificIssueUrl,
+} from "../../core/issue-tracker.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { eventsOutputId, firehoseOutputId, indexOfOutput } from "../../core/outputs.ts";
@@ -122,6 +126,7 @@ export type NormalKeysCtx = {
   doShiftMove: ReturnType<typeof makeSectionFlows>["doShiftMove"];
   openSectionPicker: ReturnType<typeof makeSectionFlows>["openSectionPicker"];
   openSectionRename: ReturnType<typeof makeSectionFlows>["openSectionRename"];
+  openIssueIdPrompt: () => void;
   openBasePicker: ReturnType<typeof makeBaseFlows>["openBasePicker"];
   openStatusPicker: () => void;
   openActionPicker: (slug: string) => void;
@@ -181,6 +186,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     doShiftMove,
     openSectionPicker,
     openSectionRename,
+    openIssueIdPrompt,
     openBasePicker,
     openStatusPicker,
     openActionPicker,
@@ -363,6 +369,14 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // Shift+L renames the current row's section.
     if (isShiftedLetter(k, "l")) {
       openSectionRename();
+      return;
+    }
+    // `#` attaches (or clears) the row's tracker id. A sequence key
+    // rather than a letter on purpose: the editing family is out of
+    // free letters, `i`/`I` already mean "open the issue", and `#`
+    // reads as an id everywhere else it appears.
+    if (k.sequence === "#") {
+      openIssueIdPrompt();
       return;
     }
     // App-level keys shared with the removed-worktrees view (help,
@@ -975,10 +989,10 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // attached, else the primary tracker id); `I` always opens the
     // primary. Identity displays, specificity acts.
     if (isPlainLetter(k, "i")) {
-      const url = specificIssueUrl(current.wt.slug, current.githubIssue);
+      const url = specificIssueUrl(current.wt.slug, current.githubIssue, current.issueId);
       if (!url) {
         rowLog.event.warn(
-          "no issue URL (needs an id in the slug or an attached --gh issue)",
+          "no issue URL (set a tracker id with `#`, or attach a --gh issue)",
         );
         return;
       }
@@ -989,10 +1003,10 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       return;
     }
     if (k.sequence === "I") {
-      const url = issueUrlForSlug(current.wt.slug);
+      const url = issueUrlForId(resolveIssueId(current.wt.slug, current.issueId));
       if (!url) {
         rowLog.event.warn(
-          "no primary issue URL (needs an id in the slug; non-GH ids also need [issue_tracker] url_template)",
+          "no primary issue URL (set a tracker id with `#`; non-GH ids also need [issue_tracker] url_template)",
         );
         return;
       }
