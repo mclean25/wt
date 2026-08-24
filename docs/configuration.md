@@ -474,7 +474,13 @@ Under a strict prefix test, `summary_marker = "### 🤖 Codex review"` matches n
 
 That colour rule is a reversal, and the reason it flipped is worth keeping. It used to leave stale-clean green, on the argument that a bot which only reviews on `opened` is stale as its *steady state*, so dimming it would make clean-green a colour you'd never see. Bots that post per-commit delta reviews broke that premise: stale became a transient again, and green-with-prose is the shape the repo rules call a false green — a contradicting fact sitting in prose beside a badge does not exist, and `(old head)` was that prose. A false yellow costs a look; a false green costs the review.
 
-Staleness is answered by the bot's own `check_contexts` on the head commit wherever it has any (the checks rollup is read off the head, so a bot context there *is* the answer), and only otherwise by the timestamp proxy of the newest summary predating the head's commit date. The proxy alone is not enough for a bot whose delta log is one comment appended to per commit: its `createdAt` is the first delta's, so it reads stale forever after.
+Staleness is answered three ways, in descending order of directness:
+
+1. **The sha the bot stamps.** A per-commit reviewer names the commit it reviewed, and that is an assertion rather than an inference. wt looks for the head's 7-character prefix anywhere in a live checklist body, which covers both shapes Codex emits (a `#### \`28daaa2\`` section heading and a `<!-- codex-review-state:v1 {…,"head":"28daaa28…"} -->` trailer) without wt knowing either format. Positive-only: a bot that never mentions shas falls through to the rest unchanged.
+2. **The bot's `check_contexts` on the head commit.** The checks rollup is read off the head, so a bot context there means its pipeline ran there.
+3. **The timestamp proxy** — the newest summary predating the head's commit date.
+
+The order matters because (2) lags (1) by minutes: the workflow attaches its check runs well after it posts the comment, and in that gap a review that has already come back clean reads as stale. That window is what put a yellow badge on a PR whose delta review said *No material issues found*. And (3) alone is not enough for a bot whose delta log is one comment appended to per commit: its `createdAt` is the first delta's, so it reads stale forever after.
 
 Badge states: pending (running / re-run acked), unresolved (with count), clean, none — unresolved wins over a concurrent re-run, since old findings still need addressing. Checkbox counting skips fenced code blocks, so a suggestion block quoting checkbox syntax doesn't inflate the count. One sizing note: the summary comment is found within the PR's most recent 30 comments — on an extremely chatty PR whose last 30 comments postdate the bot's summary, the badge reads as if the bot never ran.
 

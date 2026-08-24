@@ -187,6 +187,9 @@ describe("rollupChecklist", () => {
     pendingMarker: ACK,
   };
   const HEAD = "2026-08-24T17:24:26Z";
+  // #1444's head. Deliberately absent from every fixture body below, so
+  // only the test that plants it exercises the bot's own coverage claim.
+  const HEAD_OID = "7947de21fce23771511e0ef2db9d7379aec3ed6a";
 
   const comment = (
     body: string,
@@ -219,6 +222,7 @@ describe("rollupChecklist", () => {
         comment(OPEN_DELTA, "2026-08-24T17:21:06Z", "2026-08-24T17:25:54Z"),
       ),
       HEAD,
+      HEAD_OID,
       BOT,
     );
     expect(rb).toEqual({ state: "unresolved", unresolved: 1, stale: false });
@@ -232,6 +236,7 @@ describe("rollupChecklist", () => {
         comment(`${DELTA}\n- [ ] three\n`, "2026-08-24T17:21:06Z"),
       ),
       null,
+      HEAD_OID,
       BOT,
     );
     expect(rb.unresolved).toBe(3);
@@ -245,6 +250,7 @@ describe("rollupChecklist", () => {
         comment(`${FULL}\n- [x] fixed\n`, "2026-08-24T17:01:17Z"),
       ),
       null,
+      HEAD_OID,
       BOT,
     );
     expect(rb).toEqual({ state: "clean", unresolved: 0, stale: false });
@@ -256,8 +262,8 @@ describe("rollupChecklist", () => {
     // the head stale. The bot's check run hangs off the head commit, so
     // its presence is the direct answer the proxy was standing in for.
     const comments = nodes(comment(CLOSED_FULL, "2026-08-24T17:01:17Z"));
-    expect(rollupChecklist(botRun("COMPLETED", "SUCCESS"), comments, HEAD, BOT).stale).toBe(false);
-    expect(rollupChecklist(null, comments, HEAD, BOT).stale).toBe(true);
+    expect(rollupChecklist(botRun("COMPLETED", "SUCCESS"), comments, HEAD, HEAD_OID, BOT).stale).toBe(false);
+    expect(rollupChecklist(null, comments, HEAD, HEAD_OID, BOT).stale).toBe(true);
   });
 
   test("a clean review of an older commit stays flagged stale", () => {
@@ -267,6 +273,7 @@ describe("rollupChecklist", () => {
       null,
       nodes(comment(CLOSED_FULL, "2026-08-24T17:01:17Z")),
       HEAD,
+      HEAD_OID,
       BOT,
     );
     expect(rb).toEqual({ state: "clean", unresolved: 0, stale: true });
@@ -277,6 +284,7 @@ describe("rollupChecklist", () => {
       botRun("IN_PROGRESS", null),
       nodes(comment(CLOSED_FULL, "2026-08-24T17:01:17Z")),
       HEAD,
+      HEAD_OID,
       BOT,
     );
     expect(rb.state).toBe("pending");
@@ -290,6 +298,7 @@ describe("rollupChecklist", () => {
         comment(`${ACK}\n`, "2026-08-24T17:30:00Z"),
       ),
       HEAD,
+      HEAD_OID,
       BOT,
     );
     expect(rb.state).toBe("pending");
@@ -303,6 +312,7 @@ describe("rollupChecklist", () => {
         comment(CLOSED_FULL, "2026-08-24T17:01:17Z"),
       ),
       HEAD,
+      HEAD_OID,
       BOT,
     );
     expect(rb.state).toBe("clean");
@@ -315,6 +325,7 @@ describe("rollupChecklist", () => {
       botRun("IN_PROGRESS", null),
       nodes(comment(OPEN_DELTA, "2026-08-24T17:21:06Z")),
       HEAD,
+      HEAD_OID,
       BOT,
     );
     expect(rb).toEqual({ state: "unresolved", unresolved: 1, stale: false });
@@ -336,6 +347,7 @@ describe("rollupChecklist", () => {
         comment("### Review follow-up\n- [ ] two\n", "2026-08-24T17:10:00Z"),
       ),
       null,
+      HEAD_OID,
       nested,
     );
     expect(rb.unresolved).toBe(2);
@@ -343,7 +355,7 @@ describe("rollupChecklist", () => {
 
   test("no summary at all is `none`, not a clean bill of health", () => {
     expect(
-      rollupChecklist(null, nodes(comment("unrelated", "2026-08-24T17:00:00Z")), HEAD, BOT).state,
+      rollupChecklist(null, nodes(comment("unrelated", "2026-08-24T17:00:00Z")), HEAD, HEAD_OID, BOT).state,
     ).toBe("none");
   });
 
@@ -351,6 +363,65 @@ describe("rollupChecklist", () => {
     const nodesFromHuman = {
       nodes: [{ author: { login: "michael" }, body: OPEN_DELTA, createdAt: HEAD, updatedAt: HEAD }],
     } as never;
-    expect(rollupChecklist(null, nodesFromHuman, HEAD, BOT).state).toBe("none");
+    expect(rollupChecklist(null, nodesFromHuman, HEAD, HEAD_OID, BOT).state).toBe("none");
+  });
+});
+
+/**
+ * The bot's own coverage stamp, which outranks every proxy wt can build
+ * for it. Verbatim shapes from PR #1446's follow-up comment.
+ */
+describe("rollupChecklist — the sha the bot stamps", () => {
+  const DELTA = "### 🤖 Codex follow-up reviews";
+  const BOT: ChecklistBot = {
+    login: "github-actions",
+    summaryMarkers: [DELTA],
+    pendingMarker: null,
+  };
+  const OID = "28daaa283855d75773598f5affe9b29926f75ff6";
+  const PUSHED_AT = "2026-08-24T17:52:37Z";
+  const REVIEWED_AT = "2026-08-24T17:36:17Z";
+
+  const body = (covered: string) =>
+    `${DELTA}\n\n#### \`${covered.slice(0, 7)}\`\nNo material issues found. ✅\n` +
+    `<!-- codex-review-state:v1 {"version":1,"head":"${covered}"} -->\n`;
+  const nodes = (b: string) =>
+    ({
+      nodes: [
+        { author: { login: "github-actions" }, body: b, createdAt: REVIEWED_AT, updatedAt: REVIEWED_AT },
+      ],
+    }) as never;
+
+  test("naming the head clears staleness before any check registers", () => {
+    // The window that produced a yellow badge on a PR whose delta review
+    // had already come back clean: the comment names the head minutes
+    // before the workflow attaches its check runs to it, and until then
+    // the check-context proxy has nothing to say. The comment does.
+    const rb = rollupChecklist(null, nodes(body(OID)), PUSHED_AT, OID, BOT);
+    expect(rb).toEqual({ state: "clean", unresolved: 0, stale: false });
+  });
+
+  test("naming a DIFFERENT commit leaves it stale", () => {
+    const rb = rollupChecklist(
+      null,
+      nodes(body("575fe8ef9554003d36452a9bb7334f3369933846")),
+      PUSHED_AT,
+      OID,
+      BOT,
+    );
+    expect(rb.stale).toBe(true);
+  });
+
+  test("a bot that never mentions a sha falls back to the older proxies", () => {
+    // The signal is positive-only: absence must change nothing, or every
+    // reviewer that does not stamp shas becomes permanently stale.
+    const plain = `${DELTA}\n\nNo material issues found. ✅\n`;
+    expect(rollupChecklist(null, nodes(plain), PUSHED_AT, OID, BOT).stale).toBe(true);
+    expect(rollupChecklist(null, nodes(plain), null, OID, BOT).stale).toBe(false);
+  });
+
+  test("an absent or truncated head oid is not a coverage claim", () => {
+    expect(rollupChecklist(null, nodes(body(OID)), PUSHED_AT, null, BOT).stale).toBe(true);
+    expect(rollupChecklist(null, nodes(body(OID)), PUSHED_AT, "28da", BOT).stale).toBe(true);
   });
 });

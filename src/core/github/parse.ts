@@ -315,10 +315,35 @@ export type ChecklistBot = {
   pendingMarker: string | null;
 };
 
+/**
+ * Does a live checklist say, in its own words, that it covers this
+ * commit?
+ *
+ * A per-commit reviewer NAMES the sha it looked at, and that is the bot
+ * asserting its own coverage rather than wt inferring it. Codex heads
+ * each delta section with the short sha and repeats the full one in a
+ * machine-readable trailer:
+ *
+ *     #### `28daaa2`
+ *     ...
+ *     <!-- codex-review-state:v1 {"version":1,...,"head":"28daaa28…"} -->
+ *
+ * Matched as a bare 7-char prefix rather than against either of those
+ * shapes, because both are one bot's formatting and the sha is the fact.
+ * A positive signal only: not finding it means the older proxies decide,
+ * so a bot that never mentions shas behaves exactly as before.
+ */
+function coversHead(bodies: readonly string[], headOid: string | null): boolean {
+  if (!headOid || headOid.length < 7) return false;
+  const short = headOid.slice(0, 7);
+  return bodies.some((b) => b.includes(short));
+}
+
 export function rollupChecklist(
   contexts: RawCheck[] | null | undefined,
   comments: GqlPrNode["comments"],
   headCommittedDate: string | null,
+  headOid: string | null,
   bot: ChecklistBot = BOT,
 ): ReviewBotStatus {
   // One live checklist PER MARKER, latest-wins within each. A bot can
@@ -344,19 +369,27 @@ export function rollupChecklist(
     c.updatedAt && c.updatedAt > c.createdAt ? c.updatedAt : c.createdAt;
 
   const ctx = botContextState(contexts);
-  // "Stale" is a claim that the bot never saw THIS commit, and where the
-  // bot attached check contexts to the head they answer it outright —
-  // the rollup is read off the head commit, so a bot context here means
-  // its pipeline ran here. The timestamp proxy is the fallback for a
-  // reviewer that never re-runs on push, and it has to BE a fallback:
-  // the delta log is one comment appended to per commit, so its
-  // `createdAt` is the first delta's and reads stale forever after.
+  // "Stale" is a claim that the bot never saw THIS commit, and there are
+  // three ways to answer it, in descending order of directness.
+  //
+  // The bot's own words come first: a per-commit reviewer stamps the sha
+  // it reviewed, which is an assertion rather than an inference, and it
+  // is the only one of the three that is true the moment the review is
+  // posted. The check contexts are next — the rollup is read off the
+  // head commit, so a bot context here means its pipeline ran here — but
+  // they register minutes after the comment does, and that gap is a
+  // window where a completed review reads as stale.
+  //
+  // The timestamp proxy is last and has to BE last: the delta log is one
+  // comment appended to per commit, so its `createdAt` is the first
+  // delta's and reads stale forever after.
   const newest = live.reduce<string | null>(
     (acc, c) => (acc === null || c.createdAt > acc ? c.createdAt : acc),
     null,
   );
   const stale =
     newest !== null &&
+    !coversHead(live.map((c) => c.body), headOid) &&
     ctx === null &&
     headCommittedDate !== null &&
     newest < headCommittedDate;
@@ -384,10 +417,11 @@ function rollupReviewBot(
   threads: GqlReviewThread[] | null | undefined,
   comments: GqlPrNode["comments"],
   headCommittedDate: string | null,
+  headOid: string | null,
 ): ReviewBotStatus {
   if (state !== "OPEN") return { state: "none", unresolved: 0 };
   if (BOT.unresolvedVia === "checklist") {
-    return rollupChecklist(contexts, comments, headCommittedDate);
+    return rollupChecklist(contexts, comments, headCommittedDate, headOid);
   }
 
   // `threads` mode (CodeRabbit): unresolved bot-authored review threads.
@@ -598,6 +632,7 @@ export function nodeToPr(pr: GqlPrNode): PullRequest {
       threads,
       pr.comments,
       headCommit?.committedDate ?? null,
+      pr.headRefOid ?? null,
     ),
     requestedReviewers,
     suggestedReviewers: extractSuggestedReviewers(pr.suggestedReviewers),
