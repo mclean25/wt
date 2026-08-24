@@ -360,7 +360,13 @@ export function reviewBotBadge(rb: ReviewBotStatus): Badge | null {
     case "pending":
       return { glyph: REVIEW_BOT_GLYPH, fg: theme.warn };
     case "clean":
-      return { glyph: REVIEW_BOT_GLYPH, fg: theme.ok };
+      // A review of an OLDER commit is not a clean bill of health for
+      // this one, and green is the one color that says "nothing to do
+      // here" without anyone opening the details pane. The `(old head)`
+      // prose was the only tell, and prose beside a contradicting glyph
+      // does not exist. Unknown fails toward the warning: a false yellow
+      // costs a look, a false green costs the review.
+      return { glyph: REVIEW_BOT_GLYPH, fg: rb.stale ? theme.warn : theme.ok };
     default:
       return null;
   }

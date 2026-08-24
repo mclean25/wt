@@ -201,8 +201,18 @@ export type ReviewBotConfig = {
    */
   checkContexts: readonly string[];
   unresolvedVia: ReviewBotUnresolvedVia;
-  /** Checklist mode: body prefix identifying the bot's summary comment. */
-  summaryMarker: string | null;
+  /**
+   * Checklist mode: body prefixes identifying the bot's summary
+   * comments. A LIST, because one bot can keep more than one live
+   * checklist — Codex posts its full pass under one heading and its
+   * accumulating per-commit delta findings under another, and neither
+   * supersedes the other. Latest-wins applies within each marker; the
+   * unresolved counts sum across them.
+   *
+   * The TOML key still accepts a bare string, which is the same as a
+   * one-entry list.
+   */
+  summaryMarkers: readonly string[];
   /**
    * Checklist mode, optional: body prefix of the bot's "review started"
    * ack comment. An ack newer than the latest summary renders as
@@ -1017,6 +1027,18 @@ function obj(v: unknown): Raw | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Raw) : null;
 }
 
+/**
+ * A TOML value that may be one string or a list of them. `summary_marker`
+ * shipped as a bare string and grew a second entry when the review bot
+ * started posting delta findings under their own heading; widening in
+ * place is what keeps a config that loaded yesterday loading today.
+ */
+function strOrStrArr(v: unknown): readonly string[] {
+  if (typeof v === "string") return v ? [v] : [];
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string" && x !== "");
+  return [];
+}
+
 function strArr(v: unknown, fallback: readonly string[]): readonly string[] {
   if (!Array.isArray(v)) return fallback;
   const out: string[] = [];
@@ -1249,11 +1271,11 @@ function build(raw: Raw, errs: Errors): Config {
       isChecklist ? [] : GENERIC_DEFAULTS.reviewBot.checkContexts,
     ),
     unresolvedVia: reviewBotVia,
-    summaryMarker: errs.optStrOrNull(reviewBotRaw, "summary_marker"),
+    summaryMarkers: strOrStrArr(reviewBotRaw?.summary_marker),
     pendingMarker: errs.optStrOrNull(reviewBotRaw, "pending_marker"),
     rerunCommand: errs.optStrOrNull(reviewBotRaw, "rerun_command"),
   };
-  if (isChecklist && !reviewBot.summaryMarker) {
+  if (isChecklist && reviewBot.summaryMarkers.length === 0) {
     errs.add('review_bot.summary_marker is required when unresolved_via = "checklist"');
   }
 

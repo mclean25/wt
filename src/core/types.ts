@@ -47,10 +47,18 @@ export type ReviewBotStatus = {
   /** Count of unresolved bot findings. Only meaningful when state === "unresolved". */
   unresolved: number;
   /**
-   * Checklist mode only: the latest summary comment predates the head
-   * commit's `committedDate` — the bot deliberately doesn't re-run on
-   * push, so its review describes an older diff. The findings are still
-   * actionable; the flag just says "reviewed an older commit".
+   * Checklist mode only: the bot has not reviewed THIS commit, so what
+   * it did say describes an older diff. The findings are still
+   * actionable; the flag says "reviewed an older commit" — and, since
+   * green is the one badge color meaning "nothing to do here", it
+   * downgrades a `clean` to the warning color rather than claiming a
+   * commit nobody looked at came back empty.
+   *
+   * Answered by the bot's own check contexts where it has any on the
+   * head (they hang off the head commit, so their presence IS the
+   * answer), and only otherwise by the timestamp proxy of a summary
+   * older than the head's `committedDate` — the shape of a reviewer
+   * that deliberately never re-runs on push.
    */
   stale?: boolean;
 };

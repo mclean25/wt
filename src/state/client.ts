@@ -101,7 +101,7 @@ export const CACHE_DB = config.paths.cacheDb;
 // entry is indistinguishable from a fresh one, which is what makes this
 // a bust rather than a shape bump. (v22 busted `firstCommit` alone for
 // the narrower stale-remote-ref version of the same failure.)
-const CACHE_BUSTER = "v23";
+const CACHE_BUSTER = "v24";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

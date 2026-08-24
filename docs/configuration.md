@@ -434,19 +434,22 @@ The badge/row/automation track for an automated PR reviewer. Omit the whole sect
 Two "unresolved" models, selected by `unresolved_via`:
 
 - `"threads"` (default, CodeRabbit-shaped): unresolved = review threads opened by `login` that aren't resolved.
-- `"checklist"`: the bot posts a summary comment carrying a `- [ ]` task list; unresolved = unticked boxes in the latest summary comment (ticking a box in the GitHub UI is how items are accepted/dismissed). Use this when the bot posts via `github-actions[bot]` — that login is shared by every workflow, so the comment shape (`summary_marker`) is the discriminator.
+- `"checklist"`: the bot posts a summary comment carrying a `- [ ]` task list; unresolved = unticked boxes (ticking a box in the GitHub UI is how items are accepted/dismissed). Use this when the bot posts via `github-actions[bot]` — that login is shared by every workflow, so the comment shape (`summary_marker`) is the discriminator. A bot may keep **several** live checklists at once, which is why `summary_marker` takes a list: latest-wins applies within each marker, and the counts sum across them.
 
 ```toml
 # Example: an in-repo GitHub Actions "Codex review" workflow
 [review_bot]
 name           = "Codex"
 login          = "github-actions"   # "[bot]" suffix optional
-check_contexts = ["Codex code review", "Post Codex review", "Announce review started"]
+check_contexts = ["Codex code review", "Prepare Codex review", "Announce Codex review"]
 unresolved_via = "checklist"
-summary_marker = "### 🤖 Codex review"
+# The full pass and the per-commit delta log are independent checklists.
+summary_marker = ["### 🤖 Codex review", "### 🤖 Codex follow-up reviews"]
 pending_marker = "🤖 ⏳ Codex review started"
 rerun_command  = "/codex-review"
 ```
+
+Note what is deliberately absent from `check_contexts`: the workflow's `Codex review complete` job, because it is a **required** check in the base branch's ruleset. Listing it would exclude a real merge gate from the checks badge, which is the opposite of the exclusion's purpose — the rule is "an advisory run must not flip the CI badge", not "anything the bot owns is invisible".
 
 | key | required | default | meaning |
 |---|---|---|---|
@@ -454,7 +457,7 @@ rerun_command  = "/codex-review"
 | `login` | checklist: **yes** | `"coderabbitai"` | The bot's comment/thread author login. A trailing `[bot]` is ignored when matching (GraphQL reports app logins without it). Required in checklist mode — the CodeRabbit default would silently match nothing. |
 | `check_contexts` | no | threads: `["CodeRabbit"]`, checklist: `[]` | Glob patterns for the bot's check contexts / workflow job names. Drive pending-vs-done detection and are auto-excluded from the CI rollup — set them whenever the bot runs as checks/jobs so an advisory run can't flip the CI badge. |
 | `unresolved_via` | no | `"threads"` | `"threads"` or `"checklist"` (see above). |
-| `summary_marker` | checklist: **yes** | — | String identifying the bot's summary comment. Matched at the start of any of the comment's **first three lines** (see below). |
+| `summary_marker` | checklist: **yes** | — | String, **or a list of strings**, identifying the bot's summary comment(s). Matched at the start of any of the comment's **first three lines** (see below). Each marker tracks its own latest comment and the unticked counts sum, so a bot posting a full pass and a rolling delta log under different headings has both counted. A comment matching more than one marker is filed under the longest. |
 | `pending_marker` | no | *(unset)* | Same matching, for the bot's "review started" ack comment. An ack newer than the latest summary shows as *pending* — needed for comment-triggered re-runs, whose check runs never attach to the PR head. |
 
 **Marker matching.** Both markers match at the start of any of the comment's first three lines, not strictly at the start of the body. The reason is that the conventional way to make a comment machine-identifiable is an HTML comment on its own first line, with the visible heading below it:
@@ -467,7 +470,13 @@ rerun_command  = "/codex-review"
 Under a strict prefix test, `summary_marker = "### 🤖 Codex review"` matches nothing there and the badge sits blank with no error to chase — two repos running variants of one reviewer workflow differed on exactly this. The three-line window is deliberate rather than a substring search: a human (or the bot) quoting the heading further down a long comment must not promote that comment to "the summary". Either line works as the marker; prefer the HTML comment when the workflow emits one, since it's the half that exists to be matched.
 | `rerun_command` | no | *(unset)* | PR comment body that re-triggers a review. When set, a built-in "Re-run *name* review" action appears in the `!` picker (it posts the comment via `gh`). |
 
-Checklist-mode bots typically don't re-run on push, so a review can lag the branch head. wt detects this (the latest summary comment predates the head commit) and marks the state **stale**: the details row shows `(old head)`. The badge colour does *not* change, because for a bot that only reviews on `opened` stale is the steady state rather than a transient, and dimming it would make clean-green a colour you'd essentially never see. Badge states: pending (running / re-run acked), unresolved (with count), clean, none — unresolved wins over a concurrent re-run, since old findings still need addressing. Checkbox counting skips fenced code blocks, so a suggestion block quoting checkbox syntax doesn't inflate the count. One sizing note: the summary comment is found within the PR's most recent 30 comments — on an extremely chatty PR whose last 30 comments postdate the bot's summary, the badge reads as if the bot never ran.
+**Staleness.** A review can lag the branch head, and wt marks that state **stale**: the details row shows `(old head)` and a *clean* badge renders in the warning colour rather than green.
+
+That colour rule is a reversal, and the reason it flipped is worth keeping. It used to leave stale-clean green, on the argument that a bot which only reviews on `opened` is stale as its *steady state*, so dimming it would make clean-green a colour you'd never see. Bots that post per-commit delta reviews broke that premise: stale became a transient again, and green-with-prose is the shape the repo rules call a false green — a contradicting fact sitting in prose beside a badge does not exist, and `(old head)` was that prose. A false yellow costs a look; a false green costs the review.
+
+Staleness is answered by the bot's own `check_contexts` on the head commit wherever it has any (the checks rollup is read off the head, so a bot context there *is* the answer), and only otherwise by the timestamp proxy of the newest summary predating the head's commit date. The proxy alone is not enough for a bot whose delta log is one comment appended to per commit: its `createdAt` is the first delta's, so it reads stale forever after.
+
+Badge states: pending (running / re-run acked), unresolved (with count), clean, none — unresolved wins over a concurrent re-run, since old findings still need addressing. Checkbox counting skips fenced code blocks, so a suggestion block quoting checkbox syntax doesn't inflate the count. One sizing note: the summary comment is found within the PR's most recent 30 comments — on an extremely chatty PR whose last 30 comments postdate the bot's summary, the badge reads as if the bot never ran.
 
 **Drafts.** In `threads` mode the badge hides on draft PRs: clean is inferred from the bot's check context completing, and CodeRabbit's "review skipped — draft detected" run completes exactly like a real review, so a skipped draft would read green. `checklist` mode has no such hazard (clean requires a summary comment the bot actually posted, so a skip yields `none`), and those bots typically review drafts, so the badge shows there.
 

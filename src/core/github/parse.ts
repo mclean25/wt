@@ -190,10 +190,10 @@ const isBotContext = compileIgnore(BOT.checkContexts);
  * config matches. Fast-path the exact match — this runs per thread and
  * per comment on every fetch.
  */
-function isBotLogin(login: string | null | undefined): boolean {
+function isBotLogin(login: string | null | undefined, expected: string = BOT.login): boolean {
   if (!login) return false;
-  if (login === BOT.login) return true;
-  return login.replace(/\[bot\]$/, "") === BOT.login;
+  if (login === expected) return true;
+  return login.replace(/\[bot\]$/, "") === expected;
 }
 
 /**
@@ -282,36 +282,99 @@ export function hasMarker(body: string, marker: string): boolean {
     .some((line) => line.trimStart().startsWith(marker));
 }
 
-function rollupChecklist(
+type BotComment = { body: string; createdAt: string; updatedAt?: string | null };
+
+/**
+ * The longest configured summary marker this body carries, or null.
+ *
+ * Longest rather than first, because markers are prefixes and one can
+ * contain another: `### Review` would claim `### Review follow-up`'s
+ * comments and file both under one key, silently keeping only whichever
+ * was newer. Nothing in the shipped config collides today; the cost of
+ * removing the trap is one comparison.
+ */
+function summaryMarkerOf(body: string, markers: readonly string[]): string | null {
+  let best: string | null = null;
+  for (const m of markers) {
+    if (!hasMarker(body, m)) continue;
+    if (best === null || m.length > best.length) best = m;
+  }
+  return best;
+}
+
+/**
+ * The slice of `[review_bot]` this rollup reads. Injectable so the tests
+ * state their own markers instead of inheriting whichever bot the
+ * machine running them is configured for — the suite would otherwise be
+ * green on a checklist config and vacuous on a threads one, which is the
+ * shape of an instrument answering about a world it is not in.
+ */
+export type ChecklistBot = {
+  login: string;
+  summaryMarkers: readonly string[];
+  pendingMarker: string | null;
+};
+
+export function rollupChecklist(
   contexts: RawCheck[] | null | undefined,
   comments: GqlPrNode["comments"],
   headCommittedDate: string | null,
+  bot: ChecklistBot = BOT,
 ): ReviewBotStatus {
-  type BotComment = { body: string; createdAt: string; updatedAt?: string | null };
-  let summary: BotComment | null = null;
+  // One live checklist PER MARKER, latest-wins within each. A bot can
+  // keep several at once and they are independent: a fresh full pass
+  // supersedes the previous FULL PASS and nothing else, while the delta
+  // log accumulates alongside it. Keeping a single latest-of-all comment
+  // is what hid an open finding behind a green badge — the newest
+  // comment happened to be the one with no boxes left.
+  const summaries = new Map<string, BotComment>();
   let ack: BotComment | null = null;
   for (const c of comments?.nodes ?? []) {
-    if (!c?.body || !isBotLogin(c.author?.login)) continue;
-    if (BOT.summaryMarker && hasMarker(c.body, BOT.summaryMarker)) {
-      if (!summary || c.createdAt > summary.createdAt) summary = c;
-    } else if (BOT.pendingMarker && hasMarker(c.body, BOT.pendingMarker)) {
+    if (!c?.body || !isBotLogin(c.author?.login, bot.login)) continue;
+    const marker = summaryMarkerOf(c.body, bot.summaryMarkers);
+    if (marker !== null) {
+      const prev = summaries.get(marker);
+      if (!prev || c.createdAt > prev.createdAt) summaries.set(marker, c);
+    } else if (bot.pendingMarker && hasMarker(c.body, bot.pendingMarker)) {
       if (!ack || c.createdAt > ack.createdAt) ack = c;
     }
   }
+  const live = [...summaries.values()];
   const touchedAt = (c: BotComment): string =>
     c.updatedAt && c.updatedAt > c.createdAt ? c.updatedAt : c.createdAt;
+
+  const ctx = botContextState(contexts);
+  // "Stale" is a claim that the bot never saw THIS commit, and where the
+  // bot attached check contexts to the head they answer it outright —
+  // the rollup is read off the head commit, so a bot context here means
+  // its pipeline ran here. The timestamp proxy is the fallback for a
+  // reviewer that never re-runs on push, and it has to BE a fallback:
+  // the delta log is one comment appended to per commit, so its
+  // `createdAt` is the first delta's and reads stale forever after.
+  const newest = live.reduce<string | null>(
+    (acc, c) => (acc === null || c.createdAt > acc ? c.createdAt : acc),
+    null,
+  );
   const stale =
-    summary !== null &&
+    newest !== null &&
+    ctx === null &&
     headCommittedDate !== null &&
-    summary.createdAt < headCommittedDate;
-  const unresolved = summary ? countUntickedBoxes(summary.body) : 0;
+    newest < headCommittedDate;
+
+  let unresolved = 0;
+  for (const c of live) unresolved += countUntickedBoxes(c.body);
   if (unresolved > 0) return { state: "unresolved", unresolved, stale };
+
+  const newestTouched = live.reduce<string | null>(
+    (acc, c) => (acc === null || touchedAt(c) > acc ? touchedAt(c) : acc),
+    null,
+  );
   const rerunning =
-    ack !== null && (!summary || ack.createdAt > touchedAt(summary));
-  if (botContextState(contexts) === "pending" || rerunning) {
+    ack !== null && (newestTouched === null || ack.createdAt > newestTouched);
+  if (ctx === "pending" || rerunning) {
     return { state: "pending", unresolved: 0 };
   }
-  if (summary) return { state: "clean", unresolved: 0, stale };
+  if (live.length > 0) return { state: "clean", unresolved: 0, stale };
   return { state: "none", unresolved: 0 };
 }
 

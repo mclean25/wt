@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
-import { countUntickedBoxes, hasMarker, rollupChecks } from "./parse.ts";
+import {
+  type ChecklistBot,
+  countUntickedBoxes,
+  hasMarker,
+  rollupChecklist,
+  rollupChecks,
+} from "./parse.ts";
 
 /**
  * `hasMarker` decides which of a PR's comments IS the review bot's
@@ -158,5 +164,193 @@ describe("rollupChecks superseded-run dedupe", () => {
         },
       ]),
     ).toBe("pending");
+  });
+});
+
+/**
+ * `rollupChecklist` decides the review-bot glyph for a checklist bot.
+ * Every case here is built from PR #1444, where a delta review posted
+ * one open finding and the badge stayed green.
+ *
+ * The bot is injected rather than read from `[review_bot]`, so these run
+ * the same on a machine configured for a checklist bot and in CI, whose
+ * synthetic config has no `[review_bot]` at all. Inheriting it would
+ * make the suite vacuous in exactly the place it is asked to vouch for.
+ */
+describe("rollupChecklist", () => {
+  const FULL = "### 🤖 Codex review";
+  const DELTA = "### 🤖 Codex follow-up reviews";
+  const ACK = "🤖 ⏳ Codex review started";
+  const BOT: ChecklistBot = {
+    login: "github-actions",
+    summaryMarkers: [FULL, DELTA],
+    pendingMarker: ACK,
+  };
+  const HEAD = "2026-08-24T17:24:26Z";
+
+  const comment = (
+    body: string,
+    createdAt: string,
+    updatedAt?: string,
+  ): { author: { login: string }; body: string; createdAt: string; updatedAt?: string } => ({
+    author: { login: "github-actions" },
+    body,
+    createdAt,
+    updatedAt: updatedAt ?? createdAt,
+  });
+  const nodes = (...cs: ReturnType<typeof comment>[]) => ({ nodes: cs }) as never;
+  const botRun = (status: string, conclusion: string | null) =>
+    [{ __typename: "CheckRun" as const, name: "Codex code review", status, conclusion }] as never;
+
+  // The exact pair on #1444: the full pass had both its boxes ticked,
+  // and the delta log posted afterwards carried one open item.
+  const CLOSED_FULL = `${FULL}\n\n#### Issues (2)\n- [x] a\n- [x] b\n`;
+  const OPEN_DELTA = `${DELTA}\n\n#### \`8e7fe82\`\n\n#### Issues (1)\n- [ ] Bound the Twilio compensation request\n`;
+
+  test("counts an open finding in a SECOND checklist the bot keeps", () => {
+    // The bug. One marker saw one of two live checklists, and the one it
+    // saw was the empty one — so the glyph read green with a Medium
+    // finding open. Latest-of-all would have been just as wrong in the
+    // other direction once the full pass has items and the delta does not.
+    const rb = rollupChecklist(
+      botRun("COMPLETED", "SUCCESS"),
+      nodes(
+        comment(CLOSED_FULL, "2026-08-24T17:01:17Z", "2026-08-24T17:19:08Z"),
+        comment(OPEN_DELTA, "2026-08-24T17:21:06Z", "2026-08-24T17:25:54Z"),
+      ),
+      HEAD,
+      BOT,
+    );
+    expect(rb).toEqual({ state: "unresolved", unresolved: 1, stale: false });
+  });
+
+  test("sums across checklists rather than letting the newest win", () => {
+    const rb = rollupChecklist(
+      null,
+      nodes(
+        comment(`${FULL}\n- [ ] one\n- [ ] two\n`, "2026-08-24T17:01:17Z"),
+        comment(`${DELTA}\n- [ ] three\n`, "2026-08-24T17:21:06Z"),
+      ),
+      null,
+      BOT,
+    );
+    expect(rb.unresolved).toBe(3);
+  });
+
+  test("a fresh full pass supersedes the previous one, per marker", () => {
+    const rb = rollupChecklist(
+      null,
+      nodes(
+        comment(`${FULL}\n- [ ] stale finding\n`, "2026-08-24T15:00:00Z"),
+        comment(`${FULL}\n- [x] fixed\n`, "2026-08-24T17:01:17Z"),
+      ),
+      null,
+      BOT,
+    );
+    expect(rb).toEqual({ state: "clean", unresolved: 0, stale: false });
+  });
+
+  test("the bot's own check on the head answers staleness outright", () => {
+    // #1444's delta log was CREATED before the head commit existed and
+    // appended to afterwards, so the timestamp proxy called a review of
+    // the head stale. The bot's check run hangs off the head commit, so
+    // its presence is the direct answer the proxy was standing in for.
+    const comments = nodes(comment(CLOSED_FULL, "2026-08-24T17:01:17Z"));
+    expect(rollupChecklist(botRun("COMPLETED", "SUCCESS"), comments, HEAD, BOT).stale).toBe(false);
+    expect(rollupChecklist(null, comments, HEAD, BOT).stale).toBe(true);
+  });
+
+  test("a clean review of an older commit stays flagged stale", () => {
+    // The reviewer that never re-runs on push: no bot context on the
+    // head at all, so the proxy is all there is and must still fire.
+    const rb = rollupChecklist(
+      null,
+      nodes(comment(CLOSED_FULL, "2026-08-24T17:01:17Z")),
+      HEAD,
+      BOT,
+    );
+    expect(rb).toEqual({ state: "clean", unresolved: 0, stale: true });
+  });
+
+  test("a running bot check reads pending", () => {
+    const rb = rollupChecklist(
+      botRun("IN_PROGRESS", null),
+      nodes(comment(CLOSED_FULL, "2026-08-24T17:01:17Z")),
+      HEAD,
+      BOT,
+    );
+    expect(rb.state).toBe("pending");
+  });
+
+  test("an ack newer than every summary reads pending", () => {
+    const rb = rollupChecklist(
+      null,
+      nodes(
+        comment(CLOSED_FULL, "2026-08-24T17:01:17Z"),
+        comment(`${ACK}\n`, "2026-08-24T17:30:00Z"),
+      ),
+      HEAD,
+      BOT,
+    );
+    expect(rb.state).toBe("pending");
+  });
+
+  test("an ack that PRECEDES its own summary is not a re-run", () => {
+    const rb = rollupChecklist(
+      null,
+      nodes(
+        comment(`${ACK}\n`, "2026-08-24T16:57:44Z"),
+        comment(CLOSED_FULL, "2026-08-24T17:01:17Z"),
+      ),
+      HEAD,
+      BOT,
+    );
+    expect(rb.state).toBe("clean");
+  });
+
+  test("open findings outrank a re-run in progress", () => {
+    // A push re-triggers the bot routinely; the open items are still
+    // what needs addressing, and a spinner would hide them.
+    const rb = rollupChecklist(
+      botRun("IN_PROGRESS", null),
+      nodes(comment(OPEN_DELTA, "2026-08-24T17:21:06Z")),
+      HEAD,
+      BOT,
+    );
+    expect(rb).toEqual({ state: "unresolved", unresolved: 1, stale: false });
+  });
+
+  test("the LONGEST matching marker claims a comment", () => {
+    // Markers are prefixes and one can contain another. First-match
+    // would file both headings under one key and silently keep only the
+    // newer, which is the same drop this whole change exists to stop.
+    const nested: ChecklistBot = {
+      login: "github-actions",
+      summaryMarkers: ["### Review", "### Review follow-up"],
+      pendingMarker: null,
+    };
+    const rb = rollupChecklist(
+      null,
+      nodes(
+        comment("### Review\n- [ ] one\n", "2026-08-24T17:00:00Z"),
+        comment("### Review follow-up\n- [ ] two\n", "2026-08-24T17:10:00Z"),
+      ),
+      null,
+      nested,
+    );
+    expect(rb.unresolved).toBe(2);
+  });
+
+  test("no summary at all is `none`, not a clean bill of health", () => {
+    expect(
+      rollupChecklist(null, nodes(comment("unrelated", "2026-08-24T17:00:00Z")), HEAD, BOT).state,
+    ).toBe("none");
+  });
+
+  test("a comment from someone else never counts", () => {
+    const nodesFromHuman = {
+      nodes: [{ author: { login: "michael" }, body: OPEN_DELTA, createdAt: HEAD, updatedAt: HEAD }],
+    } as never;
+    expect(rollupChecklist(null, nodesFromHuman, HEAD, BOT).state).toBe("none");
   });
 });
