@@ -195,14 +195,60 @@ export async function enableAutoMerge(
  * setting that had nothing to do with the failure, on a repo where
  * "merge when ready" demonstrably works from the web UI.
  *
- * Positive list, so it fails CLOSED: `has failed`, `was cancelled` and
- * the aggregate `have not succeeded` all need someone to DO something,
- * and a retry loop would hide that behind a spinner.
+ * Positive list, so it fails CLOSED: `has failed` and `was cancelled`
+ * need someone to DO something, and a retry loop would hide that behind
+ * a spinner.
+ *
+ * The AGGREGATE wording is a third shape and used to be lumped in with
+ * the durable refusals, on the reasoning that it "mixes pending with
+ * failed, so it cannot say whether waiting helps". It says exactly that,
+ * in a breakdown GitHub enumerates after the colon: `4 of 4 required
+ * status checks have not succeeded: 2 expected.` is four checks of which
+ * two have not reported, and nothing there has failed. Refusing the whole
+ * class cost the same wrong report the single-check wording did — a
+ * fallback to classic auto-merge on a repo with `allow_auto_merge: false`,
+ * blaming a repo setting for a clock. So the breakdown is parsed, with
+ * the same discipline one level down: every reason must be a KNOWN
+ * pending one, and an unrecognised token (or no breakdown at all) is not
+ * a green light.
  */
 export function checksStillPending(error: string | undefined): boolean {
-  return /required status check\b[^]*?\bis (?:expected|in progress|queued|pending|waiting)/i.test(
-    error ?? "",
-  );
+  const msg = error ?? "";
+  if (SINGLE_CHECK_PENDING_RE.test(msg)) return true;
+  return aggregateIsAllPending(msg);
+}
+
+const SINGLE_CHECK_PENDING_RE =
+  /required status check\b[^]*?\bis (?:expected|in progress|queued|pending|waiting)/i;
+
+/**
+ * The states in an aggregate breakdown that a CLOCK clears. Anything
+ * outside this set — `failing`, `cancelled`, `action required`, or a
+ * word GitHub adds next year — means the refusal is not retryable.
+ */
+const PENDING_CHECK_STATES = new Set([
+  "expected",
+  "pending",
+  "queued",
+  "waiting",
+  "in progress",
+  "in_progress",
+]);
+
+/** Everything after the colon in the aggregate refusal, up to its period. */
+const AGGREGATE_RE = /required status checks?\s+have not succeeded:\s*([^.]*)/i;
+
+function aggregateIsAllPending(error: string): boolean {
+  const m = AGGREGATE_RE.exec(error);
+  if (!m) return false;
+  const reasons = (m[1] ?? "")
+    .split(/,|\band\b/)
+    .map((s) => s.trim().replace(/^\d+\s+/, "").toLowerCase())
+    .filter((s) => s.length > 0);
+  // A breakdown GitHub did not give is not a breakdown saying "all
+  // pending". Absence of a reason means unknown, never fine.
+  if (reasons.length === 0) return false;
+  return reasons.every((r) => PENDING_CHECK_STATES.has(r));
 }
 
 /**

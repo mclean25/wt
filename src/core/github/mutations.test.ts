@@ -61,16 +61,49 @@ describe("checksStillPending", () => {
     expect(checksStillPending(RUNNING)).toBe(true);
   });
 
-  test("does NOT claim a merely-unsuccessful check", () => {
-    // The aggregate wording mixes pending with failed, so it cannot say
-    // whether waiting helps — and an ambiguous message must fail closed.
-    // Verified against a live PR: six required checks IN_PROGRESS and
-    // mergeStateStatus BLOCKED still enqueued, so "have not succeeded"
-    // is a different situation and must not be called retryable.
+  // Verbatim from PR #1446. The aggregate wording was read as ambiguous
+  // and failed closed as a class, on the reasoning that it "mixes
+  // pending with failed". It does not mix anything here: GitHub
+  // enumerates the reasons and both of these name only checks that have
+  // yet to report.
+  const AGGREGATE = "gh: Pull request 4 of 4 required status checks have not succeeded: 2 expected.";
+
+  test("reads the aggregate breakdown instead of refusing the whole class", () => {
+    expect(checksStillPending(AGGREGATE)).toBe(true);
     expect(
       checksStillPending(
         "Pull request 2 of 4 required status checks have not succeeded: 1 expected.",
       ),
+    ).toBe(true);
+  });
+
+  test("a breakdown listing several pending states is still a clock", () => {
+    expect(
+      checksStillPending(
+        "Pull request 3 of 4 required status checks have not succeeded: 1 expected, 1 pending, and 1 in progress.",
+      ),
+    ).toBe(true);
+  });
+
+  test("one failing entry disqualifies the whole breakdown", () => {
+    // The reason the class was refused wholesale, now handled one level
+    // down: waiting does not clear a failure, and a retry loop would put
+    // a spinner in front of it.
+    for (const reasons of ["1 failing", "1 expected and 1 failing", "2 cancelled"]) {
+      expect(
+        checksStillPending(`Pull request 2 of 4 required status checks have not succeeded: ${reasons}.`),
+      ).toBe(false);
+    }
+  });
+
+  test("an unrecognised or absent breakdown is not a green light", () => {
+    // Absence of a reason means unknown, never fine — and a word GitHub
+    // adds next year must not arrive already classified as harmless.
+    expect(
+      checksStillPending("Pull request 2 of 4 required status checks have not succeeded: 1 blorped."),
+    ).toBe(false);
+    expect(
+      checksStillPending("Pull request 2 of 4 required status checks have not succeeded."),
     ).toBe(false);
   });
 
@@ -94,7 +127,7 @@ describe("checksStillPending", () => {
   test("pending is a subset of not-yet-enqueueable, so ordering is what separates them", () => {
     // Both match the real messages; `enableAutoMerge` therefore has to
     // test the narrower one FIRST or the retryable flag is never set.
-    for (const msg of [REAL, RUNNING]) {
+    for (const msg of [REAL, RUNNING, AGGREGATE]) {
       expect(notYetEnqueueable(msg)).toBe(true);
       expect(checksStillPending(msg)).toBe(true);
     }
