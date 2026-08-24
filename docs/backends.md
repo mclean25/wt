@@ -148,6 +148,21 @@ and it drives the rest of the design:
   untracked file and is left. OpenCode has no such gate. (Both mirror the
   `unseamless-coop` fleet.)
 
+  **The Claude write is verified, and repairs its siblings.** `~/.claude.json`
+  is one shared blob that Claude Code also read-modify-writes, and its window
+  between reading at startup and flushing its snapshot back is *seconds*
+  against the ~2.3ms wt spends — so a wt write can be complete, atomic, and
+  gone. `ensureTrustInFile` therefore reads back after the rename and re-applies
+  (3 attempts, 60/200ms), and reports on `log.attention.*` when it still could
+  not make it stick, because the next thing the user sees is the dialog. It also
+  re-asserts every rift sibling under the same worktree root that Claude already
+  has an entry for: a stale flush wipes a whole snapshot rather than one key, so
+  a per-path seed heals one worktree per spawn and leaves the rest — six starts
+  inside 90 seconds cost three hand-accepted dialogs. Repairing siblings makes
+  the Nth start heal the first N-1, so a batch converges. Siblings are repaired,
+  never introduced (entry must already exist), and the set is derived from disk,
+  so there is no list to maintain.
+
 ## Stale remote-tracking refs
 
 A rift clone's `origin/<trunk>` is frozen at clone time. `fetchOrigin`
