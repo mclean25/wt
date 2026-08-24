@@ -447,7 +447,14 @@ export function destroyHazardLabel(hazard: DestroyHazard): string {
     case "unpushed":
       return `${hazard.count} unpushed commit${hazard.count === 1 ? "" : "s"}`;
     case "unverified":
-      return `post-merge verification still owed: ${hazard.steps}`;
+      // Deliberately without the steps. `verifyAfterMerge` is the one
+      // field with no length budget — an executable contract for an
+      // agent that is not the one who wrote it — and every consumer of
+      // this label is a SCAN LINE: a `c` modal row, a `d` confirm that
+      // joins reasons with commas and appends "will be lost", a toast.
+      // Fourteen numbered steps in any of those buries the other
+      // hazards next to it. The details pane is where the text lives.
+      return "post-merge verification still owed";
   }
 }
 

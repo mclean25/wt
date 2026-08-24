@@ -274,8 +274,10 @@ describe("an unverified landing is a destroy hazard", () => {
       kind: "unverified",
       steps: "connect gcal on staging",
     });
+    // The steps stay on the hazard and out of the label: every reader
+    // of the label is a scan line, and the field has no length budget.
     expect(destroyHazardLabel(destroyHazard(row)!)).toBe(
-      "post-merge verification still owed: connect gcal on staging",
+      "post-merge verification still owed",
     );
   });
 

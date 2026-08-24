@@ -32,7 +32,9 @@ export function remoteCleanHazardLabel(
     return `${entry.unpushed} unpushed commit${entry.unpushed === 1 ? "" : "s"}`;
   }
   if (entry.workVerifyAfterMerge && entry.workState !== "verified") {
-    return `post-merge verification still owed: ${entry.workVerifyAfterMerge}`;
+    // Same scan-line reasoning as `destroyHazardLabel`, which this
+    // mirrors for rows on another host.
+    return "post-merge verification still owed";
   }
   return null;
 }
