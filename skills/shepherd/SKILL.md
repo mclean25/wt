@@ -19,6 +19,12 @@ A sweep you run on a timer from the manager session. Each pass looks at the
 whole fleet, does the small things that move rows toward mergeable, and stops
 short of merging — that stays the human's.
 
+**Inside a single worktree, driving your OWN branch through review, you want
+`babysit` instead.** Same destination, opposite ownership: this skill acts
+across rows and implements nothing, that one acts on one row and does the
+fixing. Reaching for the wrong half is how an agent starts editing a branch
+that is not its own.
+
 **Why this exists, in one sentence: the fleet decays quietly between merges,
 and the decay is invisible from inside any single worktree.** The highest-value
 thing a real run of this ever did was notice that four pull requests had gone

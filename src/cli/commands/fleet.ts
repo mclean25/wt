@@ -384,7 +384,24 @@ export async function run(argv: string[]): Promise<number> {
               // unresolved threads and still read as having open
               // findings; this is that other half.
               review_bot: r.pr.reviewBot
-                ? { state: r.pr.reviewBot.state, unresolved: r.pr.reviewBot.unresolved }
+                ? {
+                    state: r.pr.reviewBot.state,
+                    unresolved: r.pr.reviewBot.unresolved,
+                    // Whether the bot has reviewed THIS head. Without it
+                    // `clean` is two different answers wearing one word —
+                    // "looked at your latest push and found nothing" and
+                    // "looked at an older commit" — and the TUI already
+                    // refuses to paint the second one green. Dropping the
+                    // flag here handed every JSON reader exactly the green
+                    // reading the badge withholds, which matters most to
+                    // the caller that acts on it: an agent iterating a
+                    // bot's follow-up reviews stops at the first stale
+                    // clean, believing its newest commit came back empty.
+                    // Checklist mode only; `false` elsewhere, matching
+                    // what every existing reader already infers from the
+                    // absent field.
+                    stale: r.pr.reviewBot.stale ?? false,
+                  }
                 : null,
             }
           : null,

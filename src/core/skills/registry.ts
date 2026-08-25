@@ -86,6 +86,12 @@ export const UNITS: readonly Unit[] = [
   },
   {
     kind: "skill",
+    name: "babysit",
+    summary: "drive this worktree's own branch through review to mergeable",
+    vars: [],
+  },
+  {
+    kind: "skill",
     name: "start",
     summary: "kick off work inside a prepared worktree (brief → research → build → hand off)",
     vars: [PROJECT_NOTES],
