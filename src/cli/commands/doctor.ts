@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -173,6 +173,110 @@ function detectPackageManager(path: string): { install: string; store: string | 
   return existsSync(join(path, "package.json")) ? { install: "npm install", store: null } : null;
 }
 
+/**
+ * Packages sitting at the top of a pnpm `node_modules` as REAL
+ * directories rather than symlinks into `.pnpm`, plus those among them
+ * whose version the virtual store does not have.
+ *
+ * Under `nodeLinker: isolated` — pnpm's default, and the only mode this
+ * looks at — every package entry is a symlink. A real directory there is
+ * something pnpm did not put there, and pnpm will not remove it: the
+ * store is pruned against the lockfile while the top level is left
+ * alone, so `pnpm install` prints `Already up to date` over a tree whose
+ * resolution is frozen at whenever the directory was written.
+ *
+ * That is a lie in the worst available direction, because it is LOCAL
+ * only. CI installs from the lockfile into an empty tree and sees the
+ * right versions, so the two disagree with nothing to say which is
+ * wrong — measured here as a typecheck failing on a member the installed
+ * version does have, and it fails green just as easily.
+ *
+ * Returns null when the question does not apply (not pnpm, no store, or
+ * a linker whose layout makes real directories correct). Absence of an
+ * answer is never reported as a clean one.
+ */
+export function pnpmPhantomTopLevel(
+  nm: string,
+): { phantoms: string[]; drifted: string[] } | null {
+  let linker: unknown;
+  try {
+    linker = (JSON.parse(readFileSync(join(nm, ".modules.yaml"), "utf8")) as {
+      nodeLinker?: unknown;
+    }).nodeLinker;
+  } catch {
+    // pnpm writes this file on every install and it is JSON-compatible
+    // YAML. Unreadable means we cannot establish the layout, so we do
+    // not get to have an opinion about it.
+    return null;
+  }
+  if (linker !== "isolated") return null;
+
+  // Every version the virtual store holds, keyed by package name. The
+  // directory name is `<name>@<version>` with `/` written `+` and any
+  // peer-suffix after `_`.
+  const store = new Map<string, Set<string>>();
+  let entries: string[];
+  try {
+    entries = readdirSync(join(nm, ".pnpm"));
+  } catch {
+    return null;
+  }
+  for (const e of entries) {
+    const m = /^(.+)@(\d[^_]*?)(?:_.*)?$/.exec(e);
+    if (!m) continue;
+    const name = m[1]!.replace(/^(@[^+]+)\+/, "$1/");
+    (store.get(name) ?? store.set(name, new Set()).get(name)!).add(m[2]!);
+  }
+
+  const phantoms: string[] = [];
+  const drifted: string[] = [];
+  const walk = (dir: string, scope: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const e of names) {
+      if (e.startsWith(".")) continue;
+      const full = join(dir, e);
+      let st;
+      try {
+        st = lstatSync(full);
+      } catch {
+        continue;
+      }
+      // A symlink is the correct shape and the common case, so it costs
+      // one lstat and nothing else.
+      if (st.isSymbolicLink() || !st.isDirectory()) continue;
+      // `@scope` is a real directory by design; its children are the
+      // package entries.
+      if (!scope && e.startsWith("@")) {
+        walk(full, `${e}/`);
+        continue;
+      }
+      const name = `${scope}${e}`;
+      phantoms.push(name);
+      let version: unknown;
+      try {
+        version = (
+          JSON.parse(readFileSync(join(full, "package.json"), "utf8")) as {
+            version?: unknown;
+          }
+        ).version;
+      } catch {
+        continue;
+      }
+      const have = store.get(name);
+      if (have && typeof version === "string" && !have.has(version)) {
+        drifted.push(`${name} ${version} → ${[...have].join(", ")}`);
+      }
+    }
+  };
+  walk(nm, "");
+  return { phantoms, drifted };
+}
+
 async function checkNodeModules(wt: Worktree): Promise<Check> {
   const pm = detectPackageManager(wt.path);
   if (!pm) return mkCheck("node_modules", "info", "no JS package manager");
@@ -181,6 +285,24 @@ async function checkNodeModules(wt: Worktree): Promise<Check> {
     (pm.store !== null && !existsSync(join(nm, pm.store)));
   if (missing) {
     return mkCheck("node_modules", "warn", `not installed — run \`${pm.install}\``);
+  }
+  const stray = pm.store === ".pnpm" ? pnpmPhantomTopLevel(nm) : null;
+  if (stray && stray.drifted.length > 0) {
+    // `pnpm install` cannot clear this — it reports the tree up to date
+    // and leaves the top level as it found it. The directory has to go.
+    return mkCheck(
+      "node_modules",
+      "warn",
+      `${stray.drifted.length} of ${stray.phantoms.length} unmanaged top-level package(s) resolve to a version the lockfile does not have — \`rm -rf node_modules && ${pm.install}\``,
+      stray.drifted.slice(0, 8),
+    );
+  }
+  if (stray && stray.phantoms.length > 0) {
+    return mkCheck(
+      "node_modules",
+      "info",
+      `installed — ${stray.phantoms.length} unmanaged top-level package(s), none drifted yet`,
+    );
   }
   return mkCheck("node_modules", "ok", "installed");
 }
