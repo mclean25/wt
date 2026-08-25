@@ -256,7 +256,7 @@ Omit the whole section to disable SST awareness entirely — the stage row, `wt 
 
 ## `[dev_server]` — optional per-worktree dev server
 
-Omit to disable. When configured, each worktree can run one supervised dev server: started/stopped from the `!` picker (pinned "dev server" group below the always-present "agent" pair `u`/`g` — `d` starts/restarts, `s` stops; pinned-builtin quick-pick letters are claimed before user `[[actions]]` keys, which fall back to auto-derivation) or `wt dev`, shown in the `dev` row and the bolt badge (the local twin of the SST deploy bolt), opened with `s` (when no SST stage is deployed) and yanked with `y d`.
+Omit to disable. When configured, each worktree can run one supervised dev server: started/stopped from the `!` picker (pinned "dev server" group below the always-present "agent" pair `u`/`g` — `d` starts/restarts, `s` stops, `l` opens a live scrollable log overlay; pinned-builtin quick-pick letters are claimed before user `[[actions]]` keys, which fall back to auto-derivation) or `wt dev`, shown in the `dev` row and the bolt badge (the local twin of the SST deploy bolt), opened with `s` (when no SST stage is deployed) and yanked with `y d`.
 
 ```toml
 [dev_server]

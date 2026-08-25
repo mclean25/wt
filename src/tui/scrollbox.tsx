@@ -147,11 +147,15 @@ export const overlayScroll: { current: ScrollBoxRenderable | null } = {
 export function useOverlayScroll(): RefObject<ScrollBoxRenderable | null> {
   const ref = useRef<ScrollBoxRenderable>(null);
   useEffect(() => {
-    overlayScroll.current = ref.current;
+    // Run after every commit: some overlays mount their scrollbox only
+    // after async content arrives. Capturing the node also lets cleanup
+    // clear the global after React has nulled the callback ref on unmount.
+    const node = ref.current;
+    overlayScroll.current = node;
     return () => {
-      if (overlayScroll.current === ref.current) overlayScroll.current = null;
+      if (overlayScroll.current === node) overlayScroll.current = null;
     };
-  }, []);
+  });
   return ref;
 }
 

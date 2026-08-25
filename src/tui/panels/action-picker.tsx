@@ -19,8 +19,8 @@ type ClaudeActionDef = Extract<ActionDef, { kind: "claude" }>;
 /**
  * Picker-mode item: one of the configured actions, the auto-merge
  * toggle row (a TS flow, not an ActionDef — it needs the optimistic
- * `doAutoMerge` path), or the trailing "Custom prompt..." entry that
- * drops you straight into a freeform editor with no template prefix.
+ * `doAutoMerge` path), the local dev-log overlay row, or the trailing
+ * "Custom prompt..." entry that drops into a freeform editor.
  * `availability` reflects the def's `requires` evaluated against the
  * current row state — `ok: false` grays the entry and surfaces the
  * reason as the dim subtitle. The Custom entry is always available.
@@ -46,6 +46,12 @@ export type PickerItem =
        * flow like `autoMerge`, not an ActionDef — nothing is injected.
        */
       kind: "openEditor";
+      key: string;
+      availability: ActionAvailability;
+    }
+  | {
+      /** Row-palette entry that opens wt's live dev-log overlay. */
+      kind: "devLogs";
       key: string;
       availability: ActionAvailability;
     }
@@ -162,9 +168,10 @@ type Props = {
   selectedIndex: number;
 };
 
-/** Group label for header clustering; autoMerge sits in "github". */
+/** Group label for header clustering of configured and local rows. */
 function itemGroup(item: PickerItem): string | null {
   if (item.kind === "custom" || item.kind === "openEditor") return null;
+  if (item.kind === "devLogs") return "dev server";
   if (item.kind === "autoMerge") return "github";
   return item.def.group ?? null;
 }
@@ -180,7 +187,9 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
         ? "action:__auto-merge__"
         : item.kind === "openEditor"
           ? "action:__open-editor__"
-          : `action:${item.def.id}`;
+          : item.kind === "devLogs"
+            ? "action:__dev-logs__"
+            : `action:${item.def.id}`;
   const selectedId = items[selectedIndex]
     ? rowId(items[selectedIndex]!)
     : undefined;
@@ -253,7 +262,9 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
               : "Arm auto-merge (merge when ready)"
             : item.kind === "openEditor"
               ? "Open in editor"
-              : item.def.name;
+              : item.kind === "devLogs"
+                ? "Open dev server logs"
+                : item.def.name;
         // Trailing hint: a kind/target marker plus the action id. `$` for
         // shell commands; the Claude robot glyph for claude prompts (two
         // spaces: the nerd-font glyph renders wide and reads cramped with
@@ -269,11 +280,13 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
               ? "gh · merge queue aware"
               : item.kind === "openEditor"
                 ? "local"
-                : item.def.kind === "shell"
-                  ? `$ ${item.def.id}`
-                  : item.def.target === "session"
-                    ? `${claudeGlyph}  ↪ ${item.def.id}`
-                    : `${claudeGlyph}  ${item.def.id}`;
+                : item.kind === "devLogs"
+                  ? "live · scrollable"
+                  : item.def.kind === "shell"
+                    ? `$ ${item.def.id}`
+                    : item.def.target === "session"
+                      ? `${claudeGlyph}  ↪ ${item.def.id}`
+                      : `${claudeGlyph}  ${item.def.id}`;
         return (
           <Fragment key={rowId(item)}>
             {showHeader ? (

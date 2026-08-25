@@ -58,6 +58,11 @@ type Props = {
   /** Viewport-relative padding. Smaller values yield a larger modal. */
   inset?: Inset;
   /**
+   * Maximum visible frame width in cells. `null` keeps the inset-derived
+   * width, for wide content surfaces such as terminal logs.
+   */
+  maxWidth?: number | null;
+  /**
    * Keystroke hints rendered along the bottom edge. Pass an empty
    * array only if the modal has no dismiss path (it always has at
    * least one — esc/q/ctrl+c are universal).
@@ -92,6 +97,7 @@ export function Modal({
   title,
   borderColor = theme.accent,
   inset,
+  maxWidth = MAX_CONTENT_WIDTH,
   hints,
   fill = false,
   children,
@@ -99,7 +105,10 @@ export function Modal({
   const { width, height } = useTerminalDimensions();
   const i =
     width < NARROW_WIDTH ? NARROW_INSET : { ...DEFAULT_INSET, ...inset };
-  const { left, right } = capWidth(i.left, i.right, width);
+  const { left, right } =
+    maxWidth === null
+      ? { left: i.left, right: i.right }
+      : capWidth(i.left, i.right, width, maxWidth);
   // Height is content-driven by default: the box grows with its
   // children and the vertical insets only bound the MAXIMUM. A seven-
   // row picker renders as a seven-row modal instead of a fixed
@@ -168,7 +177,7 @@ function pct(p: Percent): number {
 
 /**
  * Resolves the outer box's left/right insets, capping the rendered
- * modal (border included) at `MAX_CONTENT_WIDTH`. The percent insets
+ * modal (border included) at the caller's maximum. The percent insets
  * pass through unchanged until the terminal is wide enough that they'd
  * produce a wider modal than the cap — at that point we switch to
  * absolute-cell insets that center a fixed-width modal instead of
@@ -180,10 +189,11 @@ function capWidth(
   left: Percent,
   right: Percent,
   termWidth: number,
+  maxWidth: number,
 ): { left: Percent | number; right: Percent | number } {
   const outerWidth = termWidth - (termWidth * pct(left)) / 100 - (termWidth * pct(right)) / 100;
   const contentWidth = outerWidth - 2;
-  if (contentWidth <= MAX_CONTENT_WIDTH) return { left, right };
-  const gutter = Math.floor((termWidth - (MAX_CONTENT_WIDTH + 2)) / 2);
+  if (contentWidth <= maxWidth) return { left, right };
+  const gutter = Math.floor((termWidth - (maxWidth + 2)) / 2);
   return { left: gutter, right: gutter };
 }

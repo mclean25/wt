@@ -120,6 +120,7 @@ export type Modal =
       newName: TextEdit | null;
     }
   | { kind: "actionPicker"; state: ActionPickerState }
+  | { kind: "devLogs"; slug: string }
   | {
       kind: "argPicker";
       slug: string;

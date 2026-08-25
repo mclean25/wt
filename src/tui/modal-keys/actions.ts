@@ -69,6 +69,10 @@ export function handleActionPickerKey(
           );
         return;
       }
+      if (item.kind === "devLogs") {
+        setModal({ kind: "devLogs", slug: ap.slug });
+        return;
+      }
       if (palette && item.kind === "action" && item.def.direct) {
         // Direct-launch builtins (the palettes' raw `/compact`): the
         // prompt IS the message; an extras screen would be noise. The

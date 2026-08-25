@@ -21,6 +21,8 @@ import { theme } from "../theme.ts";
 
 /** Quick-pick letter for the `!` picker's auto-merge toggle row. */
 const AUTO_MERGE_KEY = "m";
+/** Quick-pick letter for the row palette's dev-log overlay. */
+const DEV_LOGS_KEY = "l";
 /** Quick-pick letter for the slot palettes' open-in-editor row. */
 const OPEN_EDITOR_KEY = "z";
 
@@ -44,10 +46,10 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
     // Pinned builtins (dev server) lead, then the user's actions, then
     // the trailing builtins (review-bot re-run).
     const defs = [...PINNED_BUILTIN_ACTIONS, ...config.actions, ...BUILTIN_ACTIONS];
-    // `m` is reserved for the auto-merge toggle row below, so key
-    // assignment must not hand it to an action (an explicit key = "m"
-    // in config falls back to auto-derivation).
-    const keyById = assignActionKeys(defs, [AUTO_MERGE_KEY]);
+    // `m` and `l` are reserved for the built-in auto-merge and dev-log
+    // rows below, so assignment must not hand either to a configured
+    // action (an explicit collision falls back to auto-derivation).
+    const keyById = assignActionKeys(defs, [AUTO_MERGE_KEY, DEV_LOGS_KEY]);
     const actionItems = defs.map((def) => ({
       kind: "action" as const,
       def,
@@ -58,12 +60,28 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
     // within a group, so the picker shows one header per section. Keys
     // are assigned over the unclustered list above so they stay stable
     // regardless of grouping. The custom-prompt entry always trails.
-    const buckets = new Map<string, typeof actionItems>();
+    const buckets = new Map<string, PickerItem[]>();
     for (const it of actionItems) {
       const g = it.def.group ?? "";
       const arr = buckets.get(g);
       if (arr) arr.push(it);
       else buckets.set(g, [it]);
+    }
+    if (config.devServer) {
+      const dev = row?.fields.dev.data;
+      const logsItem: PickerItem = {
+        kind: "devLogs",
+        key: DEV_LOGS_KEY,
+        // A parked crash still owns useful logs. A stopped/never-started
+        // server has neither a live pane nor a saved crash report.
+        availability:
+          dev?.running || dev?.starting || dev?.crashed
+            ? { ok: true }
+            : { ok: false, reason: "dev server is not running" },
+      };
+      const devBucket = buckets.get("dev server");
+      if (devBucket) devBucket.push(logsItem);
+      else buckets.set("dev server", [logsItem]);
     }
     // Auto-merge toggle — the flow that used to live on Shift+M, now a
     // picker row (group "github") so it sits with the other PR-shaped
@@ -160,7 +178,9 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
         ? item.def.name
         : item.kind === "autoMerge"
           ? "auto-merge"
-          : "open in editor";
+          : item.kind === "devLogs"
+            ? "dev server logs"
+            : "open in editor";
     toast(`${name}: ${item.availability.reason}`, theme.warn, 2500);
     return false;
   }

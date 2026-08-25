@@ -134,6 +134,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "! c", label: "open action picker, jump to custom prompt" },
       { key: "! u", label: "agent updates the work status (re-assesses, runs `wt status`)" },
       { key: "! g", label: "agent continues the work per current status (build / test / address review)" },
+      { key: "! l", label: "open dev server logs (j/k scroll)" },
       { key: ";", label: "sessions picker (all harnesses for current row)" },
       { key: "; c / x / o", label: "jump to + new claude / codex / opencode" },
       { key: "; d", label: "close highlighted session gracefully (ctrl+d ×2)" },
