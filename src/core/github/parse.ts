@@ -53,6 +53,43 @@ function checkStartedAt(c: RawCheck): string | null | undefined {
 }
 
 /**
+ * The Actions run behind a check entry: which workflow file, and which of
+ * that file's runs. Null for anything that is not an Actions check run —
+ * a StatusContext, a GitHub App's check, or an entry restored from a
+ * cache written before these fields were fetched. Every such entry is
+ * left to the name dedupe, so an unknown provenance never discards
+ * anything.
+ */
+function workflowRunOf(c: RawCheck): { run: number; workflow: number } | null {
+  if (c.__typename !== "CheckRun") return null;
+  const run = c.checkSuite?.workflowRun?.databaseId;
+  const workflow = c.checkSuite?.workflowRun?.workflow?.databaseId;
+  if (typeof run !== "number" || typeof workflow !== "number") return null;
+  return { run, workflow };
+}
+
+/**
+ * Predicate: this entry belongs to a run that a later run of the same
+ * workflow has replaced. Ids are per-repo monotonic, so "later" needs no
+ * timestamp — which matters, because the orphaned entries this exists for
+ * are precisely the ones with nothing to compare against.
+ */
+function supersededRuns(raw: readonly RawCheck[]): (c: RawCheck) => boolean {
+  const newestRun = new Map<number, number>();
+  for (const c of raw) {
+    const w = workflowRunOf(c);
+    if (!w) continue;
+    const prev = newestRun.get(w.workflow);
+    if (prev === undefined || w.run > prev) newestRun.set(w.workflow, w.run);
+  }
+  return (c) => {
+    const w = workflowRunOf(c);
+    if (!w) return false;
+    return w.run < (newestRun.get(w.workflow) ?? w.run);
+  };
+}
+
+/**
  * `statusCheckRollup` is HISTORY, not state: GitHub keeps every check
  * run recorded against a head sha forever, so a run that failed and was
  * then re-run green leaves BOTH entries in the rollup for the same
@@ -73,11 +110,26 @@ function checkStartedAt(c: RawCheck): string | null | undefined {
  * kept, which preserves the previous any-failure-counts behaviour for
  * them. That direction is deliberate — a false red costs a look, while
  * a false green is a broken branch reported as fine.
+ *
+ * Collapsing BY NAME is not enough on its own, because a superseded run
+ * does not always leave a same-named successor to lose to. When a run is
+ * cancelled before its matrix expands, GitHub records the job under its
+ * literal unexpanded name — `Integration tests (Vitest ${{ matrix.shard
+ * }}/3)` — while the run that replaces it reports `1/3`, `2/3`, `3/3`.
+ * Those names can never meet, so a CANCELLED placeholder pinned the badge
+ * red for the life of the branch on a PR whose `mergeStateStatus` was
+ * CLEAN and every real check green. A job renamed between two runs of the
+ * same sha does the same thing. So supersession is resolved at the level
+ * it actually happens — the WORKFLOW RUN — before names are compared at
+ * all: within one head sha, a later run of the same workflow file
+ * discards the whole of an earlier one, orphaned names included.
  */
 function latestPerContext(raw: readonly RawCheck[]): RawCheck[] {
+  const superseded = supersededRuns(raw);
   const newest = new Map<string, { at: number; check: RawCheck }>();
   const undated: RawCheck[] = [];
   for (const c of raw) {
+    if (superseded(c)) continue;
     const name = checkName(c);
     const at = Date.parse(checkStartedAt(c) ?? "");
     if (!name || !Number.isFinite(at)) {

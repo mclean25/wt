@@ -43,8 +43,14 @@ query {
                 contexts(first: 50) {
                   nodes {
                     __typename
-                    ... on CheckRun { name status conclusion }
-                    ... on StatusContext { context state }
+                    ... on CheckRun {
+                      name
+                      status
+                      conclusion
+                      startedAt
+                      checkSuite { workflowRun { databaseId workflow { databaseId } } }
+                    }
+                    ... on StatusContext { context state createdAt }
                   }
                 }
               }

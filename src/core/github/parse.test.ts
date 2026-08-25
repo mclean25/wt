@@ -168,6 +168,142 @@ describe("rollupChecks superseded-run dedupe", () => {
 });
 
 /**
+ * The same lesson one level down. Collapsing by NAME assumes a superseded
+ * run leaves a same-named successor to lose to, and a run cancelled before
+ * its matrix expands does not: GitHub files the job under its literal
+ * unexpanded name while the replacement run reports the expanded ones.
+ *
+ * Every fixture here is the shape of cozee-dev PR #1507, where workflow
+ * file 304273193 ran twice on one head sha — the first cancelled whole,
+ * the second green throughout — and the orphaned placeholder pinned the
+ * badge red on a PR that GitHub reported CLEAN.
+ */
+describe("rollupChecks superseded-workflow-run dedupe", () => {
+  const CI = 304273193;
+  const OTHER = 304261078;
+  const OLD = 32885731630;
+  const NEW = 32885773241;
+
+  const job = (name: string, conclusion: string, workflow: number, run: number) => ({
+    __typename: "CheckRun" as const,
+    name,
+    status: "COMPLETED",
+    conclusion,
+    startedAt: "2026-08-25T18:47:00Z",
+    checkSuite: { workflowRun: { databaseId: run, workflow: { databaseId: workflow } } },
+  });
+
+  test("an orphaned name from a superseded run does not pin the badge", () => {
+    // The reported case. The cancelled entry's name can never meet the
+    // three expanded names that replaced it, so no name dedupe reaches it.
+    expect(
+      rollupChecks([
+        job("Integration tests (Vitest ${{ matrix.shard }}/3)", "CANCELLED", CI, OLD),
+        job("Integration tests (Vitest 1/3)", "SUCCESS", CI, NEW),
+        job("Integration tests (Vitest 2/3)", "SUCCESS", CI, NEW),
+        job("Integration tests (Vitest 3/3)", "SUCCESS", CI, NEW),
+      ]),
+    ).toBe("pass");
+  });
+
+  test("a run's whole contents go, not only the names that were replaced", () => {
+    // A job dropped or renamed between the two runs is the same shape as
+    // the matrix placeholder, and must not survive its own run's death.
+    expect(
+      rollupChecks([
+        job("Retired job", "FAILURE", CI, OLD),
+        job("Lint & Typecheck", "CANCELLED", CI, OLD),
+        job("Lint & Typecheck", "SUCCESS", CI, NEW),
+      ]),
+    ).toBe("pass");
+  });
+
+  test("the newest run's own failure is untouched", () => {
+    // The whole risk of discarding by run is losing real red. It must
+    // only ever discard runs that something newer replaced.
+    expect(
+      rollupChecks([
+        job("Lint & Typecheck", "SUCCESS", CI, OLD),
+        job("Lint & Typecheck", "FAILURE", CI, NEW),
+      ]),
+    ).toBe("fail");
+  });
+
+  test("one workflow's newer run never supersedes another workflow's", () => {
+    // Run ids are per-repo monotonic, so a busy repo routinely gives one
+    // workflow a higher id than another's live run. Grouping by workflow
+    // file is what stops that from reading as supersession.
+    //
+    // Neutral names on purpose: `isIgnoredCheck` folds in this machine's
+    // `[review_bot] check_contexts`, so a fixture named after the real bot
+    // would be silently skipped here and counted in CI.
+    expect(
+      rollupChecks([
+        job("Deploy preview", "FAILURE", OTHER, OLD),
+        job("Lint & Typecheck", "SUCCESS", CI, NEW),
+      ]),
+    ).toBe("fail");
+  });
+
+  test("a check with no Actions run behind it is never discarded", () => {
+    // #1507 carried two: a GitHub App's check run and a StatusContext.
+    // Neither has a workflow run, so neither can be superseded by one.
+    expect(
+      rollupChecks([
+        {
+          __typename: "CheckRun" as const,
+          name: "Supabase Preview",
+          status: "COMPLETED",
+          conclusion: "FAILURE",
+          startedAt: "2026-08-25T18:46:31Z",
+        },
+        job("Lint & Typecheck", "SUCCESS", CI, NEW),
+      ]),
+    ).toBe("fail");
+  });
+
+  test("a pre-v25 cache entry falls back to the name dedupe", () => {
+    // Absent provenance means unknown, never fine: with no run identity
+    // the orphan is a context of its own and still reads red, which is
+    // the state a restored cache is in until the next fetch.
+    expect(
+      rollupChecks([
+        {
+          __typename: "CheckRun" as const,
+          name: "Integration tests (Vitest ${{ matrix.shard }}/3)",
+          status: "COMPLETED",
+          conclusion: "CANCELLED",
+          startedAt: "2026-08-25T18:47:29Z",
+        },
+        {
+          __typename: "CheckRun" as const,
+          name: "Integration tests (Vitest 1/3)",
+          status: "COMPLETED",
+          conclusion: "SUCCESS",
+          startedAt: "2026-08-25T18:47:51Z",
+        },
+      ]),
+    ).toBe("fail");
+  });
+
+  test("a still-running newer run reads pending, not the old run's red", () => {
+    expect(
+      rollupChecks([
+        job("Lint & Typecheck", "FAILURE", CI, OLD),
+        {
+          __typename: "CheckRun" as const,
+          name: "Lint & Typecheck",
+          status: "IN_PROGRESS",
+          conclusion: null,
+          startedAt: "2026-08-25T18:47:33Z",
+          checkSuite: { workflowRun: { databaseId: NEW, workflow: { databaseId: CI } } },
+        },
+      ]),
+    ).toBe("pending");
+  });
+});
+
+/**
  * `rollupChecklist` decides the review-bot glyph for a checklist bot.
  * Every case here is built from PR #1444, where a delta review posted
  * one open finding and the badge stayed green.

@@ -17,6 +17,19 @@ export type RawCheck =
       conclusion?: string | null;
       /** Ordering key for superseded-run dedupe; absent on cached pre-v19 entries. */
       startedAt?: string | null;
+      /**
+       * Which Actions run produced this entry. `workflow.databaseId`
+       * identifies the workflow FILE (stable across a rename, and distinct
+       * for two files that happen to share a `name:`); `workflowRun
+       * .databaseId` orders that file's runs. Absent on a check run from a
+       * GitHub App rather than Actions, and on cached pre-v25 entries.
+       */
+      checkSuite?: {
+        workflowRun?: {
+          databaseId?: number | null;
+          workflow?: { databaseId?: number | null } | null;
+        } | null;
+      } | null;
     }
   | {
       __typename: "StatusContext";
