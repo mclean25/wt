@@ -21,6 +21,35 @@ export const AUTO_MERGE_METHOD: AutoMergeMethod = "REBASE";
  * gate, and a uniform error-logged/GhActionResult shape. Callers supply
  * only the argv and their own log label/context.
  */
+const WORKFLOW_SCOPE_REMEDY =
+  "This is the LOCAL gh token, not the PR: run `gh auth refresh -h github.com -s workflow` " +
+  "(then `gh auth status` to confirm), and try again. Retrying as-is never clears it.";
+
+/**
+ * Did GitHub refuse this because the caller's credential lacks the
+ * `workflow` scope?
+ *
+ * It reads as a statement about the pull request — "Pull request
+ * refusing to allow an OAuth App to create or update workflow
+ * `.github/workflows/ci.yml`" — and it is a statement about the token on
+ * this machine. Nothing in it names a remedy, and the noun it leads with
+ * sends the reader to the PR, the repo, or the merge queue.
+ *
+ * It bites hardest through the merge QUEUE, where nothing the user did
+ * mentions a workflow file: enqueueing has GitHub create a
+ * `gh-readonly-queue/...` branch carrying the PR's changes, so a PR that
+ * touches `.github/workflows/` needs the scope to be enqueued at all.
+ * Wording varies by credential kind (OAuth App / GitHub App / Personal
+ * Access Token), so the match is on the stable half.
+ *
+ * Never retryable: a scope does not arrive on its own.
+ */
+export function missingWorkflowScope(error: string | undefined): boolean {
+  if (!error) return false;
+  return /refusing to allow \S+(?: \S+)* to create or update workflow/i.test(error)
+    || /without\s+`?workflow`?\s+scope/i.test(error);
+}
+
 async function runGhMutation(
   argv: string[],
   logLabel: string,
@@ -29,7 +58,8 @@ async function runGhMutation(
   if (!(await hasGh())) return { ok: false, error: "gh CLI not found" };
   const r = await run(argv, { cwd: config.paths.mainClone, timeoutMs: 15_000 });
   if (r.exitCode !== 0) {
-    const msg = (r.stderr || r.stdout).trim() || `gh exited ${r.exitCode}`;
+    const raw = (r.stderr || r.stdout).trim() || `gh exited ${r.exitCode}`;
+    const msg = missingWorkflowScope(raw) ? `${raw} ${WORKFLOW_SCOPE_REMEDY}` : raw;
     log.error(logLabel, { ...logCtx, msg });
     return { ok: false, error: msg };
   }

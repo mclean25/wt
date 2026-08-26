@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import { checksStillPending, notYetEnqueueable } from "./mutations.ts";
+import { checksStillPending, missingWorkflowScope, notYetEnqueueable } from "./mutations.ts";
 
 describe("notYetEnqueueable", () => {
   // Observed verbatim on a live queue base while a required check had
@@ -131,5 +131,56 @@ describe("checksStillPending", () => {
       expect(notYetEnqueueable(msg)).toBe(true);
       expect(checksStillPending(msg)).toBe(true);
     }
+  });
+});
+
+/**
+ * The verbatim refusal from cozee-dev #1572, a `staging` PR touching
+ * `.github/workflows/ci.yml` on a token whose scopes were
+ * `admin:public_key, gist, read:org, repo`. It reads as a fact about the
+ * pull request and is a fact about the local token, and it names no
+ * remedy at all.
+ */
+describe("missingWorkflowScope", () => {
+  test("the OAuth App wording, as GitHub sends it", () => {
+    expect(
+      missingWorkflowScope(
+        "gh: Pull request refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope",
+      ),
+    ).toBe(true);
+  });
+
+  test("the other two credential kinds, which differ only in the noun", () => {
+    expect(
+      missingWorkflowScope(
+        "refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope",
+      ),
+    ).toBe(true);
+    expect(
+      missingWorkflowScope(
+        "refusing to allow a Personal Access Token to create or update workflow `.github/workflows/release.yml` without `workflow` scope",
+      ),
+    ).toBe(true);
+  });
+
+  test("either half alone is enough — the two clauses do not always travel together", () => {
+    expect(missingWorkflowScope("refusing to allow an OAuth App to create or update workflow x.yml")).toBe(true);
+    expect(missingWorkflowScope("resource not accessible without workflow scope")).toBe(true);
+  });
+
+  test("an unrelated refusal is not claimed", () => {
+    // The queue's own refusals must keep their own handling: mislabelling
+    // one as a scope problem sends the reader to re-auth over a wait.
+    expect(missingWorkflowScope('gh: Required status check "Lint & Typecheck" is expected.')).toBe(false);
+    expect(missingWorkflowScope("gh: Auto merge is not allowed for this repository")).toBe(false);
+    expect(missingWorkflowScope("gh: Pull request is already queued")).toBe(false);
+    expect(missingWorkflowScope(undefined)).toBe(false);
+  });
+
+  test("it is never retryable, so it must not look like the pending class", () => {
+    const err =
+      "gh: Pull request refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope";
+    expect(checksStillPending(err)).toBe(false);
+    expect(notYetEnqueueable(err)).toBe(false);
   });
 });
