@@ -8,7 +8,7 @@
  * webhook. See `core/events/` for the daemon + on-disk contract.
  */
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -42,13 +42,56 @@ subcommands:
   stop        unload the launchd agent
   secret      generate + store an HMAC secret, print webhook setup`;
 
+function readFileSafe(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 function plistPath(): string {
   return join(homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 }
 
-/** The wt entrypoint this daemon runs from — same source tree as this CLI. */
-function mainEntry(): string {
-  return join(import.meta.dir, "..", "..", "main.ts");
+/**
+ * The launcher launchd execs.
+ *
+ * Deliberately `bin/wt` and NOT `process.execPath`. On Homebrew the running
+ * interpreter is a VERSION-SPECIFIC Cellar path
+ * (`/opt/homebrew/Cellar/bun/1.3.14/bin/bun`), which `brew upgrade bun`
+ * deletes — after which launchd cannot exec the job at all. That failure is
+ * invisible in the worst way: `launchctl list` shows exit **78**, and both
+ * `StandardOutPath` and `StandardErrorPath` stay EMPTY, because nothing ever
+ * ran to write to them. A running daemon survives (it is already exec'd), so
+ * the agent looks healthy for as long as nobody restarts it and is dead the
+ * first time anybody does. Observed here after an upgrade to bun 1.4.0, on an
+ * agent installed 7 days earlier.
+ *
+ * `bin/wt` resolves `bun` off PATH, which the plist bakes, so it survives any
+ * number of interpreter upgrades — and it is the same launcher a human uses,
+ * so the daemon inherits the `env -u BUN_INSPECT` scrub for free.
+ */
+function launcherEntry(): string {
+  return join(import.meta.dir, "..", "..", "..", "bin", "wt");
+}
+
+/**
+ * The program path a plist will try to exec. Exported for tests: it powers
+ * the only diagnostic for a job launchd cannot exec, and that failure writes
+ * nothing to either daemon log, so a silent parse miss here would leave the
+ * failure with no output at all — again.
+ */
+export function plistProgramOf(xml: string): string | null {
+  const arr = xml.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+  const first = arr?.[1]?.match(/<string>([^<]*)<\/string>/);
+  return first?.[1] ?? null;
+}
+
+/** The program path the installed plist will try to exec, or null if unreadable. */
+function plistProgram(): string | null {
+  const xml = readFileSafe(plistPath());
+  return xml === null ? null : plistProgramOf(xml);
 }
 
 function ago(ts: number | null | undefined): string {
@@ -68,11 +111,14 @@ function xmlEscape(s: string): string {
 }
 
 function plistContents(): string {
-  const argv = [process.execPath, mainEntry(), "events", "serve"];
+  const argv = [launcherEntry(), "events", "serve"];
   const env: Record<string, string> = {
     // launchd starts with a minimal PATH; bake the install-time PATH (which
-    // has gh + git) plus bun's own dir so `fetchGithub` can shell out.
-    PATH: `${dirname(process.execPath)}:${process.env.PATH ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"}`,
+    // has gh + git) plus bun's own dir so `bin/wt` finds an interpreter and
+    // `fetchGithub` can shell out. bun's dir goes LAST: it is a versioned
+    // Cellar path on Homebrew and will be deleted by the next upgrade, so it
+    // is a fallback for a bun that is not on PATH, never the primary.
+    PATH: `${process.env.PATH ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"}:${dirname(process.execPath)}`,
     HOME: homedir(),
   };
   // Carry config overrides so the daemon loads the same config.toml the TUI does.
@@ -166,6 +212,22 @@ async function launchctl(action: "load" | "unload"): Promise<number> {
     console.error(red(`no launchd agent at ${plist} — run \`wt events install\` first`));
     return 1;
   }
+  // Reconcile before loading, never only at install. Every value in the
+  // plist is derived from the current environment (interpreter, PATH, repo
+  // location), so a stored plist is a snapshot of a machine that may have
+  // moved on — and the failure it produces has no output anywhere to read:
+  // launchd cannot exec, so it writes nothing to either log and reports
+  // exit 78. A source fix cannot heal a plist a previous version wrote;
+  // only a pass that rewrites it can.
+  if (action === "load") {
+    const want = plistContents();
+    if (readFileSafe(plist) !== want) {
+      const before = plistProgram();
+      writeFileSync(plist, want);
+      const stale = before && !existsSync(before) ? ` (its program was gone: ${before})` : "";
+      console.log(`${yellow("↻")} refreshed the launchd agent${stale}`);
+    }
+  }
   const r = await sh(["launchctl", action, "-w", plist]);
   if (r.stderr.trim()) process.stderr.write(r.stderr.endsWith("\n") ? r.stderr : `${r.stderr}\n`);
   if (r.exitCode !== 0) {
@@ -217,6 +279,13 @@ function cmdStatus(): number {
     console.log(`  build         ${yellow(`stale (wrote ${wrote}, this build ${(buildSha() ?? "?").slice(0, 7)})`)}`);
     console.log(dim("                the TUI is ignoring its snapshot and fetching live; it restarts itself on its next fetch"));
     console.log(dim("                — `wt events stop && wt events start` does it now"));
+  }
+  const program = plistProgram();
+  if (program && !existsSync(program)) {
+    // The one failure with no output to read: launchd never execs, so both
+    // daemon logs stay empty and `launchctl list` shows a bare exit 78.
+    console.log(`  agent         ${red("cannot exec")} ${dim(program)}`);
+    console.log(dim("                `wt events start` rewrites the agent and reloads it"));
   }
   if (!alive) console.log(dim("\nStart it with `wt events start` (after `wt events install`)."));
   return 0;

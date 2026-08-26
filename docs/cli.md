@@ -290,7 +290,7 @@ The optional GitHub webhook daemon — see [github-events.md](github-events.md).
 | sub | what it does |
 |---|---|
 | `install` | write the launchd agent + generate the HMAC secret; prints the values to paste into GitHub's webhook settings |
-| `start` / `stop` | load / unload the launchd agent |
+| `start` / `stop` | load / unload the launchd agent; `start` also rewrites the agent when the stored one no longer matches the environment (a `brew upgrade bun` makes the baked interpreter path unexecutable) |
 | `status` | liveness, bind address, pid, delivery count, last fetch/error, snapshot age, and a `build` line when the daemon is running older code than the caller (see [github-events.md](github-events.md#the-daemons-build-and-why-the-tui-checks-it)) |
 | `secret` | generate or show the HMAC secret |
 | `uninstall` | unload + remove the launchd agent |

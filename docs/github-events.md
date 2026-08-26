@@ -66,6 +66,31 @@ without moving it — a daemon started mid-edit still looks current. That gap is
 deliberate: closing it means a `git status` per read, and a daemon is stale by
 spanning commits, which is what a long-lived process does by construction.
 
+## The launchd agent execs `bin/wt`, not the interpreter
+
+`wt events install` used to bake `process.execPath` into the plist. On Homebrew
+that is a **version-specific** path (`/opt/homebrew/Cellar/bun/1.3.14/bin/bun`),
+and `brew upgrade bun` deletes it.
+
+The failure this produces has no output anywhere. launchd never execs anything,
+so `StandardOutPath` and `StandardErrorPath` both stay empty; `launchctl list`
+shows a bare exit **78**; and a daemon that is *already running* survives the
+upgrade untouched, so the agent reads healthy for as long as nobody restarts
+it. It is dead the first time anybody does — which on this machine was seven
+days later, and only because the daemon was being restarted to fix something
+else.
+
+So the program is `bin/wt`, which resolves `bun` off the PATH the plist bakes
+(and brings the `env -u BUN_INSPECT` scrub with it). bun's own directory moves
+to the END of that PATH: it is a fallback for a bun that is not on PATH, never
+the primary.
+
+A source fix cannot repair a plist an older version already wrote, so
+`wt events start` **reconciles** — it rewrites the plist whenever the stored one
+differs from what the current environment would generate, and says so, naming
+the missing program when that is why. `wt events status` reports an
+`agent cannot exec` line for the same condition.
+
 ## Fetch cadence
 
 A delivery does not map to a fetch. Two constraints compose in `scheduleFetch`:
