@@ -16,6 +16,13 @@
 [paths]
 main_clone = "/tmp/wt-ci-fake-main"
 worktree_root = "/tmp/wt-ci-fake-worktrees"
+# `cache_root` is derived as this file's dirname, and log_dir/lock_dir hang
+# off it, so relocating cache_db moves every cross-process artifact at once.
+# Without it the suite's cache root is the REAL ~/.cache/wt, where a single
+# test calling into `core/events/store.ts` would overwrite the live daemon's
+# snapshot -- a test that damages the thing it is testing on a machine that
+# is using it.
+cache_db = "/tmp/wt-test-cache/cache.sqlite"
 
 [branch]
 prefix = "ci"

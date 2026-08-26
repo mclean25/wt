@@ -18,6 +18,7 @@
 import { mkdirSync, readFileSync, renameSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 
+import { sameBuild } from "../build-id.ts";
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
 import { makeDebounced } from "../repo-watch.ts";
@@ -55,6 +56,15 @@ export type GithubSnapshot = GithubSnapshotData & {
   updatedAt: number;
   /** The worktree branch set this snapshot was fetched for. */
   branches: string[];
+  /**
+   * The wt build that produced this snapshot (source-clone HEAD, null
+   * when wt is not a git checkout). The snapshot is PARSED data, so it
+   * carries the writer's parsing rules with it — and the writer is a
+   * launchd agent that outlives every update. Without this, a daemon
+   * from any point in the past silently overrides a current TUI's own
+   * fixes; see `core/build-id.ts`.
+   */
+  writerSha?: string | null;
 };
 
 export type EventsState = {
@@ -112,6 +122,24 @@ export function readSnapshot(): GithubSnapshot | null {
 }
 
 /**
+ * Narrate a build mismatch ONCE per process. It is worth interrupting a
+ * scan for — every badge the daemon feeds is suspect until it restarts,
+ * and a user who just updated has no other way to learn that the piece
+ * of wt they cannot see is still on the old code. Once, because the
+ * check runs on every fetch and the condition persists until the daemon
+ * cycles.
+ */
+let warnedForeignSnapshot = false;
+function warnForeignSnapshotOnce(writerSha: string | null | undefined): void {
+  if (warnedForeignSnapshot) return;
+  warnedForeignSnapshot = true;
+  log.attention.warn(
+    `events daemon is running an older wt build (${writerSha ? writerSha.slice(0, 7) : "unstamped"}) ` +
+      "— serving live fetches until it restarts",
+  );
+}
+
+/**
  * Serve the github query from the daemon's snapshot when it's fresh and
  * covers every requested branch; otherwise return null so the caller does
  * a live `gh` fetch. Coverage is exact-subset: a branch absent from the
@@ -126,6 +154,14 @@ export function snapshotForBranches(
   const snap = readSnapshot();
   if (!snap) return null;
   if (Date.now() - snap.updatedAt > SNAPSHOT_FRESH_MS) return null;
+  if (!sameBuild(snap.writerSha)) {
+    // A different build wrote this. Fall back to a live fetch rather
+    // than render its parse: the daemon restarts itself on the next
+    // cycle (see `daemon.ts`), so this is a short window, and a wrong
+    // badge during it would be indistinguishable from a real one.
+    warnForeignSnapshotOnce(snap.writerSha);
+    return null;
+  }
   const covered = new Set(snap.branches);
   for (const b of branches) if (!covered.has(b)) return null;
   const prs: Record<string, PullRequest> = {};

@@ -28,6 +28,44 @@ The daemon listens on `[github.events].host` (default loopback); map a public HT
 
 Omit the `[github.events]` section entirely and nothing changes — the daemon subcommands just refuse to run, and the TUI stays in watcher + backstop mode. If the daemon dies mid-session, `backstop_poll_ms` (default 10 minutes) bounds how stale the badges can get.
 
+## The daemon's build, and why the TUI checks it
+
+`github.json` holds **parsed** `PullRequest` objects, not the raw GraphQL
+payload, so a snapshot carries the writing build's parsing rules with it. The
+writer is a launchd agent with `KeepAlive`, which means it survives every hot
+update and can be arbitrarily older than the TUI reading it. Nothing said so:
+`wt events status` reported "running", the fetches succeeded, and the TUI
+preferred the snapshot over its own fetch, so a daemon started weeks earlier
+quietly overrode every parsing fix the TUI had.
+
+That cost two visible wrong badges on one day, both on a TUI that already held
+the fix: a red checks badge on a PR whose only failure was a superseded
+`CANCELLED` job (the daemon predated the rollup dedupe), and a stale review-bot
+badge on a PR whose delta review named the head sha (it predated `coversHead`).
+Both read as wt bugs against a working GitHub.
+
+Two halves, in `core/build-id.ts`:
+
+- **The snapshot is stamped** with `writerSha`, the source clone's HEAD.
+  `snapshotForBranches` refuses a snapshot from a different build and falls back
+  to a live fetch, narrating once on `log.attention.*`. A **missing** stamp is
+  refused too — only a build predating the field writes one, so absence is the
+  diagnosis rather than a missing input. It fails *open* only when the reader
+  cannot identify itself at all (wt is not a git checkout), where there is no
+  version question to answer.
+- **The daemon stands down** when it notices the source clone move under it,
+  checked at the top of each fetch. `KeepAlive` means exiting *is* the upgrade.
+  Nothing is lost: the delivery that woke it re-arrives as the restarted
+  daemon's warm-up fetch.
+
+`wt events status` prints a `build` line when the two disagree, so "running" and
+"up to date" stop being the same answer.
+
+The identity is the committed sha, so an **uncommitted** edit moves the code
+without moving it — a daemon started mid-edit still looks current. That gap is
+deliberate: closing it means a `git status` per read, and a daemon is stale by
+spanning commits, which is what a long-lived process does by construction.
+
 ## Fetch cadence
 
 A delivery does not map to a fetch. Two constraints compose in `scheduleFetch`:

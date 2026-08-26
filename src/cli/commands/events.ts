@@ -12,6 +12,7 @@ import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { buildSha, sameBuild } from "../../core/build-id.ts";
 import { config } from "../../core/config.ts";
 import { resolveWebhookSecret, runDaemonForeground } from "../../core/events/daemon.ts";
 import {
@@ -205,6 +206,18 @@ function cmdStatus(): number {
     if (state.lastError) console.log(`  last error    ${red(state.lastError)}`);
   }
   console.log(`  snapshot      ${snap ? `${Object.keys(snap.prs).length} PRs, written ${ago(snap.updatedAt)}` : dim("none")}`);
+  // The daemon outlives every hot update, and it hands the TUI PARSED
+  // data — so "running" and "up to date" are different questions and only
+  // the first one used to be answerable here. A daemon on an older build
+  // looks perfectly healthy while feeding the TUI its own build's
+  // parsing rules, which is how a red checks badge and a stale
+  // review-bot badge both survived on a TUI that had already fixed them.
+  if (snap && !sameBuild(snap.writerSha)) {
+    const wrote = snap.writerSha ? snap.writerSha.slice(0, 7) : "unstamped";
+    console.log(`  build         ${yellow(`stale (wrote ${wrote}, this build ${(buildSha() ?? "?").slice(0, 7)})`)}`);
+    console.log(dim("                the TUI is ignoring its snapshot and fetching live; it restarts itself on its next fetch"));
+    console.log(dim("                — `wt events stop && wt events start` does it now"));
+  }
   if (!alive) console.log(dim("\nStart it with `wt events start` (after `wt events install`)."));
   return 0;
 }

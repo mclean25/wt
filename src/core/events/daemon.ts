@@ -16,6 +16,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 
+import { buildSha, currentSourceSha } from "../build-id.ts";
 import { config, type GithubEventsConfig } from "../config.ts";
 import { fetchGithub } from "../github.ts";
 import { createLogger } from "../logger.ts";
@@ -252,12 +253,41 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
   let fetching = false;
   let refetchQueued = false;
 
+  /**
+   * Has the source clone moved since this process loaded its modules?
+   *
+   * Checked per fetch rather than on a timer: a fetch is the only thing
+   * this daemon does that anyone else reads, so it is exactly where a
+   * wrong build costs something. Null on either side means "cannot
+   * tell" (wt is not a git checkout) and never triggers an exit — a
+   * daemon that restarted itself on an unanswerable question would loop.
+   */
+  function sourceMoved(): boolean {
+    const started = buildSha();
+    if (started === null) return false;
+    const now = currentSourceSha();
+    return now !== null && now !== started;
+  }
+
   async function runFetch(): Promise<void> {
     if (fetching) {
       // A burst landed mid-fetch; remember to run once more so the final
       // state always wins.
       refetchQueued = true;
       return;
+    }
+    if (sourceMoved()) {
+      // Stand down rather than serve a snapshot the TUI will refuse.
+      // launchd has KeepAlive, so exiting IS the upgrade: the agent comes
+      // straight back on the new code. Nothing is lost — the delivery
+      // that woke us re-arrives as the restarted daemon's warm-up fetch,
+      // and a missed one only costs the staleTime backstop.
+      log.info("wt source moved under a running daemon — exiting so launchd restarts it", {
+        startedFrom: buildSha(),
+        now: currentSourceSha(),
+      });
+      writeState(state);
+      process.exit(0);
     }
     fetching = true;
     const startedAt = Date.now();
@@ -281,6 +311,10 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
         branches,
         prs: Object.fromEntries(prs),
         mergeQueue: Object.fromEntries(mergeQueue),
+        // What the TUI checks before serving this instead of fetching
+        // itself. The snapshot is parsed data, so it carries THIS
+        // build's rules; a reader on a newer build must not render them.
+        writerSha: buildSha(),
       });
       touchMarker(Date.now());
       state.lastFetchAt = Date.now();
