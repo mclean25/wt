@@ -279,6 +279,8 @@ export type GithubEventsConfig = {
 export type PullRequestTarget = "github" | "linear";
 
 export type GithubConfig = {
+  /** Whether this repository uses GitHub's human-reviewer workflow. */
+  reviewers: boolean;
   /**
    * Glob patterns matched against check context names (CheckRun.name /
    * StatusContext.context). Matching contexts are dropped from the PR
@@ -949,6 +951,7 @@ const GENERIC_DEFAULTS = {
     timeoutMs: 120_000,
   },
   github: {
+    reviewers: true,
     prTarget: "github" as const satisfies PullRequestTarget,
   },
   // CodeRabbit preset — the shape the review-bot track hardcoded before
@@ -1432,6 +1435,13 @@ function build(raw: Raw, errs: Errors): Config {
   const update = { startupCheck: updateStartupRaw !== false };
 
   const githubRaw = obj(raw.github);
+  const githubReviewersRaw = githubRaw?.reviewers;
+  if (
+    githubReviewersRaw !== undefined &&
+    typeof githubReviewersRaw !== "boolean"
+  ) {
+    errs.add("github.reviewers must be a boolean");
+  }
   const githubEventsRaw = githubRaw ? obj(githubRaw.events) : null;
   const githubEventsSecretFile = githubEventsRaw
     ? errs.optStrOrNull(githubEventsRaw, "secret_file")
@@ -1455,6 +1465,7 @@ function build(raw: Raw, errs: Errors): Config {
     };
   }
   const github: GithubConfig = {
+    reviewers: githubReviewersRaw !== false,
     ignoredChecks: strArr(githubRaw?.ignored_checks, []),
     defaultReviewer: errs.optStrOrNull(githubRaw, "default_reviewer"),
     prTarget: errs.optEnum(

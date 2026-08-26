@@ -24,7 +24,10 @@ function reasonFor(candidate: CleanCandidate): string {
     candidate.kind === "local" ? candidate.row.status.kind : candidate.entry.status;
   if (status === StatusKind.Merged) return "merged";
   if (status === StatusKind.Gone) return "gone";
-  if (candidate.kind === "local" && candidate.row.pr?.state === "MERGED") {
+  if (
+    (candidate.kind === "local" && candidate.row.pr?.state === "MERGED") ||
+    (candidate.kind === "remote" && candidate.pr?.state === "MERGED")
+  ) {
     return "PR merged";
   }
   return "—";

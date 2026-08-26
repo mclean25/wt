@@ -252,6 +252,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     const branch = row.wt.branch;
     const wasDraft = row.pr.isDraft;
     const reviewerToAdd =
+      config.github.reviewers &&
       config.github.defaultReviewer &&
       !row.pr.requestedReviewers.includes(config.github.defaultReviewer)
         ? config.github.defaultReviewer

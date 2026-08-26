@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { actionRegistry } from "../../core/actions.ts";
 import type { RemoteConfig } from "../../core/config.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
+import type { PullRequest } from "../../core/types.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { spawnBackgroundRemove } from "../../core/lifecycle.ts";
@@ -74,6 +75,7 @@ function recordRemovedSnapshots(rows: readonly WorktreeRow[]): void {
 export type DestroyFlowsCtx = {
   rows: readonly WorktreeRow[];
   remoteWorktrees: readonly RemoteWorktreeSummary[];
+  remotePullRequests: Readonly<Record<string, PullRequest>> | undefined;
   archivedKeys: ReadonlySet<string>;
   /** Currently-selected row (for `doReplayStack`'s stack resolution). */
   current: WorktreeRow | undefined;
@@ -117,6 +119,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
   const {
     rows,
     remoteWorktrees,
+    remotePullRequests,
     archivedKeys,
     toast,
     archive,
@@ -266,6 +269,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       isRemoteCleanCandidate(
         entry,
         archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug)),
+        remotePullRequests?.[entry.branch],
       ),
     );
     if (localCandidates.length + remoteCandidates.length === 0) {

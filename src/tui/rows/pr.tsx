@@ -18,7 +18,6 @@ import {
   reviewBotBadge,
   showReviewBot,
 } from "../badges.ts";
-import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { NF } from "../icons.ts";
 import { theme } from "../theme.ts";
 import { fitSegments, type Segment } from "./fit.tsx";
@@ -270,16 +269,18 @@ function buildPrSegments(
   return segs;
 }
 
-const PrLine = memo(function PrLine({
-  row,
+export const PrLine = memo(function PrLine({
+  pr,
+  mq,
   valueWidth,
 }: {
-  row: WorktreeRow;
+  pr: PullRequest | undefined;
+  mq: MergeQueueEntry | undefined;
   valueWidth: number;
 }) {
   const segments = useMemo(
-    () => (row.pr ? buildPrSegments(row.pr, row.mq) : null),
-    [row],
+    () => (pr ? buildPrSegments(pr, mq) : null),
+    [pr, mq],
   );
   const fit = useMemo(
     () => (segments ? fitSegments(segments, valueWidth) : null),
@@ -297,5 +298,7 @@ export const prRow: RowModule = {
   id: "pr",
   label: "pr",
   sources: ({ github }) => [github],
-  render: ({ row, valueWidth }) => <PrLine row={row} valueWidth={valueWidth} />,
+  render: ({ row, valueWidth }) => (
+    <PrLine pr={row.pr} mq={row.mq} valueWidth={valueWidth} />
+  ),
 };

@@ -186,7 +186,7 @@ function wtItem(
 }
 
 function sectionItem(sectionKey: string): VisualItem {
-  return { kind: "section", sectionKey, label: sectionKey, rows: [] } as unknown as VisualItem;
+  return { kind: "section", sectionKey, label: sectionKey, members: [] } as unknown as VisualItem;
 }
 
 describe("cursorSuccessor", () => {

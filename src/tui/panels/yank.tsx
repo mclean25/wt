@@ -9,6 +9,7 @@ import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import type { SelectedSection } from "../hooks/useVisualItems.ts";
+import { isRemoteSummary, remoteEntryLabel } from "../remote-creation.ts";
 
 export type Item = { key: string; label: string; value: string | null };
 
@@ -73,22 +74,34 @@ export function yankItemsFor(row: WorktreeRow): Item[] {
  * the clipboard.
  */
 export function sectionYankItems(section: SelectedSection): Item[] {
-  const rows = section.rows;
+  const members = section.members.map((member) =>
+    member.kind === "wt"
+      ? {
+          slug: member.row.wt.slug,
+          branch: member.row.wt.branch,
+          title: member.row.title,
+        }
+      : {
+          slug: remoteEntryLabel(member.entry),
+          branch: isRemoteSummary(member.entry) ? member.entry.branch : null,
+          title: remoteEntryLabel(member.entry),
+        },
+  );
   const join = (values: readonly (string | null)[]): string | null => {
     const present = values.filter((v): v is string => Boolean(v));
     return present.length > 0 ? present.join(" ") : null;
   };
   const list =
-    rows.length > 0
+    members.length > 0
       ? [
-          `${section.label} (${rows.length})`,
-          ...rows.map((r) => `- ${r.wt.slug}: ${r.title}`),
+          `${section.label} (${members.length})`,
+          ...members.map((member) => `- ${member.slug}: ${member.title}`),
         ].join("\n")
       : null;
   return [
     { key: "n", label: "name", value: section.label || null },
-    { key: "s", label: "slugs", value: join(rows.map((r) => r.wt.slug)) },
-    { key: "b", label: "branches", value: join(rows.map((r) => r.wt.branch || null)) },
+    { key: "s", label: "slugs", value: join(members.map((member) => member.slug)) },
+    { key: "b", label: "branches", value: join(members.map((member) => member.branch || null)) },
     { key: "l", label: "list", value: list },
   ];
 }

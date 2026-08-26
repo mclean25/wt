@@ -134,8 +134,8 @@ is an independent clone with its own refs — see
 
 Configure a second machine whose own `wt` installation, clone, config, and
 worktree root remain authoritative. The local TUI polls that host's worktree
-summaries and renders them in a server-named section of the same list,
-grouped apart from local worktrees. `Ctrl+N` forwards the normal `wt new`
+summaries and renders them in the same sections as local worktrees, with a
+small remote indicator on each row. `Ctrl+N` forwards the normal `wt new`
 lifecycle over SSH; F10/F11/F12 on one of those rows attach to that
 worktree's remote tmux shell, diff, or AI session. Ordinary `n` / `N`
 continue to create locally.
@@ -145,9 +145,10 @@ cache. If the host sleeps or becomes unreachable, those rows remain visible as
 last-known state and are marked `host unavailable`; they are not interpreted as
 deleted worktrees.
 
-Fleet presentation state remains local to the controlling TUI. In particular,
-archiving a remote row records a location-aware (`host` + `slug`) key in the
-local `archive.json`; it does not move or mutate the checkout on the SSH host.
+Section assignment comes from the remote host's authoritative wt state; fold
+state and archiving remain local to the controlling TUI. Archiving a remote row
+records a location-aware (`host` + `slug`) key in the local `archive.json`; it
+does not move or mutate the checkout on the SSH host.
 Filesystem, Git, tmux, and destructive operations continue to execute remotely.
 The schema currently accepts one `[remote]`, but stored identity and query
 caches are host-qualified; future multiple-remote support will not conflate
@@ -425,6 +426,7 @@ Summaries are content-addressed by a hash of the diff, so identical diffs (acros
 
 | key | required | default | meaning |
 |---|---|---|---|
+| `reviewers` | no | `true` | Human-reviewer workflow. Set `false` in a repository `.wt.toml` when the repo does not use human code review: hides the human-review badge and PR metadata, removes the review-requests section, disables the `v` reviewer picker and the reviewer leg of `E`, and suppresses `review.changes_requested` automations. The separate `[review_bot]` track is unaffected. |
 | `ignored_checks` | no | `[]` | Glob patterns (case-insensitive, `*` wildcard only) matched against check names; matching contexts are dropped from the PR checks rollup so non-CI checks don't flip the badge. The configured `[review_bot]`'s `check_contexts` are always excluded automatically — no need to repeat them here. |
 | `default_reviewer` | no | *(unset)* | GitHub login requested by the `E` ("ship it") chord (mark ready + request reviewer + arm auto-merge). Unset disables the reviewer leg. |
 | `pr_target` | no | `"github"` | Where `p` opens PRs: `"github"` keeps GitHub URLs, `"linear"` rewrites them to Linear Reviews deep-links. `g p` / `l p` always open GitHub / Linear explicitly. |

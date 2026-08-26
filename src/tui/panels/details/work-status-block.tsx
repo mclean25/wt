@@ -26,6 +26,7 @@ import {
 import { rowHasLanded } from "../../app-helpers.ts";
 import { workStateColor } from "../../badges.ts";
 import type { WorkState } from "../../../core/work-status.ts";
+import type { WorkStatusRecord } from "../../../core/work-status.ts";
 import { parseVerifySteps, revertVerdict, splitNoteSections } from "../../work-status-text.ts";
 
 /**
@@ -209,14 +210,38 @@ export function WorkStatusBlock({
    */
   verifyExpanded: boolean | null;
 }) {
-  const record = row.work;
+  return (
+    <WorkStatusRecordBlock
+      record={row.work ?? null}
+      contentWidth={contentWidth}
+      verifyExpanded={verifyExpanded}
+      landed={rowHasLanded(row)}
+      lastCommitMs={row.fields.gitActivity.data?.lastCommitMs ?? null}
+    />
+  );
+}
+
+/** Location-neutral work-status banner used by local and remote details. */
+export function WorkStatusRecordBlock({
+  record,
+  contentWidth,
+  verifyExpanded,
+  landed,
+  lastCommitMs,
+}: {
+  record: WorkStatusRecord | null;
+  contentWidth: number;
+  verifyExpanded: boolean | null;
+  landed: boolean;
+  lastCommitMs: number | null;
+}) {
   if (!record) return null;
   const blocked = isGated(record);
   // Same relationship as the gate, at the other end of the lifecycle:
   // the row asserts `ready` and the branch has landed, so the state
   // alone reads as finished while a check is still owed.
-  const owed = owesPostMergeVerification(record, rowHasLanded(row));
-  const overdue = owed && verificationOverdue(record, true);
+  const owed = owesPostMergeVerification(record, landed);
+  const overdue = owed && verificationOverdue(record, landed);
   // The gate owns the banner's color when set: this block is the
   // legend for the list dot, and the two disagreeing is how a note
   // saying BLOCKED lost to a field saying ready.
@@ -229,7 +254,7 @@ export function WorkStatusBlock({
   // Time-based staleness: commits after the assertion mean the status
   // describes an older tree. (The CLI's `stale` flag uses the recorded
   // sha; here `lastCommitMs` is what's already fetched.)
-  const stale = isWorkStatusStale(record, row.fields.gitActivity.data?.lastCommitMs ?? null);
+  const stale = isWorkStatusStale(record, lastCommitMs);
   const sections = record.note ? splitNoteSections(record.note) : [];
   // Sized to the widest label actually present, so a note carrying
   // only `OPS:` doesn't indent its values past an absent `IF WRONG`.

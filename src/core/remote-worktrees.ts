@@ -18,8 +18,12 @@ export type RemoteWorktreeSummary = {
   hostLabel: string;
   slug: string;
   branch: string;
+  /** Effective merge target reported by the remote wt. */
+  base: string | null;
   path: string;
   stage: string;
+  /** Manual section owned by the remote wt state; null means Inbox. */
+  section: string | null;
   exists: boolean;
   status: StatusKindValue;
   statusLabel: string;
@@ -40,6 +44,7 @@ export type RemoteWorktreeSummary = {
    */
   aheadOfBase: number | null;
   issueUrl: string | null;
+  issueId: string | null;
   /**
    * Work status asserted on the remote host (`work_*` in its
    * `wt ls --json`). All null when unasserted OR when the remote wt
@@ -115,8 +120,8 @@ export function parseRemoteWorktrees(
   const value: unknown = parseWorktreeJson(raw);
   if (!Array.isArray(value)) throw new Error("remote wt ls returned non-array JSON");
   // `wt ls --json` appends recently-removed rows, discriminated by
-  // `kind` — see core/wtstate/removed.ts. The remote section renders
-  // live worktrees only, so drop them here.
+  // `kind` — see core/wtstate/removed.ts. The fleet renders live
+  // worktrees only, so drop removed-history entries here.
   //
   // Keep on the VALUE, never on the key's absence: hosts run
   // independently-updated wt versions, and `kind` has meant three things
@@ -160,8 +165,10 @@ export function parseRemoteWorktrees(
       hostLabel,
       slug: str("slug"),
       branch: str("branch"),
+      base: typeof row.base === "string" ? row.base : null,
       path: str("path"),
       stage: str("stage"),
+      section: typeof row.section === "string" ? row.section : null,
       exists: row.exists === true,
       status: status as StatusKindValue,
       statusLabel,
@@ -182,6 +189,7 @@ export function parseRemoteWorktrees(
           ? row.ahead_of_base
           : null,
       issueUrl: typeof row.issue_url === "string" ? row.issue_url : null,
+      issueId: typeof row.issue_id === "string" ? row.issue_id : null,
       workState:
         typeof row.work_state === "string" &&
         (WORK_STATES as readonly string[]).includes(row.work_state)

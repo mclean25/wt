@@ -29,6 +29,7 @@ import { config } from "../../core/config.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import type { DerivedState } from "../../core/harness/status.ts";
 import { StatusKind, type PrComment, type Worktree } from "../../core/types.ts";
+import type { WorkStatusRecord } from "../../core/work-status.ts";
 import { useGithub } from "../../state/hooks.ts";
 import { useHarnessSessions } from "../hooks/useHarnessSessions.ts";
 import { useNowTick } from "../hooks/useNowTick.ts";
@@ -53,9 +54,15 @@ import {
   type RemoteListEntry,
 } from "../remote-creation.ts";
 import { NF } from "../icons.ts";
+import { statusBadge } from "../badges.ts";
+import { remoteRowLabel } from "./list.tsx";
+import { PrLine } from "../rows/pr.tsx";
 import { Row } from "./details/row-cell.tsx";
 import { RebaseBlock } from "./details/rebase-block.tsx";
-import { WorkStatusBlock } from "./details/work-status-block.tsx";
+import {
+  WorkStatusBlock,
+  WorkStatusRecordBlock,
+} from "./details/work-status-block.tsx";
 import { RemovedBody } from "./details/removed-body.tsx";
 import { ReviewRequestBody } from "./details/review-request-body.tsx";
 import {
@@ -73,7 +80,7 @@ type Props = {
   section?: SectionDetail;
   /** Set in the removed-worktrees view (`h`) — shows the history snapshot. */
   removed?: RemovedWorktree;
-  /** Transient SSH-hosted worktree selected in the local Inbox. */
+  /** SSH-hosted worktree selected in a normal fleet section. */
   remote?: RemoteListEntry;
   remoteUnavailable?: boolean;
   remoteError?: string | null;
@@ -548,16 +555,148 @@ function RemoteDetails({
   entry,
   unavailable,
   error,
+  width,
+  scrollRef,
 }: {
   entry: RemoteListEntry;
   unavailable: boolean;
   error: string | null;
+  width: number;
+  scrollRef?: RefObject<ScrollBoxRenderable | null>;
 }) {
-  const status = unavailable
-    ? "host unavailable"
-    : isRemoteSummary(entry)
-      ? entry.statusLabel
-      : entry.status;
+  const github = useGithub();
+  const summary = isRemoteSummary(entry) ? entry : null;
+  const pr = summary ? github.data?.prs[summary.branch] : undefined;
+  const mq = summary ? github.data?.mergeQueue?.[summary.branch] : undefined;
+  const valueWidth = valueWidthFor(width);
+  const mechanical = summary
+    ? {
+        kind: summary.status,
+        label: summary.statusLabel,
+        age: summary.statusAge ?? undefined,
+        op: summary.statusOp ?? undefined,
+      }
+    : entry.status === "creating"
+      ? { kind: StatusKind.Busy, label: "creating", op: "init" }
+      : { kind: StatusKind.Clean, label: "ready" };
+  const mechanicalBadge = statusBadge(mechanical);
+  const work: WorkStatusRecord | null =
+    summary?.workState
+      ? {
+          state: summary.workState,
+          at: summary.workAt ?? "",
+          note: summary.workNote ?? undefined,
+          risk: summary.workRisk ?? undefined,
+          blockedOn: summary.workBlockedOn ?? undefined,
+          verifyAfterMerge: summary.workVerifyAfterMerge ?? undefined,
+        }
+      : null;
+  const landed =
+    summary?.status === StatusKind.Merged ||
+    summary?.status === StatusKind.Gone ||
+    pr?.state === "MERGED";
+  const title = pr?.title ?? remoteRowLabel(entry);
+
+  const remoteRows = RESOLVED_ROWS.map((module) => {
+    if (module.id === "branch") {
+      const branch = summary?.branch ?? "(preparing)";
+      const base = summary?.base ?? config.branch.base;
+      return (
+        <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH}>
+          <text wrapMode="none" truncate>
+            <span fg={theme.fg}>{branch}</span>
+            <span fg={theme.fgDim}>{" → "}</span>
+            <span fg={theme.fg}>{base}</span>
+          </text>
+        </Row>
+      );
+    }
+    if (module.id === "path") {
+      return summary ? (
+        <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH}>
+          <text fg={theme.fg} wrapMode="none" truncate>{summary.path}</text>
+        </Row>
+      ) : null;
+    }
+    if (module.id === "issue") {
+      if (!config.issueTracker) return null;
+      const issue = summary?.issueUrl ?? summary?.issueId ?? null;
+      return (
+        <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH}>
+          <text fg={issue ? theme.accentAlt : theme.fgDim} wrapMode="none" truncate>
+            {issue ?? "—"}
+          </text>
+        </Row>
+      );
+    }
+    if (module.id === "stage") {
+      if (!config.sst) return null;
+      return (
+        <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH}>
+          <text fg={theme.fgDim} wrapMode="none" truncate>
+            {summary ? `${summary.stage} · remote status unavailable` : "—"}
+          </text>
+        </Row>
+      );
+    }
+    if (module.id === "dev") {
+      if (!config.devServer) return null;
+      return (
+        <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH}>
+          <text fg={theme.fgDim} wrapMode="none" truncate>
+            {NF.remote}  managed on {entry.hostLabel}
+          </text>
+        </Row>
+      );
+    }
+    if (module.id === "pr") {
+      const glyph = combinedGlyph([github]);
+      const fetchError = firstError([github]);
+      return (
+        <Row
+          key={module.id}
+          label={module.label}
+          labelWidth={LABEL_WIDTH}
+          trailing={glyph ? <Glyph kind={glyph} /> : undefined}
+        >
+          {fetchError ? (
+            <text fg={theme.err} wrapMode="none" truncate>{fetchError.message}</text>
+          ) : (
+            <PrLine pr={pr} mq={mq} valueWidth={valueWidth} />
+          )}
+        </Row>
+      );
+    }
+    if (module.id === "claude") {
+      return (
+        <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH}>
+          <text fg={theme.fgDim} wrapMode="none" truncate>
+            <span fg={theme.info}>{NF.remote}  </span>
+            remote session · F12 to open
+          </text>
+        </Row>
+      );
+    }
+    if (module.id === "git") {
+      return (
+        <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH}>
+          <text fg={theme.fg} wrapMode="none" truncate>
+            <span fg={unavailable ? theme.warn : mechanicalBadge.fg}>
+              {mechanicalBadge.glyph}  {unavailable ? "host unavailable" : mechanical.label}
+            </span>
+            {summary && summary.unpushed > 0 ? (
+              <span fg={theme.warn}>{` · ${summary.unpushed} unpushed`}</span>
+            ) : null}
+            {summary?.aheadOfBase ? (
+              <span fg={theme.fgDim}>{` · ${summary.aheadOfBase} ahead of base`}</span>
+            ) : null}
+          </text>
+        </Row>
+      );
+    }
+    return null;
+  });
+
   return (
     <box
       flexGrow={1}
@@ -568,36 +707,37 @@ function RemoteDetails({
       border
       borderStyle="single"
       borderColor={theme.border}
-      title={` ${remoteEntryLabel(entry)} `}
+      title={paneTitle(remoteEntryLabel(entry), width)}
       titleAlignment="left"
       padding={1}
       flexDirection="column"
     >
-      <text fg={theme.fg} attributes={TextAttributes.BOLD}>
-        {`${NF.remote} Remote worktree`}
-      </text>
-      <box marginTop={1} flexDirection="column">
-        <text><span fg={theme.fgDim}>host   </span>{entry.hostLabel}</text>
-        <text>
-          <span fg={theme.fgDim}>state  </span>
-          <span fg={unavailable ? theme.warn : theme.fg}>{status}</span>
-        </text>
-        {isRemoteSummary(entry) ? (
-          <>
-            <text><span fg={theme.fgDim}>branch </span>{entry.branch}</text>
-            <text><span fg={theme.fgDim}>path   </span>{entry.path}</text>
-          </>
+      <WtScrollbox scrollRef={scrollRef}>
+        <TitleLine title={title} source={pr ? "pr" : "slug"} />
+        <WorkStatusRecordBlock
+          record={work}
+          contentWidth={Math.max(0, width - PANE_CHROME_WIDTH)}
+          verifyExpanded={null}
+          landed={landed}
+          lastCommitMs={null}
+        />
+        <Row label="server" labelWidth={LABEL_WIDTH}>
+          <text wrapMode="none" truncate>
+            <span fg={unavailable ? theme.warn : theme.info}>{NF.remote}  </span>
+            <span fg={unavailable ? theme.warn : theme.fg}>{entry.hostLabel}</span>
+          </text>
+        </Row>
+        {unavailable && error ? (
+          <box marginBottom={1}>
+            <text fg={theme.warn} wrapMode="word">{error}</text>
+          </box>
         ) : null}
-      </box>
-      <box marginTop={1}>
-        <text fg={unavailable ? theme.warn : theme.fgDim}>
-          {unavailable
-            ? error ?? "SSH host is offline; showing the last-known worktree state."
-            : isRemoteSummary(entry)
-            ? "F10 shell · F11 diff · F12 AI session"
-            : "Remote checkout is being prepared."}
-        </text>
-      </box>
+        {remoteRows}
+        <CommentsBlock
+          comments={pr?.comments ?? []}
+          unresolvedThreads={pr?.unresolvedThreads ?? 0}
+        />
+      </WtScrollbox>
     </box>
   );
 }
@@ -659,6 +799,8 @@ export const Details = memo(function Details({
         entry={remote}
         unavailable={remoteUnavailable}
         error={remoteError}
+        width={width}
+        scrollRef={scrollRef}
       />
     );
   }

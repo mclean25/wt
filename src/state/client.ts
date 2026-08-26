@@ -101,7 +101,10 @@ export const CACHE_DB = config.paths.cacheDb;
 // entry is indistinguishable from a fresh one, which is what makes this
 // a bust rather than a shape bump. (v22 busted `firstCommit` alone for
 // the narrower stale-remote-ref version of the same failure.)
-const CACHE_BUSTER = "v25";
+// v26: `RemoteWorktreeSummary` gained `section`. Restoring v25 rows would
+// temporarily file every remote checkout into Inbox instead of its remote-owned
+// manual section, so discard those inventories rather than flash false grouping.
+const CACHE_BUSTER = "v26";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

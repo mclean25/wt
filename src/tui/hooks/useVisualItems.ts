@@ -1,6 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { config } from "../../core/config.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import { reviewRequestsQuery } from "../../state/index.ts";
 import type { FleetWorktreeItem, ListActiveItem } from "../panels/list.tsx";
@@ -22,10 +23,78 @@ import {
 export type VisualItem = ListActiveItem | { kind: "pr"; pr: ReviewRequestPr };
 export type ArchivedItem =
   | { kind: "wt"; row: WorktreeRow; target: WorktreeTarget }
-  | { kind: "remote"; entry: RemoteWorktreeSummary; target: WorktreeTarget }
+  | {
+      kind: "remote";
+      entry: RemoteWorktreeSummary;
+      target: WorktreeTarget;
+      archived: true;
+    }
   /** The whole block, folded to one header line (`GROUP_ARCHIVED`). */
   | SelectedSection;
 export type SelectedSection = Extract<ListActiveItem, { kind: "section" }>;
+
+function entrySection(entry: RemoteCreation | RemoteWorktreeSummary): string {
+  return "section" in entry && entry.section !== null ? entry.section : GROUP_INBOX;
+}
+
+/** Build the visible active fleet with location-neutral section grouping. */
+export function buildActiveItems({
+  rows,
+  foldedSections,
+  remoteCreation,
+  remoteWorktrees,
+  archivedKeys,
+}: Omit<UseVisualItemsArgs, "selectedKey">): ListActiveItem[] {
+  const buckets = new Map<string, FleetWorktreeItem[]>();
+  const ensure = (section: string): FleetWorktreeItem[] => {
+    const existing = buckets.get(section);
+    if (existing) return existing;
+    const created: FleetWorktreeItem[] = [];
+    buckets.set(section, created);
+    return created;
+  };
+
+  for (const row of rows) {
+    if (row.archived) continue;
+    ensure(row.section ?? GROUP_INBOX).push({
+      kind: "wt",
+      row,
+      target: localWorktreeTarget(row.wt),
+    });
+  }
+  for (const entry of remoteWorktrees) {
+    if (archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug))) continue;
+    ensure(entrySection(entry)).push({
+      kind: "remote",
+      entry,
+      target: remoteWorktreeTarget(entry),
+      archived: false,
+    });
+  }
+  if (remoteCreation && !remoteWorktrees.some((row) => row.slug === remoteCreation.input)) {
+    ensure(GROUP_INBOX).push({
+      kind: "remote",
+      entry: remoteCreation,
+      target: null,
+      archived: false,
+    });
+  }
+
+  const out: ListActiveItem[] = [];
+  for (const [sectionKey, members] of buckets) {
+    if (foldedSections.has(sectionKey)) {
+      out.push({
+        kind: "section" as const,
+        sectionKey,
+        label: sectionKey === GROUP_INBOX ? "Inbox" : sectionKey,
+        members,
+      });
+    } else {
+      out.push(...members);
+    }
+  }
+  return out;
+}
 
 export function visualKey(item: VisualItem): string {
   return item.kind === "wt"
@@ -60,7 +129,10 @@ export function useVisualItems({
 
   const reviewRequests = useQuery(reviewRequestsQuery());
   const reviewRequestRows = useMemo<readonly ReviewRequestPr[]>(
-    () => reviewRequests.data ?? [],
+    // A disabled query can still expose a persisted cache entry. The
+    // repository switch is authoritative, so suppress that stale section
+    // explicitly instead of relying on `enabled: false` alone.
+    () => config.github.reviewers ? (reviewRequests.data ?? []) : [],
     [reviewRequests.data],
   );
 
@@ -76,46 +148,23 @@ export function useVisualItems({
   // Active portion, with folded sections collapsed to one `section` item each.
   // This is the single source of truth shared by the cursor model and the list.
   const activeItems = useMemo<ListActiveItem[]>(() => {
-    const activeRows = rows.filter((r) => !r.archived);
-    const out: ListActiveItem[] = [];
-    for (const entry of remoteWorktrees) {
-      if (!archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug))) {
-        out.push({ kind: "remote", entry, target: remoteWorktreeTarget(entry) });
-      }
-    }
-    if (
-      remoteCreation &&
-      !remoteWorktrees.some((row) => row.slug === remoteCreation.input)
-    ) {
-      out.push({ kind: "remote", entry: remoteCreation, target: null });
-    }
-    const emitted = new Set<string>();
-    for (const r of activeRows) {
-      const sec = r.section ?? GROUP_INBOX;
-      if (foldedSections.has(sec)) {
-        if (emitted.has(sec)) continue;
-        emitted.add(sec);
-        out.push({
-          kind: "section",
-          sectionKey: sec,
-          label: r.section === null ? "Inbox" : r.section,
-          rows: activeRows.filter((x) => (x.section ?? GROUP_INBOX) === sec),
-        });
-      } else {
-        out.push({ kind: "wt", row: r, target: localWorktreeTarget(r.wt) });
-      }
-    }
-    return out;
+    return buildActiveItems({
+      rows,
+      foldedSections,
+      remoteCreation,
+      remoteWorktrees,
+      archivedKeys,
+    });
   }, [
     rows,
     foldedSections,
-      remoteCreation,
+    remoteCreation,
     remoteWorktrees,
     archivedKeys,
   ]);
 
   const archivedItems = useMemo<ArchivedItem[]>(() => {
-    const members: ArchivedItem[] = [
+    const members: Exclude<ArchivedItem, SelectedSection>[] = [
       ...archivedRows.map((row) => ({
         kind: "wt" as const,
         row,
@@ -125,6 +174,7 @@ export function useVisualItems({
         kind: "remote" as const,
         entry,
         target: remoteWorktreeTarget(entry),
+        archived: true as const,
       })),
     ];
     // Folded, the whole block collapses to one header — here rather
@@ -137,11 +187,7 @@ export function useVisualItems({
         kind: "section",
         sectionKey: GROUP_ARCHIVED,
         label: "Archived",
-        rows: archivedRows,
-        // Remote members aren't worktree rows, so the count is passed
-        // rather than taken from `rows` — a header that says ×02 over
-        // three hidden things is a small lie with no upside.
-        count: members.length,
+        members,
       },
     ];
   }, [archivedRows, archivedRemoteRows, foldedSections]);

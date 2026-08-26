@@ -31,6 +31,12 @@ describe("isRemoteCleanCandidate", () => {
     expect(isRemoteCleanCandidate(remote("gone"), false)).toBeTrue();
   });
 
+  test("includes a remote row whose PR merged without git-level containment", () => {
+    expect(
+      isRemoteCleanCandidate(remote("clean"), false, { state: "MERGED" }),
+    ).toBeTrue();
+  });
+
   test("excludes archived, busy, and active remote rows", () => {
     expect(isRemoteCleanCandidate(remote("merged"), true)).toBeFalse();
     expect(isRemoteCleanCandidate(remote("busy"), false)).toBeFalse();

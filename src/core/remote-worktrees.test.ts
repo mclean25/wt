@@ -7,8 +7,10 @@ describe("parseRemoteWorktrees", () => {
     const rows = parseRemoteWorktrees(JSON.stringify([{
       slug: "remote-test",
       branch: "alex/remote-test",
+      base: null,
       path: "/home/alex/dev/client-app-worktrees/remote-test",
       stage: "alex-123",
+      section: null,
       exists: true,
       status: "busy",
       status_label: "init: pnpm install",
@@ -30,8 +32,10 @@ describe("parseRemoteWorktrees", () => {
       hostLabel: "Cachy",
       slug: "remote-test",
       branch: "alex/remote-test",
+      base: null,
       path: "/home/alex/dev/client-app-worktrees/remote-test",
       stage: "alex-123",
+      section: null,
       exists: true,
       status: "busy",
       statusLabel: "init: pnpm install",
@@ -42,6 +46,7 @@ describe("parseRemoteWorktrees", () => {
       pushed: true,
       aheadOfBase: 5,
       issueUrl: null,
+      issueId: null,
       workState: null,
       workNote: null,
       workRisk: null,
@@ -64,7 +69,17 @@ describe("parseRemoteWorktrees", () => {
       aheadOfBase: null,
       statusOp: null,
       workState: null,
+      section: null,
     });
+  });
+
+  test("preserves the remote-owned manual section", () => {
+    const [row] = parseRemoteWorktrees(JSON.stringify([{
+      slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
+      status: "clean", status_label: "clean", dirty: false,
+      section: "Paused",
+    }]), "cachy");
+    expect(row?.section).toBe("Paused");
   });
 
   test("drops malformed pushed/ahead_of_base values to null", () => {

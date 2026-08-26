@@ -77,7 +77,7 @@ import { useSessionsPickerData } from "./hooks/useSessionsPickerData.ts";
 import { writeClipboard } from "../core/macos.ts";
 import { theme } from "./theme.ts";
 import { showToast } from "./toast.ts";
-import { type RemoteCreation } from "./remote-creation.ts";
+import { isRemoteSummary, type RemoteCreation } from "./remote-creation.ts";
 import {
   isRemoteCleanCandidate,
   type CleanCandidate,
@@ -282,11 +282,16 @@ export function App({ onExit }: Props) {
           isRemoteCleanCandidate(
             entry,
             archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug)),
+            githubData?.prs[entry.branch],
           ),
         )
-        .map((entry) => ({ kind: "remote" as const, entry })),
+        .map((entry) => ({
+          kind: "remote" as const,
+          entry,
+          pr: githubData?.prs[entry.branch],
+        })),
     ],
-    [rows, remoteRows, archivedKeys],
+    [rows, remoteRows, archivedKeys, githubData],
   );
 
   // Removed-worktrees history view (`h` toggles the left pane into it).
@@ -370,8 +375,12 @@ export function App({ onExit }: Props) {
 
   // `g p` / `l p` PR-target chord — extracted to
   // `hooks/usePrTargetChord.ts`.
+  const selectedRemotePr =
+    selectedRemote && isRemoteSummary(selectedRemote)
+      ? githubData?.prs[selectedRemote.branch]
+      : undefined;
   const { rememberPrTargetChord, openPrUrl, consumePrTargetChord } =
-    usePrTargetChord({ selectedPr, current });
+    usePrTargetChord({ selectedPr, current, selectedRemotePr });
 
   const listWidth = Math.max(32, Math.min(52, Math.floor(width * 0.44)));
   // Middle (list + details) is capped; activity absorbs the rest. Title
@@ -564,6 +573,7 @@ export function App({ onExit }: Props) {
   } = makeDestroyFlows({
     rows,
     remoteWorktrees: remoteRows,
+    remotePullRequests: githubData?.prs,
     archivedKeys,
     current,
     toast,
@@ -867,6 +877,7 @@ export function App({ onExit }: Props) {
       currentItem,
       selectedPr,
       selectedRemote,
+      selectedRemotePr,
       currentTarget,
       visualItems,
       cursorIndex,

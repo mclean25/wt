@@ -120,9 +120,16 @@ const KEY_BLOCKS: Block[] = [
     items: [
       { key: "! m", label: "arm / disarm auto-merge (merge when ready)" },
       { key: "e", label: "exit draft (mark ready for review)" },
-      { key: "E", label: "ship: mark ready + request default_reviewer + arm auto-merge" },
+      {
+        key: "E",
+        label: config.github.reviewers
+          ? "ship: mark ready + request default_reviewer + arm auto-merge"
+          : "ship: mark ready + arm auto-merge",
+      },
       { key: "f", label: "tail failed CI logs (gh run view --log-failed)" },
-      { key: "v", label: "edit reviewers (picker · v v submits)" },
+      ...(config.github.reviewers
+        ? [{ key: "v", label: "edit reviewers (picker · v v submits)" }]
+        : []),
     ],
   },
   {
@@ -195,7 +202,7 @@ const KEY_BLOCKS: Block[] = [
     items: [
       { key: "n", label: "new worktree" },
       { key: "N", label: "new worktree · base = selected" },
-      { key: "ctrl+n", label: "new worktree on SSH remote · lands in a server-named remote section" },
+      { key: "ctrl+n", label: "new worktree on SSH remote · lands in its normal section / Inbox" },
       { key: "c", label: "clean merged/gone" },
       { key: "h", label: "show / hide removed-worktree history" },
       { key: "r", label: "refresh (fetch + recompute)" },
@@ -210,17 +217,19 @@ const KEY_BLOCKS: Block[] = [
       { key: "q / ^C", label: "quit" },
     ],
   },
-  {
-    kind: "keys",
-    title: "review requests (pinned section)",
-    note: "PRs awaiting your review, pulled from GitHub. Not worktrees — only these keys apply.",
-    items: [
-      { key: "p / ⏎", label: `open PR in ${PR_TARGET_LABEL}` },
-      { key: "g p", label: "open PR in GitHub" },
-      { key: "l p", label: "open PR in Linear" },
-      { key: "w", label: "check out branch as worktree → Reviews" },
-    ],
-  },
+  ...(config.github.reviewers
+    ? [{
+        kind: "keys" as const,
+        title: "review requests (pinned section)",
+        note: "PRs awaiting your review, pulled from GitHub. Not worktrees — only these keys apply.",
+        items: [
+          { key: "p / ⏎", label: `open PR in ${PR_TARGET_LABEL}` },
+          { key: "g p", label: "open PR in GitHub" },
+          { key: "l p", label: "open PR in Linear" },
+          { key: "w", label: "check out branch as worktree → Reviews" },
+        ],
+      }]
+    : []),
   {
     kind: "keys",
     title: "removed worktrees (h)",

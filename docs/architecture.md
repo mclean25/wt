@@ -91,8 +91,9 @@ Three related invariants:
 
 The optional `[remote]` host owns its clone, worktree paths, locks, and tmux
 processes, while the Mac owns the single visible TUI. `remoteWorktreesQuery`
-polls the host's `wt ls --json` and renders those summaries in a host-named
-remote section; remote filesystem paths are never accessed as if they were local.
+polls the host's `wt ls --json` and renders those summaries in their remote-owned
+manual section (or Inbox), alongside local rows; remote filesystem paths are never
+accessed as if they were local.
 The query's successful inventory is persisted for offline startup and retained
 across refetch failures. SSH failure changes host health only: the host header
 renders a warning and session keys are disabled until a later poll succeeds.

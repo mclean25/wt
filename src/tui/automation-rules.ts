@@ -295,6 +295,7 @@ function evaluateRowTrigger(
       );
     }
     case "review.changes_requested": {
+      if (!config.github.reviewers) return null;
       const pr = freshOpenPr(row, ctx);
       if (!pr || pr.review !== "changes_requested") return null;
       return singleRowFire(

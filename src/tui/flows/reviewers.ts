@@ -5,6 +5,7 @@
  */
 import type { QueryFilters } from "@tanstack/react-query";
 
+import { config } from "../../core/config.ts";
 import { editReviewers } from "../../core/github.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Contributor } from "../../core/types.ts";
@@ -31,6 +32,10 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
   const { rows, setModal, toast, fetchContributors, fetchMe, mutate } = ctx;
 
   async function openReviewerPicker(slug: string): Promise<void> {
+    if (!config.github.reviewers) {
+      toast("reviewers disabled for this repo", theme.fgDim, 2000);
+      return;
+    }
     const row = rows.find((r) => r.wt.slug === slug);
     if (!row?.pr) {
       toast("no PR for this row", theme.warn, 2000);

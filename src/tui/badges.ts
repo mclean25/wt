@@ -259,6 +259,7 @@ export function checkBadge(c: PrChecks): Badge | null {
  * shares amber with `pending` but stays distinct via the lightbulb glyph.
  */
 export function reviewBadge(r: PrReview): Badge | null {
+  if (!config.github.reviewers) return null;
   switch (r) {
     case "approved":
       return { glyph: NF.thumbsUp, fg: theme.ok };

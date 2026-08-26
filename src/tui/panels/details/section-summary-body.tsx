@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import type { RefObject } from "react";
 
-import { StatusKind } from "../../../core/types.ts";
+import { StatusKind, type Status } from "../../../core/types.ts";
 import { GROUP_ARCHIVED } from "../../../core/wtstate.ts";
 import type { HarnessId } from "../../../core/harness/index.ts";
 import type { DerivedState } from "../../../core/harness/status.ts";
@@ -15,7 +15,12 @@ import {
 } from "../../../core/work-status.ts";
 import type { WorktreeRow } from "../../hooks/useWorktreeRows.ts";
 import { rowHasLanded } from "../../app-helpers.ts";
-import { workStateColor, workStateGlyph } from "../../badges.ts";
+import {
+  statusBadge,
+  workStateColor,
+  workStateGlyph,
+  workStatusBadge,
+} from "../../badges.ts";
 import { BadgeCluster, badgeClusterCells } from "../../badge-cluster.tsx";
 import { NF } from "../../icons.ts";
 import {
@@ -28,6 +33,11 @@ import type { SpineCell } from "../../../core/stack-layout.ts";
 import { WtScrollbox } from "../../scrollbox.tsx";
 import { clipLines } from "../../text.ts";
 import { theme } from "../../theme.ts";
+import {
+  isRemoteSummary,
+  remoteEntryKey,
+  type RemoteListEntry,
+} from "../../remote-creation.ts";
 
 /**
  * What the detail pane shows when a FOLDED section header is the cursor.
@@ -40,10 +50,11 @@ import { theme } from "../../theme.ts";
  * components the list pane uses, so folding a section can never change
  * what a glyph means.
  *
- * Built by `tui/hooks/useSectionDetail.ts` from the folded section
- * item's rows, so this pane stays free of state reads.
+ * Built by `tui/hooks/useSectionDetail.ts` from the folded section's
+ * local and remote members, so this pane stays free of state reads.
  */
 export type SectionMember = {
+  kind: "wt";
   /** Same label the list row shows (`rowLabel`), so the folded summary
    *  and the expanded rows read identically. */
   label: string;
@@ -56,6 +67,11 @@ export type SectionMember = {
   actionRunning: boolean;
   activeHarnessId: HarnessId | undefined;
   sessionState: DerivedState | undefined;
+} | {
+  kind: "remote";
+  label: string;
+  entry: RemoteListEntry;
+  archived: boolean;
 };
 
 export type SectionDetail = {
@@ -77,6 +93,9 @@ export type SectionDetail = {
  *  `ready` here while its own glyph two panes over reads needs-testing
  *  is exactly the drift this module exists to prevent. */
 function memberState(m: SectionMember): WorkState | null {
+  if (m.kind === "remote") {
+    return isRemoteSummary(m.entry) ? m.entry.workState : null;
+  }
   return (
     effectiveWorkState(m.row.work, m.sessionState, rowHasLanded(m.row))?.state ?? null
   );
@@ -85,7 +104,10 @@ function memberState(m: SectionMember): WorkState | null {
 /** Risk a member row shows: the merge decision, and only once the work
  *  is actually `ready` — before that it is a guess about unfinished work. */
 function memberRisk(m: SectionMember): WorkRisk | undefined {
-  return memberState(m) === "ready" ? m.row.work?.risk : undefined;
+  if (memberState(m) !== "ready") return undefined;
+  return m.kind === "remote"
+    ? isRemoteSummary(m.entry) ? m.entry.workRisk ?? undefined : undefined
+    : m.row.work?.risk;
 }
 
 function riskColor(risk: WorkRisk): string {
@@ -119,7 +141,9 @@ function memberColumns(members: SectionMember[]): { risk: number; badges: number
     if (r) risk = Math.max(risk, r.length + 2);
     badges = Math.max(
       badges,
-      badgeClusterCells(m.row, m.actionRunning, m.activeHarnessId),
+      m.kind === "remote"
+        ? 0
+        : badgeClusterCells(m.row, m.actionRunning, m.activeHarnessId),
     );
   }
   return { risk, badges };
@@ -177,11 +201,18 @@ function batchFactParts(
   members: SectionMember[],
   pausedCount: number,
 ): { text: string; fg: string }[] {
-  const prs = members.filter((m) => m.row.pr?.state === "OPEN");
+  const local = members.filter(
+    (m): m is Extract<SectionMember, { kind: "wt" }> => m.kind === "wt",
+  );
+  const prs = local.filter((m) => m.row.pr?.state === "OPEN");
   const drafts = prs.filter((m) => m.row.pr?.isDraft);
-  const failing = members.filter((m) => m.row.pr?.checks === "fail");
-  const dirty = members.filter((m) => m.row.status.kind === StatusKind.Dirty);
-  const queued = members.filter((m) => m.row.mq);
+  const failing = local.filter((m) => m.row.pr?.checks === "fail");
+  const dirty = members.filter((m) =>
+    m.kind === "wt"
+      ? m.row.status.kind === StatusKind.Dirty
+      : isRemoteSummary(m.entry) && m.entry.dirty,
+  );
+  const queued = local.filter((m) => m.row.mq);
   const parts: { text: string; fg: string }[] = [];
   if (prs.length > 0) {
     parts.push({
@@ -227,6 +258,54 @@ function MemberRow({
   /** Section-wide column widths — `memberColumns`. */
   cols: { risk: number; badges: number };
 }) {
+  if (m.kind === "remote") {
+    const dim = m.archived;
+    const status: Status = isRemoteSummary(m.entry)
+      ? {
+          kind: m.entry.status,
+          label: m.entry.statusLabel,
+          age: m.entry.statusAge ?? undefined,
+          op: m.entry.statusOp ?? undefined,
+        }
+      : m.entry.status === "creating"
+        ? { kind: StatusKind.Busy, label: "creating", op: "init" }
+        : { kind: StatusKind.Clean, label: "ready" };
+    const marker = status.kind === StatusKind.Clean
+      ? workStatusBadge(
+          isRemoteSummary(m.entry) && m.entry.workState
+            ? { state: m.entry.workState, at: "" }
+            : null,
+          undefined,
+        )
+      : statusBadge(status);
+    const risk = memberRisk(m);
+    return (
+      <box flexDirection="row" flexShrink={0}>
+        <box width={gutterCells} flexShrink={0} />
+        <box width={2} flexShrink={0}>
+          <text fg={marker.fg}>{marker.glyph}</text>
+        </box>
+        <box width={2} flexShrink={0}>
+          <text fg={dim ? theme.fgDim : theme.info}>{NF.remote}</text>
+        </box>
+        <box flexGrow={1} flexShrink={1} overflow="hidden">
+          <text fg={dim ? theme.fgDim : theme.fg} wrapMode="none" truncate>
+            {m.label}
+          </text>
+        </box>
+        {cols.risk > 0 ? (
+          <box width={cols.risk} flexShrink={0}>
+            <text fg={risk ? riskColor(risk) : theme.fgDim} wrapMode="none">
+              {risk ? ` ${risk}` : ""}
+            </text>
+          </box>
+        ) : null}
+        {cols.badges > 0 ? (
+          <box width={cols.badges} flexShrink={0} />
+        ) : null}
+      </box>
+    );
+  }
   const dim = m.row.archived;
   const risk = memberRisk(m);
   return (
@@ -332,14 +411,24 @@ function BlockedNotes({
         {`${NF.conflict}  blocked on you`}
       </text>
       {blocked.map((m) => (
-        <box key={m.row.wt.slug} flexDirection="column" flexShrink={0}>
+        <box
+          key={m.kind === "wt" ? m.row.wt.slug : remoteEntryKey(m.entry)}
+          flexDirection="column"
+          flexShrink={0}
+        >
           <text fg={theme.fgDim} wrapMode="none" truncate>
             {`  ${m.label}`}
           </text>
           {/* Capped: a section can hold several blocked members and the
               pane is not the place to read a full note — enough to know
               whether it is your turn, then TAB in. */}
-          {clipLines(m.row.work?.note ?? "", Math.max(10, width - 4), perNote).map((line, i) => (
+          {clipLines(
+            m.kind === "wt"
+              ? m.row.work?.note ?? ""
+              : isRemoteSummary(m.entry) ? m.entry.workNote ?? "" : "",
+            Math.max(10, width - 4),
+            perNote,
+          ).map((line, i) => (
             <text key={i} fg={theme.fg} wrapMode="none">
               {`    ${line}`}
             </text>
@@ -375,7 +464,10 @@ export function SectionSummaryBody({
 }) {
   // The members are one contiguous run here, so they lay out as one
   // spine group — exactly as they would if the section were unfolded.
-  const spine = rowSpine([section.members.map((m) => m.row)]);
+  const localRows = section.members.flatMap((m) =>
+    m.kind === "wt" ? [m.row] : [],
+  );
+  const spine = rowSpine([localRows]);
   const gutterCells = spineGutterCells(spine);
   const cols = memberColumns(section.members);
   // Border (2) + padding (2) + the scrollbox's reserved scrollbar
@@ -383,7 +475,11 @@ export function SectionSummaryBody({
   const inner = Math.max(10, width - 5);
   const facts = batchFactParts(section.members, section.pausedCount);
   const blocked = section.members.filter(
-    (m) => memberState(m) === "needs-human" && m.row.work?.note,
+    (m) =>
+      memberState(m) === "needs-human" &&
+      (m.kind === "wt"
+        ? m.row.work?.note
+        : isRemoteSummary(m.entry) && m.entry.workNote),
   );
   // Everything the body draws before the first note line: label, the
   // rollup, the facts line when there is one, a blank, the member rows
@@ -426,10 +522,10 @@ export function SectionSummaryBody({
         ) : (
           section.members.map((m) => (
             <MemberRow
-              key={m.row.wt.slug}
+              key={m.kind === "wt" ? m.row.wt.slug : remoteEntryKey(m.entry)}
               m={m}
               gutterCells={gutterCells}
-              spineCell={spine.get(m.row.wt.slug) ?? null}
+              spineCell={m.kind === "wt" ? spine.get(m.row.wt.slug) ?? null : null}
               cols={cols}
             />
           ))

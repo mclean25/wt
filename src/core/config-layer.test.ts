@@ -82,12 +82,30 @@ base = "develop"
 
 [lifecycle]
 copy_globs = [".agents/**"]
+
+[github]
+reviewers = false
 `);
 
       const configModule = pathToFileURL(join(import.meta.dir, "config.ts")).href;
+      const badgesModule = pathToFileURL(join(import.meta.dir, "../tui/badges.ts")).href;
+      const githubQueriesModule = pathToFileURL(
+        join(import.meta.dir, "../state/queries/github.ts"),
+      ).href;
       const script = `
         const { config } = await import(${JSON.stringify(configModule)});
-        console.log(JSON.stringify({ paths: config.paths, branch: config.branch, lifecycle: config.lifecycle, rows: config.ui.rows }));
+        const { reviewBadge } = await import(${JSON.stringify(badgesModule)});
+        const { githubQuery, reviewRequestsQuery } = await import(${JSON.stringify(githubQueriesModule)});
+        console.log(JSON.stringify({
+          paths: config.paths,
+          branch: config.branch,
+          lifecycle: config.lifecycle,
+          github: config.github,
+          rows: config.ui.rows,
+          reviewerBadgeHidden: reviewBadge("unrequested") === null,
+          githubEnabled: githubQuery(["feature"]).enabled,
+          reviewRequestsEnabled: reviewRequestsQuery().enabled,
+        }));
       `;
       const env: Record<string, string | undefined> = {
         ...process.env,
@@ -106,7 +124,11 @@ copy_globs = [".agents/**"]
         paths: { mainClone: "/local/repo", worktreeRoot: "/global/worktrees" },
         branch: { prefix: "alex", base: "develop" },
         lifecycle: { copyGlobs: [".agents/**"] },
+        github: { reviewers: false },
         rows: ["branch", "git"],
+        reviewerBadgeHidden: true,
+        githubEnabled: true,
+        reviewRequestsEnabled: false,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

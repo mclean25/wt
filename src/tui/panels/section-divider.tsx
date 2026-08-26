@@ -1,7 +1,6 @@
 /**
  * Section divider for every panel that groups rows under a labeled
- * rule (the worktree list's manual sections, stack sections, and
- * remote host groups).
+ * rule (the worktree list's manual and stack sections).
  */
 import { theme } from "../theme.ts";
 

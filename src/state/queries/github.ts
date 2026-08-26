@@ -93,7 +93,8 @@ export type { ReviewRequestPr };
  * GraphQL `search` call, capped at 50. Lives under the `["github"]`
  * prefix so the `r` refresh and any post-mutation `refreshGithub` both
  * pick it up. Same staleTime as the per-worktree github query — server
- * truth doesn't drift faster on one than the other.
+ * truth doesn't drift faster on one than the other. Disabled entirely
+ * when this repository opts out of human reviewers.
  */
 export const reviewRequestsQuery = () =>
   queryOptions({
@@ -109,7 +110,7 @@ export const reviewRequestsQuery = () =>
     staleTime: config.github.events?.backstopPollMs ?? STALE.slow,
     refetchInterval:
       !GITHUB_OFF && config.github.events ? config.github.events.backstopPollMs : false,
-    enabled: !GITHUB_OFF,
+    enabled: !GITHUB_OFF && config.github.reviewers,
     ...KEEP_PREV,
   });
 

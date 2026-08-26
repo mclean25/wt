@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import type { WtState } from "../../core/wtstate.ts";
 import type { ActiveSessionGlyph } from "./useHarnessSessions.ts";
 import type { SectionDetail } from "../panels/details.tsx";
-import { rowLabel } from "../panels/list.tsx";
+import { remoteRowLabel, rowLabel } from "../panels/list.tsx";
 import type { SelectedSection } from "./useVisualItems.ts";
 
 type UseSectionDetailArgs = {
@@ -25,7 +25,10 @@ export function useSectionDetail({
     // "paused" is per member: individually (its own slug record) or via
     // the stack it belongs to (Ctrl+A pauses a whole stack).
     const pausedStacks = new Set(wtState?.pausedStacks ?? []);
-    const pausedCount = selectedSection.rows.filter(
+    const rows = selectedSection.members.flatMap((member) =>
+      member.kind === "wt" ? [member.row] : [],
+    );
+    const pausedCount = rows.filter(
       (r) =>
         wtState?.slugs[r.wt.slug]?.automationsPaused === true ||
         (r.stack ? pausedStacks.has(r.stack.stackId) : false),
@@ -34,13 +37,23 @@ export function useSectionDetail({
       sectionKey: selectedSection.sectionKey,
       label: selectedSection.label,
       pausedCount,
-      members: selectedSection.rows.map((r) => ({
-        label: rowLabel(r),
-        row: r,
-        actionRunning: activeActions.has(r.wt.slug),
-        activeHarnessId: activeSessionBySlug.get(r.wt.slug)?.harnessId,
-        sessionState: activeSessionBySlug.get(r.wt.slug)?.state ?? undefined,
-      })),
+      members: selectedSection.members.map((member) =>
+        member.kind === "remote"
+          ? {
+              kind: "remote" as const,
+              label: remoteRowLabel(member.entry),
+              entry: member.entry,
+              archived: member.archived,
+            }
+          : {
+              kind: "wt" as const,
+              label: rowLabel(member.row),
+              row: member.row,
+              actionRunning: activeActions.has(member.row.wt.slug),
+              activeHarnessId: activeSessionBySlug.get(member.row.wt.slug)?.harnessId,
+              sessionState: activeSessionBySlug.get(member.row.wt.slug)?.state ?? undefined,
+            },
+      ),
     };
   }, [selectedSection, wtState, activeActions, activeSessionBySlug]);
 }

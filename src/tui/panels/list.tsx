@@ -59,7 +59,13 @@ import {
  */
 export type FleetWorktreeItem =
   | { kind: "wt"; row: WorktreeRow; target: WorktreeTarget }
-  | { kind: "remote"; entry: RemoteListEntry; target: WorktreeTarget | null };
+  | {
+      kind: "remote";
+      entry: RemoteListEntry;
+      target: WorktreeTarget | null;
+      /** Local fleet-ledger placement; the checkout itself remains remote. */
+      archived: boolean;
+    };
 
 export type ListActiveItem =
   | FleetWorktreeItem
@@ -69,14 +75,8 @@ export type ListActiveItem =
       sectionKey: string;
       /** Header label (the section name, or "Inbox"). */
       label: string;
-      /** The collapsed member rows (for the count + the detail-pane summary). */
-      rows: WorktreeRow[];
-      /**
-       * Members hidden by the fold, when that isn't `rows.length` —
-       * only the archived block, whose members can also be remote
-       * entries (not worktree rows, so never in `rows`).
-       */
-      count?: number;
+      /** Every collapsed member, local and remote, in expanded-list order. */
+      members: FleetWorktreeItem[];
     };
 
 /**
@@ -151,6 +151,14 @@ export function rowLabel(row: WorktreeRow): string {
   const { id } = slugLabel(row.wt.slug);
   const numId = id ? id.replace(/^[A-Z]+-/, "") : null;
   return numId ? `${numId}: ${text}` : text;
+}
+
+/** Display label shared by expanded and folded remote rows. */
+export function remoteRowLabel(entry: RemoteListEntry): string {
+  const rawLabel = remoteEntryLabel(entry);
+  const { id, rest } = slugLabel(rawLabel);
+  const numId = id ? id.replace(/^[A-Z]+-/, "") : null;
+  return numId ? `${numId}: ${rest || rawLabel}` : rest || rawLabel;
 }
 
 /**
@@ -374,7 +382,7 @@ const FoldedSectionHeader = memo(function FoldedSectionHeader({
   item: Extract<ListActiveItem, { kind: "section" }>;
   selected: boolean;
 }) {
-  const count = `[×${String(item.count ?? item.rows.length).padStart(2, "0")}]`;
+  const count = `[×${String(item.members.length).padStart(2, "0")}]`;
   const labelFg = selected ? theme.fgBright : theme.fgDim;
   const attrs = selected ? TextAttributes.BOLD : 0;
   return (
@@ -399,10 +407,10 @@ const FoldedSectionHeader = memo(function FoldedSectionHeader({
 });
 
 /**
- * A checkout owned by the SSH host. Its host identity lives in the section
- * header; the row uses the same primary status glyph and label treatment as a
- * local worktree. A transient creation stays visible through install, then
- * the renderer hands off to the summary returned by remote wt.
+ * A checkout owned by an SSH host. It occupies the same section stream as a
+ * local worktree; the compact monitor glyph is the only list-level location
+ * cue. A transient creation stays visible through install, then the renderer
+ * hands off to the summary returned by remote wt.
  */
 const RemoteRowView = memo(function RemoteRowView({
   entry,
@@ -410,12 +418,14 @@ const RemoteRowView = memo(function RemoteRowView({
   panelWidth,
   githubData,
   archived = false,
+  unavailable = false,
 }: {
   entry: RemoteListEntry;
   selected: boolean;
   panelWidth: number;
   githubData?: GithubData;
   archived?: boolean;
+  unavailable?: boolean;
 }) {
   const status: Status = isRemoteSummary(entry)
     ? {
@@ -440,15 +450,15 @@ const RemoteRowView = memo(function RemoteRowView({
           undefined,
         )
       : statusBadge(status);
-  const rawLabel = remoteEntryLabel(entry);
-  const { id, rest } = slugLabel(rawLabel);
-  const numId = id ? id.replace(/^[A-Z]+-/, "") : null;
-  const baseLabel = numId ? `${numId}: ${rest || rawLabel}` : rest || rawLabel;
-  const label = archived ? `${entry.hostLabel} · ${baseLabel}` : baseLabel;
+  const label = remoteRowLabel(entry);
   const pr = isRemoteSummary(entry) ? githubData?.prs[entry.branch] : undefined;
   const mq = isRemoteSummary(entry)
     ? githubData?.mergeQueue?.[entry.branch]
     : undefined;
+  // Two cells for the PUA monitor glyph. It sits immediately before the
+  // name so location reads as part of row identity, not as one more
+  // right-aligned status badge.
+  const remoteCells = 2;
   const badgeCells = remoteBadgeClusterCells(pr, mq);
   return (
     <box
@@ -464,25 +474,24 @@ const RemoteRowView = memo(function RemoteRowView({
       <box width={1} flexShrink={0}>
         <text> </text>
       </box>
+      <box width={remoteCells} flexShrink={0}>
+        <text fg={archived ? theme.fgDim : unavailable ? theme.warn : theme.info}>
+          {NF.remote}
+        </text>
+      </box>
       <box flexGrow={1} flexShrink={1} overflow="hidden">
         <text
           fg={selected ? theme.fgBright : archived ? theme.fgDim : theme.fg}
           attributes={selected ? TextAttributes.BOLD : 0}
           wrapMode="none"
         >
-          {truncateEnd(label, Math.max(0, panelWidth - 8 - badgeCells))}
+          {truncateEnd(label, Math.max(0, panelWidth - 8 - remoteCells - badgeCells))}
         </text>
       </box>
       <RemoteBadgeCluster pr={pr} mq={mq} archived={archived} />
     </box>
   );
 });
-
-const REMOTE_SECTION_PREFIX = "\0remote:";
-
-function remoteSectionKey(entry: RemoteListEntry): string {
-  return `${REMOTE_SECTION_PREFIX}${entry.hostKey}`;
-}
 
 /**
  * Memoized: every prop is identity-stable across unrelated App renders
@@ -494,7 +503,11 @@ function remoteSectionKey(entry: RemoteListEntry): string {
 export const WorktreeList = memo(function WorktreeList({ items, archivedItems, reviewRequests, selectedIndex, width, activeTails, activeActions, activeSessionBySlug, isLoading, remoteUnavailable, githubData, scrollHandle }: Props) {
   const allRows = [
     ...items.flatMap((i) =>
-      i.kind === "wt" ? [i.row] : i.kind === "section" ? i.rows : [],
+      i.kind === "wt"
+        ? [i.row]
+        : i.kind === "section"
+          ? i.members.flatMap((member) => member.kind === "wt" ? [member.row] : [])
+          : [],
     ),
     ...archivedItems.flatMap((i) => (i.kind === "wt" ? [i.row] : [])),
   ];
@@ -665,25 +678,18 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
               ? prev.kind === "wt"
                 ? prev.row.section
                 : prev.kind === "remote"
-                  ? remoteSectionKey(prev.entry)
+                  ? isRemoteSummary(prev.entry) ? prev.entry.section : null
                   : prev.sectionKey
               : undefined;
 
             if (item.kind === "remote") {
-              const sectionKey = remoteSectionKey(item.entry);
+              const section = isRemoteSummary(item.entry) ? item.entry.section : null;
               return (
                 <Fragment key={`active:remote:${remoteEntryKey(item.entry)}`}>
-                  {prevSection !== sectionKey ? (
+                  {prevSection !== section ? (
                     <>
                       <box height={1} flexShrink={0} />
-                      <Divider
-                        label={item.entry.hostLabel}
-                        width={width}
-                        icon={{
-                          glyph: NF.remote,
-                          fg: remoteUnavailable ? theme.warn : theme.info,
-                        }}
-                      />
+                      <Divider label={section ?? INBOX_LABEL} width={width} />
                     </>
                   ) : null}
                   <RemoteRowView
@@ -691,6 +697,7 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                     selected={i === selectedIndex}
                     panelWidth={width}
                     githubData={githubData}
+                    unavailable={remoteUnavailable}
                   />
                 </Fragment>
               );
@@ -813,6 +820,7 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                       panelWidth={width}
                       githubData={githubData}
                       archived
+                      unavailable={remoteUnavailable}
                     />
                   );
                 }

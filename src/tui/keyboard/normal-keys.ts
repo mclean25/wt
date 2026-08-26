@@ -30,7 +30,7 @@ import { createLogger } from "../../core/logger.ts";
 import { eventsOutputId, firehoseOutputId, indexOfOutput } from "../../core/outputs.ts";
 import { stageUrl } from "../../core/stage.ts";
 import { closeHarnessSessionGracefully } from "../../core/tmux.ts";
-import { StatusKind } from "../../core/types.ts";
+import { StatusKind, type PullRequest } from "../../core/types.ts";
 import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 import { worktreeTargetKey } from "../../core/worktree-target.ts";
 import { setAttentionSeen } from "../../core/wtstate.ts";
@@ -90,6 +90,7 @@ export type NormalKeysCtx = {
   currentItem: VisualItems["currentItem"];
   selectedPr: VisualItems["selectedPr"];
   selectedRemote: VisualItems["selectedRemote"];
+  selectedRemotePr: PullRequest | undefined;
   selectedSection: VisualItems["selectedSection"];
   currentTarget: VisualItems["currentTarget"];
   visualItems: VisualItems["visualItems"];
@@ -161,6 +162,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     currentItem,
     selectedPr,
     selectedRemote,
+    selectedRemotePr,
     selectedSection,
     currentTarget,
     visualItems,
@@ -846,8 +848,14 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       // section's first row; folding → the new header line.
       const item = currentItem;
       if (item?.kind === "section") {
-        const first = item.rows[0];
-        setSel(first ? first.wt.slug : `section:${item.sectionKey}`);
+        const first = item.members[0];
+        setSel(
+          first
+            ? first.kind === "wt"
+              ? first.row.wt.slug
+              : `remote:${remoteEntryKey(first.entry)}`
+            : `section:${item.sectionKey}`,
+        );
         void toggleSectionFold(item.sectionKey);
         return;
       }
@@ -856,6 +864,16 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         // activeItems builder — and so does the archived block, which is
         // the one group nobody chose to have and everybody accumulates.
         const key = item.row.archived ? GROUP_ARCHIVED : item.row.section ?? GROUP_INBOX;
+        setSel(`section:${key}`);
+        void toggleSectionFold(key);
+        return;
+      }
+      if (item?.kind === "remote") {
+        const key = item.archived
+          ? GROUP_ARCHIVED
+          : isRemoteSummary(item.entry)
+            ? item.entry.section ?? GROUP_INBOX
+            : GROUP_INBOX;
         setSel(`section:${key}`);
         void toggleSectionFold(key);
         return;
@@ -875,6 +893,24 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // `wt rm` command so its lock, dirty, and unpushed-work checks stay
     // authoritative.
     if (selectedRemote) {
+      const remoteLog = createLogger(`[remote:${selectedRemote.hostLabel}]`);
+      if (isPlainLetter(k, "p")) {
+        if (!selectedRemotePr) {
+          remoteLog.event.warn("no PR for this branch");
+          return;
+        }
+        openPrUrl(
+          selectedRemotePr.url,
+          selectedRemotePr.number,
+          null,
+          `[remote:${selectedRemote.hostLabel}]`,
+        );
+        return;
+      }
+      if (isPlainLetter(k, "l")) {
+        rememberPrTargetChord("linear");
+        return;
+      }
       if (isPlainLetter(k, "a")) {
         if (!isRemoteSummary(selectedRemote)) {
           toast("remote worktree is still being created", theme.warn, 1800);
@@ -886,11 +922,10 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           : remoteWorktreeLedgerKey(selectedRemote.hostKey, slug);
         toggleArchived(key).then(
           ({ archived }) => {
-            const log = createLogger(`[remote:${selectedRemote.hostLabel}]`);
             if (!archived) {
               setSel(`remote:${remoteEntryKey(selectedRemote)}`);
             }
-            log.event.info(`${archived ? "archived" : "restored from archive"} ${slug}`);
+            remoteLog.event.info(`${archived ? "archived" : "restored from archive"} ${slug}`);
             toast(
               archived ? `archived ${slug}` : `restored ${slug}`,
               theme.info,
@@ -1128,7 +1163,9 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toast("PR is not open", theme.warn, 2000);
         return;
       }
-      const reviewer = config.github.defaultReviewer;
+      const reviewer = config.github.reviewers
+        ? config.github.defaultReviewer
+        : null;
       const steps: string[] = [];
       if (current.pr.isDraft) steps.push("mark ready");
       if (reviewer && !current.pr.requestedReviewers.includes(reviewer))
