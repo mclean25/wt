@@ -559,13 +559,30 @@ export async function removeWorktree(
     if (destroyCommand) {
       opts.onPhase?.("destroy command");
       handle.phase("destroy command");
-      await runTeardownCommand({
+      const tornDown = await runTeardownCommand({
         label: "destroy_command",
         command: destroyCommand,
         cwd: wt.path,
         slug: wt.slug,
         onLog: opts.onLog,
       });
+      // A failed STOP retries on the next stop; a failed DESTROY never
+      // retries, because the trigger is the removal that is about to
+      // happen. Whatever the command owned is now labelled for a slug
+      // with no worktree, no row and no future sweep — the address-pool
+      // exhaustion of 2026-08-18 was ~24 of these. Destroying anyway is
+      // still right (refusing turns one leak into a bigger one), so the
+      // fix is that the leak has to ANNOUNCE itself: `runTeardownCommand`
+      // logs file-only, and the destroy log this rides in is read only by
+      // someone who already suspects a problem. Attention-level, because
+      // the remedy is a command the user has to run.
+      if (!tornDown) {
+        log.attention.warn(
+          `destroy_command failed for ${wt.slug} — anything it owned (containers, ` +
+            `networks, volumes) is now orphaned and nothing will sweep it. ` +
+            `Check the runtime is up, then re-run the command from wt logs ${wt.slug}.`,
+        );
+      }
     }
 
     // Reap hand-started servers (an agent's `pnpm preview`, a stray
