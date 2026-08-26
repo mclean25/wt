@@ -260,6 +260,21 @@ function appendLine(line: string): void {
   writeChain = writeChain.then(() => appendFile(path, line, "utf8")).catch(() => {});
 }
 
+/**
+ * Await every queued write. Writes are chained ASYNCHRONOUSLY, so
+ * `process.exit()` on the line after a `log.*` call drops it — and the
+ * lines most worth keeping are exactly the ones a process emits to
+ * explain why it is about to disappear. The events daemon's
+ * self-restart notice was lost that way on its first real firing: the
+ * pid changed with a clean gap in the log and nothing saying why.
+ *
+ * Never throws: the chain already swallows write errors, and an exit
+ * path must not fail on its own diagnostics.
+ */
+export async function flushLog(): Promise<void> {
+  await writeChain;
+}
+
 function ensureInit(): void {
   if (initialized) return;
   initialized = true;

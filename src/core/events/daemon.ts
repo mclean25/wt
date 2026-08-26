@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { buildSha, currentSourceSha } from "../build-id.ts";
 import { config, type GithubEventsConfig } from "../config.ts";
 import { fetchGithub } from "../github.ts";
-import { createLogger } from "../logger.ts";
+import { createLogger, flushLog } from "../logger.ts";
 import { fetchOrigin, listWorktrees } from "../worktree.ts";
 
 import {
@@ -287,6 +287,10 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
         now: currentSourceSha(),
       });
       writeState(state);
+      // Log writes are chained async, so exiting on the next line drops
+      // the notice above — leaving a pid change with a clean gap in the
+      // log and nothing at all to say the exit was deliberate.
+      await flushLog();
       process.exit(0);
     }
     fetching = true;
