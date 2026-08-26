@@ -64,8 +64,9 @@ Full mechanics are documented in those files' header comments; the shape:
 
 A GitHub **repo webhook** (repo Settings → Webhooks — not an Actions secret)
 posting to the #github channel's Discord webhook URL with `/github` appended.
-Registered events: `issues`, `issue_comment`, `pull_request`,
-`pull_request_review`, `fork`, `star` — no `push`. Hook id `662175381`.
+Registered events: `issues`, `fork`, `star` — no `push` or pull-request
+events. `issue_comment` is deliberately excluded because GitHub also uses it
+for pull-request comments. Hook id `662175381`.
 
 `.github/workflows/discord-ci-alert.yml` separately posts every non-successful
 completion of the `ci` workflow on `main`, including failures, cancellations,
@@ -78,8 +79,7 @@ To re-register (e.g. after rotating the Discord webhook):
 
 ```sh
 gh api repos/micthiesen/wt/hooks -X POST -F active=true -f name=web \
-  -f 'events[]=issues' -f 'events[]=issue_comment' -f 'events[]=pull_request' \
-  -f 'events[]=pull_request_review' -f 'events[]=fork' -f 'events[]=star' \
+  -f 'events[]=issues' -f 'events[]=fork' -f 'events[]=star' \
   -f 'config[url]=<discord-webhook-url>/github' -f 'config[content_type]=json'
 ```
 
