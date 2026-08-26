@@ -14,19 +14,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      # core/config.ts fail-fasts (process.exit(1)) if no config file is
-      # present, which would otherwise kill `bun test` before any test
-      # runs — dozens of modules import the `config` singleton at load
-      # time. Point WT_CONFIG at a minimal synthetic config so the loader
-      # succeeds; the paths themselves are never touched by the suite.
-      - run: |
-          cat > "$RUNNER_TEMP/wt-ci-config.toml" <<'EOF'
-          [paths]
-          main_clone = "/tmp/wt-ci-fake-main"
-          worktree_root = "/tmp/wt-ci-fake-worktrees"
-
-          [branch]
-          prefix = "ci"
-          EOF
-          echo "WT_CONFIG=$RUNNER_TEMP/wt-ci-config.toml" >> "$GITHUB_ENV"
+      # The suite's config is checked in at test/config.toml and wired
+      # through bunfig.toml's preload, so a bare `bun test` runs the same
+      # here and on a developer machine. It used to be written inline
+      # here instead, which meant a local run inherited the developer's
+      # own config and CI inherited this one — two worlds, and the local
+      # one always vouching.
       - run: bun test

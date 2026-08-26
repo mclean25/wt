@@ -1,0 +1,3 @@
+[test]
+# Makes `bun test` hermetic with respect to the machine's wt config.
+preload = ["./test/preload.ts"]

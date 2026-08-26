@@ -54,6 +54,14 @@ that version (so the daily check skips it until origin moves), and
 leaves the user on what they had. A broken push therefore usually
 costs its author a red X, not a user a broken install.
 
+**What the gate does not do is tell anyone it is holding.** A red `main`
+stops shipping silently: users stay on their last green version, which is
+the correct behaviour and produces no message anywhere. `main` was red from
+2026-08-24 to 08-26 and the only visible symptom was the Discord #updates
+channel going quiet, because that digest is gated on the same green run
+(see [discord.md](discord.md)). When updates seem to have stopped, check
+whether `main` is green before looking at `core/update/`.
+
 **Lazy command dispatch.** For the pushes that do get through, the CLI
 limits how far one broken module reaches: `cli/index.ts` imports each
 subcommand's module graph on demand, so `wt status` doesn't load the

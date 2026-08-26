@@ -39,6 +39,17 @@ Full mechanics are documented in those files' header comments; the shape:
   OpenAI failure degrades to posting raw commit titles.
 - Attribution is built in: the embed footer lists commit authors' GitHub
   logins.
+- **Silence is ambiguous, and #updates is the only place it shows.** Because
+  the trigger is green-`ci`-on-`main`, "no digest for two days" has two
+  readings that look identical from the channel: nobody pushed, or `main` has
+  been red and every commit is queued for the next green digest. It was the
+  second on 2026-08-24 to 08-26 (eight pushes, four config-leaking
+  `rollupChecklist` tests, fixed in `test/preload.ts` + `test/config.toml`),
+  and nothing anywhere announced it — the same green gate also holds back
+  hot updates, so users had been getting nothing either. Before treating a
+  quiet #updates as a digest bug, check `gh run list --workflow=ci.yml
+  --branch=main`; a run of `skipped` digest runs is the tell, since the
+  green-only `if:` skips rather than fails.
 - A GitHub Actions outage can wedge a `push`-triggered ci run in
   `queued` indefinitely — `gh run cancel`/`rerun` both error unhelpfully on
   it ("already completed" / "already running") rather than clearing it. The

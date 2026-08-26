@@ -1,0 +1,21 @@
+# The config `bun test` runs against, in CI and on a developer machine
+# alike (see ../test/preload.ts).
+#
+# `core/config.ts` fail-fasts with process.exit(1) when no config file is
+# present, and dozens of modules import the `config` singleton at load
+# time, so the suite needs SOME config to exist. It must not be the
+# machine's own: a test that reads ambient config passes for whoever
+# wrote it and fails for everybody else. That cost `main` two red days —
+# four `rollupChecklist` tests recognised a review-bot check only because
+# the laptop running them was configured for that bot.
+#
+# The paths are never touched by the suite. They must still be absent, so
+# a test that shells out to git in the "default" cwd fails loudly instead
+# of quietly answering about a real repository.
+
+[paths]
+main_clone = "/tmp/wt-ci-fake-main"
+worktree_root = "/tmp/wt-ci-fake-worktrees"
+
+[branch]
+prefix = "ci"

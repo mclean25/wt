@@ -233,7 +233,6 @@ export function openPrChecks(
 // bot, not us — when they drift, the badge silently disappears
 // (state: "none") rather than breaking the whole pane.
 const BOT = config.reviewBot;
-const isBotContext = compileIgnore(BOT.checkContexts);
 
 /**
  * True when `login` is the configured bot. GraphQL reports app logins
@@ -249,6 +248,22 @@ function isBotLogin(login: string | null | undefined, expected: string = BOT.log
 }
 
 /**
+ * Which check names belong to `bot`, compiled once per bot object. The
+ * default `BOT` is a module singleton, so the common path builds its
+ * regexes exactly once; a test's injected bot gets its own entry and
+ * never reaches the machine's `[review_bot]`.
+ */
+const contextMatchers = new WeakMap<ChecklistBot, (name: string | null | undefined) => boolean>();
+function isBotContextOf(bot: ChecklistBot): (name: string | null | undefined) => boolean {
+  let m = contextMatchers.get(bot);
+  if (!m) {
+    m = compileIgnore(bot.checkContexts);
+    contextMatchers.set(bot, m);
+  }
+  return m;
+}
+
+/**
  * Aggregate state of the bot's own check contexts on the current head:
  * `pending` when any is still running, `done` when at least one exists
  * and all completed, null when none are attached to this commit (the
@@ -256,7 +271,9 @@ function isBotLogin(login: string | null | undefined, expected: string = BOT.log
  */
 function botContextState(
   contexts: RawCheck[] | null | undefined,
+  bot: ChecklistBot = BOT,
 ): "pending" | "done" | null {
+  const isBotContext = isBotContextOf(bot);
   let state: "pending" | "done" | null = null;
   for (const c of contexts ?? []) {
     if (!isBotContext(checkName(c))) continue;
@@ -360,9 +377,17 @@ function summaryMarkerOf(body: string, markers: readonly string[]): string | nul
  * machine running them is configured for — the suite would otherwise be
  * green on a checklist config and vacuous on a threads one, which is the
  * shape of an instrument answering about a world it is not in.
+ *
+ * It has to carry the WHOLE identity, `checkContexts` included. Leaving
+ * that one field to read the ambient config left the injection half
+ * done, in the way that reads as working: the comment side was hermetic
+ * while the check-context side still asked the machine, so four tests
+ * passed on a Codex-configured laptop and failed in CI, whose synthetic
+ * config has no `[review_bot]` at all.
  */
 export type ChecklistBot = {
   login: string;
+  checkContexts: readonly string[];
   summaryMarkers: readonly string[];
   pendingMarker: string | null;
 };
@@ -420,7 +445,7 @@ export function rollupChecklist(
   const touchedAt = (c: BotComment): string =>
     c.updatedAt && c.updatedAt > c.createdAt ? c.updatedAt : c.createdAt;
 
-  const ctx = botContextState(contexts);
+  const ctx = botContextState(contexts, bot);
   // "Stale" is a claim that the bot never saw THIS commit, and there are
   // three ways to answer it, in descending order of directness.
   //

@@ -312,13 +312,20 @@ describe("rollupChecks superseded-workflow-run dedupe", () => {
  * the same on a machine configured for a checklist bot and in CI, whose
  * synthetic config has no `[review_bot]` at all. Inheriting it would
  * make the suite vacuous in exactly the place it is asked to vouch for.
+ *
+ * `BOT_CHECK` is deliberately a name no real config carries, so a
+ * fixture check run can only be recognised through the injected bot. It
+ * is the half of the identity that was left reading the ambient config,
+ * which passed here and failed in CI for two days.
  */
 describe("rollupChecklist", () => {
+  const BOT_CHECK = "Injected review check";
   const FULL = "### 🤖 Codex review";
   const DELTA = "### 🤖 Codex follow-up reviews";
   const ACK = "🤖 ⏳ Codex review started";
   const BOT: ChecklistBot = {
     login: "github-actions",
+    checkContexts: [BOT_CHECK],
     summaryMarkers: [FULL, DELTA],
     pendingMarker: ACK,
   };
@@ -339,7 +346,7 @@ describe("rollupChecklist", () => {
   });
   const nodes = (...cs: ReturnType<typeof comment>[]) => ({ nodes: cs }) as never;
   const botRun = (status: string, conclusion: string | null) =>
-    [{ __typename: "CheckRun" as const, name: "Codex code review", status, conclusion }] as never;
+    [{ __typename: "CheckRun" as const, name: BOT_CHECK, status, conclusion }] as never;
 
   // The exact pair on #1444: the full pass had both its boxes ticked,
   // and the delta log posted afterwards carried one open item.
@@ -415,6 +422,24 @@ describe("rollupChecklist", () => {
     expect(rb).toEqual({ state: "clean", unresolved: 0, stale: true });
   });
 
+  test("a check the injected bot does not claim is not its check", () => {
+    // The guard on the leak itself. `botContextState` used to compile
+    // its matcher from the machine's `[review_bot]`, so a fixture check
+    // was recognised on a Codex-configured laptop and invisible in CI —
+    // the injection looked complete because the comment half was.
+    const other: ChecklistBot = { ...BOT, checkContexts: ["Some Other Bot"] };
+    const rb = rollupChecklist(
+      botRun("IN_PROGRESS", null),
+      nodes(comment(CLOSED_FULL, "2026-08-24T17:01:17Z")),
+      HEAD,
+      HEAD_OID,
+      other,
+    );
+    // No context of its own on the head: not pending, and the timestamp
+    // proxy is all that is left to answer staleness.
+    expect(rb).toEqual({ state: "clean", unresolved: 0, stale: true });
+  });
+
   test("a running bot check reads pending", () => {
     const rb = rollupChecklist(
       botRun("IN_PROGRESS", null),
@@ -473,6 +498,7 @@ describe("rollupChecklist", () => {
     // newer, which is the same drop this whole change exists to stop.
     const nested: ChecklistBot = {
       login: "github-actions",
+      checkContexts: [],
       summaryMarkers: ["### Review", "### Review follow-up"],
       pendingMarker: null,
     };
@@ -511,6 +537,7 @@ describe("rollupChecklist — the sha the bot stamps", () => {
   const DELTA = "### 🤖 Codex follow-up reviews";
   const BOT: ChecklistBot = {
     login: "github-actions",
+    checkContexts: [],
     summaryMarkers: [DELTA],
     pendingMarker: null,
   };
