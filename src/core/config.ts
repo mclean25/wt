@@ -842,6 +842,16 @@ export type Config = {
      * pure hand order. Stack sections always keep spine order.
      */
     sort: "status" | "manual";
+    /**
+     * Where the activity pane (sessions, action runs, the attention and
+     * firehose feeds) sits. `column` (default) puts it in the right-hand
+     * column under the details pane, so the list gets the full TUI
+     * height. `full_width` spans it across the bottom under both panes,
+     * capping list+details at `MIDDLE_MAX_ROWS` — wider lines before
+     * wrapping, which is what a feed of word-wrapped status notes is
+     * mostly made of, at the cost of the list's vertical scan space.
+     */
+    activityPane: "column" | "full_width";
   };
   skills: {
     /**
@@ -1412,6 +1422,13 @@ function build(raw: Raw, errs: Errors): Config {
     ["status", "manual"] as const,
     "status",
   );
+  const uiActivityPane = errs.optEnum(
+    ui,
+    "ui",
+    "activity_pane",
+    ["column", "full_width"] as const,
+    "column",
+  );
 
   const skillsRaw = obj(raw.skills);
   const startupCheckRaw = skillsRaw?.startup_check;
@@ -1516,7 +1533,7 @@ function build(raw: Raw, errs: Errors): Config {
     github,
     actions,
     automations,
-    ui: { rows, hiddenBadges, sort: uiSort },
+    ui: { rows, hiddenBadges, sort: uiSort, activityPane: uiActivityPane },
     skills,
     manager,
     update,

@@ -173,3 +173,63 @@ copy_globs = ["/tmp/**", "../secrets/**"]
     }
   });
 });
+
+describe("ui.activity_pane", () => {
+  // The pane's position is the one `[ui]` key whose DEFAULT is a product
+  // decision someone else made, so the default is pinned here rather than
+  // left to whatever the resolver happens to do: a silent flip would move
+  // every user's layout, and the setting exists precisely so nobody has to
+  // trade one group's layout for another's.
+  const load = (uiSection: string) => {
+    const root = mkdtempSync(join(tmpdir(), "wt-activity-pane-"));
+    try {
+      const userConfig = join(root, "user.toml");
+      writeFileSync(userConfig, `
+[paths]
+main_clone = "/global/repo"
+worktree_root = "/global/worktrees"
+
+[branch]
+prefix = "alex"
+base = "main"
+${uiSection}
+`);
+      const configModule = pathToFileURL(join(import.meta.dir, "config.ts")).href;
+      const script = `
+        const { config } = await import(${JSON.stringify(configModule)});
+        console.log(JSON.stringify({ activityPane: config.ui.activityPane }));
+      `;
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        WT_CONFIG: userConfig,
+      };
+      delete env[REPOSITORY_CONFIG_ENV];
+      return Bun.spawnSync([process.execPath, "-e", script], {
+        cwd: root,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  test("defaults to the column layout", () => {
+    const result = load("");
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.toString()).activityPane).toBe("column");
+  });
+
+  test("accepts full_width", () => {
+    const result = load("\n[ui]\nactivity_pane = \"full_width\"\n");
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.toString()).activityPane).toBe("full_width");
+  });
+
+  test("rejects an unknown value by name", () => {
+    const result = load("\n[ui]\nactivity_pane = \"bottom\"\n");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("ui.activity_pane");
+  });
+});

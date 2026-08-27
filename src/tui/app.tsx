@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 
+import { config } from "../core/config.ts";
 import { createLogger } from "../core/logger.ts";
 import { markKeypress } from "../core/perf.ts";
 import { perfSnapshotQuery, qk, remoteWorktreesQuery, useWtActions } from "../state/index.ts";
@@ -384,15 +385,21 @@ export function App({ onExit }: Props) {
     usePrTargetChord({ selectedPr, current, selectedRemotePr });
 
   const listWidth = Math.max(32, Math.min(52, Math.floor(width * 0.44)));
-  // The worktree list owns the full usable height. The right column is
-  // split between metadata and activity: metadata is capped while the
-  // activity pane absorbs the rest. Title and footer take 1 row each.
-  const metadataMax = 20;
-  const activityHeight = Math.max(7, height - 2 - metadataMax);
+  // Two layouts, differing only in where the activity pane sits
+  // (`[ui] activity_pane`). `column` (default): the list owns the full
+  // usable height and the right column splits between details and
+  // activity. `full_width`: activity spans the bottom under both panes,
+  // so the list is capped to the same height as details.
+  const activityInColumn = config.ui.activityPane === "column";
+  const detailsMax = 20;
+  // Title and footer take 1 row each, so `height - 2` is the budget the
+  // details cap and the activity pane divide between them. Identical in
+  // both layouts — only which box the activity height applies to moves.
+  const activityHeight = Math.max(7, height - 2 - detailsMax);
   // The details pane needs its numeric height (not just flexGrow) because
   // the folded-section body sizes notes against the rows it actually has.
-  const metadataHeight = Math.max(1, height - 2 - activityHeight);
-  const metadataWidth = Math.max(0, width - listWidth);
+  const detailsHeight = Math.max(1, height - 2 - activityHeight);
+  const detailsWidth = Math.max(0, width - listWidth);
 
   // Action runtime state for the *selected* worktree. `currentRun`
   // drives the activity-pane swap (showing the streamed claude output
@@ -962,7 +969,13 @@ export function App({ onExit }: Props) {
       {/* The in-flight fetch counter + refresh wave live INSIDE TitleBar
           (see its header comment): useIsFetching re-renders per fetch
           event, and at App level that re-rendered the whole tree. */}
-      <box flexDirection="row" flexGrow={1} minHeight={0}>
+      <box
+        flexDirection="row"
+        flexGrow={activityInColumn ? 1 : 0}
+        height={activityInColumn ? undefined : detailsHeight}
+        flexShrink={activityInColumn ? undefined : 0}
+        minHeight={0}
+      >
         {removedView ? (
           <RemovedList
             entries={removedEntries}
@@ -987,7 +1000,7 @@ export function App({ onExit }: Props) {
         )}
         <box
           flexDirection="column"
-          width={metadataWidth}
+          width={detailsWidth}
           flexShrink={0}
           minHeight={0}
         >
@@ -999,8 +1012,8 @@ export function App({ onExit }: Props) {
             remoteError={remoteError}
             section={removedView ? undefined : sectionDetail}
             removed={currentRemoved}
-            width={metadataWidth}
-            height={metadataHeight}
+            width={detailsWidth}
+            height={detailsHeight}
             scrollRef={detailsScrollRef}
             sessionState={
               current
@@ -1009,9 +1022,14 @@ export function App({ onExit }: Props) {
             }
             verifyExpanded={verifyExpanded}
           />
-          <OutputViewer output={displayedOutput} height={activityHeight} />
+          {activityInColumn && (
+            <OutputViewer output={displayedOutput} height={activityHeight} />
+          )}
         </box>
       </box>
+      {!activityInColumn && (
+        <OutputViewer output={displayedOutput} height={activityHeight} />
+      )}
       <PreFooterModals
         modal={modal}
         currentSlug={currentSlug}
