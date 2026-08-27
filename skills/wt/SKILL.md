@@ -93,6 +93,14 @@ in each one.
   `start` is also restart. Only ever your own worktree's server.
 - `wt rm [slug]` — remove a worktree; it deletes the branch too and takes no
   flags to control that.
+- `wt merge [slug]` — arm GitHub's "merge when ready" on the PR, the same
+  action as the button on the PR page. **Use this, never `gh pr merge
+  --auto`**: a base branch with a merge queue has to be ENQUEUED while
+  everything else arms classic auto-merge, and gh only ever does the
+  second — on a queue repo it fails naming a repo setting that is not the
+  reason, which reads as a permission problem and is not one. Exit 75 means
+  a required check has not reported yet: wait and re-run, do not escalate.
+  `--cancel` disarms and dequeues.
 - `wt clean` — bulk-remove merged/gone worktrees.
 - `wt doctor [slug]` — health report (dirty, sync, PR, merged).
 - `wt open [slug]` — open a worktree in the editor.

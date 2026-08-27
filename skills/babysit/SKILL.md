@@ -177,21 +177,34 @@ Assert the status first, so the record says what landed and at what risk:
 wt status ready --risk <low|medium|high> -m "<note>"
 ```
 
-Then merge, with a method the repo allows:
+If the base branch has a merge queue, or checks are still running while
+everything else is clean, this is the same command — arming is what
+covers both.
+
+Then land it:
 
 ```bash
-gh api repos/{owner}/{repo} --jq '{squash: .allow_squash_merge, merge: .allow_merge_commit, rebase: .allow_rebase_merge}'
-gh pr merge --squash    # or --merge / --rebase
+wt merge
 ```
 
-If the base branch has a merge queue, or checks are still running and
-everything else is clean, arm it and let it land on its own:
+That arms GitHub's **merge when ready** — the same action as the button
+on the PR page. It never merges on the spot: GitHub holds the PR until
+its requirements are met, then merges it. Armed is finished. Do not sit
+watching the queue, and do not follow it with a second merge command.
 
-```bash
-gh pr merge --auto --squash
-```
+**Use `wt merge`, not `gh pr merge`.** Two different GitHub features
+wear the "merge when ready" label and they are gated on different
+settings: a base branch with a merge queue ENQUEUES, everything else
+arms classic auto-merge. `gh pr merge --auto` only ever does the second,
+so on a queue repo it fails with `Auto merge is not allowed for this
+repository` — an error naming a repo setting that is not the reason,
+which reads as a permission you need a human for. It is not. `wt merge`
+picks the right one off the PR's base branch. `--squash` is likewise not
+yours to choose on a queue base: the queue's own config sets the method.
 
-Armed is finished. Do not sit watching the queue.
+Exit 75 means the refusal is temporary — a required check has not
+reported for this commit yet. Wait and re-run; that is not a blocker and
+never an escalation. `wt merge --cancel` disarms (and dequeues).
 
 ### The four times you do not merge
 

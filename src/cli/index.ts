@@ -19,6 +19,7 @@ commands:
   events      manage the optional GitHub webhook daemon
   remote      enter or run wt on the configured SSH remote
   base        show / set / clear a worktree's recorded fork base
+  merge       arm "merge when ready" on a worktree's PR (queue-aware)
   status      show / assert a worktree's work status (agent-facing)
   edge        assert / list merge-order edges between worktrees (self-expiring)
   section     list / move / rename / drop the fleet's sections (the human's batching)
@@ -67,6 +68,7 @@ const RUNNERS: Record<string, Loader> = {
   _remote: () => import("./commands/_remote.ts"),
   _session: () => import("./commands/_session.ts"),
   base: () => import("./commands/base.ts"),
+  merge: () => import("./commands/merge.ts"),
   status: () => import("./commands/status.ts"),
   edge: () => import("./commands/edge.ts"),
   section: () => import("./commands/section.ts"),

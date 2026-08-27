@@ -73,6 +73,16 @@ Remove every worktree that is merged or whose remote branch is gone. "Gone" is o
 - `--destroy-stage` / `--no-destroy-stage` — apply to all candidates (default: per-worktree, destroy iff its stage is live).
 - `--foreground` — run removals synchronously (background dispatch is the default here, unlike `rm`).
 
+### `wt merge [<slug>]` / `wt merge --cancel [<slug>]`
+
+Arm GitHub's **"merge when ready"** on the worktree's PR — the same action as the button on the PR page, and the same dispatch the TUI's `m` picker row uses. Never merges on the spot: GitHub holds the PR until its requirements are met and merges it then. `--cancel` disarms.
+
+**This exists because `gh pr merge --auto` is not a substitute, and fails in a way that reads as something else entirely.** Two different GitHub features wear the "merge when ready" label and they are gated on different settings: a base branch with a **merge queue** is enqueued (`enqueuePullRequest`, which needs nothing enabled at the repo level), and everything else arms **classic auto-merge** (`enablePullRequestAutoMerge`, which requires the repo's "Allow auto-merge"). gh only ever does the second. So on a repo that queues on `staging` with `allow_auto_merge: false`, the browser button works and the CLI returns `Auto merge is not allowed for this repository` — an error naming a repo setting that has nothing to do with the failure. An agent reads that as a permission it needs a human for, stops, and hands back a branch whose only remaining step was the button. `wt merge` picks the mutation off the PR's `baseRefName`; `--cancel` mirrors the same split, because `--disable-auto` does **not** dequeue and would report success while the PR stayed queued and merged anyway.
+
+The merge METHOD is likewise not the caller's to choose on a queue base — the queue's own configuration sets it, so there is no `--squash` here.
+
+Exit codes: `0` armed, `2` usage, `75` **temporary** — a required check has not reported for this commit yet, which is a clock rather than a verdict, so the caller should wait and re-run rather than escalate. `1` for everything else. `<slug>` defaults to `$WT_AGENT`, then to the worktree containing the current directory (longest matching path, since one slug is routinely a strict prefix of another).
+
 ### `wt doctor [<slug>]`
 
 Health report: working tree, sync vs trunk, node_modules, locks, `gh-merge-base` branch config (must match the recorded fork base / trunk, or a bare `gh pr create` targets the repo default branch — see `wt new`), merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, pending agent-skill updates (`wt skills`), and **`wt` not being reachable on `PATH`** — a shell alias satisfies interactive use but doesn't exist inside a script file, so anything that scripts wt (an agent looping over worktrees) dies partway with `wt: command not found` and leaves the fleet half-updated. The check resolves `PATH` itself rather than shelling out, since this process's own shell may carry the alias and answer misleadingly; it also warns when a `wt` on `PATH` resolves to a *different* clone, which is worse than none.
