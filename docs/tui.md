@@ -24,6 +24,7 @@ Freshness is push-based: fs watchers on git refs, worktree dirs, locks, and the 
 | `g` / `G` | jump to top / bottom |
 | `Space` | jump to the next row needing attention (`needs-human` / `needs-testing` / `ready`), scanning forward and wrapping — the cross-section scan that per-section status sort can't express |
 | `Tab` | fold/unfold the section under the cursor — a manual section, the Inbox, or the Archived block. The fold persists (`foldedSections` in wtstate), and folding collapses the group's cursor stops as well as its rows, so `j`/`k` never walk through something you can't see. Archived is otherwise not a section: it isn't in `sectionsOrder`, stays pinned to the bottom, and its summary offers no rename or move because it has neither |
+| `Ctrl+D` / `Ctrl+U` | jump to the first visible item in the next / previous section. For an expanded section that is its first row; for a folded section it is the selectable title, ready for `Tab` to unfold |
 | `Ctrl+J` / `Ctrl+K` | scroll the details pane, 3 rows a press |
 | `Ctrl+Shift+J` / `Ctrl+Shift+K` | scroll the bottom event feed — same 3-row step (also `Ctrl+E`/`Ctrl+Y`, mouse wheel); re-follows at the bottom. Kitty-protocol terminals only: legacy encodings can't express the chord and it degrades to the details scroll, leaving `Ctrl+E`/`Ctrl+Y` for the feed. There is no `Alt+J`/`Alt+K` alias, deliberately: outside the kitty protocol `Alt+<letter>` and `Esc`-then-letter are the same bytes, so such a binding hijacks bare `j`/`k` whenever you navigate right after dismissing a modal (or when a terminal binding emits an Esc-prefixed letter) |
 | `h` | flip to the removed-worktrees history view (grouped under day headers; a day starts at 04:00 local, so a late-night session stays in one group) |
@@ -90,7 +91,7 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 
 | key | action |
 |---|---|
-| `F12` | enter the row's coding-agent session (most recent live one, else spawn the primary harness); from another worktree session, switch straight to it; press again to return home; `Ctrl+D` closes it gracefully |
+| `F12` | enter the row's coding-agent session (most recent live one, else spawn the primary harness); from another worktree session, switch straight to it; press again to return home; while attached, `Ctrl+D` closes it gracefully |
 | `Shift+F12` | pick a harness (claude / codex / opencode) for a fresh spawn |
 | `Shift+Tab` | cycle the primary harness |
 | `F11` | enter the row's diff session (`[diff].command`, default `revdiff`, against the resolved diff base); from another session, switch straight to it; press again to return home |

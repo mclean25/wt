@@ -9,6 +9,7 @@ import {
   destroyHazardLabel,
   destroyHazards,
   isCleanCandidate,
+  sectionJumpTarget,
 } from "./app-helpers.ts";
 import type { FieldState, WorktreeRow } from "./hooks/useWorktreeRows.ts";
 import type { VisualItem } from "./hooks/useVisualItems.ts";
@@ -253,6 +254,35 @@ describe("cursorSuccessor", () => {
 
   test("null when nothing survives", () => {
     expect(cursorSuccessor([wtItem("a", null)], 0, new Set(["a"]))).toBeNull();
+  });
+});
+
+describe("sectionJumpTarget", () => {
+  const board: VisualItem[] = [
+    wtItem("inbox-a", null),
+    wtItem("inbox-b", null),
+    wtItem("doing-a", "Doing"),
+    wtItem("doing-b", "Doing"),
+    sectionItem("Paused"),
+    wtItem("archived", null, true),
+  ];
+
+  test("down lands on the first row of the next expanded section", () => {
+    expect(sectionJumpTarget(board, 0, 1)).toBe("doing-a");
+  });
+
+  test("down lands on a folded section title", () => {
+    expect(sectionJumpTarget(board, 2, 1)).toBe("section:Paused");
+  });
+
+  test("up lands on the first row of the previous section", () => {
+    expect(sectionJumpTarget(board, 4, -1)).toBe("doing-a");
+    expect(sectionJumpTarget(board, 3, -1)).toBe("inbox-a");
+  });
+
+  test("stops at the board edges", () => {
+    expect(sectionJumpTarget(board, 0, -1)).toBeNull();
+    expect(sectionJumpTarget(board, board.length - 1, 1)).toBeNull();
   });
 });
 

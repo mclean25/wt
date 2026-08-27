@@ -29,7 +29,6 @@ import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { eventsOutputId, firehoseOutputId, indexOfOutput } from "../../core/outputs.ts";
 import { stageUrl } from "../../core/stage.ts";
-import { closeHarnessSessionGracefully } from "../../core/tmux.ts";
 import { StatusKind, type PullRequest } from "../../core/types.ts";
 import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 import { worktreeTargetKey } from "../../core/worktree-target.ts";
@@ -42,6 +41,7 @@ import {
   isPlainLetter,
   isShiftedLetter,
   resolveDiffBase,
+  sectionJumpTarget,
   sessionLaunchBlockedReason,
 } from "../app-helpers.ts";
 import { events as activityEvents } from "../activity-log.ts";
@@ -491,6 +491,24 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       );
       return;
     }
+    // Ctrl+D / Ctrl+U jump between section starts. An expanded section's
+    // first row is its cursor stop; a folded section is represented by its
+    // selectable title, so the same helper lands where TAB can unfold it.
+    if (
+      k.ctrl &&
+      !k.shift &&
+      !k.option &&
+      !k.meta &&
+      (k.name === "d" || k.name === "u")
+    ) {
+      const target = sectionJumpTarget(
+        visualItems,
+        cursorIndex,
+        k.name === "d" ? 1 : -1,
+      );
+      if (target !== null) setSel(target);
+      return;
+    }
     if (k.name === "j" || k.name === "down") {
       if (visualItems.length === 0) return;
       // Already on the last item — there's nowhere to move the cursor, so
@@ -762,37 +780,6 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         slug,
         index: initialIdx >= 0 ? initialIdx : 0,
       });
-      return;
-    }
-    // Ctrl+D — gracefully close the selected row's F12-target session
-    // (the one the list glyph shows) by typing the harness's own exit
-    // gesture into the pane: ctrl+d twice, exactly what you'd press
-    // inside claude to end the convo. The conversation persists and is
-    // F12-resumable; the hard `; x` kill stays for stuck sessions.
-    if (k.ctrl && k.name === "d" && !k.shift && !k.option && !k.meta) {
-      if (!current) {
-        toast("select a worktree first", theme.warn, 1500);
-        return;
-      }
-      const target = currentHarnessSessions.f12Target;
-      if (!target?.isLive) {
-        toast("no live session to close", theme.fgDim, 1500);
-        return;
-      }
-      const slug = current.wt.slug;
-      const label = getHarness(target.harnessId).label;
-      createLogger(slug).event.info(`closing ${label} session (ctrl+d ×2)`);
-      void closeHarnessSessionGracefully(
-        slug,
-        target.harnessId,
-        target.extras.managedName,
-      ).then(
-        // The exit isn't instant (the harness shuts down, then tmux
-        // reaps the session) — nudge the poll shortly after instead of
-        // immediately, so the glyph flips without waiting a full tick.
-        () => setTimeout(() => void refreshTmuxSessions(), 800),
-        (err) => reportActionError("close session", err),
-      );
       return;
     }
     // F12 — toggle into the selected worktree's "F12 target" harness

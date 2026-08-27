@@ -80,6 +80,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "G", label: "bottom" },
       { key: "space", label: "jump to next row needing attention (needs-human / needs-testing / ready), wraps" },
       { key: "TAB", label: "fold / unfold the section under the cursor (Inbox and Archived too)" },
+      { key: "ctrl+d / ctrl+u", label: "jump to next / previous section" },
       { key: "ctrl+j / ctrl+k", label: "scroll details pane" },
     ],
   },
@@ -153,7 +154,6 @@ const KEY_BLOCKS: Block[] = [
       { key: "F11", label: "enter diff TUI · F11 again to detach" },
       { key: "⇧F11", label: "kill diff session (resets its view state)" },
       { key: "F12", label: "enter F12-target session · F12 again to detach" },
-      { key: "ctrl+d", label: "close F12-target session gracefully (ctrl+d ×2)" },
     ],
   },
   {

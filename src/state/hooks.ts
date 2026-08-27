@@ -269,6 +269,18 @@ export function useGithub(): UseQueryResult<GithubData, Error> {
  */
 const SETTLE_GUARD_MS = 12_000;
 
+/** Apply an archive target state idempotently for the settle guard. */
+export function patchArchivedKeys(
+  prev: readonly string[] | undefined,
+  key: string,
+  archived: boolean,
+): readonly string[] {
+  const set = new Set(prev ?? []);
+  if (archived) set.add(key);
+  else set.delete(key);
+  return [...set];
+}
+
 export async function runOptimisticMutation<TData>(
   qc: import("@tanstack/react-query").QueryClient,
   opts: {
@@ -673,19 +685,27 @@ export function useWtActions() {
      */
     async toggleArchived(key: string): Promise<{ archived: boolean }> {
       let result: { archived: boolean } | null = null;
+      // `runOptimisticMutation` may re-apply a patch after a settling
+      // refetch. Capture the intended state on the first application and
+      // make every later application idempotent; a literal toggle here
+      // re-added the row to the active list even though archive.json had
+      // correctly persisted it as archived.
+      let intendedArchived: boolean | null = null;
       await mutate<readonly string[]>({
         filter: { queryKey: qk.archive() },
         patch: (prev) => {
           const set = new Set(prev ?? []);
-          if (set.has(key)) set.delete(key);
-          else set.add(key);
-          return [...set];
+          intendedArchived ??= !set.has(key);
+          return patchArchivedKeys(prev, key, intendedArchived);
         },
         run: async () => {
           // Disk write is synchronous; wrapped in async so it slots
           // into the mutate pipeline. Errors propagate as throws and
           // trigger the rollback path.
           result = toggleArchivedOnDisk(key);
+          // Disk is authoritative if another process changed the ledger
+          // between the cached read and this serialized write.
+          intendedArchived = result.archived;
         },
       });
       // `result` is set inside `run` which always runs before mutate

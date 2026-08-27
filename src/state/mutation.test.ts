@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient } from "@tanstack/react-query";
 
-import { runOptimisticMutation } from "./hooks.ts";
+import { patchArchivedKeys, runOptimisticMutation } from "./hooks.ts";
 
 /**
  * Behavioral pins for `runOptimisticMutation` — the TanStack-scoped
@@ -34,6 +34,14 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: 
 }
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+test("archive patches keep the intended state when the settle guard reapplies them", () => {
+  const archived = patchArchivedKeys(["existing"], "new", true);
+  expect(patchArchivedKeys(archived, "new", true)).toEqual(["existing", "new"]);
+
+  const restored = patchArchivedKeys(archived, "new", false);
+  expect(patchArchivedKeys(restored, "new", false)).toEqual(["existing"]);
+});
 
 describe("runOptimisticMutation", () => {
   test("applies patch optimistically and settles", async () => {

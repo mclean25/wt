@@ -19,7 +19,11 @@ import { owesPostMergeVerification } from "../core/work-status.ts";
 import type { SyncState } from "../core/worktree.ts";
 
 import { armedFromPr } from "./badges.ts";
-import { GROUP_INBOX, type WorktreeRow } from "./hooks/useWorktreeRows.ts";
+import {
+  GROUP_ARCHIVED,
+  GROUP_INBOX,
+  type WorktreeRow,
+} from "./hooks/useWorktreeRows.ts";
 import { visualKey, type VisualItem } from "./hooks/useVisualItems.ts";
 
 /**
@@ -81,6 +85,63 @@ export function cursorSuccessor(
     if (inGroup !== null) return inGroup;
   }
   return scan(1, false) ?? scan(-1, false);
+}
+
+const REVIEW_REQUESTS_GROUP = "\0review-requests";
+
+/** The contiguous section represented by a visible list item. */
+function visualSectionKey(item: VisualItem): string {
+  if (item.kind === "section") return item.sectionKey;
+  if (item.kind === "pr") return REVIEW_REQUESTS_GROUP;
+  if (item.kind === "wt") {
+    return item.row.archived
+      ? GROUP_ARCHIVED
+      : item.row.section ?? GROUP_INBOX;
+  }
+  if (item.archived) return GROUP_ARCHIVED;
+  return "section" in item.entry
+    ? item.entry.section ?? GROUP_INBOX
+    : GROUP_INBOX;
+}
+
+/**
+ * Find the first visible item in the next/previous section. Expanded
+ * sections begin at their first row; folded sections are represented by
+ * their selectable header, so the same rule lands on the title naturally.
+ */
+export function sectionJumpTarget(
+  items: readonly VisualItem[],
+  cursorIndex: number,
+  direction: 1 | -1,
+): string | null {
+  const current = items[cursorIndex];
+  if (!current) return null;
+  const currentSection = visualSectionKey(current);
+
+  if (direction === 1) {
+    for (let i = cursorIndex + 1; i < items.length; i++) {
+      const item = items[i]!;
+      if (visualSectionKey(item) !== currentSection) return visualKey(item);
+    }
+    return null;
+  }
+
+  let previousIndex = cursorIndex - 1;
+  while (
+    previousIndex >= 0 &&
+    visualSectionKey(items[previousIndex]!) === currentSection
+  ) {
+    previousIndex--;
+  }
+  if (previousIndex < 0) return null;
+  const previousSection = visualSectionKey(items[previousIndex]!);
+  while (
+    previousIndex > 0 &&
+    visualSectionKey(items[previousIndex - 1]!) === previousSection
+  ) {
+    previousIndex--;
+  }
+  return visualKey(items[previousIndex]!);
 }
 
 /**
