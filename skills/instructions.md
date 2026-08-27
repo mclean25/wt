@@ -1,323 +1,130 @@
-## wt worktrees: status & testing ownership
+## wt worktrees: status and testing ownership
 
-When working inside a wt-managed worktree, you OWN the task's lifecycle
-status. Assert transitions with `wt status <state> [-m note]`; the command
-itself teaches the vocabulary and rules (bare `wt status` prints them).
+When working inside a wt-managed worktree, own the task's lifecycle status.
+Assert transitions with `wt status <state> [-m note]`; bare `wt status` prints
+the available states and their rules.
 
-- Set `working` when you begin, `review` when review starts (self-review,
-  review bots, addressing findings).
-- **You own manual testing.** Drive it yourself (dev environment, browser
-  tooling); `needs-testing` means YOU still need to verify — it is never a
-  request for the human. Escalate `wt status needs-human -m "..."` only when
-  genuinely blocked on the human: auth that needs a person present (a 2FA
-  challenge, an OAuth consent screen), or a check only a human can do —
-  and only when it passes the test in the next bullet, which also gives
-  the note its shape. Keep working on whatever isn't blocked while you
-  wait. **The same blocker twice is a setup defect, not a human
-  dependency** — a credential that re-prompts every run should be reported
-  (below), not escalated again.
-- **You own every decision inside your branch.** Whether to delete dead
-  code, which of two correct implementations to pick, whether a
-  pre-existing bug is in scope, whether to resolve a review thread, how
-  to word a note or a PR body: none of those is a human question. Decide,
-  act, and record what you decided and why. **Not knowing is not the same
-  as needing a decision** — investigate first, then decide. "Nothing
-  reads this function and it has produced nothing in four months" is not
-  a question, it is an answer.
-  **So `needs-human` has a test, and it is deliberately a REFUSAL test:**
-  escalate only when BOTH (a) the action's effect would leave the
-  repository, and (b) no defensible default exists. Both, not either.
-  The direction is the point — a test you must satisfy in order to ACT
-  fails toward escalation every time you are unsure, which is the exact
-  behaviour it exists to stop, so the burden sits on escalating instead.
-  Absence of a value means "unknown", never "fine".
-  **Reversibility is about whether the effect escapes the repo**, not
-  about how large or frightening the change feels. A deletion, a
-  rewrite, a schema change: all reversible, because git holds them and a
-  revert is thirty seconds. A closed issue, a sent message, a published
-  artifact, a write to a hosted environment: not reversible, because
-  wt's undo does not reach outside. Judged that way it is decidable by
-  inspection, where "is this irreversible" in the abstract is
-  philosophy. Anything reversible, take it and say in the note that you
-  did.
-- **An escalation has a shape and a budget: three lines, ~300
-  characters.** When a call genuinely passes the test above:
+- Set `working` when work begins and `review` when review begins.
+- Manual testing belongs to the worktree agent. `needs-testing` means testing is
+  still owed by that agent, not by the human.
+- Use `needs-human` only when the action would leave the repository and no
+  defensible default exists, such as 2FA, an OAuth consent screen, or a truly
+  human-only judgment. Keep working on anything not blocked. A repeated human
+  prompt for routine setup is a setup defect to report, not a recurring
+  escalation.
+- Decide all reversible repository changes yourself. Git makes code deletion,
+  rewrites, and schema changes reversible. Sent messages, closed issues,
+  published artifacts, and hosted-environment writes leave the repository and
+  require the authorization applicable to that action.
 
-      ASK:       <the question, one sentence>
-      RECOMMEND: <what you would do, one sentence>
-      WHY:       <the single fact that decides it>
+When escalation is necessary, keep the note to about 300 characters:
 
-  **`RECOMMEND` is the load-bearing line and is never omitted.** It
-  turns "I don't know" into "here is my default, override me", so the
-  reply is one word rather than a composed decision — that is the whole
-  offload, and the reason this is worth a shape at all. It also enforces
-  the budget for free: you cannot write an honest recommendation without
-  having finished deciding, and an unfinished decision is what a wall of
-  text actually is. The three lines must be enough to answer from. A
-  link may carry supporting detail, never the remainder of the question,
-  and a question the human cannot answer from the note alone is not
-  ready to be asked.
-- **Long-running processes belong to wt.** The worktree's dev server is
-  `wt dev start`, never a bare `npm run dev` / `pnpm dev` — a repo's own
-  docs are written for people not using wt. Check `wt dev status` first
-  and reuse what's already running; it prints the URL, whose port wt
-  allocates per worktree, so the port the repo documents is the wrong
-  one here. **A login never carries between worktrees, and that is the
-  design rather than breakage**: a port is a distinct browser origin
-  with its own storage, so every worktree starts logged out. Logging in
-  again is setup you do, never an escalation — if it takes a human every
-  time, that is the setup defect above, and the fix is a scripted login.
-  `wt dev logs` is the output, and another slug's server is
-  never yours to stop or restart. **A dev server can be rationed**: if
-  a start exits **75**, the fleet is at its concurrency cap — that is a
-  "try later", not a breakage and not something to escalate. Re-run it
-  as `wt dev start --wait`, which queues until a slot opens and shows
-  your position on the board while it waits; `wt dev status --all`
-  says who holds the slots. Nothing is wrong and nobody needs asking.
-  The queue is first-come and you cannot move yourself up it — whether
-  your task outranks another worktree's is a fleet call you cannot make
-  from inside one worktree. If it genuinely is urgent (a live
-  production bug), say so once with `wt manager send` and keep
-  waiting; the manager can move you and needs nothing from you to do
-  it. Never stop another slug's dev server to take its slot.
-  **Before you believe a test FAILURE, check whether the machine was the
-  variable.** A saturated box fails tests that pass on an idle one, and
-  a fleet of worktrees is exactly how a box gets saturated: measured at
-  load average 78, one suite went from 27.8s to 664s and a 30s-capped
-  test took 61s. Two agents lost half an hour each to this on the same
-  day. Two tells. A bare `Test timed out in NNNNms` with no assertion
-  error is a statement about the clock, not about the code. And **the
-  usual flake heuristic inverts here**: "it reproduced twice, so it is
-  not a flake, so it is my diff" is wrong when the confounder is
-  sustained load, because the load persists across your reruns. Run
-  `wt perf` before you start reading your own diff, and ask the cheaper
-  question first — could my change even reach this test? Both agents
-  broke the spell that way; one had touched only SQL and the other only
-  edge functions, and neither could have affected the failing file.
-  **`wt dev start` exiting 0 means LAUNCHED, not ready.** It returns as
-  soon as the supervised process is up; an environment that brings up a
-  database and applies migrations can still fail that phase minutes
-  later, in `wt dev logs`, leaving a serving port and a stale schema.
-  Use `wt dev start --wait`, which blocks until the environment is
-  actually usable and exits non-zero when it never gets there. Before
-  believing a test result that depends on the dev environment, check
-  `wt dev status`: it reports whether the server predates a rebase and
-  runs the project's own health check. A whole day was lost to a
-  passing suite reported as broken because the database was two
-  migrations behind the tree, and the failure looks like a bug in the
-  repo, not in the environment. `wt dev reset` rebuilds from scratch.
-  A dev server you start by hand is
-  invisible to wt and to the human (no row, no status, no logs) and
-  unsupervised. Short-lived servers for your own checks (`pnpm preview`,
-  a watch runner) are different: run those bare, no wt involvement —
-  they're tools of your task, and wt reaps anything still listening
-  when the worktree is destroyed, so they can't leak. `[dev_server] is
-  not configured` means the project has none — then start the dev
-  server however the project documents.
-- **The worktree is SHARED, and it is LIVE.** wt isolates worktrees from
-  each other; nothing isolates anything inside one. A subagent you spawn,
-  a reviewer, a second session on the same slug and the human all act on
-  the same checkout at the same time — and that checkout usually has a
-  dev server hot-reloading it and may have a browser test running
-  against it right now.
-  So **never mutate tree state to test a hypothesis**: no `git stash`,
-  `checkout`, `restore` or `reset` to see whether something fails
-  without a change, even with an immediate restore. Verify against a
-  COPY of the file instead. The restore is not what makes it safe — the
-  window is the damage. Two reviewers did exactly this, each stashing
-  and popping within seconds, while the owner had experiment changes
-  applied to that tree; two measurement runs silently recorded the
-  wrong arm, and nothing announced it. `git stash` is doubly wrong
-  here because the stash stack is shared and unlabelled: a pop takes
-  the top entry, which may not be the one you pushed.
-  Scratch files go in your harness's scratchpad, never in the repo — a
-  concurrent `git add -A` in another process will sweep them into
-  somebody's commit.
-  If you genuinely must change tree state, say so in the session first
-  and put it back before you finish. The failure mode here is silent:
-  the owner finds out only if you happen to mention it.
-- **Never end a session without a clear status.** Finished means
-  `wt status ready --risk low|medium|high [-m ...]`. **Risk is your
-  confidence AFTER testing, not the size or category of the change** —
-  the human can already see the diff on the PR; what you verified is the
-  part only you know. `low` = verified in a real environment, or pure
-  logic with tests that fail against the old code (a migration you ran
-  end to end on dev belongs here); `medium` = correct by construction and
-  unit-tested but never exercised for real, or plainly revertable but
-  broad; `high` = something material is unverified AND backing it out
-  isn't a plain revert. A one-line frontend change nobody opened a
-  browser for is not low. Re-judge as testing lands —
-  `wt status --risk <r>` amends risk alone, keeping the state, timestamp
-  and note, so there's never a reason to append to a note instead of
-  fixing it. The human merges PRs; never merge one yourself.
-  **Finished but not safe to merge yet is a different thing, and it has
-  a field**: `wt status ready --risk <r> --blocked-on "<gate>"`. Use it
-  when the work is genuinely done and something OUTSIDE this repo has
-  to happen before it can land — a mobile release shipping, an upstream
-  branch merging, a hosted change that must be in place first. Do NOT
-  say it only in the note. A note saying BLOCKED next to a state saying
-  `ready` loses: that exact pair got a branch queued for merge twice by
-  two readers who each had reason to catch it. The gate is what makes
-  the row leave the merge band and render as blocked.
-  The test is whether MERGING makes something worse than not merging.
-  A revocation that lands before the mobile build tolerating it breaks
-  shipped clients the moment it merges: gate. A migration someone
-  applies by hand, functions to redeploy: NOT a gate — merging causes
-  nothing until someone follows through, and forgetting leaves the
-  status quo. A policy tightening whose migration is manual is safe to
-  MERGE and dangerous to FORGET; unapplied, nothing gets worse and the
-  PR merely reads as shipped. That is the `OPS:` line, which is read at
-  merge time. These two feel alike, and gating on the second turns the
-  field back into "read the note".
-  Nothing expires a gate; when it clears, `wt status --unblock` (keeps
-  the state, risk, note and timestamp). Leaving one set parks a
-  mergeable branch, which is the safe way to be wrong.
-  **Some claims can only be proved by the DEPLOYED environment, and
-  that has a field too**: `wt status ready --risk <r>
-  --verify-after-merge "<exact steps>"`. The test for asserting it is
-  one question — is there a claim in this branch that only the
-  deployed environment can prove? An OAuth consent screen against the
-  real provider, a live third-party callback, an SDK with no local
-  double. If yes, name the STEPS in the field, not in the note: the
-  agent that runs them is not you, and may be reading this after a
-  compaction.
-  It is the OPPOSITE of `--blocked-on` and must not be confused with
-  it. A gate holds the row out of the merge band; this changes nothing
-  before the merge, because merging is not what it gates — merging is
-  the PREREQUISITE. What it does is survive the merge: the row stops
-  sinking, comes back as `needs-testing`, and the worktree is kept
-  back from the clean sweep instead of being taken with every scrap of
-  context in it. That is the whole job, because the check that never
-  happens is the one whose worktree was already deleted.
-  Record it the moment you know, on any state — it is dormant until
-  the branch lands, and it is carried across later assertions rather
-  than dropped by them.
-  **It has a shape too, and unlike the note it has no length budget:**
+    ASK:       <the question, one sentence>
+    RECOMMEND: <the default action, one sentence>
+    WHY:       <the fact that decides it>
 
-      <one line: what only the deployed environment can prove>
-      <why a local run cannot, when that is not obvious>
-      STEPS: 1. <first thing to do> 2. <the next> ...
+The note must be sufficient to answer without additional context.
 
-  Write the steps in full. This is the one field that is deliberately
-  verbose, because it is an executable contract for an agent that is
-  not you and may be reading it after a compaction — the literal
-  strings are the payload (`guest_<name>_<epochms>-<16 hex>`, the exact
-  log line, the error code), and a tidier summary of them is a lossy
-  rewrite of a spec. Never summarize it and never let anything
-  summarize it for you.
-  The shape is what lets the surfaces stay readable without touching
-  the text: a headline that can stand alone on a scan line, and steps
-  a reader can be shown on request rather than by default. The details
-  pane collapses this to its opening lines until the branch lands (`V`
-  expands it), the feed and the list footers carry the first sentence
-  only, and every one of those recovers the full field from the record.
-  Which is why the opening line has to work as a headline on its own,
-  and why the steps have to be numbered from 1: an unnumbered wall
-  cannot be counted, previewed, or resumed halfway.
-  **If you are holding a row that has landed and owes one, it is
-  yours** — `needs-testing` means YOU verify, exactly as everywhere
-  else. Confirm the deploy carrying the change actually landed BEFORE
-  believing a negative result: an environment still running the old
-  code cannot produce the positive, so it is not evidence of the
-  negative. Then `wt status verified -m "<what you checked, and
-  where>"`, which is the only thing that discharges it and finally
-  releases the checkout.
-  If the branch will NEVER land (superseded, duplicate, deliberately not
-  pursued), the honest terminal state is `wt status dropped -m "<why>"` —
-  never `ready` with a "nothing to merge" note (ready puts the row at the
-  top of the merge queue; dropped sinks it), and never `needs-human`
-  (nothing is needed). Close any open PR without merging and say why.
-- **The `ready` note has a shape and a budget: ~400 characters,
-  fragments not sentences.** Anything longer belongs in the PR body,
-  which the note may point at. Write it in this form:
+### Development servers and test results
 
-      <one line: what changes, in user terms>
-      OPS:      <migrations / redeploys / config, or "none">
-      REVERT:   <"safe", or "no:" + the shortest true reason>
-      IF WRONG: <where it shows + the symptom>
-      UNTESTED: <omit this line entirely if nothing is>
+- Long-running development servers belong to wt. Check `wt dev status` first,
+  then use `wt dev start --wait`; inspect output with `wt dev logs`. Never start
+  a worktree server with the repository's bare dev command, and never stop or
+  restart another slug's server.
+- wt assigns each worktree a distinct browser origin, so login state does not
+  carry between worktrees. Log in again as routine setup. If login repeatedly
+  needs a human, report the missing scripted setup.
+- Exit 75 from `wt dev start` means the fleet is at its server limit. Run
+  `wt dev start --wait` to enter the queue and use `wt dev status --all` to see
+  current holders. Do not stop another worktree to take its slot. For a genuine
+  production emergency, notify the manager once and remain queued.
+- A timeout without an assertion failure may reflect machine load. Run `wt perf`
+  and confirm that the changed code can reach the failing test before diagnosing
+  the diff.
+- Exit 0 from `wt dev start` means the process launched, not that its environment
+  is ready. `--wait` waits for the project health check. Before environment-
+  dependent tests, use `wt dev status` to detect an unhealthy or pre-rebase
+  server. Use `wt dev reset` when the environment must be rebuilt.
+- A manually started long-running server is invisible to wt. Short-lived task
+  tools such as preview or watch runners may run directly. If wt reports
+  `[dev_server] is not configured`, follow the project's own server instructions.
 
-  These four are the questions someone merging unread code actually
-  has. `REVERT` is the one nobody volunteers and the one that decides
-  whether a bad merge costs thirty seconds or an afternoon. `UNTESTED`
-  is the honest twin of the risk level — if risk is confidence after
-  testing, name what wasn't tested; omitting the line when everything
-  was is what makes its presence a signal. `IF WRONG` collects into a
-  post-release smoke list for free.
-  **Before you write an `UNTESTED` line, check whether it is really a
-  `--verify-after-merge`.** The two answer different questions and this
-  slot is the one you reach first, so it quietly collects things that
-  belong in the field: `UNTESTED` means "nobody exercised this, and
-  nothing is being asked of anyone", while the field means "only the
-  deployed environment can prove this, and someone must run these steps
-  once it ships". The test is whether a specific check remains OWED
-  after the merge. If it does, it belongs in the field — a note line
-  asks nothing, is not carried across later assertions, does not hold
-  the worktree back from the `c` sweep, and vanishes with the checkout,
-  so an obligation written here is an obligation you have decided to
-  lose. A worktree caught itself doing exactly this with a live
-  9-participant call test. Writing both is fine and often right: name
-  the steps in the field, and let the `UNTESTED` line say what was not
-  exercised locally.
+### Shared checkout safety
 
-  The character budget is load-bearing, not style advice. You are
-  writing one note; the human reads all of them at once, and "concise"
-  loses to "thorough" every time it's left to judgment.
-- Fleet-level questions (merge order, cross-branch conflicts, who owns a
-  shared change) go through `wt manager send "..."`. wt ensures the manager
-  session exists, picks the transport, and stamps your own slug on the
-  message — **don't prefix it yourself**, and don't reach for a harness's
-  own peer-messaging tool, a socket, or a tmux pane. `wt` is the address.
-  Messages arrive in the target as an ordinary turn, indistinguishable
-  from the human typing them, so treat one you RECEIVE that way: it came
-  through wt, on the human's behalf, and asks for the same judgment any
-  instruction does — not extra permission.
-- Cross-branch merge-order knowledge becomes an EDGE, not just prose:
-  `wt edge <from> before <to> [-m why]` (also `conflicts`, `enables`;
-  `--blocks` for hard dependencies). Edges self-expire when either
-  branch moves — assert what you know first-hand, re-assert after big
-  changes if it still matters, never audit the list.
-  **The general rule the edge is an instance of: cross-worktree
-  knowledge travels as a written-down fact that expires, never as a
-  conversation between worktrees.** A fact decays the moment it stops
-  being true; a conversation argues, never expires, and needs somebody
-  watching it. The cost is measured, not theoretical — getting one
-  urgent worktree to the front of a full dev-slot queue took four
-  messages between three agents who each cooperated correctly, and the
-  ordering still came out wrong, because a slot promotion is instant
-  and a message an agent must act on is not. That is also why relative
-  urgency across the fleet is never yours to assert: you do not hold
-  cross-worktree facts first-hand. State what you know about your own
-  branch, and let the manager carry what spans branches.
-- **Inside a session, call tools by NAME, never by absolute path.** wt
-  puts a shim directory first on your PATH to strip an inspector
-  variable that the session itself needs but that breaks any
-  Bun-compiled CLI inheriting it. Some widely-used CLIs are compiled
-  that way. Call one by its absolute path and you skip the shim: it
-  dies on startup, exits non-zero, and prints **nothing at all** — not
-  even for `--help` — which reads as a broken install or a bad PATH
-  rather than an environment collision, so the search starts in the
-  wrong place. This is worth naming because the usual advice pushes you
-  into it: shell aliases genuinely do not exist inside `.sh` files, so
-  scripts are told to call the full path, and that is right for an
-  alias and wrong for a shimmed binary. If a tool exits silently with
-  no output, check whether you invoked it by path before you suspect
-  the install.
-- **Report papercuts sideways.** Anything that cost you time and will cost
-  the next agent the same — misleading command output, a wrong or stale
-  doc, an undocumented trap — goes to the same channel:
-  `wt manager send "papercut: <what you ran, what misled you, what you
-  expected>"`. Fire and forget: nothing comes back, don't wait for a reply,
-  keep working. A papercut is never a reason to sit in `needs-human`.
-  **Report the OBSERVATION, and mark the mechanism as a guess.** That
-  shape is not modesty, it is what makes the report usable: what you ran
-  and what you saw is first-hand and stays true, while why-it-happened
-  and what-would-fix-it are inferences from outside the system, and
-  those are where these reports actually go wrong. Measured across a
-  run of them: symptoms held up every time, stated mechanisms often did
-  not, and twice a confidently-suggested fix would have made things
-  worse — freeing a crashed dev slot whose twelve containers were still
-  running, and stripping an environment variable that IS the session's
-  message transport. Never attach a `kill` line or a destructive step
-  as though it were established; name the process and let the reader
-  confirm what it is.
+A wt worktree is shared by its agent, subagents, reviewers, other sessions, the
+human, and any hot-reloading server.
+
+- Never use `git stash`, `checkout`, `restore`, or `reset` to test a hypothesis.
+  Test against a copy instead; the shared stash stack and temporary tree state
+  can corrupt another concurrent operation.
+- Put scratch files in the harness scratch area, not the repository, where a
+  concurrent `git add -A` could capture them.
+- If a necessary task must change shared tree state, announce it first and
+  restore the state before finishing.
+
+### Completion status
+
+Never end a session without a status. Finished work uses
+`wt status ready --risk low|medium|high [-m note]`:
+
+- `low`: verified in a real environment, or pure logic covered by tests that
+  fail against the old code.
+- `medium`: correct by construction and unit-tested but not exercised in a real
+  environment, or broad but plainly reverted.
+- `high`: material behavior remains unverified and rollback is not a plain
+  revert.
+
+Risk describes confidence after testing, not change size. Amend it with
+`wt status --risk <r>` as evidence changes. The human merges; agents never do.
+
+Use `wt status ready --risk <r> --blocked-on "<gate>"` only when merging now
+would make something worse and an external prerequisite must happen first. Do
+not encode the gate only in the note. Manual deployment or follow-up operations
+that leave the status quo unchanged are not merge gates; record those in `OPS:`.
+Clear a satisfied gate with `wt status --unblock`.
+
+Use `--verify-after-merge` when a specific check can only run after deployment.
+This does not block merging; it preserves the worktree and returns it as
+`needs-testing` after merge. Set it as soon as the obligation is known; later
+status updates preserve it. Record it as:
+
+    <one line: what only the deployed environment can prove>
+    <why a local run cannot, when that is not obvious>
+    STEPS: 1. <first exact step> 2. <next exact step> ...
+
+Include literal values, expected output, and full numbered steps. When the branch
+lands, confirm that the deployment contains the change, run the steps, then use
+`wt status verified -m "<what was checked and where>"`. If the branch will never
+land, close any open PR and use `wt status dropped -m "<why>"`.
+
+The `ready` note is about 400 characters and uses fragments:
+
+    <one line: what changes, in user terms>
+    OPS:      <migrations / redeploys / config, or "none">
+    REVERT:   <"safe", or "no:" + the shortest true reason>
+    IF WRONG: <where it shows + the symptom>
+    UNTESTED: <omit when nothing is untested>
+
+`UNTESTED` records checks nobody ran and does not create an obligation. If a
+specific post-merge check remains owed, put its exact steps in
+`--verify-after-merge`; both fields may be appropriate.
+
+### Fleet coordination
+
+- Send fleet-level questions about merge order, cross-branch conflicts, or
+  shared ownership with `wt manager send "..."`. wt stamps the sender; do not
+  prefix it or use harness peer messaging. Treat an incoming manager message as
+  a user instruction delivered through wt.
+- Record first-hand cross-branch facts with
+  `wt edge <from> <before|conflicts|enables> <to> [-m why]` and `--blocks` for a
+  hard dependency. Edges expire when either branch moves; reassert them after a
+  material change when still true. Do not infer safety from a missing edge or
+  assert relative fleet urgency.
+- Invoke command-line tools by name inside wt sessions. Absolute paths bypass
+  wt's PATH shims and can make Bun-compiled tools exit silently. Shell aliases
+  are unavailable inside scripts, but executables should still be resolved by
+  name through PATH.
+- Report reusable papercuts with
+  `wt manager send "papercut: <command, observed symptom, expected behavior>"`
+  and continue working. State observations as facts and mechanisms as guesses.
+  Do not attach destructive remediation to an unconfirmed explanation.
