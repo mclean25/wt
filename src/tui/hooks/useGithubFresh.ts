@@ -9,7 +9,7 @@
  * clobber guard in `runOptimisticMutation` uses.
  *
  * Extracted from `useAutomations` so other consumers can honor the
- * same hard rule (CLAUDE.md: persisted-cache PR data must never fire)
+ * same hard rule (AGENTS.md: persisted-cache PR data must never fire)
  * without duplicating the subscription. `enabled` short-circuits the
  * subscription for callers that only conditionally care (automations
  * gate on `configured`); once fresh, stays fresh for the process

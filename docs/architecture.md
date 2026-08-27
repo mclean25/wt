@@ -1,6 +1,6 @@
 # Architecture
 
-Internals map for contributors and coding agents. Bun + React + [OpenTUI](https://github.com/sst/opentui) on top of TanStack Query. The companion rules file for agents is [`CLAUDE.md`](../CLAUDE.md); this page is the *map*, that one is the *rules*.
+Internals map for contributors and coding agents. Bun + React + [OpenTUI](https://github.com/sst/opentui) on top of TanStack Query. The companion rules file for agents is [`AGENTS.md`](../AGENTS.md); this page is the *map*, that one is the *rules*.
 
 ## The three layers
 
@@ -196,7 +196,7 @@ The render loop is **on-demand**: a React commit requests a frame, the frame wal
 
 Writes are an async `appendFile` chain, so **both exit paths drain it**: the TUI in its shutdown sequence, and `main.ts` before its hard `process.exit`. Without the latter a short command (`wt status`, `wt section`) returned and exited with its lines still queued, silently losing the file-only audit trail those commands write specifically to be grepped — and any warning raised during a state read.
 
-**Toasts** (`tui/toast.ts`) are the footer's transient one-liner: a single latest-wins slot, colored by level, auto-expiring. Two producers, per the contract in CLAUDE.md: keystroke feedback goes through the flows' `ctx.toast(message, color?, ms?)` (a wrapper over `showToast` — toast-only, never logged), and background code toasts through the logger — `attention.*` emits toast by default (`{toast: false}` opts out), `event.*` emits opt in with `{toast: true}`. The logger side is `setToastSink`, registered by `attachLoggerToasts()` in `tui/runtime.tsx`; CLI runs have no sink, so the flags are inert there.
+**Toasts** (`tui/toast.ts`) are the footer's transient one-liner: a single latest-wins slot, colored by level, auto-expiring. Two producers, per the contract in AGENTS.md: keystroke feedback goes through the flows' `ctx.toast(message, color?, ms?)` (a wrapper over `showToast` — toast-only, never logged), and background code toasts through the logger — `attention.*` emits toast by default (`{toast: false}` opts out), `event.*` emits opt in with `{toast: true}`. The logger side is `setToastSink`, registered by `attachLoggerToasts()` in `tui/runtime.tsx`; CLI runs have no sink, so the flags are inert there.
 
 Per-worktree destroy logs live one level up at `~/.cache/wt/logs/<slug>-*.log`; `wt logs <slug>` tails the latest. Event lines in the daily file are tagged `EVENT` (firehose) or `ATTN` (attention), so `grep ' EVENT \| ATTN '` reconstructs what the pane showed.
 

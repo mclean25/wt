@@ -43,13 +43,13 @@ behind them**: no measurements, no dates, no war stories, no rationale for a
 rule that has to be followed either way. Every line should be an imperative a
 reader can act on without knowing why it exists.
 
-That is deliberately the opposite of wt's own `CLAUDE.md`, which is an
+That is deliberately the opposite of wt's own `AGENTS.md`, which is an
 incident ledger, and the difference is the audience. A bullet there is read by
 whoever is about to change the mechanism, where the evidence is the only thing
 stopping them from undoing it; the block is read by agents doing unrelated
 work, where provenance is context spent on every turn and gets skimmed past.
 So when a papercut teaches something, the lesson goes into the repo's
-`CLAUDE.md` in full and reaches the block only as the shortest imperative that
+`AGENTS.md` in full and reaches the block only as the shortest imperative that
 changes behaviour — or not at all, which is the common case.
 
 `registry.test.ts` holds a line budget on the block for the same reason. It

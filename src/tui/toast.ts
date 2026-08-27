@@ -4,7 +4,7 @@
  * that must not be missed belongs in the pane feeds, which are the
  * record).
  *
- * Two producer classes, per the contract in CLAUDE.md:
+ * Two producer classes, per the contract in AGENTS.md:
  *  - Keystroke feedback: flows call `ctx.toast(...)` (a thin wrapper
  *    over `showToast`). Ephemeral only, never logged — it's the
  *    response to something the user just did.

@@ -25,7 +25,7 @@
  * `SLOW_SAMPLE_MS`. The summary also reports the live-mode duty cycle
  * observed over the window: after the shared-ticker change nothing
  * should hold the renderer in continuous "live" mode, and a nonzero
- * duty here is the regression signal (see CLAUDE.md's Timeline trap).
+ * duty here is the regression signal (see AGENTS.md's Timeline trap).
  */
 import { createLogger } from "../logger.ts";
 

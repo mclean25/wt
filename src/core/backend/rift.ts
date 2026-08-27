@@ -157,7 +157,7 @@ async function materializeBranch(input: {
   // tree INCLUDING its uncommitted modifications, and a plain switch
   // refuses when those files differ across the jump ("Your local
   // changes... would be overwritten") — which used to abort creation
-  // whenever the main clone was dirty (an agent-edited CLAUDE.md was
+  // whenever the main clone was dirty (an agent-edited AGENTS.md was
   // enough). The dirt lives only in this throwaway copy; the main
   // clone's working tree is never touched, so discarding is safe and
   // removes the whole clean-main-clone requirement.

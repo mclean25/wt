@@ -23,7 +23,7 @@
  *  - Quick-pick digits track the rendered order of the SESSION rows
  *    only; "+ new" rows are reached via per-harness letters.
  *  - `x` on a row kills that session (matches the universal modal
- *    kill key in CLAUDE.md). Claude rows: kills the named slot or
+ *    kill key in AGENTS.md). Claude rows: kills the named slot or
  *    forgets the ghost. Codex/OpenCode rows: kills the shared tmux
  *    slot when live; toasts a hint when dead (those stores are owned
  *    by the harness CLI, not wt).

@@ -5,7 +5,7 @@ are git clones that fast-forward (see [cli.md](cli.md#wt-update-log---check---he
 for command surface). What makes that safe is not a version scheme but
 four layers around the pull — prevent, detect, recover, evolve. This
 page is the semantics reference for those layers; the enforcement rules
-for people (and agents) changing wt live in `CLAUDE.md`.
+for people (and agents) changing wt live in `AGENTS.md`.
 
 ## The moving parts
 

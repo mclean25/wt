@@ -221,7 +221,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     // "auto <rule>: … — running <run>" dispatch line and narrates
     // declines/failures itself, so the direct toasts here would
     // clobber it in the single latest-wins slot (see the toast
-    // contract in CLAUDE.md — background paths toast via the logger).
+    // contract in AGENTS.md — background paths toast via the logger).
     const manual = launchOpts.autoFireKeys === undefined;
     const ack: typeof toast = (...args) => {
       if (manual) toast(...args);

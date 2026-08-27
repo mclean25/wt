@@ -481,7 +481,7 @@ export function App({ onExit }: Props) {
     refreshStack,
   });
 
-  // Keystroke-feedback toasts (see CLAUDE.md's toast contract): a thin
+  // Keystroke-feedback toasts (see AGENTS.md's toast contract): a thin
   // wrapper over the module store so every flow keeps its familiar
   // `(message, color, ms)` signature. Background code toasts through
   // the logger's `{ toast: true }` opt instead — never through this.

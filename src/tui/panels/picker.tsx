@@ -11,7 +11,7 @@ type Props = {
   selectedIndex: number;
   /**
    * Key that opens the modal — re-pressing it confirms (chord-confirm
-   * convention; see modal UX rules in CLAUDE.md). Shown in the "pick"
+   * convention; see modal UX rules in AGENTS.md). Shown in the "pick"
    * hint when set.
    */
   toggleKey?: string;
@@ -126,7 +126,7 @@ type MultiProps = {
   checked: ReadonlySet<string>;
   /**
    * Key that opens the modal — re-pressing it submits (chord-confirm
-   * convention; see modal UX rules in CLAUDE.md). Shown in the
+   * convention; see modal UX rules in AGENTS.md). Shown in the
    * "submit" hint when set.
    */
   toggleKey?: string;
@@ -217,7 +217,7 @@ type ArgProps = {
  * renders as just the "+ new" row alone.
  *
  * Modal UX rules: Enter / Esc only (no chord — reached mid-`!` flow,
- * see CLAUDE.md "When a picker doesn't naturally have a single trigger
+ * see AGENTS.md "When a picker doesn't naturally have a single trigger
  * key").
  */
 export function ArgPickerModal({
