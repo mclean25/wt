@@ -245,18 +245,13 @@ answer it back to the worker, and never let it become a status change.
 first-hand half (what was run, what was printed, what was expected) is
 reliable and is the part worth carrying. Its explanatory half (why this
 happened, what would fix it) is an inference made from outside the
-system that broke, and that is the half that is wrong. Measured across
-one run of them: every symptom held up, several mechanisms did not, and
-twice the suggested fix would have made things worse — freeing a
-crashed dev-server slot whose twelve containers were still running, and
-un-exporting the variable that IS a session's message transport. Two
-others traced to wt's own tooling asserting something false, which is
-worth knowing precisely because it means a confident report can be
-sincerely and completely wrong.
+system that broke, and that is the half that is usually wrong. Symptoms
+hold up; stated mechanisms often do not, and a report can be sincere,
+confident and completely wrong — including when the thing that misled
+it was wt's own tooling asserting something false.
 
 So when you batch them, pass the evidence and label the theory as
 theirs. **A destructive suggestion is never relayed as established** —
-a `kill` line, a delete, a restart. Name the thing and let whoever
-acts confirm what it is first: one report proposed killing a pid that
-turned out to be the user's own webhook daemon, installed the day
-before, which every surface marker made look like a leak.
+a `kill` line, a delete, a restart. Name the thing and let whoever acts
+confirm what it is first; a process that looks abandoned by every
+surface marker is routinely something the human installed on purpose.

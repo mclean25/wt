@@ -35,6 +35,32 @@ repo's table. The managed block is per-machine, always on, and therefore the
 one surface that wins that argument — which is why the dev-server rule lives
 there and not in the `wt` skill alone.
 
+### What belongs in the block
+
+Because it lands in the reader's own always-loaded file, the block is edited
+by **replacement, not accretion**, and it carries **rules, not the incidents
+behind them**: no measurements, no dates, no war stories, no rationale for a
+rule that has to be followed either way. Every line should be an imperative a
+reader can act on without knowing why it exists.
+
+That is deliberately the opposite of wt's own `CLAUDE.md`, which is an
+incident ledger, and the difference is the audience. A bullet there is read by
+whoever is about to change the mechanism, where the evidence is the only thing
+stopping them from undoing it; the block is read by agents doing unrelated
+work, where provenance is context spent on every turn and gets skimmed past.
+So when a papercut teaches something, the lesson goes into the repo's
+`CLAUDE.md` in full and reaches the block only as the shortest imperative that
+changes behaviour — or not at all, which is the common case.
+
+`registry.test.ts` holds a line budget on the block for the same reason. It
+had grown to 2.5x that budget one reasonable-looking addition at a time, and
+no single addition was ever the problem, which is why the check is a number
+rather than a review habit.
+
+The skills are looser: they load on demand, so a worked example there can earn
+its space. The war-story test still applies to anything that reads as an
+incident report rather than a procedure.
+
 ## The startup check
 
 When the TUI starts (and before it takes over the terminal, so agents
