@@ -75,7 +75,8 @@ Never end a session without a status. Finished work uses
   revert.
 
 Risk describes confidence after testing, not change size. Amend it with
-`wt status --risk <r>` as evidence changes. The human merges; agents never do.
+`wt status --risk <r>` as evidence changes. The human merges, unless they hand
+a branch over explicitly; `ready` is where an unbidden agent stops.
 
 Use `wt status ready --risk <r> --blocked-on "<gate>"` only when merging now
 would make something worse and an external prerequisite must happen first. Do

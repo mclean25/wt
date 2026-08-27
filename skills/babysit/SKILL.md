@@ -1,21 +1,27 @@
 ---
 name: babysit
 description: >-
-  Drive THIS worktree's branch all the way to mergeable and stay with it:
-  open the PR, wait for the review bot to review the current head, fix what
-  it raises, and keep going through its follow-up reviews until nothing is
-  outstanding. TRIGGER: invoked as /babysit inside a wt worktree session, or
-  when the human asks you to see your own branch through review. Scoped to
-  one worktree; for the whole fleet, that is `shepherd`.
+  Drive THIS worktree's branch all the way to merged and stay with it: open
+  the PR, wait for the review bot to review the current head, fix what it
+  raises, keep going through its follow-up reviews, and merge it once nothing
+  is outstanding. TRIGGER: invoked as /babysit inside a wt worktree session,
+  or when the human asks you to see your own branch through review and land
+  it. Scoped to one worktree; for the whole fleet, that is `shepherd`.
 targets:
   - '*'
 user_invocable: true
 ---
 
-# Babysit — see your own branch through review
+# Babysit — see your own branch through review and land it
 
 `start` builds the work and hands off. This is what happens next: the part
-between "the PR is open" and "there is nothing left to do but merge it".
+between "the PR is open" and "it is on the base branch".
+
+**Invoking this is the human handing you the merge.** wt's standing rule is
+that the human merges; `/babysit` is them delegating it for this one branch.
+So land it — parking at `ready` and asking whether to merge is the one wrong
+answer here. What they delegated is the judgment, not the keystroke: merge
+when the branch has earned it, and say plainly when it has not.
 
 **One worktree — yours.** Everything here acts on the branch you are checked
 out on. Another worktree's findings, threads and PRs are not your business,
@@ -78,7 +84,7 @@ looking at, and then you two disagree with nothing to say which is right.
 | `review_bot.state: pending` | wait. It is reading your diff right now. |
 | `unresolved` | address the findings (next section) |
 | `clean` + `stale: true` | wait for the review of the current head |
-| `clean`, not stale, checks pass | you are done — assert `ready` and stop |
+| `clean`, not stale, checks pass | nothing is outstanding — merge it (below) |
 | `checks: fail` | read the failure before touching anything (see *four shapes*) |
 | `merge_state: CONFLICTING` | rebase onto the base and resolve; `wt restack` if stacked |
 | open human threads | reply and resolve them; a human's thread is not the bot's |
@@ -155,34 +161,75 @@ it only when the branch has stopped moving: work finished, checks not failing,
 your own review done. Waiting a pass costs one interval; spending it early
 costs the review and buys one of a diff you are about to replace.
 
-## Finishing
+## Merging
 
-You are done when the bot's checklist is empty against your **current** head,
-no threads are open, and checks pass. Then:
+Merge once all of these hold against your **current** head:
+
+- the bot's checklist is empty and `review_bot.stale` is false
+- `.pr.checks` is `pass`
+- no open threads, bot or human
+- `.pr.merge_state` is not `CONFLICTING`
+- none of the four cases below applies
+
+Assert the status first, so the record says what landed and at what risk:
 
 ```bash
 wt status ready --risk <low|medium|high> -m "<note>"
 ```
 
-Risk is your confidence after testing, and the note shape is in the always-on
-instructions. If something is genuinely blocked on the human, `needs-human`
-with the three-line shape; if the branch will never land, `dropped` with why.
+Then merge, with a method the repo allows:
 
-**You do not merge, and you do not arm anything that merges for you.** That is
-the human's, everywhere in wt, and this skill does not change it. Driving the
-branch to the point where merging is a single unblocked decision *is* the job.
+```bash
+gh api repos/{owner}/{repo} --jq '{squash: .allow_squash_merge, merge: .allow_merge_commit, rebase: .allow_rebase_merge}'
+gh pr merge --squash    # or --merge / --rebase
+```
+
+If the base branch has a merge queue, or checks are still running and
+everything else is clean, arm it and let it land on its own:
+
+```bash
+gh pr merge --auto --squash
+```
+
+Armed is finished. Do not sit watching the queue.
+
+### The four times you do not merge
+
+These are about the merge being wrong, not about permission:
+
+- **`ready --blocked-on "<gate>"` is set.** Someone recorded an external
+  prerequisite, and landing now is what the gate exists to stop. `wt status
+  --unblock` if it is satisfied; otherwise leave it and say why.
+- **A stacked branch whose parent has not landed.** The parent merges first.
+  If the order looks wrong, that is a fleet question: `wt manager send`.
+- **You cannot honestly claim `--risk low` or `medium`.** `high` means material
+  behavior is unverified and rollback is not a plain revert. Go verify it, or
+  hand the risk acceptance back with `needs-human`.
+- **The human said not to** in this conversation or in the task.
+
+Anything else — a finding you decided not to fix, a check you re-triggered, a
+note you would rather they read first — is something to write down and merge.
+
+### After it lands
+
+- If the branch owes `--verify-after-merge`, those steps are yours: confirm the
+  deploy carrying the change is actually live, run them, then `wt status
+  verified -m "<what you checked, and where>"`. wt keeps the worktree alive for
+  exactly this.
+- Otherwise you are done. The merge cleanup archives the row; do not destroy the
+  worktree yourself.
 
 ## Stopping
 
-Stop when you assert `ready`, when you are blocked on a human, or when a pass
-finds nothing to do and nothing pending — an idle loop against a finished branch
-is just noise. Do not keep polling a PR whose review came back clean on the
-current head.
+Stop when the branch is merged and any post-merge verification is discharged,
+when you are genuinely blocked on a human, or when a pass finds nothing to do
+and nothing pending. Do not keep polling a PR whose review came back clean on
+the current head — that is the state you were invoked to act on.
 
 ## What you never do
 
 - Touch another worktree, its threads, or its PR.
-- Merge, or arm merge-when-ready.
+- Merge past a red check, an open finding, or a `blocked-on` gate.
 - Push per finding instead of per round.
 - Resolve a thread you did not act on.
 - Read `clean` without reading `stale`.
