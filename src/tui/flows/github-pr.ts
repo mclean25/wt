@@ -20,7 +20,7 @@ import type { PullRequest } from "../../core/types.ts";
 import { patchPullRequest, type GithubData } from "../../state/index.ts";
 import type { QueryFilters } from "@tanstack/react-query";
 
-import { mergeWhenReadyArmed } from "../app-helpers.ts";
+import { armedFromPr } from "../badges.ts";
 import {
   autoMergeRetryPending,
   cancelAutoMergeRetry,
@@ -28,6 +28,7 @@ import {
   startAutoMergeRetry,
 } from "./auto-merge-retry.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import type { ActionSubject } from "../action-subject.ts";
 import { theme } from "../theme.ts";
 
 export type GithubPrFlowsCtx = {
@@ -93,19 +94,19 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
    * it with whichever badge GitHub actually lands on.
    */
   async function doAutoMerge(
-    slug: string,
+    subject: ActionSubject,
     action: "enable" | "disable",
   ): Promise<void> {
-    const log = createLogger(slug);
-    const row = rows.find((r) => r.wt.slug === slug);
-    if (!row?.pr) {
+    const log = createLogger(subject.slug);
+    const { pr } = subject;
+    if (!pr) {
       toast("no PR for this row", theme.warn, 2000);
       return;
     }
-    // Armed-ness spans BOTH features this keystroke can drive; see
-    // `mergeWhenReadyArmed`. Keying on `pr.autoMerge` alone left a queued
-    // PR looking unarmed, so the disarm leg refused to dequeue it.
-    const armed = mergeWhenReadyArmed(row);
+    // Armed-ness spans BOTH features this keystroke can drive. Keying on
+    // `pr.autoMerge` alone left a queued PR looking unarmed, so the disarm
+    // leg refused to dequeue it.
+    const armed = armedFromPr(pr, subject.mq);
     if (action === "enable" && armed) {
       toast("merge when ready already armed", theme.info, 2000);
       return;
@@ -114,12 +115,12 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     // without this the disarm leg would report "not armed" and leave
     // the loop running to arm it a minute later — the worst possible
     // answer to someone who just asked for it to stop.
-    if (action === "disable" && cancelAutoMergeRetry(row.pr.number)) {
-      log.event.ok(`#${row.pr.number}: cancelled the pending merge-when-ready arm`);
+    if (action === "disable" && cancelAutoMergeRetry(pr.number)) {
+      log.event.ok(`#${pr.number}: cancelled the pending merge-when-ready arm`);
       toast("cancelled pending arm", theme.ok, 2500);
       return;
     }
-    if (action === "enable" && autoMergeRetryPending(row.pr.number)) {
+    if (action === "enable" && autoMergeRetryPending(pr.number)) {
       toast("already waiting on checks", theme.info, 2000);
       return;
     }
@@ -127,8 +128,8 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       toast("merge when ready not armed", theme.info, 2000);
       return;
     }
-    const prNumber = row.pr.number;
-    const prId = row.pr.id;
+    const prNumber = pr.number;
+    const prId = pr.id;
     // The arm mutation needs the GraphQL node id, which persisted-cache
     // entries from before the field existed lack. One live fetch fills
     // it in — don't guess-and-merge with the number-based porcelain
@@ -137,7 +138,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       toast("PR cache predates this build — press r, then retry", theme.warn, 3500);
       return;
     }
-    const branch = row.wt.branch;
+    const branch = subject.branch;
     // Optimistic shape for enable: seed the method the gh call will arm
     // (shared AUTO_MERGE_METHOD constant, so this can't drift from
     // enableAutoMerge). The invalidate that fires on success replaces it
@@ -160,12 +161,12 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
           const result =
             action === "enable"
               ? await enableAutoMerge(prId ?? "", {
-                  baseRefName: row.pr?.baseRefName,
-                  headRefOid: row.pr?.headRefOid,
+                  baseRefName: pr.baseRefName,
+                  headRefOid: pr.headRefOid,
                 })
               : await disableAutoMerge(prNumber, {
                   prId,
-                  baseRefName: row.pr?.baseRefName,
+                  baseRefName: pr.baseRefName,
                 });
           if (!result.ok) {
             // The flag dies in the Error otherwise, and it is the one
@@ -189,8 +190,8 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
           prNumber,
           () =>
             enableAutoMerge(prId ?? "", {
-              baseRefName: row.pr?.baseRefName,
-              headRefOid: row.pr?.headRefOid,
+              baseRefName: pr.baseRefName,
+              headRefOid: pr.headRefOid,
             }),
           {
             onArmed: () => {

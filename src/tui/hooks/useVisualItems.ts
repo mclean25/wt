@@ -7,6 +7,7 @@ import { reviewRequestsQuery } from "../../state/index.ts";
 import type { FleetWorktreeItem, ListActiveItem } from "../panels/list.tsx";
 import type { RemoteCreation } from "../remote-creation.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
+import type { GithubData } from "../../state/queries/github.ts";
 import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 import {
   localWorktreeTarget,
@@ -15,6 +16,10 @@ import {
 } from "../../core/worktree-target.ts";
 import { remoteEntryKey } from "../remote-creation.ts";
 import {
+  buildWorktreeModels,
+  type WorktreeModel,
+} from "../worktree-model.ts";
+import {
   GROUP_ARCHIVED,
   GROUP_INBOX,
   type WorktreeRow,
@@ -22,11 +27,17 @@ import {
 
 export type VisualItem = ListActiveItem | { kind: "pr"; pr: ReviewRequestPr };
 export type ArchivedItem =
-  | { kind: "wt"; row: WorktreeRow; target: WorktreeTarget }
+  | {
+      kind: "wt";
+      row: WorktreeRow;
+      target: WorktreeTarget;
+      model: WorktreeModel;
+    }
   | {
       kind: "remote";
       entry: RemoteWorktreeSummary;
       target: WorktreeTarget;
+      model: WorktreeModel;
       archived: true;
     }
   /** The whole block, folded to one header line (`GROUP_ARCHIVED`). */
@@ -44,7 +55,10 @@ export function buildActiveItems({
   remoteCreation,
   remoteWorktrees,
   archivedKeys,
+  githubData,
 }: Omit<UseVisualItemsArgs, "selectedKey">): ListActiveItem[] {
+  const models = buildWorktreeModels(rows, remoteWorktrees, archivedKeys, githubData);
+  const byKey = new Map(models.map((model) => [model.key, model]));
   const buckets = new Map<string, FleetWorktreeItem[]>();
   const ensure = (section: string): FleetWorktreeItem[] => {
     const existing = buckets.get(section);
@@ -60,6 +74,7 @@ export function buildActiveItems({
       kind: "wt",
       row,
       target: localWorktreeTarget(row.wt),
+      model: byKey.get(row.wt.slug)!,
     });
   }
   for (const entry of remoteWorktrees) {
@@ -68,6 +83,7 @@ export function buildActiveItems({
       kind: "remote",
       entry,
       target: remoteWorktreeTarget(entry),
+      model: byKey.get(remoteWorktreeLedgerKey(entry.hostKey, entry.slug))!,
       archived: false,
     });
   }
@@ -76,6 +92,7 @@ export function buildActiveItems({
       kind: "remote",
       entry: remoteCreation,
       target: null,
+      model: null,
       archived: false,
     });
   }
@@ -113,6 +130,7 @@ type UseVisualItemsArgs = {
   remoteCreation: RemoteCreation | null;
   remoteWorktrees: readonly RemoteWorktreeSummary[];
   archivedKeys: ReadonlySet<string>;
+  githubData?: GithubData;
 };
 
 export function useVisualItems({
@@ -122,7 +140,16 @@ export function useVisualItems({
   remoteCreation,
   remoteWorktrees,
   archivedKeys,
+  githubData,
 }: UseVisualItemsArgs) {
+  const worktrees = useMemo(
+    () => buildWorktreeModels(rows, remoteWorktrees, archivedKeys, githubData),
+    [rows, remoteWorktrees, archivedKeys, githubData],
+  );
+  const worktreesByKey = useMemo(
+    () => new Map(worktrees.map((model) => [model.key, model])),
+    [worktrees],
+  );
   // When the selected slug disappears, this ref snaps the cursor to the
   // row that took its place rather than jumping to the top of the list.
   const lastIndexRef = useRef(0);
@@ -154,6 +181,7 @@ export function useVisualItems({
       remoteCreation,
       remoteWorktrees,
       archivedKeys,
+      githubData,
     });
   }, [
     rows,
@@ -161,6 +189,7 @@ export function useVisualItems({
     remoteCreation,
     remoteWorktrees,
     archivedKeys,
+    githubData,
   ]);
 
   const archivedItems = useMemo<ArchivedItem[]>(() => {
@@ -169,11 +198,15 @@ export function useVisualItems({
         kind: "wt" as const,
         row,
         target: localWorktreeTarget(row.wt),
+        model: worktreesByKey.get(row.wt.slug)!,
       })),
       ...archivedRemoteRows.map((entry) => ({
         kind: "remote" as const,
         entry,
         target: remoteWorktreeTarget(entry),
+        model: worktreesByKey.get(
+          remoteWorktreeLedgerKey(entry.hostKey, entry.slug),
+        )!,
         archived: true as const,
       })),
     ];
@@ -190,7 +223,7 @@ export function useVisualItems({
         members,
       },
     ];
-  }, [archivedRows, archivedRemoteRows, foldedSections]);
+  }, [archivedRows, archivedRemoteRows, foldedSections, worktreesByKey]);
 
   const visualItems = useMemo<VisualItem[]>(() => {
     const prs: VisualItem[] = reviewRequestRows.map((pr) => ({ kind: "pr", pr }));
@@ -236,6 +269,7 @@ export function useVisualItems({
     currentItem?.kind === "wt" || currentItem?.kind === "remote"
       ? currentItem
       : undefined;
+  const selectedWorktree = currentFleetRow?.model ?? undefined;
 
   // Render-time write is derived from this render's inputs and mirrors the
   // previous in-app cursor model.
@@ -256,5 +290,7 @@ export function useVisualItems({
     selectedSection,
     currentTarget,
     currentFleetRow,
+    selectedWorktree,
+    worktrees,
   };
 }

@@ -46,6 +46,7 @@ import { ageMsToText, ELLIPSIS, truncateEnd } from "../text.ts";
 import { Spinner, useBouncingBall } from "../spinner.tsx";
 import { theme } from "../theme.ts";
 import type { TitleSource, WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import type { WorktreeModel } from "../worktree-model.ts";
 import type { RemovedWorktree } from "../../core/wtstate.ts";
 import {
   isRemoteSummary,
@@ -74,7 +75,7 @@ import {
 export type { SectionMember, SectionDetail };
 
 type Props = {
-  row?: WorktreeRow;
+  worktree?: WorktreeModel;
   reviewRequest?: ReviewRequestPr;
   /** Set when a folded section header is selected — shows the stack summary. */
   section?: SectionDetail;
@@ -553,12 +554,14 @@ const DetailsBody = memo(function DetailsBody({
 
 function RemoteDetails({
   entry,
+  model,
   unavailable,
   error,
   width,
   scrollRef,
 }: {
   entry: RemoteListEntry;
+  model?: WorktreeModel;
   unavailable: boolean;
   error: string | null;
   width: number;
@@ -566,10 +569,10 @@ function RemoteDetails({
 }) {
   const github = useGithub();
   const summary = isRemoteSummary(entry) ? entry : null;
-  const pr = summary ? github.data?.prs[summary.branch] : undefined;
-  const mq = summary ? github.data?.mergeQueue?.[summary.branch] : undefined;
+  const pr = model?.pr ?? (summary ? github.data?.prs[summary.branch] : undefined);
+  const mq = model?.mq ?? (summary ? github.data?.mergeQueue?.[summary.branch] : undefined);
   const valueWidth = valueWidthFor(width);
-  const mechanical = summary
+  const mechanical = model?.status ?? (summary
     ? {
         kind: summary.status,
         label: summary.statusLabel,
@@ -578,10 +581,10 @@ function RemoteDetails({
       }
     : entry.status === "creating"
       ? { kind: StatusKind.Busy, label: "creating", op: "init" }
-      : { kind: StatusKind.Clean, label: "ready" };
+      : { kind: StatusKind.Clean, label: "ready" });
   const mechanicalBadge = statusBadge(mechanical);
-  const work: WorkStatusRecord | null =
-    summary?.workState
+  const work: WorkStatusRecord | null = model?.work ??
+    (summary?.workState
       ? {
           state: summary.workState,
           at: summary.workAt ?? "",
@@ -590,7 +593,7 @@ function RemoteDetails({
           blockedOn: summary.workBlockedOn ?? undefined,
           verifyAfterMerge: summary.workVerifyAfterMerge ?? undefined,
         }
-      : null;
+      : null);
   const landed =
     summary?.status === StatusKind.Merged ||
     summary?.status === StatusKind.Gone ||
@@ -750,7 +753,7 @@ function RemoteDetails({
  * unaffected by the memo boundary.
  */
 export const Details = memo(function Details({
-  row,
+  worktree,
   reviewRequest,
   section,
   removed,
@@ -797,6 +800,7 @@ export const Details = memo(function Details({
       <RemoteDetails
         key={`remote:${remoteEntryKey(remote)}`}
         entry={remote}
+        model={undefined}
         unavailable={remoteUnavailable}
         error={remoteError}
         width={width}
@@ -804,7 +808,7 @@ export const Details = memo(function Details({
       />
     );
   }
-  if (!row) {
+  if (!worktree) {
     return (
       <box
         flexGrow={1}
@@ -819,6 +823,20 @@ export const Details = memo(function Details({
       </box>
     );
   }
+  if (worktree.source.kind === "remote") {
+    return (
+      <RemoteDetails
+        key={`remote:${worktree.key}`}
+        entry={worktree.source.row}
+        model={worktree}
+        unavailable={remoteUnavailable}
+        error={remoteError}
+        width={width}
+        scrollRef={scrollRef}
+      />
+    );
+  }
+  const row = worktree.source.row;
   // Key by slug so the AI summary observer below resets across
   // worktree switches. Without this, `placeholderData: keepPreviousData`
   // bleeds the previous slug's summary into the new slug whenever the

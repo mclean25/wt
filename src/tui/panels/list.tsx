@@ -46,6 +46,8 @@ import type { ActiveSessionGlyph } from "../hooks/useHarnessSessions.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import type { ArchivedItem } from "../hooks/useVisualItems.ts";
 import type { WorktreeTarget } from "../../core/worktree-target.ts";
+import type { WorktreeModel } from "../worktree-model.ts";
+import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 import {
   isRemoteSummary,
   remoteEntryKey,
@@ -59,11 +61,17 @@ import {
  * of truth — a folded section is one cursor stop, not N hidden rows.
  */
 export type FleetWorktreeItem =
-  | { kind: "wt"; row: WorktreeRow; target: WorktreeTarget }
+  | {
+      kind: "wt";
+      row: WorktreeRow;
+      target: WorktreeTarget;
+      model: WorktreeModel;
+    }
   | {
       kind: "remote";
       entry: RemoteListEntry;
       target: WorktreeTarget | null;
+      model: WorktreeModel | null;
       /** Local fleet-ledger placement; the checkout itself remains remote. */
       archived: boolean;
     };
@@ -427,6 +435,7 @@ const RemoteRowView = memo(function RemoteRowView({
   githubData,
   archived = false,
   unavailable = false,
+  actionRunning = false,
 }: {
   entry: RemoteListEntry;
   selected: boolean;
@@ -434,6 +443,7 @@ const RemoteRowView = memo(function RemoteRowView({
   githubData?: GithubData;
   archived?: boolean;
   unavailable?: boolean;
+  actionRunning?: boolean;
 }) {
   const status: Status = isRemoteSummary(entry)
     ? {
@@ -467,7 +477,7 @@ const RemoteRowView = memo(function RemoteRowView({
   // name so location reads as part of row identity, not as one more
   // right-aligned status badge.
   const remoteCells = 2;
-  const badgeCells = remoteBadgeClusterCells(pr, mq);
+  const badgeCells = remoteBadgeClusterCells(pr, mq, actionRunning);
   return (
     <box
       id={`remote:${remoteEntryKey(entry)}`}
@@ -496,7 +506,7 @@ const RemoteRowView = memo(function RemoteRowView({
           {truncateEnd(label, Math.max(0, panelWidth - 8 - remoteCells - badgeCells))}
         </text>
       </box>
-      <RemoteBadgeCluster pr={pr} mq={mq} archived={archived} />
+      <RemoteBadgeCluster pr={pr} mq={mq} archived={archived} actionRunning={actionRunning} />
     </box>
   );
 });
@@ -706,6 +716,10 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                     panelWidth={width}
                     githubData={githubData}
                     unavailable={remoteUnavailable}
+                    actionRunning={
+                      isRemoteSummary(item.entry) &&
+                      activeActions.has(remoteWorktreeLedgerKey(item.entry.hostKey, item.entry.slug))
+                    }
                   />
                 </Fragment>
               );
@@ -829,6 +843,9 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                       githubData={githubData}
                       archived
                       unavailable={remoteUnavailable}
+                      actionRunning={activeActions.has(
+                        remoteWorktreeLedgerKey(item.entry.hostKey, item.entry.slug),
+                      )}
                     />
                   );
                 }

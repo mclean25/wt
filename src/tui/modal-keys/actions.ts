@@ -39,7 +39,7 @@ export function handleActionPickerKey(
       ? buildManagerPickerItems(ap.rowSlug)
       : ap.surface === "slot"
         ? buildSlotPickerItems()
-        : buildActionPickerItems(ap.slug);
+        : buildActionPickerItems(ap.target!);
   if (ap.mode === "list") {
     const items = buildItems();
     const commitIndex = (i: number): void => {
@@ -50,7 +50,7 @@ export function handleActionPickerKey(
         // Direct toggle, no confirm — `!` + `m` is already deliberate,
         // matching the `; x` direct-kill convention.
         setModal(null);
-        void doAutoMerge(ap.slug, item.armed ? "disable" : "enable");
+        void doAutoMerge(ap.slug, item.armed ? "disable" : "enable", ap.target);
         return;
       }
       if (item.kind === "openEditor") {
@@ -70,7 +70,7 @@ export function handleActionPickerKey(
         return;
       }
       if (item.kind === "devLogs") {
-        setModal({ kind: "devLogs", slug: ap.slug });
+        setModal({ kind: "devLogs", slug: ap.slug, target: ap.target });
         return;
       }
       if (palette && item.kind === "action" && item.def.direct) {
@@ -101,6 +101,7 @@ export function handleActionPickerKey(
           // actions; launch against the captured row (canPickAction
           // already blocked them when no row was selected).
           slug: manager ? (ap.rowSlug ?? ap.slug) : ap.slug,
+          target: manager ? undefined : ap.target,
           def: item.def,
           history,
           index: 0,
@@ -110,7 +111,7 @@ export function handleActionPickerKey(
       }
       if (item.kind === "action" && item.def.kind === "shell") {
         setModal(null);
-        void launchAction(ap.slug, item.def, "");
+        void launchAction(ap.slug, item.def, "", undefined, undefined, ap.target);
         return;
       }
       const def = item.kind === "action" ? item.def : null;
@@ -121,6 +122,7 @@ export function handleActionPickerKey(
           surface: ap.surface,
           slug: ap.slug,
           rowSlug: ap.rowSlug,
+          target: ap.target,
           def: def && def.kind === "claude" ? def : null,
           extras: emptyEdit,
         },
@@ -138,6 +140,7 @@ export function handleActionPickerKey(
           surface: ap.surface,
           slug: ap.slug,
           rowSlug: ap.rowSlug,
+          target: ap.target,
           def: null,
           extras: emptyEdit,
         },
@@ -186,7 +189,11 @@ export function handleActionPickerKey(
       // Palette surfaces always have a list to return to; the row
       // surface guards against the worktree vanishing while the editor
       // was up.
-      if (!palette && !rows.find((r) => r.wt.slug === ap.slug)) {
+      if (
+        !palette &&
+        ap.target?.location.kind !== "remote" &&
+        !rows.find((r) => r.wt.slug === ap.slug)
+      ) {
         setModal(null);
         toast("worktree gone", warnColor, 2000);
         return true;
@@ -202,6 +209,7 @@ export function handleActionPickerKey(
           surface: ap.surface,
           slug: ap.slug,
           rowSlug: ap.rowSlug,
+          target: ap.target,
           index: Math.max(0, idx),
         },
       });
@@ -223,7 +231,7 @@ export function handleActionPickerKey(
       else if (rowSlug) void launchAction(rowSlug, def, extras.value);
       else toast("no row selected", warnColor, 2000);
     } else {
-      void launchAction(slug, def, extras.value);
+      void launchAction(slug, def, extras.value, undefined, undefined, ap.target);
     }
     return true;
   }
@@ -255,7 +263,14 @@ export function handleArgPickerKey(
     const trimmed = value.trim();
     if (!trimmed) return;
     setModal(null);
-    void launchAction(modal.slug, modal.def, "", trimmed);
+    void launchAction(
+      modal.slug,
+      modal.def,
+      "",
+      trimmed,
+      undefined,
+      modal.target,
+    );
   };
   if (k.ctrl && k.name === "c") {
     setModal(null);

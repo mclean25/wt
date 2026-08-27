@@ -20,10 +20,18 @@ import {
 } from "../hooks/useWorktreeRows.ts";
 import { emptyEdit, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
+import type { WorktreeTarget } from "../../core/worktree-target.ts";
+import { worktreeTargetKey } from "../../core/worktree-target.ts";
+import {
+  worktreeVisualKey,
+  type WorktreeModel,
+} from "../worktree-model.ts";
 
 type SectionFlowsCtx = {
   rows: WorktreeRow[];
   current: WorktreeRow | undefined;
+  worktrees: readonly WorktreeModel[];
+  currentWorktree: WorktreeModel | undefined;
   selectedSection: { sectionKey: string } | undefined;
   wtState: WtState | undefined;
   lastMoveTarget: string | null;
@@ -36,7 +44,10 @@ type SectionFlowsCtx = {
   /** Re-aim the cursor off rows that are leaving their slot — see
    *  `cursorSuccessor`. */
   advanceCursorPast: (keys: readonly string[]) => void;
-  setSection: (slug: string, section: string | null) => Promise<void>;
+  setWorktreeSection: (
+    target: WorktreeTarget,
+    section: string | null,
+  ) => Promise<void>;
   placeSlug: (
     slug: string,
     section: string | null,
@@ -60,6 +71,8 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
   const {
     rows,
     current,
+    worktrees,
+    currentWorktree,
     selectedSection,
     wtState,
     lastMoveTarget,
@@ -70,7 +83,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     toast,
     reportActionError,
     advanceCursorPast,
-    setSection,
+    setWorktreeSection,
     placeSlug,
     swapOrder,
     moveGroupPast,
@@ -83,12 +96,12 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
    * "+ new section" sits at the bottom with `l` as its quick chord
    * trigger so `l l` creates a fresh section in two keystrokes.
    */
-  function buildSectionItems(currentRow: WorktreeRow): SectionPickerItem[] {
+  function buildSectionItems(currentRow: WorktreeModel): SectionPickerItem[] {
     const items: SectionPickerItem[] = [];
     const currentSection = currentRow.section;
     if (currentSection !== null) items.push({ kind: "none" });
     const seen = new Set<string>();
-    for (const r of rows) {
+    for (const r of worktrees) {
       if (r.archived) continue;
       if (r.section === null || seen.has(r.section)) continue;
       seen.add(r.section);
@@ -260,18 +273,18 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
   }
 
   function openSectionPicker(): void {
-    if (!current) return;
-    if (current.archived) {
+    if (!currentWorktree) return;
+    if (currentWorktree.archived) {
       toast("archived rows don't have a section context, use `a` to restore", theme.fgDim, 2000);
       return;
     }
-    const items = buildSectionItems(current);
+    const items = buildSectionItems(currentWorktree);
     // Default cursor: sticky last-move-target if it's still in the
     // list (and isn't the current section), else the first item.
     // The user's most common workflow is "move several rows into the
     // same section", and forcing them to re-aim every time eats keys.
     let initial = 0;
-    if (lastMoveTarget !== null && lastMoveTarget !== current.section) {
+    if (lastMoveTarget !== null && lastMoveTarget !== currentWorktree.section) {
       const i = items.findIndex(
         (it) => it.kind === "section" && it.name === lastMoveTarget,
       );
@@ -279,8 +292,9 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     }
     setModal({
       kind: "sectionPicker",
-      title: `move ${current.wt.slug} to section`,
-      slug: current.wt.slug,
+      title: `move ${currentWorktree.slug} to section`,
+      slug: currentWorktree.slug,
+      target: currentWorktree.target,
       items,
       index: initial,
       newName: null,
@@ -293,30 +307,44 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
    * `wt section mv`. Splits stay reachable (move a member back out);
    * nothing here reconciles an existing split.
    */
-  function stackGroup(slug: string): string[] {
-    const row = rows.find((r) => r.wt.slug === slug);
+  function stackGroup(target: WorktreeTarget): WorktreeModel[] {
+    const model = worktrees.find(
+      (candidate) => candidate.key === worktreeTargetKey(target),
+    );
+    if (!model || model.source.kind === "remote") return model ? [model] : [];
+    const row = model.source.row;
     const stackId = row?.stack?.stackId;
-    if (!stackId) return [slug];
-    return rows
-      .filter((r) => !r.archived && r.stack?.stackId === stackId)
-      .map((r) => r.wt.slug);
+    if (!stackId) return [model];
+    return worktrees.filter(
+      (candidate) =>
+        !candidate.archived &&
+        candidate.source.kind === "local" &&
+        candidate.source.row.stack?.stackId === stackId,
+    );
   }
 
-  function moveSlugs(slugs: string[], target: string | null): Promise<unknown> {
-    return Promise.all(slugs.map((s) => setSection(s, target)));
+  function moveWorktrees(
+    members: readonly WorktreeModel[],
+    section: string | null,
+  ): Promise<unknown> {
+    return Promise.all(
+      members.map((member) => setWorktreeSection(member.target, section)),
+    );
   }
 
-  function commitSectionPick(item: SectionPickerItem, slug: string): void {
-    const group = stackGroup(slug);
+  function commitSectionPick(item: SectionPickerItem, target: WorktreeTarget): void {
+    const group = stackGroup(target);
     const suffix = group.length > 1 ? ` (stack of ${group.length})` : "";
     // Filing a row away is a move the user makes while working THROUGH a
     // section — the cursor holds its place there rather than chasing the
     // row into wherever it was filed. (Shift+J/K is the opposite: that's
     // dragging a row, so the cursor follows it, which the plain key
     // anchor already does.)
-    if (item.kind !== "create") advanceCursorPast(group);
+    if (item.kind !== "create") {
+      advanceCursorPast(group.map(worktreeVisualKey));
+    }
     if (item.kind === "none") {
-      moveSlugs(group, null).then(
+      moveWorktrees(group, null).then(
         () => toast(`moved to Inbox${suffix}`, theme.info, 1500),
         (err) => reportActionError("move", err),
       );
@@ -326,7 +354,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     }
     if (item.kind === "section") {
       const target = item.name;
-      moveSlugs(group, target).then(
+      moveWorktrees(group, target).then(
         () => toast(`moved to ${target}${suffix}`, theme.info, 1500),
         (err) => reportActionError("move", err),
       );

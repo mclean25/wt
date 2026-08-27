@@ -14,11 +14,10 @@ import {
   pullRequestOpenUrlForTarget,
 } from "../../core/github.ts";
 import { createLogger } from "../../core/logger.ts";
-import type { PullRequest } from "../../core/types.ts";
 import type { ReviewRequestPr } from "../../state/index.ts";
 import { isPlainLetter } from "../app-helpers.ts";
 import { openUrlHidingTerminal } from "../../core/macos.ts";
-import type { WorktreeRow } from "./useWorktreeRows.ts";
+import type { WorktreeModel } from "../worktree-model.ts";
 
 const PR_TARGET_CHORD_MS = 1_200;
 
@@ -32,10 +31,9 @@ type PendingPrTargetChord = {
 
 export function usePrTargetChord(opts: {
   selectedPr: ReviewRequestPr | undefined;
-  current: WorktreeRow | undefined;
-  selectedRemotePr?: PullRequest;
+  selectedWorktree: WorktreeModel | undefined;
 }) {
-  const { selectedPr, current, selectedRemotePr } = opts;
+  const { selectedPr, selectedWorktree } = opts;
   const pendingPrTargetChordRef = useRef<PendingPrTargetChord | null>(null);
 
   function clearPendingPrTargetChord(): void {
@@ -45,10 +43,10 @@ export function usePrTargetChord(opts: {
   }
 
   function rememberPrTargetChord(target: PullRequestTarget): boolean {
-    const pr = selectedPr ?? current?.pr ?? selectedRemotePr;
+    const pr = selectedPr ?? selectedWorktree?.pr;
     if (!pr) return false;
     clearPendingPrTargetChord();
-    const logName = selectedPr ? "[review]" : current?.wt.slug ?? "[remote]";
+    const logName = selectedPr ? "[review]" : selectedWorktree?.slug ?? "[worktree]";
     const timer = setTimeout(() => {
       pendingPrTargetChordRef.current = null;
     }, PR_TARGET_CHORD_MS);

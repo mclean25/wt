@@ -137,7 +137,10 @@ worktree root remain authoritative. The local TUI polls that host's worktree
 summaries and renders them in the same sections as local worktrees, with a
 small remote indicator on each row. `Ctrl+N` forwards the normal `wt new`
 lifecycle over SSH; F10/F11/F12 on one of those rows attach to that
-worktree's remote tmux shell, diff, or AI session. Ordinary `n` / `N`
+worktree's remote tmux shell, diff, or AI session. The `!` picker is identical
+for local and remote rows: requirements/templates use one normalized row model,
+while tracked commands, custom prompts, dev controls/logs, and cancellation run
+against the selected checkout through SSH. Ordinary `n` / `N`
 continue to create locally.
 
 The last successful remote inventory is persisted with the rest of wt's query

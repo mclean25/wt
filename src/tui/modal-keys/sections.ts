@@ -14,13 +14,7 @@ export function handleSectionPickerKey(
   const {
     setModal,
     consumePrTargetChord,
-    setSection,
-    setLastMoveTarget,
-    advanceCursorPast,
-    toast,
-    reportActionError,
     commitSectionPick,
-    infoColor,
   } = ctx;
   if (consumePrTargetChord(k)) {
     setModal(null);
@@ -41,16 +35,7 @@ export function handleSectionPickerKey(
         setModal({ ...modal, newName: null });
         return true;
       }
-      const slug = modal.slug;
-      // Same rule as picking an existing section (`commitSectionPick`):
-      // the cursor holds its place in the section being worked through.
-      advanceCursorPast([slug]);
-      setSection(slug, name).then(
-        () => toast(`moved to ${name}`, infoColor, 1500),
-        (err) => reportActionError("move", err),
-      );
-      setLastMoveTarget(name);
-      setModal(null);
+      commitSectionPick({ kind: "section", name }, modal.target);
       return true;
     }
     // Backspace on empty input backs out to the picker list.
@@ -74,7 +59,7 @@ export function handleSectionPickerKey(
     onMove: (next) => setModal({ ...modal, index: next }),
     onCommit: (i) => {
       const item = modal.items[i];
-      if (item) commitSectionPick(item, modal.slug);
+      if (item) commitSectionPick(item, modal.target);
     },
     onCancel: () => setModal(null),
     confirm: ["l"],
@@ -82,13 +67,17 @@ export function handleSectionPickerKey(
     chords: {
       n: () => {
         const createIdx = modal.items.findIndex((it) => it.kind === "create");
-        if (createIdx >= 0) commitSectionPick(modal.items[createIdx]!, modal.slug);
+        if (createIdx >= 0) {
+          commitSectionPick(modal.items[createIdx]!, modal.target);
+        }
       },
     },
     // Digits pick sections only — the create row keeps its letter.
     digits: (n) => {
       const item = modal.items[n - 1];
-      if (item && item.kind !== "create") commitSectionPick(item, modal.slug);
+      if (item && item.kind !== "create") {
+        commitSectionPick(item, modal.target);
+      }
     },
   });
 }

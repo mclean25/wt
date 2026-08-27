@@ -79,6 +79,7 @@ export function materializeRun(
 ): ActionRun {
   return {
     slug: meta.slug,
+    ...(meta.worktreeRef ? { worktreeRef: meta.worktreeRef } : {}),
     kind: meta.kind,
     actionId: meta.actionId,
     actionName: meta.actionName,

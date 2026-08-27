@@ -2,6 +2,7 @@ import type { ActionLine, ToolStartMap } from "../harness/claude/events.ts";
 import type { ActionTailHandle } from "./tail.ts";
 import type { EffectTag } from "../config.ts";
 import type { PullRequest } from "../types.ts";
+import type { WorktreeRef } from "../worktree-ref.ts";
 
 /**
  * Snapshot of row state the requirement predicates read. Kept narrow
@@ -50,7 +51,10 @@ export type ActionStatus = "running" | "succeeded" | "failed" | "killed";
 export type ActionRunKind = "claude" | "shell" | "harness";
 
 export type ActionRun = {
+  /** Registry/tmux identity. Remote runs use a host-qualified safe key. */
   slug: string;
+  /** Actual fleet subject when it differs from the registry identity. */
+  worktreeRef?: WorktreeRef;
   /**
    * Runtime output parser kind. Claude headless actions use stream-json;
    * shell and non-Claude headless harnesses are tailed as raw text.
@@ -103,6 +107,7 @@ export type Listener = () => void;
 export type ActionMeta = {
   version: 1;
   slug: string;
+  worktreeRef?: WorktreeRef;
   runId: string;
   kind: ActionRunKind;
   actionId: string;

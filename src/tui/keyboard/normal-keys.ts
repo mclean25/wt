@@ -18,20 +18,19 @@ import { actionRegistry } from "../../core/actions.ts";
 import { emptyEdit } from "../text-edit.tsx";
 import type { WorkState } from "../../core/work-status.ts";
 import { config, type PullRequestTarget } from "../../core/config.ts";
-import { effectiveBaseOrTrunk } from "../../core/git.ts";
 import { getHarness, HARNESSES, type HarnessId } from "../../core/harness/index.ts";
 import {
   issueUrlForId,
-  resolveIssueId,
   specificIssueUrl,
 } from "../../core/issue-tracker.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { eventsOutputId, firehoseOutputId, indexOfOutput } from "../../core/outputs.ts";
 import { stageUrl } from "../../core/stage.ts";
-import { StatusKind, type PullRequest } from "../../core/types.ts";
-import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
-import { worktreeTargetKey } from "../../core/worktree-target.ts";
+import { StatusKind } from "../../core/types.ts";
+import {
+  worktreeActionKey,
+} from "../../core/worktree-target.ts";
 import { setAttentionSeen } from "../../core/wtstate.ts";
 import {
   destroyHazardLabel,
@@ -40,7 +39,6 @@ import {
   isBareShiftedKey,
   isPlainLetter,
   isShiftedLetter,
-  resolveDiffBase,
   sectionJumpTarget,
   sessionLaunchBlockedReason,
 } from "../app-helpers.ts";
@@ -49,8 +47,6 @@ import { verifyStepsOpenByDefault } from "../panels/details/work-status-block.ts
 import { activityScroll } from "../panels/activity.tsx";
 import { SCROLL_STEP } from "../scrollbox.tsx";
 import { firstYankIndex, sectionYankItems, yankItemsFor } from "../panels/yank.tsx";
-import { enterDiffSession } from "../sessions/diff.ts";
-import { enterShellSession } from "../sessions/shell.ts";
 import type { HarnessRoute } from "../sessions/worktree.ts";
 import type { makeBaseFlows } from "../flows/base.ts";
 import type { makeDestroyFlows } from "../flows/destroy.ts";
@@ -72,6 +68,7 @@ import type { FooterMode } from "../panels/footer.tsx";
 import type { ListScrollHandle } from "../panels/list.tsx";
 import { isRemoteSummary, remoteEntryKey } from "../remote-creation.ts";
 import { theme } from "../theme.ts";
+import type { WorktreeModel } from "../worktree-model.ts";
 
 const appLog = createLogger("[app]");
 const newLog = createLogger("[new]");
@@ -90,7 +87,7 @@ export type NormalKeysCtx = {
   currentItem: VisualItems["currentItem"];
   selectedPr: VisualItems["selectedPr"];
   selectedRemote: VisualItems["selectedRemote"];
-  selectedRemotePr: PullRequest | undefined;
+  selectedWorktree: VisualItems["selectedWorktree"];
   selectedSection: VisualItems["selectedSection"];
   currentTarget: VisualItems["currentTarget"];
   visualItems: VisualItems["visualItems"];
@@ -119,8 +116,11 @@ export type NormalKeysCtx = {
   primaryHarness: HarnessId;
   activeShellSessions: ReadonlySet<string>;
   activeDiffSessions: ReadonlySet<string>;
-  renderer: Parameters<typeof enterShellSession>[0]["renderer"];
-  doEnterRemoteSession: (target: "shell" | "diff" | "harness") => void;
+  doEnterWorktreeSession: (
+    worktree: WorktreeModel,
+    target: "shell" | "diff" | "harness",
+    harnessRoute?: HarnessRoute,
+  ) => void;
   doEnterHarnessSession: ReturnType<typeof makeSessionFlows>["doEnterHarnessSession"];
   // Flows
   handleGlobalKey: (k: KeyEvent) => boolean;
@@ -130,7 +130,7 @@ export type NormalKeysCtx = {
   openIssueIdPrompt: () => void;
   openBasePicker: ReturnType<typeof makeBaseFlows>["openBasePicker"];
   openStatusPicker: () => void;
-  openActionPicker: (slug: string) => void;
+  openActionPicker: (target: NonNullable<VisualItems["currentTarget"]>) => void;
   openReviewerPicker: (slug: string) => Promise<void>;
   doReplayStack: ReturnType<typeof makeDestroyFlows>["doReplayStack"];
   doTailFailedChecks: ReturnType<typeof makeGithubPrFlows>["doTailFailedChecks"];
@@ -140,14 +140,16 @@ export type NormalKeysCtx = {
   toggleStackAutomationsPaused: (stackId: string, memberSlugs: readonly string[]) => Promise<boolean>;
   // Actions on the row
   toggleArchived: (key: string) => Promise<{ archived: boolean }>;
-  setSection: (slug: string, section: string | null) => Promise<void>;
+  setWorktreeSection: (
+    target: WorktreeModel["target"],
+    section: string | null,
+  ) => Promise<void>;
   toggleSectionFold: (key: string) => Promise<boolean>;
   setSectionFolded: (key: string, folded: boolean) => Promise<boolean>;
   refreshAiSummary: (slug: string) => Promise<boolean>;
   /** `V`'s override of the details pane's post-merge-steps block. */
   verifyExpanded: boolean | null;
   setVerifyExpanded: (v: boolean | null) => void;
-  refreshTmuxSessions: () => Promise<void>;
   // Feedback
   toast: (message: string, color?: string, ms?: number) => void;
   reportActionError: (label: string, err: unknown) => void;
@@ -163,7 +165,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     currentItem,
     selectedPr,
     selectedRemote,
-    selectedRemotePr,
+    selectedWorktree,
     selectedSection,
     currentTarget,
     visualItems,
@@ -182,8 +184,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     primaryHarness,
     activeShellSessions,
     activeDiffSessions,
-    renderer,
-    doEnterRemoteSession,
+    doEnterWorktreeSession,
     doEnterHarnessSession,
     handleGlobalKey,
     doShiftMove,
@@ -200,13 +201,12 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     toggleAutomationsPaused,
     toggleStackAutomationsPaused,
     toggleArchived,
-    setSection,
+    setWorktreeSection,
     toggleSectionFold,
     setSectionFolded,
     refreshAiSummary,
     verifyExpanded,
     setVerifyExpanded,
-    refreshTmuxSessions,
     toast,
     reportActionError,
   } = ctx;
@@ -604,16 +604,20 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // Same key both ways so muscle memory stays consistent regardless
     // of state.
     if (k.sequence === "!") {
-      if (!current) {
+      if (!currentTarget) {
         toast("select a worktree first", theme.warn, 1500);
         return;
       }
-      const slug = current.wt.slug;
-      const run = actionRegistry.get(slug);
+      const actionKey = worktreeActionKey(currentTarget);
+      const run = actionRegistry.get(actionKey);
       if (run?.status === "running") {
-        setModal({ kind: "killActionConfirm", slug, actionName: run.actionName });
+        setModal({
+          kind: "killActionConfirm",
+          slug: actionKey,
+          actionName: run.actionName,
+        });
       } else {
-        openActionPicker(slug);
+        openActionPicker(currentTarget);
       }
       return;
     }
@@ -622,48 +626,11 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // scrollback, env, and any background processes still alive.
     // `exit` / Ctrl+D ends the session.
     if (isBareKey(k, "f10")) {
-      if (selectedRemote) {
-        doEnterRemoteSession("shell");
-        return;
-      }
-      if (!current) {
+      if (!selectedWorktree) {
         toast("select a worktree first", theme.warn, 1500);
         return;
       }
-      const slug = current.wt.slug;
-      const shellBlocked = sessionLaunchBlockedReason(current);
-      if (shellBlocked) {
-        toast(`${slug} is ${shellBlocked}`, theme.warn, 2000);
-        return;
-      }
-      const cwd = current.wt.path;
-      const rawBase = resolveDiffBase(current);
-      const shellLog = createLogger(slug);
-      void (async () => {
-        const diffBase = await effectiveBaseOrTrunk(cwd, rawBase);
-        shellLog.event.info("entering shell (F10 to detach)");
-        const result = await enterShellSession({
-          renderer,
-          slug,
-          cwd,
-          diffBase,
-          harness: f12Route(),
-        });
-        // Flip the indicator + spin up the shell-tail tailer
-        // immediately rather than waiting for the tmux-sessions
-        // poll. Without this, lines written in the first seconds
-        // arrive only via seed-on-late-ensure, not as live deltas.
-        void refreshTmuxSessions();
-        if (result.kind === "spawn-failed") {
-          shellLog.event.err(`shell failed to start: ${result.reason}`);
-          toast(`shell failed: ${result.reason}`, theme.err, 3000);
-        } else if (result.kind === "detached") {
-          shellLog.event.info(`detached from shell (${slug})`);
-        } else {
-          shellLog.event.info(`shell exited (${result.code ?? "?"})`);
-          if (result.stderr) shellLog.event.err(result.stderr);
-        }
-      })();
+      doEnterWorktreeSession(selectedWorktree, "shell", f12Route());
       return;
     }
     // F11 — toggle into the selected worktree's diff TUI
@@ -675,47 +642,11 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // expansion state. Init locks are allowed once the checkout exists;
     // destructive operations remain blocked so we don't race a destroy.
     if (isBareKey(k, "f11")) {
-      if (selectedRemote) {
-        doEnterRemoteSession("diff");
-        return;
-      }
-      if (!current) {
+      if (!selectedWorktree) {
         toast("select a worktree first", theme.warn, 1500);
         return;
       }
-      const slug = current.wt.slug;
-      const diffBlocked = sessionLaunchBlockedReason(current);
-      if (diffBlocked) {
-        toast(`${slug} is ${diffBlocked}`, theme.warn, 2000);
-        return;
-      }
-      const cwd = current.wt.path;
-      const rawBase = resolveDiffBase(current);
-      const diffLog = createLogger(slug);
-      void (async () => {
-        // Degrade a dead diff base to trunk before handing it to the user's
-        // diff command — a stack-on-stack parent whose branch was merged +
-        // cleaned would otherwise make `<deadref>...HEAD` error in the
-        // session. Mirrors the render diff/sync paths' `effectiveBaseOrTrunk`.
-        const base = await effectiveBaseOrTrunk(cwd, rawBase);
-        diffLog.event.info(`opening diff vs ${base} (F11 to detach)`);
-        const result = await enterDiffSession({
-          renderer,
-          slug,
-          cwd,
-          base,
-          harness: f12Route(),
-        });
-        if (result.kind === "spawn-failed") {
-          diffLog.event.err(`diff failed to start: ${result.reason}`);
-          toast(`diff failed: ${result.reason}`, theme.err, 3000);
-        } else if (result.kind === "detached") {
-          diffLog.event.info(`detached from diff (${slug})`);
-        } else {
-          diffLog.event.info(`diff exited (${result.code ?? "?"})`);
-          if (result.stderr) diffLog.event.err(result.stderr);
-        }
-      })();
+      doEnterWorktreeSession(selectedWorktree, "diff", f12Route());
       return;
     }
     // Shift+F10 — kill-confirm for the selected worktree's shell
@@ -758,8 +689,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // claude option preserves the prior auto-name behavior (see the
     // `harnessSelect` handler above).
     if (isBareShiftedKey(k, "f12")) {
-      if (selectedRemote) {
-        doEnterRemoteSession("harness");
+      if (selectedWorktree?.source.kind === "remote") {
+        doEnterWorktreeSession(selectedWorktree, "harness");
         return;
       }
       if (!current) {
@@ -792,8 +723,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // Init locks are allowed once the checkout exists; destructive operations
     // remain blocked so we don't race a destroy.
     if (isBareKey(k, "f12")) {
-      if (selectedRemote) {
-        doEnterRemoteSession("harness");
+      if (selectedWorktree?.source.kind === "remote") {
+        doEnterWorktreeSession(selectedWorktree, "harness");
         return;
       }
       if (!current) {
@@ -877,47 +808,90 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       setModal({ kind: "yank", index: firstYankIndex(sectionYankItems(selectedSection)) });
       return;
     }
-    // Remote rows use the shared navigation keys and the F10/F11/F12 session
-    // routes above. Deletion is forwarded through the remote host's normal
-    // `wt rm` command so its lock, dirty, and unpushed-work checks stay
-    // authoritative.
-    if (selectedRemote) {
-      const remoteLog = createLogger(`[remote:${selectedRemote.hostLabel}]`);
+    // Location-neutral row commands. PR and issue identity are part of the
+    // shared worktree model; opening either never depends on where the checkout
+    // lives.
+    if (selectedWorktree) {
+      const modelLog = createLogger(
+        selectedWorktree.source.kind === "remote"
+          ? `[remote:${selectedWorktree.source.row.hostLabel}]`
+          : selectedWorktree.slug,
+      );
       if (isPlainLetter(k, "p")) {
-        if (!selectedRemotePr) {
-          remoteLog.event.warn("no PR for this branch");
+        if (!selectedWorktree.pr) {
+          modelLog.event.warn("no PR for this branch");
           return;
         }
         openPrUrl(
-          selectedRemotePr.url,
-          selectedRemotePr.number,
+          selectedWorktree.pr.url,
+          selectedWorktree.pr.number,
           null,
-          `[remote:${selectedRemote.hostLabel}]`,
+          selectedWorktree.slug,
         );
         return;
       }
-      if (isPlainLetter(k, "l")) {
-        rememberPrTargetChord("linear");
+      if (isPlainLetter(k, "i")) {
+        const url = specificIssueUrl(
+          selectedWorktree.slug,
+          selectedWorktree.githubIssue,
+          selectedWorktree.issueId,
+        );
+        if (!url) {
+          modelLog.event.warn(
+            "no issue URL (set a tracker id with `#`, or attach a --gh issue)",
+          );
+          return;
+        }
+        void openUrlHidingTerminal(url);
+        modelLog.event.info(
+          selectedWorktree.githubIssue
+            ? `opened gh issue #${selectedWorktree.githubIssue}`
+            : "opened issue",
+        );
+        return;
+      }
+      if (k.sequence === "I") {
+        const url = issueUrlForId(selectedWorktree.issueId);
+        if (!url) {
+          modelLog.event.warn(
+            "no primary issue URL (set a tracker id with `#`; non-GH ids also need [issue_tracker] url_template)",
+          );
+          return;
+        }
+        void openUrlHidingTerminal(url);
+        modelLog.event.info("opened issue");
         return;
       }
       if (isPlainLetter(k, "a")) {
-        if (!isRemoteSummary(selectedRemote)) {
-          toast("remote worktree is still being created", theme.warn, 1800);
-          return;
+        if (selectedWorktree.source.kind === "local") {
+          const archiveLock = lockStatus(selectedWorktree.slug);
+          if (archiveLock) {
+            toast(
+              `${selectedWorktree.slug} is ${lockLabel(archiveLock)} — can't change archive state`,
+              theme.warn,
+              2500,
+            );
+            return;
+          }
         }
-        const slug = selectedRemote.slug;
-        const key = currentTarget
-          ? worktreeTargetKey(currentTarget)
-          : remoteWorktreeLedgerKey(selectedRemote.hostKey, slug);
-        toggleArchived(key)
+        if (!selectedWorktree.archived && currentItem) {
+          advanceCursorPast([visualKey(currentItem)]);
+        }
+        const prepareRestore = selectedWorktree.archived
+          ? setWorktreeSection(selectedWorktree.target, null)
+          : Promise.resolve();
+        prepareRestore
+          .then(() => toggleArchived(selectedWorktree.key))
           .then(async ({ archived }) => {
             if (archived) await setSectionFolded(GROUP_ARCHIVED, true);
-            if (!archived) {
-              setSel(`remote:${remoteEntryKey(selectedRemote)}`);
-            }
-            remoteLog.event.info(`${archived ? "archived" : "restored from archive"} ${slug}`);
+            if (!archived && currentItem) setSel(visualKey(currentItem));
+            modelLog.event.info(
+              archived ? "archived" : "restored to Inbox",
+            );
             toast(
-              archived ? `archived ${slug}` : `restored ${slug}`,
+              archived
+                ? `archived ${selectedWorktree.slug}`
+                : `restored ${selectedWorktree.slug}`,
               theme.info,
               2000,
             );
@@ -925,6 +899,17 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           .catch((err) => reportActionError("archive", err));
         return;
       }
+      if (isPlainLetter(k, "l")) {
+        rememberPrTargetChord("linear");
+        openSectionPicker();
+        return;
+      }
+    }
+    // Remote rows use the shared navigation keys and the F10/F11/F12 session
+    // routes above. Deletion is forwarded through the remote host's normal
+    // `wt rm` command so its lock, dirty, and unpushed-work checks stay
+    // authoritative.
+    if (selectedRemote) {
       if (isPlainLetter(k, "d")) {
         if (!isRemoteSummary(selectedRemote)) {
           toast("remote worktree is still being created", theme.warn, 1800);
@@ -940,9 +925,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           : `${selectedRemote.unpushed} unpushed commit${selectedRemote.unpushed === 1 ? "" : "s"} will be lost. The remote branch will also be deleted.`;
         setModal({
           kind: "confirm",
-          pendingKey: force ? "remote-d!" : "remote-d",
-          remoteSlug: selectedRemote.slug,
-          remoteEndpoint: selectedRemote.remote,
+          pendingKey: force ? "d!" : "d",
+          target: selectedWorktree?.target,
           title: force ? "force remove remote worktree" : "remove remote worktree",
           message: `Remove ${selectedRemote.slug} from ${selectedRemote.hostLabel}?`,
           detail: force
@@ -999,43 +983,6 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
             `editor open failed: ${err instanceof Error ? err.message : String(err)}`,
           ),
         );
-      return;
-    }
-    if (isPlainLetter(k, "p")) {
-      if (!current.pr) {
-        rowLog.event.warn("no PR for this branch");
-        return;
-      }
-      openPrUrl(current.pr.url, current.pr.number, null, current.wt.slug);
-      return;
-    }
-    // `i` opens the MOST SPECIFIC issue (secondary GitHub issue when
-    // attached, else the primary tracker id); `I` always opens the
-    // primary. Identity displays, specificity acts.
-    if (isPlainLetter(k, "i")) {
-      const url = specificIssueUrl(current.wt.slug, current.githubIssue, current.issueId);
-      if (!url) {
-        rowLog.event.warn(
-          "no issue URL (set a tracker id with `#`, or attach a --gh issue)",
-        );
-        return;
-      }
-      void openUrlHidingTerminal(url);
-      rowLog.event.info(
-        current.githubIssue ? `opened gh issue #${current.githubIssue}` : "opened issue",
-      );
-      return;
-    }
-    if (k.sequence === "I") {
-      const url = issueUrlForId(resolveIssueId(current.wt.slug, current.issueId));
-      if (!url) {
-        rowLog.event.warn(
-          "no primary issue URL (set a tracker id with `#`; non-GH ids also need [issue_tracker] url_template)",
-        );
-        return;
-      }
-      void openUrlHidingTerminal(url);
-      rowLog.event.info("opened issue");
       return;
     }
     if (isPlainLetter(k, "s")) {
@@ -1097,6 +1044,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           kind: "confirm",
           pendingKey: "d!",
           slug: current.wt.slug,
+          target: selectedWorktree?.target,
           title: "force remove",
           message: `Force remove ${current.wt.slug}?`,
           detail: [lost, caveat].filter(Boolean).join(" "),
@@ -1108,6 +1056,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           kind: "confirm",
           pendingKey: "d",
           slug: current.wt.slug,
+          target: selectedWorktree?.target,
           title: "remove worktree",
           message: `Remove ${current.wt.slug}?`,
           confirmLabel: "remove",
@@ -1181,52 +1130,6 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       // Tail the failing PR's `--log-failed` CI logs into the activity
       // pane. The flow refuses cleanly when checks aren't red.
       void doTailFailedChecks(current.wt.slug);
-      return;
-    }
-    if (isPlainLetter(k, "a")) {
-      const slug = current.wt.slug;
-      // A clean/destroy archives the row itself, then tears it down in a
-      // detached child. Toggling the archive flag here fights that: an
-      // un-archive pops a being-removed worktree back into the active
-      // list (its dirty/sync/merged fields now read a vanishing dir), and
-      // other flows treat `archived` as authoritative teardown state.
-      // Refuse while the on-disk flock is held; the flag settles on its
-      // own when the remove finishes and the row disappears.
-      const archiveLock = lockStatus(slug);
-      if (archiveLock) {
-        toast(
-          `${slug} is ${lockLabel(archiveLock)} — can't change archive state`,
-          theme.warn,
-          2500,
-        );
-        return;
-      }
-      // Archiving moves the row to the bottom of the board; the cursor
-      // stays where the user was reading. Restoring is the opposite —
-      // the row comes back to the Inbox and the cursor follows it.
-      if (!current.archived) advanceCursorPast([slug]);
-      const key = currentTarget ? worktreeTargetKey(currentTarget) : slug;
-      // Archived rows deliberately render without section context. Restore
-      // them into the Inbox explicitly instead of reviving a stale manual
-      // section assignment (which may now be folded or off-screen). Do the
-      // section write first so the first active render already has its final
-      // placement rather than flashing in the old section for one frame.
-      const prepareRestore = current.archived
-        ? setSection(slug, null)
-        : Promise.resolve();
-      prepareRestore
-        .then(() => toggleArchived(key))
-        .then(async ({ archived }) => {
-          if (archived) await setSectionFolded(GROUP_ARCHIVED, true);
-          if (!archived) setSel(slug);
-          rowLog.event.info(archived ? "archived" : "restored to Inbox");
-          toast(
-            archived ? `archived ${slug}` : `restored ${slug} to Inbox`,
-            theme.info,
-            2000,
-          );
-        })
-        .catch((err) => reportActionError("archive", err));
       return;
     }
     if (isPlainLetter(k, "l")) {

@@ -13,10 +13,12 @@ import {
 } from "../../core/actions.ts";
 import { config } from "../../core/config.ts";
 import { MANAGER_SLUG } from "../../core/manager.ts";
-import { mergeWhenReadyArmed } from "../app-helpers.ts";
+import { armedFromPr } from "../badges.ts";
 import type { Modal } from "../modal-state.ts";
 import { assignActionKeys, type PickerItem } from "../panels/action-picker.tsx";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
+import type { WorktreeTarget } from "../../core/worktree-target.ts";
+import type { ActionSubjectResolver } from "../action-subject.ts";
 import { theme } from "../theme.ts";
 
 /** Quick-pick letter for the `!` picker's auto-merge toggle row. */
@@ -28,20 +30,23 @@ const OPEN_EDITOR_KEY = "z";
 
 type ActionPickerFlowsCtx = {
   rows: WorktreeRow[];
+  actionSubjectFor: ActionSubjectResolver;
   setModal: (m: Modal | null) => void;
   toast: (message: string, color?: string, ms?: number) => void;
 };
 
 export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
-  const { rows, setModal, toast } = ctx;
+  const { rows, actionSubjectFor, setModal, toast } = ctx;
 
-  function buildActionPickerItems(slug: string): PickerItem[] {
-    const row = rows.find((r) => r.wt.slug === slug);
+  function buildActionPickerItems(target: WorktreeTarget): PickerItem[] {
+    const slug = target.slug;
+    const subject = actionSubjectFor(target);
+    const pr = subject?.pr;
     const rowState = {
       slug,
-      issueId: row?.issueId,
-      pr: row?.pr,
-      deployed: row?.fields.deploy.data ?? false,
+      issueId: subject?.issueId,
+      pr,
+      deployed: subject?.deployed ?? false,
     };
     // Pinned builtins (dev server) lead, then the user's actions, then
     // the trailing builtins (review-bot re-run).
@@ -68,14 +73,13 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
       else buckets.set(g, [it]);
     }
     if (config.devServer) {
-      const dev = row?.fields.dev.data;
       const logsItem: PickerItem = {
         kind: "devLogs",
         key: DEV_LOGS_KEY,
         // A parked crash still owns useful logs. A stopped/never-started
         // server has neither a live pane nor a saved crash report.
         availability:
-          dev?.running || dev?.starting || dev?.crashed
+          subject?.devLogsAvailable
             ? { ok: true }
             : { ok: false, reason: "dev server is not running" },
       };
@@ -90,10 +94,10 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
     const autoMergeItem: PickerItem = {
       kind: "autoMerge",
       key: AUTO_MERGE_KEY,
-      armed: mergeWhenReadyArmed(row),
-      availability: !row?.pr
+      armed: !!pr && armedFromPr(pr, subject?.mq),
+      availability: !pr
         ? { ok: false, reason: "no PR" }
-        : row.pr.state !== "OPEN"
+        : pr.state !== "OPEN"
           ? { ok: false, reason: "PR is not open" }
           : { ok: true },
     };
@@ -185,10 +189,17 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
     return false;
   }
 
-  function openActionPicker(slug: string): void {
+  function openActionPicker(target: WorktreeTarget): void {
     setModal({
       kind: "actionPicker",
-      state: { mode: "list", surface: "row", slug, rowSlug: null, index: 0 },
+      state: {
+        mode: "list",
+        surface: "row",
+        slug: target.slug,
+        rowSlug: null,
+        target,
+        index: 0,
+      },
     });
   }
 

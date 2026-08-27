@@ -349,18 +349,20 @@ export function BadgeCluster({
 export function remoteBadgeClusterCells(
   pr: PullRequest | undefined,
   mq: MergeQueueEntry | undefined,
+  actionRunning = false,
 ): number {
-  if (!pr) return 0;
-  const bot = shows("review_bot") && showReviewBot(pr)
+  const action = actionRunning && shows("action");
+  if (!pr) return action ? 4 : 0;
+  const bot = pr && shows("review_bot") && showReviewBot(pr)
     ? reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE)
     : null;
-  const review = shows("review") && pr.state === "OPEN" && !pr.isDraft
+  const review = pr && shows("review") && pr.state === "OPEN" && !pr.isDraft
     ? reviewBadge(pr.review)
     : null;
   const prSlot = shows("pr");
   const checks = shows("checks") && pr.state === "OPEN" && pr.checks !== "none";
-  if (!bot && !review && !prSlot && !checks) return 0;
-  return 2 + (bot ? 2 : 0) + (review ? 2 : 0) +
+  if (!action && !bot && !review && !prSlot && !checks) return 0;
+  return 2 + (action ? 2 : 0) + (bot ? 2 : 0) + (review ? 2 : 0) +
     (prSlot ? (mq ? 4 : 2) : 0) + (checks ? 2 : 0);
 }
 
@@ -369,22 +371,25 @@ export function RemoteBadgeCluster({
   pr,
   mq,
   archived,
+  actionRunning = false,
 }: {
   pr: PullRequest | undefined;
   mq: MergeQueueEntry | undefined;
   archived: boolean;
+  actionRunning?: boolean;
 }) {
-  if (remoteBadgeClusterCells(pr, mq) === 0 || !pr) return null;
-  const bot = shows("review_bot") && showReviewBot(pr)
+  const showAction = actionRunning && shows("action");
+  if (remoteBadgeClusterCells(pr, mq, actionRunning) === 0) return null;
+  const bot = pr && shows("review_bot") && showReviewBot(pr)
     ? reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE)
     : null;
-  const review = shows("review") && pr.state === "OPEN" && !pr.isDraft
+  const review = pr && shows("review") && pr.state === "OPEN" && !pr.isDraft
     ? reviewBadge(pr.review)
     : null;
   const showPr = shows("pr");
-  const showChecks = shows("checks") && pr.state === "OPEN" && pr.checks !== "none";
-  const prBadge = prSlotBadge(pr, mq);
-  const checks = checkBadge(pr.checks);
+  const showChecks = !!pr && shows("checks") && pr.state === "OPEN" && pr.checks !== "none";
+  const prBadge = pr ? prSlotBadge(pr, mq) : null;
+  const checks = pr ? checkBadge(pr.checks) : null;
   const dim = archived ? theme.fgDim : undefined;
   const mqText = mq
     ? `${NF.mergeQueue} ${mq.position >= 10 ? "+" : String(mq.position)}`
@@ -392,11 +397,12 @@ export function RemoteBadgeCluster({
   return (
     <box flexShrink={0} flexDirection="row">
       <text>  </text>
+      {showAction ? <box width={2} flexShrink={0}><text fg={theme.ok}>{NF.comment}</text></box> : null}
       {bot ? <box width={2} flexShrink={0}><text fg={dim ?? bot.fg}>{bot.glyph}</text></box> : null}
       {review ? <box width={2} flexShrink={0}><text fg={dim ?? review.fg}>{review.glyph}</text></box> : null}
       {showPr && mq ? (
         <box width={4} flexShrink={0}><text fg={dim ?? mqStateBadge(mq.state).fg}>{mqText}</text></box>
-      ) : showPr ? (
+      ) : showPr && prBadge ? (
         <box width={2} flexShrink={0}><text fg={dim ?? prBadge.fg}>{prBadge.glyph}</text></box>
       ) : null}
       {showChecks && checks ? (

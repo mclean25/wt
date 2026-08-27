@@ -11,6 +11,10 @@ import { nextAutoName } from "../core/harness/claude/names.ts";
 import { HARNESSES, type HarnessId } from "../core/harness/index.ts";
 import type { PerfSnapshot } from "../core/perf.ts";
 import { actionSkillPrefix, buildActionVars } from "./app-helpers.ts";
+import {
+  actionSubjectVars,
+  type ActionSubjectResolver,
+} from "./action-subject.ts";
 import { workStateColor, workStateGlyph } from "./badges.ts";
 import type { Modal } from "./modal-state.ts";
 import {
@@ -40,6 +44,7 @@ import type { SelectedSection } from "./hooks/useVisualItems.ts";
 import type { useOutputFocus } from "./hooks/useOutputFocus.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
 import type { CleanCandidate } from "./clean-candidate.ts";
+import type { WorktreeTarget } from "../core/worktree-target.ts";
 
 /** Bottom-pane pickers rendered between the OutputViewer and the Footer. */
 export function PreFooterModals({
@@ -126,6 +131,7 @@ export function PostFooterModals({
   buildActionPickerItems,
   buildManagerPickerItems,
   buildSlotPickerItems,
+  actionSubjectFor,
   perfSnapshot,
   perfError,
 }: {
@@ -136,9 +142,10 @@ export function PostFooterModals({
   rows: WorktreeRow[];
   cleanCandidates: readonly CleanCandidate[];
   primaryHarness: HarnessId;
-  buildActionPickerItems: (slug: string) => PickerItem[];
+  buildActionPickerItems: (target: WorktreeTarget) => PickerItem[];
   buildManagerPickerItems: (rowSlug: string | null) => PickerItem[];
   buildSlotPickerItems: () => PickerItem[];
+  actionSubjectFor: ActionSubjectResolver;
   /** Undefined until the first sample lands (the overlay shows "sampling…"). */
   perfSnapshot: PerfSnapshot | undefined;
   /** Sampler failure, so a broken `ps` doesn't render as an idle machine. */
@@ -157,7 +164,9 @@ export function PostFooterModals({
         />
       ) : null}
       {modal?.kind === "errors" ? <ErrorOverlay inject={modal.inject} /> : null}
-      {modal?.kind === "devLogs" ? <DevLogsOverlay slug={modal.slug} /> : null}
+      {modal?.kind === "devLogs" ? (
+        <DevLogsOverlay slug={modal.slug} target={modal.target} />
+      ) : null}
       {modal?.kind === "cleanConfirm" ? (
         <CleanConfirmModal candidates={cleanCandidates} />
       ) : null}
@@ -228,7 +237,7 @@ export function PostFooterModals({
               ? buildManagerPickerItems(modal.state.rowSlug)
               : modal.state.surface === "slot"
                 ? buildSlotPickerItems()
-                : buildActionPickerItems(modal.state.slug)
+                : buildActionPickerItems(modal.state.target!)
           }
           selectedIndex={modal.state.index}
         />
@@ -245,18 +254,15 @@ export function PostFooterModals({
             // entries preview against the row captured at open time —
             // the same row launchAction will render against.
             const st = modal.state;
-            const subject =
-              st.surface === "manager"
-                ? st.rowSlug
-                : st.surface === "slot"
-                  ? null
-                  : st.slug;
-            const row = subject
-              ? rows.find((r) => r.wt.slug === subject)
+            const prefix = actionSkillPrefix(st.def, primaryHarness);
+            if (st.surface === "row" && st.target) {
+              const subject = actionSubjectFor(st.target);
+              return subject ? actionSubjectVars(subject, prefix) : {};
+            }
+            const row = st.surface === "manager" && st.rowSlug
+              ? rows.find((candidate) => candidate.wt.slug === st.rowSlug)
               : undefined;
-            return row
-              ? buildActionVars(row, actionSkillPrefix(st.def, primaryHarness))
-              : {};
+            return row ? buildActionVars(row, prefix) : {};
           })()}
         />
       ) : null}

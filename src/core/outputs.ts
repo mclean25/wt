@@ -163,7 +163,7 @@ export function actionOutput(run: ActionRun): Output {
   return {
     id: actionOutputId(run.slug, run.startedAt),
     kind: "action",
-    title: `${run.slug} · ${run.actionName}`,
+    title: `${run.worktreeRef?.slug ?? run.slug} · ${run.actionName}`,
     slug: run.slug,
     sessionName: null,
     status,

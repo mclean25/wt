@@ -98,8 +98,7 @@ export function handleConfirmKey(
 ): boolean {
   const {
     setModal,
-    doRemove,
-    doRemoteRemove,
+    doRemoveWorktree,
     doMarkReady,
     doShipPr,
     doCheckoutReview,
@@ -118,22 +117,10 @@ export function handleConfirmKey(
       // flows tolerate a slug whose row has since vanished — doRemove no-ops
       // on an unknown slug, the gh flows surface a clear error.
       const slug = modal.slug;
-      if (pending === "d" && slug) {
-        void doRemove(slug);
-      } else if (pending === "d!" && slug) {
-        void doRemove(slug, { force: true });
-      } else if (
-        pending === "remote-d" &&
-        modal.remoteSlug &&
-        modal.remoteEndpoint
-      ) {
-        void doRemoteRemove(modal.remoteEndpoint, modal.remoteSlug);
-      } else if (
-        pending === "remote-d!" &&
-        modal.remoteSlug &&
-        modal.remoteEndpoint
-      ) {
-        void doRemoteRemove(modal.remoteEndpoint, modal.remoteSlug, { force: true });
+      if (pending === "d" && modal.target) {
+        void doRemoveWorktree(modal.target);
+      } else if (pending === "d!" && modal.target) {
+        void doRemoveWorktree(modal.target, { force: true });
       } else if (pending === "e" && slug) {
         void doMarkReady(slug);
       } else if (pending === "E" && slug) {

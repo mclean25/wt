@@ -4,14 +4,15 @@ import { useDevServerLog } from "../hooks/useDevServerLog.ts";
 import { Modal } from "../modal.tsx";
 import { useOverlayScroll, WtScrollbox } from "../scrollbox.tsx";
 import { theme } from "../theme.ts";
+import type { WorktreeTarget } from "../../core/worktree-target.ts";
 
 /** Plain terminal rows for rendering; blank rows remain visible. */
 export function devLogLines(output: string): string[] {
   return output.split("\n").map(sanitizeLine);
 }
 
-export function DevLogsOverlay({ slug }: { slug: string }) {
-  const output = useDevServerLog(slug);
+export function DevLogsOverlay({ slug, target }: { slug: string; target?: WorktreeTarget }) {
+  const output = useDevServerLog(slug, target);
   const scrollRef = useOverlayScroll();
   const lines = output === null ? [] : devLogLines(output);
   return (

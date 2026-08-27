@@ -27,21 +27,31 @@ import { config } from "../../core/config.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
+import { sendWorktreeMessage } from "../../core/worktree-executor.ts";
 import { StatusKind } from "../../core/types.ts";
+import {
+  isRemoteWorktreeTarget,
+  localWorktreeTarget,
+  type WorktreeTarget,
+} from "../../core/worktree-target.ts";
 import { ensureManagerClaudeName, MANAGER_SLUG } from "../../core/manager.ts";
 import { MANAGER_SLOT, SESSION_SLOTS } from "../sessions/slots.ts";
 
 import {
   actionSkillPrefix,
-  buildActionVars,
   extractLabel,
-  launchBlockedReason,
 } from "../app-helpers.ts";
+import {
+  actionSubjectBlockedReason,
+  actionSubjectVars,
+  type ActionSubjectResolver,
+} from "../action-subject.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
 import { theme } from "../theme.ts";
 
 export type ActionDispatchOpts = {
   rows: readonly WorktreeRow[];
+  actionSubjectFor: ActionSubjectResolver;
   primaryHarness: HarnessId;
   toast: (message: string, color?: string, ms?: number) => void;
   /** Clear a worktree's output focus so auto-rules surface the run. */
@@ -50,6 +60,7 @@ export type ActionDispatchOpts = {
   refreshOrigin: () => Promise<void>;
   refreshGithub: () => Promise<void>;
   refreshStack: () => Promise<void>;
+  refreshRemoteWorktrees: () => Promise<unknown>;
 };
 
 export type LaunchActionOpts = {
@@ -80,6 +91,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     extras: string,
     arg?: string,
     launchOpts?: LaunchActionOpts,
+    target?: WorktreeTarget,
   ) => Promise<LaunchOutcome>;
   launchSlotCommand: (
     slotSlug: string,
@@ -105,12 +117,14 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     refreshOrigin: opts.refreshOrigin,
     refreshGithub: opts.refreshGithub,
     refreshStack: opts.refreshStack,
+    refreshRemoteWorktrees: opts.refreshRemoteWorktrees,
   });
   helpersRef.current = {
     invalidateWorktree: opts.invalidateWorktree,
     refreshOrigin: opts.refreshOrigin,
     refreshGithub: opts.refreshGithub,
     refreshStack: opts.refreshStack,
+    refreshRemoteWorktrees: opts.refreshRemoteWorktrees,
   };
   const handledRef = useRef<Set<string>>(new Set());
   /**
@@ -145,18 +159,23 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           refreshOrigin: ro,
           refreshGithub: rg,
           refreshStack: rs,
+          refreshRemoteWorktrees: rr,
         } = helpersRef.current;
+        const remote = run.worktreeRef?.kind === "remote";
         for (const tag of run.affects) {
           switch (tag) {
             case "git":
-              void ro();
-              void inv(run.slug);
+              if (remote) void rr();
+              else {
+                void ro();
+                void inv(run.slug);
+              }
               // History-rewriting actions (rebase, modify, …) rewrite
               // commits under a fixed explicit parent, so the per-base
               // diff / sync queries need a re-run even though the parent
               // relationship is unchanged. `refreshStack` invalidates
               // those (see its doc in state/hooks.ts).
-              void rs();
+              if (!remote) void rs();
               break;
             case "github":
               void rg();
@@ -165,7 +184,8 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
               // Dev-server start/stop — refresh the slug's per-worktree
               // fields so the dev row/bolt snap without waiting out the
               // staleTime. Slug-scoped; no cross-worktree state moved.
-              void inv(run.slug);
+              if (remote) void rr();
+              else void inv(run.slug);
               break;
             default: {
               // Exhaustiveness check — a new EffectTag without a case
@@ -214,8 +234,9 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     extras: string,
     arg?: string,
     launchOpts: LaunchActionOpts = {},
+    target?: WorktreeTarget,
   ): Promise<LaunchOutcome> {
-    const { rows, primaryHarness, toast, setFocus } = opts;
+    const { rows, actionSubjectFor, primaryHarness, toast, setFocus } = opts;
     // Automation launches (marked by `autoFireKeys`) suppress the
     // keystroke-style acks below: the engine already toasts its own
     // "auto <rule>: … — running <run>" dispatch line and narrates
@@ -226,11 +247,17 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     const ack: typeof toast = (...args) => {
       if (manual) toast(...args);
     };
-    const row = rows.find((r) => r.wt.slug === slug);
-    if (!row) {
+    const localRow = rows.find((r) => r.wt.slug === slug);
+    const subjectTarget = target ?? (localRow ? localWorktreeTarget(localRow.wt) : undefined);
+    const subject = subjectTarget ? actionSubjectFor(subjectTarget) : undefined;
+    if (!subject) {
       ack("worktree gone", theme.warn, 1500);
       return { launched: false, reason: "worktree gone" };
     }
+    const remoteTarget = isRemoteWorktreeTarget(subject.target)
+      ? subject.target
+      : undefined;
+    const runtimeKey = subject.actionKey;
     if (!def && !extras.trim()) {
       ack("prompt is empty", theme.warn, 1500);
       return { launched: false, reason: "prompt is empty" };
@@ -250,12 +277,12 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       // alone leaves a window where an action would launch into a directory
       // about to be `git worktree remove --force`d. `launchBlockedReason`
       // checks both — the same gate every session launch uses.
-      const blocked = launchBlockedReason(row);
+      const blocked = actionSubjectBlockedReason(subject);
       if (blocked) {
         ack(`${slug} is ${blocked}`, theme.warn, 2000);
         return { launched: false, reason: `${slug} is ${blocked}` };
       }
-      if (row.status.kind === StatusKind.Busy) {
+      if (subject.status.kind === StatusKind.Busy) {
         ack(`${slug} is busy`, theme.warn, 2000);
         return { launched: false, reason: `${slug} is busy` };
       }
@@ -263,16 +290,17 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     if (def) {
       const avail = evaluateActionRequirements(def.requires, {
         slug,
-        issueId: row.issueId,
-        pr: row.pr,
-        deployed: row.fields.deploy.data ?? false,
+        issueId: subject.issueId,
+        pr: subject.pr,
+        deployed: subject.deployed,
       });
       if (!avail.ok) {
         ack(`${def.name}: ${avail.reason}`, theme.warn, 2500);
         return { launched: false, reason: avail.reason };
       }
     }
-    const baseVars = buildActionVars(row, actionSkillPrefix(def, primaryHarness));
+    const prefix = actionSkillPrefix(def, primaryHarness);
+    const baseVars = actionSubjectVars(subject, prefix);
     // `{{arg}}` substitution lives alongside the row-derived vars. The
     // value, when present, came from the action-arg picker; gets folded
     // in for both shell and claude actions (including session-target).
@@ -284,7 +312,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     // value (LRU dedup).
     if (def && arg && def.id !== "__custom__") {
       recordHistoryRun(def.id, arg, null);
-      pendingArgs.current.set(`${slug}/${def.id}`, arg);
+      pendingArgs.current.set(`${runtimeKey}/${def.id}`, arg);
     }
     // Session- and manager-target prompt actions bypass the headless
     // `-p` runner and deliver the prompt to a live harness session
@@ -301,32 +329,64 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       const body = trimmedExtras
         ? `${renderedPrompt}\n\n${trimmedExtras}`
         : renderedPrompt;
-      const target =
-        def.target === "manager"
-          ? {
-              slug: MANAGER_SLOT.slug,
-              cwd: MANAGER_SLOT.path,
-              managedName: MANAGER_SLOT.claudeName,
-              label: "manager",
-              text: `[re: ${slug}] ${body}`,
+      const sessionLog = createLogger(
+        remoteTarget ? `[remote:${remoteTarget.location.endpoint.label}]` : slug,
+      );
+      if (def.target === "session") {
+        const label = `${getHarness(primaryHarness).label} session`;
+        const location = remoteTarget
+          ? ` on ${remoteTarget.location.endpoint.label}`
+          : "";
+        sessionLog.event.info(
+          `${def.name} → ${label}${location}`,
+        );
+        ack(`sending ${def.name} to ${label}${location}…`, theme.info, 2000);
+        void sendWorktreeMessage(
+          subject.target,
+          primaryHarness,
+          body,
+          (line) => sessionLog.event.info(line),
+        ).then(
+          (res) => {
+            if (res.ok && res.delivered === false) {
+              sessionLog.attention.warn(
+                `${label} never received ${def.name} — attach and check its pane`,
+              );
+            } else if (res.ok) {
+              sessionLog.event.ok(
+                `${res.coldStarted ? `started ${label} and sent` : `sent`} ${def.name}${
+                  res.delivered === null ? " (arrival can't be confirmed)" : ""
+                }`,
+                { toast: true },
+              );
+            } else {
+              sessionLog.event.err(`send failed: ${res.reason}`, { toast: true });
             }
-          : {
-              slug,
-              cwd: row.wt.path,
-              managedName: null,
-              label: `${getHarness(primaryHarness).label} session`,
-              text: body,
-            };
-      if (def.target === "manager") ensureManagerClaudeName();
-      const sessionLog = createLogger(slug);
-      sessionLog.event.info(`${def.name} → ${target.label}`);
-      ack(`sending ${def.name} to ${target.label}…`, theme.info, 2000);
+          },
+          (err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            sessionLog.event.err(`send failed: ${msg}`, { toast: true });
+          },
+        );
+        return { launched: true };
+      }
+
+      const deliveryTarget = {
+        slug: MANAGER_SLOT.slug,
+        cwd: MANAGER_SLOT.path,
+        managedName: MANAGER_SLOT.claudeName,
+        label: "manager",
+        text: `[re: ${slug}] ${body}`,
+      };
+      ensureManagerClaudeName();
+      sessionLog.event.info(`${def.name} → ${deliveryTarget.label}`);
+      ack(`sending ${def.name} to ${deliveryTarget.label}…`, theme.info, 2000);
       void sendSessionMessage({
-        slug: target.slug,
-        cwd: target.cwd,
+        slug: deliveryTarget.slug,
+        cwd: deliveryTarget.cwd,
         harnessId: primaryHarness,
-        managedName: target.managedName,
-        text: target.text,
+        managedName: deliveryTarget.managedName,
+        text: deliveryTarget.text,
       }).then(
         (res) => {
           if (res.ok && res.delivered === false) {
@@ -335,7 +395,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
             // can't be verified needs attention because an automation
             // has no other witness.
             sessionLog.attention.warn(
-              `${target.label} never received ${def.name} — attach and check its pane`,
+              `${deliveryTarget.label} never received ${def.name} — attach and check its pane`,
             );
           } else if (res.ok) {
             // Toast: the "sending…" ack above has long expired by the
@@ -348,8 +408,8 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
             // attention feed: it's the expected outcome for a command,
             // and interrupting a scan for it every time would be noise.
             sessionLog.event.ok(
-              `${res.coldStarted ? `started ${target.label} and sent` : `sent`} ${def.name}${
-                res.coldStarted ? "" : ` to ${target.label}`
+              `${res.coldStarted ? `started ${deliveryTarget.label} and sent` : `sent`} ${def.name}${
+                res.coldStarted ? "" : ` to ${deliveryTarget.label}`
               }${res.delivered === null ? " (a command's arrival can't be confirmed)" : ""}`,
               { toast: true },
             );
@@ -372,18 +432,18 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       return { launched: true };
     }
     const result = def
-      ? await actionRegistry.start(
+      ? await actionRegistry.startForWorktree(
           def,
-          slug,
-          row.wt.path,
+          subject.target,
+          config.paths.mainClone,
           extras,
           vars,
           primaryHarness,
           { autoFireKeys: launchOpts.autoFireKeys },
         )
-      : await actionRegistry.startCustom(
-          slug,
-          row.wt.path,
+      : await actionRegistry.startCustomForWorktree(
+          subject.target,
+          config.paths.mainClone,
           extras,
           vars,
           primaryHarness,
@@ -394,7 +454,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     }
     // Clear this worktree's focus so the auto-rules surface the
     // just-launched action.
-    setFocus(slug, { focused: null });
+    setFocus(runtimeKey, { focused: null });
     ack(`launched ${result.run.actionName}`, theme.info, 2000);
     return { launched: true };
   }

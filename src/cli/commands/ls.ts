@@ -28,6 +28,7 @@ import {
   renderTable,
 } from "../render.ts";
 import { existsSync } from "node:fs";
+import { isOurStageDeployed } from "../../core/stage-safety.ts";
 
 const USAGE = `usage: wt ls [options]
 
@@ -74,6 +75,7 @@ export async function run(argv: string[]): Promise<number> {
           branch: w.branch,
           path: w.path,
           stage: w.stage,
+          deployed: isOurStageDeployed(w),
           // Positive discriminator, matching `wt status --all --json`.
           // Live rows used to carry nothing, so the only way to drop the
           // appended removed-history rows was a negative test — and a

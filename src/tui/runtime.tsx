@@ -156,6 +156,9 @@ async function reapStartup(): Promise<void> {
     // namespace — whitelist them here so the reaper doesn't kill them.
     const protectedSlugs = new Set(live);
     for (const slug of SLOT_SLUGS) protectedSlugs.add(slug);
+    for (const slug of actionRegistry.persistedRemoteActionKeys()) {
+      protectedSlugs.add(slug);
+    }
     await reapOrphanedSessions(protectedSlugs);
     // One-time migration: the manager now lives as a NAMED claude
     // session (`manager~manager`) with its own conversation UUID —

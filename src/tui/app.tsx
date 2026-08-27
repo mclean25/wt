@@ -9,6 +9,7 @@ import { markKeypress } from "../core/perf.ts";
 import { perfSnapshotQuery, qk, remoteWorktreesQuery, useWtActions } from "../state/index.ts";
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
 import { remoteWorktreeLedgerKey } from "../core/worktree-ref.ts";
+import { worktreeActionKey } from "../core/worktree-target.ts";
 
 import { Details } from "./panels/details.tsx";
 import { Footer, type FooterMode } from "./panels/footer.tsx";
@@ -44,6 +45,7 @@ import { useWorktreeRows } from "./hooks/useWorktreeRows.ts";
 import { useStackSections } from "./hooks/useStackSections.ts";
 import { useVisualItems, visualKey } from "./hooks/useVisualItems.ts";
 import { useAutomations } from "./hooks/useAutomations.ts";
+import { findWorktreeModel } from "./worktree-model.ts";
 import { useSectionDetail } from "./hooks/useSectionDetail.ts";
 import { useSessionTailReconcile } from "./hooks/useSessionTailReconcile.ts";
 import { useOutputFocus } from "./hooks/useOutputFocus.ts";
@@ -71,6 +73,7 @@ import { makePerfFlows } from "./flows/perf-report.ts";
 import { makeReviewerFlows } from "./flows/reviewers.ts";
 import { makeSectionFlows } from "./flows/sections.ts";
 import { makeSessionFlows } from "./flows/sessions.ts";
+import { makeWorktreeMutations } from "./worktree-mutations.ts";
 import { useErrorOverlayAutoPop } from "./hooks/useErrorOverlay.ts";
 import { usePrTargetChord } from "./hooks/usePrTargetChord.ts";
 import { useRemovedView } from "./hooks/useRemovedView.ts";
@@ -78,7 +81,7 @@ import { useSessionsPickerData } from "./hooks/useSessionsPickerData.ts";
 import { writeClipboard } from "../core/macos.ts";
 import { theme } from "./theme.ts";
 import { showToast } from "./toast.ts";
-import { isRemoteSummary, type RemoteCreation } from "./remote-creation.ts";
+import type { RemoteCreation } from "./remote-creation.ts";
 import {
   isRemoteCleanCandidate,
   type CleanCandidate,
@@ -319,6 +322,8 @@ export function App({ onExit }: Props) {
     selectedRemote,
     selectedSection,
     currentTarget,
+    selectedWorktree,
+    worktrees,
   } = useVisualItems({
     rows,
     foldedSections,
@@ -326,6 +331,7 @@ export function App({ onExit }: Props) {
     remoteCreation,
     remoteWorktrees: remoteRows,
     archivedKeys,
+    githubData,
   });
 
   // A row can also leave without any wt-side action behind it — an
@@ -378,12 +384,16 @@ export function App({ onExit }: Props) {
 
   // `g p` / `l p` PR-target chord — extracted to
   // `hooks/usePrTargetChord.ts`.
-  const selectedRemotePr =
-    selectedRemote && isRemoteSummary(selectedRemote)
-      ? githubData?.prs[selectedRemote.branch]
-      : undefined;
+  const actionSubjectFor = useCallback(
+    (target: Parameters<typeof findWorktreeModel>[0]) =>
+      findWorktreeModel(target, worktrees),
+    [worktrees],
+  );
   const { rememberPrTargetChord, openPrUrl, consumePrTargetChord } =
-    usePrTargetChord({ selectedPr, current, selectedRemotePr });
+    usePrTargetChord({
+      selectedPr,
+      selectedWorktree,
+    });
 
   const listWidth = Math.max(32, Math.min(52, Math.floor(width * 0.44)));
   // Two layouts, differing only in where the activity pane sits
@@ -407,13 +417,16 @@ export function App({ onExit }: Props) {
   // in place of events) and the `!`-key dispatch (open kill-confirm
   // when running, open picker otherwise).
   const currentSlug = current?.wt.slug;
+  const currentActionKey = currentTarget
+    ? worktreeActionKey(currentTarget)
+    : undefined;
   // `V`'s override of the details pane's post-merge-steps block.
   // `null` follows the row's own default (open once the check is due),
   // and it resets below on every cursor move — a display choice made
   // about one row is not a claim about the next one.
   const [verifyExpanded, setVerifyExpanded] = useState<boolean | null>(null);
   useEffect(() => setVerifyExpanded(null), [currentSlug]);
-  const currentRun = useAction(currentSlug);
+  const currentRun = useAction(currentActionKey);
   // Per-current-row harness session discovery: combines per-harness
   // discoverSessions queries with the live tmux name set. The hook
   // fans out three queries unconditionally (so the call is stable
@@ -424,7 +437,7 @@ export function App({ onExit }: Props) {
     current?.wt.path ?? "",
     primaryHarness,
   );
-  const showActionViewer = useActionVisible(currentSlug);
+  const showActionViewer = useActionVisible(currentActionKey);
   // Per-slug list of live claude session names (`null` = primary).
   // Drives the tail-registry reconcile, the sessions picker, and the
   // auto-output focus rule.
@@ -470,7 +483,7 @@ export function App({ onExit }: Props) {
     setFocus,
   } = useOutputFocus({
     rows,
-    currentSlug,
+    currentSlug: currentActionKey,
     currentRun,
     showActionViewer,
   });
@@ -481,6 +494,7 @@ export function App({ onExit }: Props) {
   // returns `launchAction`.
   const { launchAction, launchSlotCommand } = useActionDispatch({
     rows,
+    actionSubjectFor,
     primaryHarness,
     toast,
     setFocus,
@@ -488,6 +502,7 @@ export function App({ onExit }: Props) {
     refreshOrigin,
     refreshGithub,
     refreshStack,
+    refreshRemoteWorktrees: () => remoteWorktreeList.refetch(),
   });
 
   // Keystroke-feedback toasts (see AGENTS.md's toast contract): a thin
@@ -513,6 +528,11 @@ export function App({ onExit }: Props) {
     toast(`${label} failed: ${msg}`, theme.err, 3000);
   }
 
+  const { setSection: setWorktreeSection } = makeWorktreeMutations({
+    setLocalSection: setSection,
+    refreshRemote: () => remoteWorktreeList.refetch(),
+  });
+
   // Section-management flows (Shift+J/K moves, the section picker,
   // rename) — extracted to `flows/sections.ts`. Rebuilt per render so
   // the closures see fresh rows / selection / wtstate.
@@ -520,6 +540,8 @@ export function App({ onExit }: Props) {
     makeSectionFlows({
       rows,
       current,
+      worktrees,
+      currentWorktree: selectedWorktree,
       selectedSection,
       wtState: wtStateForStacks.data,
       lastMoveTarget,
@@ -530,7 +552,7 @@ export function App({ onExit }: Props) {
       setPendingRename,
       toast,
       reportActionError,
-      setSection,
+      setWorktreeSection,
       placeSlug,
       swapOrder,
       moveGroupPast,
@@ -572,8 +594,7 @@ export function App({ onExit }: Props) {
   // Destroy / clean / restack flows — extracted to `flows/destroy.ts`.
   // Rebuilt per render so the closures see fresh rows / selection.
   const {
-    doRemove,
-    doRemoteRemove,
+    doRemoveWorktree,
     doClean,
     doCleanSlugs,
     doReplayStack,
@@ -624,7 +645,7 @@ export function App({ onExit }: Props) {
     doEnterSlotSession,
     doSpawnNamedClaudeSession,
     doKillClaudeSession,
-    doEnterRemoteSession,
+    doEnterWorktreeSession,
   } = makeSessionFlows({
     rows,
     renderer,
@@ -634,7 +655,6 @@ export function App({ onExit }: Props) {
     refreshHarnessSessions,
     refreshClaudeSummaries,
     optimisticRemoveClaude,
-    selectedRemote,
     remoteUnavailable,
     reportActionError,
   });
@@ -716,7 +736,7 @@ export function App({ onExit }: Props) {
     openActionPicker,
     openManagerPalette,
     openSlotPalette,
-  } = makeActionPickerFlows({ rows, setModal, toast });
+  } = makeActionPickerFlows({ rows, actionSubjectFor, setModal, toast });
 
   // Worktree-creation flows (`n`/`N`, review checkout, removed-history
   // restore) — extracted to `flows/new-worktree.ts`.
@@ -787,9 +807,15 @@ export function App({ onExit }: Props) {
           beginStatusNote,
           doYank,
           doClean,
-          doRemove,
-          doRemoteRemove,
-          doAutoMerge,
+          doRemoveWorktree,
+          doAutoMerge: async (_slug, mode, target) => {
+            const subject = target ? actionSubjectFor(target) : undefined;
+            if (!subject) {
+              toast("worktree gone", theme.warn, 2000);
+              return;
+            }
+            await doAutoMerge(subject, mode);
+          },
           doMarkReady,
           doShipPr,
           doCheckoutReview,
@@ -800,7 +826,6 @@ export function App({ onExit }: Props) {
           consumePrTargetChord,
           setLastMoveTarget,
           advanceCursorPast,
-          setSection,
           toast,
           reportActionError,
           visibleOutputs,
@@ -887,7 +912,7 @@ export function App({ onExit }: Props) {
       currentItem,
       selectedPr,
       selectedRemote,
-      selectedRemotePr,
+      selectedWorktree,
       currentTarget,
       visualItems,
       cursorIndex,
@@ -907,8 +932,7 @@ export function App({ onExit }: Props) {
       primaryHarness,
       activeShellSessions,
       activeDiffSessions,
-      renderer,
-      doEnterRemoteSession,
+      doEnterWorktreeSession,
       doEnterHarnessSession,
       handleGlobalKey: globalKey,
       doShiftMove,
@@ -925,11 +949,10 @@ export function App({ onExit }: Props) {
       toggleAutomationsPaused,
       toggleStackAutomationsPaused,
       toggleArchived,
-      setSection,
+      setWorktreeSection,
       toggleSectionFold,
       setSectionFolded,
       refreshAiSummary,
-      refreshTmuxSessions,
       toast,
       reportActionError,
     };
@@ -1007,9 +1030,13 @@ export function App({ onExit }: Props) {
           minHeight={0}
         >
           <Details
-            row={removedView ? undefined : current}
+            worktree={removedView ? undefined : selectedWorktree}
             reviewRequest={removedView ? undefined : selectedPr}
-            remote={removedView ? undefined : selectedRemote}
+            remote={
+              removedView || selectedWorktree
+                ? undefined
+                : selectedRemote
+            }
             remoteUnavailable={remoteUnavailable}
             remoteError={remoteError}
             section={removedView ? undefined : sectionDetail}
@@ -1050,6 +1077,7 @@ export function App({ onExit }: Props) {
         buildActionPickerItems={buildActionPickerItems}
         buildManagerPickerItems={buildManagerPickerItems}
         buildSlotPickerItems={buildSlotPickerItems}
+        actionSubjectFor={actionSubjectFor}
         perfSnapshot={perf.data}
         perfError={perf.error}
       />

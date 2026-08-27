@@ -2,7 +2,7 @@ import type { ActionDef } from "../core/actions.ts";
 import type { HistoryEntry } from "../core/actions.ts";
 import type { WorkState } from "../core/work-status.ts";
 import type { RemovedWorktree } from "../core/wtstate.ts";
-import type { RemoteConfig } from "../core/config.ts";
+import type { WorktreeTarget } from "../core/worktree-target.ts";
 import type { ActionPickerState } from "./panels/action-picker.tsx";
 import type { ErrorInjectState } from "./panels/error-overlay.tsx";
 import type { PerfInjectState } from "./panels/perf.tsx";
@@ -75,9 +75,8 @@ export type Modal =
        */
       slug?: string;
       reviewBranch?: string;
-      /** Remote target for the `remote-d` / `remote-d!` pending keys. */
-      remoteSlug?: string;
-      remoteEndpoint?: RemoteConfig;
+      /** Location-aware subject for worktree mutations. */
+      target?: WorktreeTarget;
       /** Payload for the `restore` pendingKey (removed-worktrees view). */
       restoreEntry?: RemovedWorktree;
     }
@@ -115,15 +114,17 @@ export type Modal =
       kind: "sectionPicker";
       title: string;
       slug: string;
+      target: WorktreeTarget;
       items: SectionPickerItem[];
       index: number;
       newName: TextEdit | null;
     }
   | { kind: "actionPicker"; state: ActionPickerState }
-  | { kind: "devLogs"; slug: string }
+  | { kind: "devLogs"; slug: string; target?: WorktreeTarget }
   | {
       kind: "argPicker";
       slug: string;
+      target?: WorktreeTarget;
       def: ActionDef;
       history: readonly HistoryEntry[];
       index: number;

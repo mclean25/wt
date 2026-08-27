@@ -4,6 +4,7 @@ import {
   isRemoteWorktreeTarget,
   localWorktreeTarget,
   remoteWorktreeTarget,
+  worktreeActionKey,
   worktreeTargetKey,
 } from "./worktree-target.ts";
 
@@ -44,5 +45,8 @@ describe("worktree targets", () => {
     });
 
     expect(worktreeTargetKey(a)).not.toBe(worktreeTargetKey(b));
+    expect(worktreeActionKey(a)).not.toBe(worktreeActionKey(b));
+    expect(worktreeActionKey(a)).not.toBe(a.slug);
+    expect(worktreeActionKey(localWorktreeTarget(row))).toBe(row.slug);
   });
 });

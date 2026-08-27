@@ -10,6 +10,11 @@ import { existsSync } from "node:fs";
 import { actionRegistry } from "../../core/actions.ts";
 import type { RemoteConfig } from "../../core/config.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
+import {
+  isRemoteWorktreeTarget,
+  remoteWorktreeActionKey,
+  type WorktreeTarget,
+} from "../../core/worktree-target.ts";
 import type { PullRequest } from "../../core/types.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
@@ -151,6 +156,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     ];
     log.event.info(`removing ${slug}${force ? " (force)" : ""}`);
     try {
+      void actionRegistry.kill(remoteWorktreeActionKey(remote.host, slug));
       await optimisticRemoveRemoteWorktree(remote, slug, async () => {
         const code = await runRemoteWt(remote, args, {
           onLine: (line) => log.event.dim(line),
@@ -261,6 +267,17 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // vanishing directory buys errors, not freshness. The busy glyph
     // comes from the lock watcher either way.
     setTimeout(() => void refreshAfterRemoval(), 600);
+  }
+
+  /** One removal entrypoint; location is resolved only at execution. */
+  async function doRemoveWorktree(
+    target: WorktreeTarget,
+    opts: { force?: boolean } = {},
+  ): Promise<void> {
+    if (isRemoteWorktreeTarget(target)) {
+      return doRemoteRemove(target.location.endpoint, target.slug, opts);
+    }
+    return doRemove(target.slug, opts);
   }
 
   async function doClean(): Promise<void> {
@@ -616,6 +633,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
   return {
     doRemove,
     doRemoteRemove,
+    doRemoveWorktree,
     doClean,
     doCleanSlugs,
     doReplayStack,

@@ -10,6 +10,62 @@ export type RemoteRunOptions = {
 };
 
 /**
+ * Non-interactive SSH argv for one encoded remote wt invocation.
+ * Exported for long-running callers (notably the action registry), which
+ * need to supervise the SSH process themselves instead of awaiting the
+ * captured-output `runRemoteWt` wrapper.
+ */
+export function remoteWtSshArgv(
+  remote: RemoteConfig,
+  argv: readonly string[],
+): string[] {
+  return [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=5",
+    "-o",
+    "ServerAliveInterval=5",
+    "-o",
+    "ServerAliveCountMax=3",
+    remote.host,
+    remoteWtCommand(remote, argv),
+  ];
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Run an ordinary process in a remote checkout without depending on the
+ * remote host's wt version. The account login shell only sees a fixed
+ * `/bin/sh -c` wrapper; cwd and argv are quoted for that wrapper.
+ */
+export function remoteProcessSshArgv(
+  remote: RemoteConfig,
+  cwd: string,
+  argv: readonly string[],
+): string[] {
+  if (argv.length === 0) throw new Error("remote process argv is empty");
+  const script = `cd ${shellQuote(cwd)} && exec ${argv.map(shellQuote).join(" ")}`;
+  return [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=5",
+    "-o",
+    "ServerAliveInterval=5",
+    "-o",
+    "ServerAliveCountMax=3",
+    remote.host,
+    `exec /bin/sh -c ${shellQuote(script)}`,
+  ];
+}
+
+/**
  * Argv for an interactive (PTY-allocating) remote wt invocation — the
  * full-screen handoff (`runRemoteWt` interactive). Bound the TCP
  * connect + detect a mid-session drop:
@@ -52,19 +108,7 @@ export async function runRemoteWt(
   }
 
   return runStreaming(
-    [
-      "ssh",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=5",
-      "-o",
-      "ServerAliveInterval=5",
-      "-o",
-      "ServerAliveCountMax=3",
-      remote.host,
-      remoteWtCommand(remote, argv),
-    ],
+    remoteWtSshArgv(remote, argv),
     { cwd: process.cwd(), onLine: opts.onLine },
   );
 }

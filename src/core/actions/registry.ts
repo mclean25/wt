@@ -66,17 +66,30 @@ import {
 import {
   DEFAULT_CLAUDE_AFFECTS,
   DEFAULT_REQUIRES,
+  type RemoteConfig,
   type ActionDef,
 } from "../config.ts";
 import type { HarnessId } from "../harness/index.ts";
 import { sanitizeLine } from "../proc.ts";
+import type { WorktreeRef } from "../worktree-ref.ts";
+import {
+  isRemoteWorktreeTarget,
+  worktreeActionKey,
+  type WorktreeTarget,
+} from "../worktree-target.ts";
 import {
   killActionSession as killActionTmuxSession,
   listSessions,
   startActionSession,
 } from "../tmux.ts";
 import { CUSTOM_ACTION_ID, MAX_RETAINED_RUNS, RECENT_WINDOW_MS } from "./builtins.ts";
-import { actionsDir, formatRunId, headlessPromptRunner, makeFreshHandles } from "./launch.ts";
+import {
+  actionsDir,
+  formatRunId,
+  headlessPromptRunner,
+  makeFreshHandles,
+  prepareRemoteAction,
+} from "./launch.ts";
 import { applyEmit, capLines } from "./lines.ts";
 import {
   log,
@@ -97,6 +110,19 @@ import type {
   LiveHandles,
   Listener,
 } from "./types.ts";
+
+type PreparedExecution = {
+  argv: string[];
+  cwd: string;
+  kind: ActionRunKind;
+  prompt: string;
+};
+
+type StartOpts = {
+  autoFireKeys?: readonly string[];
+  execution?: PreparedExecution;
+  worktreeRef?: WorktreeRef;
+};
 
 class ActionRegistry {
   private runs: ReadonlyMap<string, ActionRun> = new Map();
@@ -133,7 +159,7 @@ class ActionRegistry {
     extras: string,
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
-    opts: { autoFireKeys?: readonly string[] } = {},
+    opts: StartOpts = {},
   ): Promise<ActionStartResult> {
     const existing = this.runs.get(slug);
     if (existing?.status === "running" || this.starting.has(slug)) {
@@ -150,6 +176,96 @@ class ActionRegistry {
     }
   }
 
+  /** Location-neutral entrypoint used by the TUI action dispatcher. */
+  startForWorktree(
+    def: ActionDef,
+    target: WorktreeTarget,
+    supervisorCwd: string,
+    extras: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+    opts: { autoFireKeys?: readonly string[] } = {},
+  ): Promise<ActionStartResult> {
+    if (isRemoteWorktreeTarget(target)) {
+      return this.startRemote(
+        def,
+        worktreeActionKey(target),
+        supervisorCwd,
+        target.path,
+        target.location.endpoint,
+        target.ref,
+        extras,
+        vars,
+        harnessId,
+        opts,
+      );
+    }
+    return this.start(
+      def,
+      target.slug,
+      target.path,
+      extras,
+      vars,
+      harnessId,
+      opts,
+    );
+  }
+
+  /**
+   * Start an action whose process lives in a remote checkout while this
+   * registry remains the supervisor. The local tmux wrapper captures the SSH
+   * stream, so output, cancellation, recent-run visibility, and restart
+   * recovery are identical to a local action.
+   */
+  async startRemote(
+    def: ActionDef,
+    actionKey: string,
+    supervisorCwd: string,
+    remoteCwd: string,
+    remote: RemoteConfig,
+    worktreeRef: Extract<WorktreeRef, { kind: "remote" }>,
+    extras: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+    opts: { autoFireKeys?: readonly string[] } = {},
+  ): Promise<ActionStartResult> {
+    const existing = this.runs.get(actionKey);
+    if (existing?.status === "running" || this.starting.has(actionKey)) {
+      return { ok: false, reason: "an action is already running for this worktree" };
+    }
+
+    const remoteAction = prepareRemoteAction(
+      def,
+      remote,
+      remoteCwd,
+      worktreeRef.slug,
+      extras,
+      vars,
+      harnessId,
+    );
+    const execution: PreparedExecution = {
+      argv: remoteAction.argv,
+      cwd: supervisorCwd,
+      kind: remoteAction.kind,
+      prompt: remoteAction.prompt,
+    };
+
+    this.starting.add(actionKey);
+    try {
+      return await this.startInner(
+        def,
+        actionKey,
+        supervisorCwd,
+        extras,
+        vars,
+        harnessId,
+        { execution, worktreeRef, autoFireKeys: opts.autoFireKeys },
+      );
+    } finally {
+      this.starting.delete(actionKey);
+    }
+  }
+
   private async startInner(
     def: ActionDef,
     slug: string,
@@ -157,7 +273,7 @@ class ActionRegistry {
     extras: string,
     vars: ActionVars,
     harnessId: HarnessId,
-    opts: { autoFireKeys?: readonly string[] },
+    opts: StartOpts,
   ): Promise<ActionStartResult> {
     // `kill()` synchronously closes the prior run's tail + done
     // watcher and tmux-kills the session, so by the time we reach
@@ -197,20 +313,23 @@ class ActionRegistry {
       def.kind === "claude"
         ? headlessPromptRunner(harnessId, fullPrompt, cwd)
         : null;
-    const argv =
+    const argv = opts.execution?.argv ?? (
       def.kind === "shell"
         ? [userShell, "-lc", applyVars(def.shell, vars)]
-        : promptRunner!.argv;
-    const runKind: ActionRunKind =
-      def.kind === "shell" ? "shell" : promptRunner!.kind;
-    const promptForRun =
+        : promptRunner!.argv
+    );
+    const runKind: ActionRunKind = opts.execution?.kind ??
+      (def.kind === "shell" ? "shell" : promptRunner!.kind);
+    const promptForRun = opts.execution?.prompt ?? (
       def.kind === "shell"
         ? applyVars(def.shell, vars)
-        : fullPrompt;
+        : fullPrompt
+    );
 
     const meta: ActionMeta = {
       version: 1,
       slug,
+      ...(opts.worktreeRef ? { worktreeRef: opts.worktreeRef } : {}),
       runId,
       kind: runKind,
       actionId: def.id,
@@ -231,7 +350,12 @@ class ActionRegistry {
       return { ok: false, reason: `write meta: ${msg}` };
     }
 
-    const spawnResult = await startActionSession({ slug, cwd, runDir, argv });
+    const spawnResult = await startActionSession({
+      slug,
+      cwd: opts.execution?.cwd ?? cwd,
+      runDir,
+      argv,
+    });
     if (!spawnResult.ok) {
       // Persist a failed sentinel so a later boot doesn't see a
       // "running" run with no tmux session.
@@ -251,6 +375,7 @@ class ActionRegistry {
     };
     const run: ActionRun = {
       slug,
+      ...(opts.worktreeRef ? { worktreeRef: opts.worktreeRef } : {}),
       kind: runKind,
       actionId: def.id,
       actionName: def.name,
@@ -296,6 +421,67 @@ class ActionRegistry {
       },
       slug,
       cwd,
+      prompt,
+      vars,
+      harnessId,
+    );
+  }
+
+  startCustomRemote(
+    actionKey: string,
+    supervisorCwd: string,
+    remoteCwd: string,
+    remote: RemoteConfig,
+    worktreeRef: Extract<WorktreeRef, { kind: "remote" }>,
+    prompt: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+  ): Promise<ActionStartResult> {
+    return this.startRemote(
+      {
+        kind: "claude",
+        id: CUSTOM_ACTION_ID,
+        name: "Custom prompt",
+        prompt: "",
+        target: "headless",
+        affects: DEFAULT_CLAUDE_AFFECTS,
+        requires: DEFAULT_REQUIRES,
+        argPrompt: null,
+        labelExtract: null,
+      },
+      actionKey,
+      supervisorCwd,
+      remoteCwd,
+      remote,
+      worktreeRef,
+      prompt,
+      vars,
+      harnessId,
+    );
+  }
+
+  startCustomForWorktree(
+    target: WorktreeTarget,
+    supervisorCwd: string,
+    prompt: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+  ): Promise<ActionStartResult> {
+    if (isRemoteWorktreeTarget(target)) {
+      return this.startCustomRemote(
+        worktreeActionKey(target),
+        supervisorCwd,
+        target.path,
+        target.location.endpoint,
+        target.ref,
+        prompt,
+        vars,
+        harnessId,
+      );
+    }
+    return this.startCustom(
+      target.slug,
+      target.path,
       prompt,
       vars,
       harnessId,
@@ -435,7 +621,11 @@ class ActionRegistry {
       // Drop runs whose slug no longer exists. The session reaper kills
       // their tmux session at startup; we mirror by not surfacing the
       // run in the picker. Files stay on disk for one more reap pass.
-      if (!liveSlugs.has(meta.slug) && !liveActionSlugs.has(meta.slug)) {
+      if (
+        meta.worktreeRef?.kind !== "remote" &&
+        !liveSlugs.has(meta.slug) &&
+        !liveActionSlugs.has(meta.slug)
+      ) {
         continue;
       }
       const done = readDoneSafe(runDir);
@@ -547,7 +737,13 @@ class ActionRegistry {
     } catch {
       return;
     }
-    type Entry = { name: string; mtime: number; slug: string; terminal: boolean };
+    type Entry = {
+      name: string;
+      mtime: number;
+      slug: string;
+      terminal: boolean;
+      remote: boolean;
+    };
     const entries: Entry[] = [];
     for (const name of names) {
       const path = join(dir, name);
@@ -561,6 +757,7 @@ class ActionRegistry {
           mtime: st.mtimeMs,
           slug: meta.slug,
           terminal: meta.status !== "running",
+          remote: meta.worktreeRef?.kind === "remote",
         });
       } catch {
         // skip
@@ -571,7 +768,7 @@ class ActionRegistry {
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!;
       if (!e.terminal) continue;
-      const dropForSlug = !liveSlugs.has(e.slug);
+      const dropForSlug = !e.remote && !liveSlugs.has(e.slug);
       const dropForAge = i >= MAX_RETAINED_RUNS;
       if (!dropForSlug && !dropForAge) continue;
       const path = join(dir, e.name);
@@ -586,6 +783,31 @@ class ActionRegistry {
       }
     }
     if (removed > 0) log.info("reaped action dirs", { removed });
+  }
+
+  /**
+   * Remote tracked actions are supervised on this machine but their action
+   * keys are not in the local git-worktree inventory. Protect their live tmux
+   * sessions from the startup orphan sweep; `boot` will reconcile them from
+   * the same persisted metadata immediately afterward.
+   */
+  persistedRemoteActionKeys(): ReadonlySet<string> {
+    const out = new Set<string>();
+    const dir = actionsDir();
+    if (!existsSync(dir)) return out;
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return out;
+    }
+    for (const name of names) {
+      const meta = readMetaSafe(join(dir, name));
+      if (meta?.worktreeRef?.kind === "remote" && meta.status === "running") {
+        out.add(meta.slug);
+      }
+    }
+    return out;
   }
 
   get(slug: string): ActionRun | null {

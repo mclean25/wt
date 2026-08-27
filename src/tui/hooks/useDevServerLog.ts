@@ -6,11 +6,15 @@
  */
 import { useEffect, useState } from "react";
 
-import { devServerLogs, readDevCrashLog } from "../../core/dev-server.ts";
+import type { WorktreeTarget } from "../../core/worktree-target.ts";
+import { readWorktreeDevLogs } from "../../core/worktree-executor.ts";
 
 const POLL_MS = 1_000;
 
-export function useDevServerLog(slug: string): string | null {
+export function useDevServerLog(
+  slug: string,
+  target?: WorktreeTarget,
+): string | null {
   const [output, setOutput] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,8 +23,7 @@ export function useDevServerLog(slug: string): string | null {
     setOutput(null);
 
     const poll = async () => {
-      const next =
-        (await devServerLogs(slug).catch(() => null)) ?? readDevCrashLog(slug);
+      const next = target ? await readWorktreeDevLogs(target) : null;
       if (!active) return;
       setOutput((prev) => (prev === next ? prev : next));
       timer = setTimeout(poll, POLL_MS);
@@ -31,7 +34,7 @@ export function useDevServerLog(slug: string): string | null {
       active = false;
       if (timer !== null) clearTimeout(timer);
     };
-  }, [slug]);
+  }, [slug, target?.ref.kind, target?.ref.kind === "remote" ? target.ref.host : ""]);
 
   return output;
 }

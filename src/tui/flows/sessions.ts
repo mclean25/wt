@@ -29,11 +29,14 @@ import { config } from "../../core/config.ts";
 
 import { enterHarnessSession, type EnterResult } from "../sessions/harness.ts";
 import { enterRemoteWorktreeSession } from "../sessions/remote.ts";
+import { enterDiffSession } from "../sessions/diff.ts";
+import { enterShellSession } from "../sessions/shell.ts";
+import type { HarnessRoute } from "../sessions/worktree.ts";
 import { resolveDiffBase, sessionLaunchBlockedReason } from "../app-helpers.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
-import { isRemoteSummary, type RemoteListEntry } from "../remote-creation.ts";
 import type { SessionSlot } from "../sessions/slots.ts";
 import { theme } from "../theme.ts";
+import type { WorktreeModel } from "../worktree-model.ts";
 
 const appLog = createLogger("[app]");
 
@@ -107,8 +110,6 @@ export type SessionFlowsCtx = {
   refreshHarnessSessions: (slug: string) => Promise<void>;
   refreshClaudeSummaries: (slug: string) => Promise<void>;
   optimisticRemoveClaude: (slug: string, name: string | null) => void;
-  /** The selected remote row (or in-flight creation), for remote sessions. */
-  selectedRemote: RemoteListEntry | undefined;
   /** True when the selected remote's host is known-unreachable. */
   remoteUnavailable: boolean;
   reportActionError: (label: string, err: unknown) => void;
@@ -124,7 +125,6 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
     refreshHarnessSessions,
     refreshClaudeSummaries,
     optimisticRemoveClaude,
-    selectedRemote,
     remoteUnavailable,
     reportActionError,
   } = ctx;
@@ -398,35 +398,91 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
    * terminal to `enterRemoteWorktreeSession`. Lives here (not app.tsx) so all
    * session-entry logic shares one home.
    */
-  function doEnterRemoteSession(target: "shell" | "diff" | "harness"): void {
-    if (!selectedRemote || !isRemoteSummary(selectedRemote)) {
-      toast("remote worktree is still being created", theme.warn, 1800);
-      return;
-    }
-    if (remoteUnavailable) {
-      toast(`${selectedRemote.hostLabel} is unavailable`, theme.warn, 2200);
-      return;
-    }
-    if (
-      selectedRemote.status === "busy" &&
-      !canEnterSessionDuringLock(
-        { op: selectedRemote.statusOp ?? "" },
-        selectedRemote.exists,
-      )
-    ) {
-      toast(`${selectedRemote.slug} is ${selectedRemote.statusLabel}`, theme.warn, 2200);
-      return;
-    }
-    void enterRemoteWorktreeSession({
-      renderer,
-      worktree: selectedRemote,
-      target,
-      harnessId: primaryHarness,
-    })
-      .then((code) => {
-        if (code !== 0) toast(`remote session exited ${code}`, theme.warn, 2500);
+  function doEnterWorktreeSession(
+    worktree: WorktreeModel,
+    target: "shell" | "diff" | "harness",
+    harnessRoute?: HarnessRoute,
+  ): void {
+    if (worktree.source.kind === "remote") {
+      const remote = worktree.target.location.kind === "remote"
+        ? worktree.target.location.endpoint
+        : null;
+      if (!remote) return;
+      if (remoteUnavailable) {
+        toast(`${remote.label} is unavailable`, theme.warn, 2200);
+        return;
+      }
+      if (
+        worktree.status.kind === "busy" &&
+        !canEnterSessionDuringLock(
+          { op: worktree.status.op ?? "" },
+          worktree.exists,
+        )
+      ) {
+        toast(`${worktree.slug} is ${worktree.status.label}`, theme.warn, 2200);
+        return;
+      }
+      void enterRemoteWorktreeSession({
+        renderer,
+        worktree: worktree.target,
+        target,
+        harnessId: primaryHarness,
       })
-      .catch((err) => reportActionError("remote session", err));
+        .then((code) => {
+          if (code !== 0) toast(`remote session exited ${code}`, theme.warn, 2500);
+        })
+        .catch((err) => reportActionError("remote session", err));
+      return;
+    }
+
+    const row = worktree.source.row;
+    const blocked = sessionLaunchBlockedReason(row);
+    if (blocked) {
+      toast(`${worktree.slug} is ${blocked}`, theme.warn, 2000);
+      return;
+    }
+    if (target === "harness") {
+      doEnterHarnessSession(worktree.slug, primaryHarness);
+      return;
+    }
+    const sessionLog = createLogger(worktree.slug);
+    void (async () => {
+      const base = await effectiveBaseOrTrunk(
+        worktree.path,
+        resolveDiffBase(row),
+      );
+      const result = target === "shell"
+        ? await (async () => {
+            sessionLog.event.info("entering shell (F10 to detach)");
+            return enterShellSession({
+              renderer,
+              slug: worktree.slug,
+              cwd: worktree.path,
+              diffBase: base,
+              harness: harnessRoute ?? { harnessId: primaryHarness },
+            });
+          })()
+        : await (async () => {
+            sessionLog.event.info(`opening diff vs ${base} (F11 to detach)`);
+            return enterDiffSession({
+              renderer,
+              slug: worktree.slug,
+              cwd: worktree.path,
+              base,
+              harness: harnessRoute ?? { harnessId: primaryHarness },
+            });
+          })();
+      void refreshTmuxSessions();
+      if (result.kind === "spawn-failed") {
+        sessionLog.event.err(`${target} failed to start: ${result.reason}`);
+        toast(`${target} failed: ${result.reason}`, theme.err, 3000);
+      } else if (result.kind === "detached") {
+        sessionLog.event.info(`detached from ${target} (${worktree.slug})`);
+      } else {
+        sessionLog.event.info(`${target} exited (${result.code ?? "?"})`);
+        if (result.stderr) sessionLog.event.err(result.stderr);
+      }
+    })();
   }
 
   return {
@@ -434,6 +490,6 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
     doEnterSlotSession,
     doSpawnNamedClaudeSession,
     doKillClaudeSession,
-    doEnterRemoteSession,
+    doEnterWorktreeSession,
   };
 }

@@ -23,6 +23,7 @@ function remote(slug: string, section: string | null): RemoteWorktreeSummary {
     base: "main",
     path: `/remote/${slug}`,
     stage: slug,
+    deployed: false,
     section,
     exists: true,
     status: "clean",

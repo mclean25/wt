@@ -22,6 +22,8 @@ export type RemoteWorktreeSummary = {
   base: string | null;
   path: string;
   stage: string;
+  /** Strict remote equivalent of the local `deployed` action requirement. */
+  deployed: boolean;
   /** Manual section owned by the remote wt state; null means Inbox. */
   section: string | null;
   exists: boolean;
@@ -168,6 +170,7 @@ export function parseRemoteWorktrees(
       base: typeof row.base === "string" ? row.base : null,
       path: str("path"),
       stage: str("stage"),
+      deployed: row.deployed === true,
       section: typeof row.section === "string" ? row.section : null,
       exists: row.exists === true,
       status: status as StatusKindValue,

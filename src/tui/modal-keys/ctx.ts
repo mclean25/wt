@@ -11,7 +11,7 @@ import type { PickerRow } from "../panels/sessions-picker.tsx";
 import type { SectionPickerItem } from "../panels/section-picker.tsx";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import type { SelectedSection } from "../hooks/useVisualItems.ts";
-import type { RemoteConfig } from "../../core/config.ts";
+import type { WorktreeTarget } from "../../core/worktree-target.ts";
 
 export type SimpleModalContext = {
   setModal: Dispatch<SetStateAction<Modal | null>>;
@@ -38,13 +38,15 @@ export type SimpleModalContext = {
   selectedSection: SelectedSection | undefined;
   doYank: (slug: string, label: string, value: string | null) => void;
   doClean: () => void;
-  doRemove: (slug: string, opts?: { force?: boolean }) => Promise<void>;
-  doRemoteRemove: (
-    remote: RemoteConfig,
-    slug: string,
+  doRemoveWorktree: (
+    target: WorktreeTarget,
     opts?: { force?: boolean },
   ) => Promise<void>;
-  doAutoMerge: (slug: string, mode: "enable" | "disable") => Promise<void>;
+  doAutoMerge: (
+    slug: string,
+    mode: "enable" | "disable",
+    target?: WorktreeTarget,
+  ) => Promise<void>;
   doMarkReady: (slug: string) => Promise<void>;
   doShipPr: (slug: string) => Promise<void>;
   doCheckoutReview: (branch: string) => Promise<void>;
@@ -53,10 +55,9 @@ export type SimpleModalContext = {
   submitReviewerPicker: (
     picker: Extract<Modal, { kind: "reviewerPicker" }>,
   ) => Promise<void>;
-  commitSectionPick: (item: SectionPickerItem, slug: string) => void;
+  commitSectionPick: (item: SectionPickerItem, target: WorktreeTarget) => void;
   consumePrTargetChord: (k: KeyEvent) => boolean;
   setLastMoveTarget: Dispatch<SetStateAction<string | null>>;
-  setSection: (slug: string, section: string | null) => Promise<unknown>;
   /** Re-aim the cursor off rows that are leaving their slot — see
    *  `cursorSuccessor`. */
   advanceCursorPast: (keys: readonly string[]) => void;
@@ -66,7 +67,7 @@ export type SimpleModalContext = {
   currentSlug: string | undefined;
   setFocus: (slug: string | null, patch: { focused?: string | null }) => void;
   rows: readonly WorktreeRow[];
-  buildActionPickerItems: (slug: string) => PickerItem[];
+  buildActionPickerItems: (target: WorktreeTarget) => PickerItem[];
   /** `M` palette items — fleet builtins + row-scoped manager entries. */
   buildManagerPickerItems: (rowSlug: string | null) => PickerItem[];
   /** Slot-palette items (`<` / `>` / `\`) — uniform across slots. */
@@ -79,6 +80,8 @@ export type SimpleModalContext = {
     def: ActionDef | null,
     extras: string,
     arg?: string,
+    launchOpts?: Record<string, unknown>,
+    target?: WorktreeTarget,
   ) => void | Promise<unknown>;
   /** Slot-scoped palette delivery (no row context, no [re:] prefix). */
   launchSlotCommand: (

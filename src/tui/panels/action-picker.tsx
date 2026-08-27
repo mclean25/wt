@@ -12,6 +12,7 @@ import { Modal } from "../modal.tsx";
 import type { TextEdit } from "../text-edit.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
+import type { WorktreeTarget } from "../../core/worktree-target.ts";
 
 /** Claude-flavored action def — the only kind that uses the edit modal. */
 type ClaudeActionDef = Extract<ActionDef, { kind: "claude" }>;
@@ -150,6 +151,7 @@ export type ActionPickerState =
       surface: ActionPickerSurface;
       slug: string;
       rowSlug: string | null;
+      target?: WorktreeTarget;
       index: number;
     }
   | {
@@ -157,6 +159,7 @@ export type ActionPickerState =
       surface: ActionPickerSurface;
       slug: string;
       rowSlug: string | null;
+      target?: WorktreeTarget;
       def: ClaudeActionDef | null;
       extras: TextEdit;
     };

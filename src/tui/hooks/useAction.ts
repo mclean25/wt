@@ -6,6 +6,7 @@ import {
   actionRegistry,
   type ActionRun,
 } from "../../core/actions.ts";
+import { worktreeLedgerKey } from "../../core/worktree-ref.ts";
 
 /**
  * The current run for a slug, or `null` when there is none. Per-key
@@ -47,7 +48,9 @@ export function useActiveActions(): ReadonlySet<string> {
   return useMemo(() => {
     const out = new Set<string>();
     for (const [slug, run] of map) {
-      if (run.status === "running") out.add(slug);
+      if (run.status === "running") {
+        out.add(run.worktreeRef ? worktreeLedgerKey(run.worktreeRef) : slug);
+      }
     }
     const prev = prevRef.current;
     if (prev.size === out.size && [...out].every((s) => prev.has(s))) {
