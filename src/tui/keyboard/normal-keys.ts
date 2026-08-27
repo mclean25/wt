@@ -142,6 +142,7 @@ export type NormalKeysCtx = {
   toggleArchived: (key: string) => Promise<{ archived: boolean }>;
   setSection: (slug: string, section: string | null) => Promise<void>;
   toggleSectionFold: (key: string) => Promise<boolean>;
+  setSectionFolded: (key: string, folded: boolean) => Promise<boolean>;
   refreshAiSummary: (slug: string) => Promise<boolean>;
   /** `V`'s override of the details pane's post-merge-steps block. */
   verifyExpanded: boolean | null;
@@ -201,6 +202,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     toggleArchived,
     setSection,
     toggleSectionFold,
+    setSectionFolded,
     refreshAiSummary,
     verifyExpanded,
     setVerifyExpanded,
@@ -920,8 +922,9 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         const key = currentTarget
           ? worktreeTargetKey(currentTarget)
           : remoteWorktreeLedgerKey(selectedRemote.hostKey, slug);
-        toggleArchived(key).then(
-          ({ archived }) => {
+        toggleArchived(key)
+          .then(async ({ archived }) => {
+            if (archived) await setSectionFolded(GROUP_ARCHIVED, true);
             if (!archived) {
               setSel(`remote:${remoteEntryKey(selectedRemote)}`);
             }
@@ -931,9 +934,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
               theme.info,
               2000,
             );
-          },
-          (err) => reportActionError("archive", err),
-        );
+          })
+          .catch((err) => reportActionError("archive", err));
         return;
       }
       if (isPlainLetter(k, "d")) {
@@ -1227,18 +1229,17 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         : Promise.resolve();
       prepareRestore
         .then(() => toggleArchived(key))
-        .then(
-          ({ archived }) => {
-            if (!archived) setSel(slug);
-            rowLog.event.info(archived ? "archived" : "restored to Inbox");
-            toast(
-              archived ? `archived ${slug}` : `restored ${slug} to Inbox`,
-              theme.info,
-              2000,
-            );
-          },
-          (err) => reportActionError("archive", err),
-        );
+        .then(async ({ archived }) => {
+          if (archived) await setSectionFolded(GROUP_ARCHIVED, true);
+          if (!archived) setSel(slug);
+          rowLog.event.info(archived ? "archived" : "restored to Inbox");
+          toast(
+            archived ? `archived ${slug}` : `restored ${slug} to Inbox`,
+            theme.info,
+            2000,
+          );
+        })
+        .catch((err) => reportActionError("archive", err));
       return;
     }
     if (isPlainLetter(k, "l")) {

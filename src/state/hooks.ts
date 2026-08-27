@@ -105,6 +105,7 @@ import {
   moveGroupPast as moveGroupPastOnDisk,
   placeSlug as placeSlugOnDisk,
   renameSection as renameSectionOnDisk,
+  setSectionFolded as setSectionFoldedOnDisk,
   setSlugBase as setSlugBaseOnDisk,
   setSlugSection as setSlugSectionOnDisk,
   setSlugIssueId as setSlugIssueIdOnDisk,
@@ -874,6 +875,12 @@ export function useWtActions() {
       );
       await qc.invalidateQueries({ queryKey: qk.wtState() });
       return folded;
+    },
+    /** Set a section's fold state without risking an accidental re-toggle. */
+    async setSectionFolded(sectionKey: string, folded: boolean): Promise<boolean> {
+      const result = setSectionFoldedOnDisk(sectionKey, folded);
+      await qc.invalidateQueries({ queryKey: qk.wtState() });
+      return result;
     },
   };
 }

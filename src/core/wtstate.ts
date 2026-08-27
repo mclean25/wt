@@ -38,6 +38,7 @@ export {
   setSlugIssueId,
   setSlugSection,
   setSlugWorkStatus,
+  setSectionFolded,
   swapOrders,
   toggleSectionFolded,
   setBranchTip,

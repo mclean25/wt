@@ -72,3 +72,39 @@ test("l starts the Linear PR-target chord for a remote worktree", () => {
 
   expect(targets).toEqual(["linear"]);
 });
+
+test("a folds Archived after archiving a remote worktree", async () => {
+  const folds: Array<[string, boolean]> = [];
+  const ctx = {
+    focusedOutputId: null,
+    consumePrTargetChord: () => false,
+    handleGlobalKey: () => false,
+    current: undefined,
+    currentItem: undefined,
+    selectedPr: undefined,
+    selectedRemote: {
+      hostKey: "ssh://dellserver/repo",
+      hostLabel: "dellserver",
+      slug: "remote-task",
+    },
+    selectedRemotePr: undefined,
+    selectedSection: undefined,
+    currentTarget: null,
+    toggleArchived: async () => ({ archived: true }),
+    setSectionFolded: async (key: string, folded: boolean) => {
+      folds.push([key, folded]);
+      return folded;
+    },
+    setSel: () => {},
+    toast: () => {},
+    reportActionError: (label: string, err: unknown) => {
+      throw new Error(`${label}: ${String(err)}`);
+    },
+  } as unknown as NormalKeysCtx;
+
+  handleNormalKey(plainKey("a"), ctx);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(folds).toEqual([["\0archived", true]]);
+});

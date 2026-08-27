@@ -559,6 +559,27 @@ export function toggleSectionFolded(sectionKey: string): boolean {
 }
 
 /**
+ * Idempotently set a section's folded state. Archive actions use this rather
+ * than a toggle so two overlapping mutations can never reopen the Archived
+ * block while trying to hide newly archived rows.
+ */
+export function setSectionFolded(sectionKey: string, folded: boolean): boolean {
+  return withWtStateLock(() => {
+    const state = readWtState();
+    const alreadyFolded = state.foldedSections.includes(sectionKey);
+    if (alreadyFolded === folded) return folded;
+    const next: WtState = {
+      ...state,
+      foldedSections: folded
+        ? [...state.foldedSections, sectionKey]
+        : state.foldedSections.filter((s) => s !== sectionKey),
+    };
+    writeWtState(next);
+    return folded;
+  });
+}
+
+/**
  * Reap stale slug entries against the live slug set. Called after
  * destroys to keep the state file tidy. No-op when nothing to drop.
  */
