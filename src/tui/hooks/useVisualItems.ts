@@ -33,11 +33,7 @@ export type ArchivedItem =
   | SelectedSection;
 export type SelectedSection = Extract<ListActiveItem, { kind: "section" }>;
 
-function entrySection(entry: RemoteCreation | RemoteWorktreeSummary): string {
-  return "section" in entry && entry.section !== null ? entry.section : GROUP_INBOX;
-}
-
-/** Build the visible active fleet with location-neutral section grouping. */
+/** Build the visible fleet, keeping SSH-owned worktrees grouped by host. */
 export function buildActiveItems({
   rows,
   foldedSections,
@@ -45,6 +41,25 @@ export function buildActiveItems({
   remoteWorktrees,
   archivedKeys,
 }: Omit<UseVisualItemsArgs, "selectedKey">): ListActiveItem[] {
+  const out: ListActiveItem[] = [];
+  for (const entry of remoteWorktrees) {
+    if (archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug))) continue;
+    out.push({
+      kind: "remote",
+      entry,
+      target: remoteWorktreeTarget(entry),
+      archived: false,
+    });
+  }
+  if (remoteCreation && !remoteWorktrees.some((row) => row.slug === remoteCreation.input)) {
+    out.push({
+      kind: "remote",
+      entry: remoteCreation,
+      target: null,
+      archived: false,
+    });
+  }
+
   const buckets = new Map<string, FleetWorktreeItem[]>();
   const ensure = (section: string): FleetWorktreeItem[] => {
     const existing = buckets.get(section);
@@ -62,25 +77,6 @@ export function buildActiveItems({
       target: localWorktreeTarget(row.wt),
     });
   }
-  for (const entry of remoteWorktrees) {
-    if (archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug))) continue;
-    ensure(entrySection(entry)).push({
-      kind: "remote",
-      entry,
-      target: remoteWorktreeTarget(entry),
-      archived: false,
-    });
-  }
-  if (remoteCreation && !remoteWorktrees.some((row) => row.slug === remoteCreation.input)) {
-    ensure(GROUP_INBOX).push({
-      kind: "remote",
-      entry: remoteCreation,
-      target: null,
-      archived: false,
-    });
-  }
-
-  const out: ListActiveItem[] = [];
   for (const [sectionKey, members] of buckets) {
     if (foldedSections.has(sectionKey)) {
       out.push({
