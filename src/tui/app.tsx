@@ -383,15 +383,15 @@ export function App({ onExit }: Props) {
     usePrTargetChord({ selectedPr, current, selectedRemotePr });
 
   const listWidth = Math.max(32, Math.min(52, Math.floor(width * 0.44)));
-  // Middle (list + details) is capped; activity absorbs the rest. Title
-  // and footer take 1 row each, so `height - 2` is the usable column
-  // budget split between middle and activity.
-  const middleMax = 20;
-  const activityHeight = Math.max(7, height - 2 - middleMax);
-  // What's left for the list/details row. The details pane needs it as
-  // a number, not just as `flexGrow` — the folded-section body sizes a
-  // block against the rows it actually has.
-  const middleHeight = Math.max(1, height - 2 - activityHeight);
+  // The worktree list owns the full usable height. The right column is
+  // split between metadata and activity: metadata is capped while the
+  // activity pane absorbs the rest. Title and footer take 1 row each.
+  const metadataMax = 20;
+  const activityHeight = Math.max(7, height - 2 - metadataMax);
+  // The details pane needs its numeric height (not just flexGrow) because
+  // the folded-section body sizes notes against the rows it actually has.
+  const metadataHeight = Math.max(1, height - 2 - activityHeight);
+  const metadataWidth = Math.max(0, width - listWidth);
 
   // Action runtime state for the *selected* worktree. `currentRun`
   // drives the activity-pane swap (showing the streamed claude output
@@ -960,7 +960,7 @@ export function App({ onExit }: Props) {
       {/* The in-flight fetch counter + refresh wave live INSIDE TitleBar
           (see its header comment): useIsFetching re-renders per fetch
           event, and at App level that re-rendered the whole tree. */}
-      <box flexDirection="row" flexGrow={1}>
+      <box flexDirection="row" flexGrow={1} minHeight={0}>
         {removedView ? (
           <RemovedList
             entries={removedEntries}
@@ -983,26 +983,33 @@ export function App({ onExit }: Props) {
             scrollHandle={listScrollHandleRef}
           />
         )}
-        <Details
-          row={removedView ? undefined : current}
-          reviewRequest={removedView ? undefined : selectedPr}
-          remote={removedView ? undefined : selectedRemote}
-          remoteUnavailable={remoteUnavailable}
-          remoteError={remoteError}
-          section={removedView ? undefined : sectionDetail}
-          removed={currentRemoved}
-          width={Math.max(0, width - listWidth)}
-          height={middleHeight}
-          scrollRef={detailsScrollRef}
-          sessionState={
-            current
-              ? activeSessionBySlug.get(current.wt.slug)?.state ?? undefined
-              : undefined
-          }
-          verifyExpanded={verifyExpanded}
-        />
+        <box
+          flexDirection="column"
+          width={metadataWidth}
+          flexShrink={0}
+          minHeight={0}
+        >
+          <Details
+            row={removedView ? undefined : current}
+            reviewRequest={removedView ? undefined : selectedPr}
+            remote={removedView ? undefined : selectedRemote}
+            remoteUnavailable={remoteUnavailable}
+            remoteError={remoteError}
+            section={removedView ? undefined : sectionDetail}
+            removed={currentRemoved}
+            width={metadataWidth}
+            height={metadataHeight}
+            scrollRef={detailsScrollRef}
+            sessionState={
+              current
+                ? activeSessionBySlug.get(current.wt.slug)?.state ?? undefined
+                : undefined
+            }
+            verifyExpanded={verifyExpanded}
+          />
+          <OutputViewer output={displayedOutput} height={activityHeight} />
+        </box>
       </box>
-      <OutputViewer output={displayedOutput} height={activityHeight} />
       <PreFooterModals
         modal={modal}
         currentSlug={currentSlug}
