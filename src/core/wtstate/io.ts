@@ -219,7 +219,12 @@ export function parseWtState(raw: unknown): WtState {
       // Whitelisted like every other field on the entry: a value
       // written but not parsed round-trips to nothing with every test
       // still green (the `RemovedWorktree.work` lesson).
-      if (typeof rec.issueId === "string" && rec.issueId.trim() !== "") {
+      // The EMPTY string round-trips deliberately: it is the third
+      // state, "this worktree has no tracker issue", which absence
+      // cannot express because absence means "fall back to the slug".
+      // Dropping it here would silently turn an asserted none back
+      // into whatever the slug happens to parse to.
+      if (typeof rec.issueId === "string") {
         slugs[k]!.issueId = rec.issueId.trim().toUpperCase();
       }
       if (rec.automationsPaused === true) {

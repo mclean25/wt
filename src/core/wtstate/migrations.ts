@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 13;
+export const WT_STATE_VERSION = 14;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -150,6 +150,17 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // paused, which is the honest answer for history written before
     // the pause could outlive its row.
     to: 13,
+    up: (raw) => raw,
+  },
+  {
+    // v14: no shape change — a MEANING change inside an unchanged one,
+    // which needs a boundary just as much. `issueId: ""` used to be
+    // dropped at parse and now means "this worktree has no tracker
+    // issue", distinct from the field being absent ("use the slug").
+    // Nothing before v14 could write an empty override (both doors
+    // rejected it), so no existing value changes interpretation; the
+    // bump is here so a downgrade-then-upgrade has a version to see.
+    to: 14,
     up: (raw) => raw,
   },
 ];

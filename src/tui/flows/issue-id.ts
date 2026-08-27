@@ -12,8 +12,15 @@
  *
  * What it writes is an OVERRIDE, never a cache of the parse: readers
  * go through `resolveIssueId`, which prefers the stored value and
- * falls back to the slug. So clearing restores the derived answer
- * rather than blanking the row.
+ * falls back to the slug.
+ *
+ * Three states, because two could not say everything. Absent means
+ * "use the slug"; a value means "use this"; and the EMPTY string means
+ * "this worktree has no ticket" — which the prompt writes when you
+ * clear the field. Without that third state the prompt was a no-op on
+ * precisely the rows you would want to detach: a slug carrying an id
+ * re-supplied it the moment the override went away. `wt issue <slug>
+ * --clear-id` is the way back to the derived answer.
  */
 import { ISSUE_ID_RE, resolveIssueId } from "../../core/issue-tracker.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
@@ -44,7 +51,7 @@ export function useIssueIdFlow(ctx: IssueIdFlowCtx) {
     setPendingIssueSlug(slug);
     setFooter({
       kind: "input",
-      prompt: `tracker id for ${slug} (empty clears):`,
+      prompt: `tracker id for ${slug} (empty = no issue):`,
       edit: makeEdit(seed),
       purpose: "issue-id",
     });
@@ -60,15 +67,21 @@ export function useIssueIdFlow(ctx: IssueIdFlowCtx) {
     }
     const trimmed = raw.trim();
     if (trimmed === "") {
-      void setIssueId(slug, null).then(() => {
-        // Say what it fell back TO, not just that it cleared: on a slug
-        // that parses, clearing is not the same as having no id, and
-        // the row is about to render one either way.
-        const fallback = resolveIssueId(slug, null);
+      // Emptying a field that was SEEDED with the current answer means
+      // "this row has no ticket" — so it writes the asserted none
+      // rather than dropping the override. Falling back to the slug
+      // here was the old behaviour and it made the prompt a no-op on
+      // exactly the rows whose id you would want to remove: the ones
+      // carrying it in the slug. `wt issue <slug> --clear-id` is the
+      // way back to the derived value.
+      void setIssueId(slug, "").then(() => {
+        const parsed = resolveIssueId(slug, null);
         toast(
-          fallback ? `${slug} → ${fallback} (from slug)` : `${slug} tracker id cleared`,
+          parsed
+            ? `${slug} has no tracker id (was ${parsed} from slug)`
+            : `${slug} has no tracker id`,
           theme.info,
-          2000,
+          2500,
         );
       });
       return;

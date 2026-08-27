@@ -78,6 +78,17 @@ export function resolveIssueId(
   slug: string,
   stored: string | null | undefined,
 ): string | null {
+  // Three states, not two. ABSENT (null/undefined) means "nothing
+  // stored, use the slug". The EMPTY STRING means "this worktree has
+  // no tracker issue" — an asserted none, which a slug carrying an id
+  // would otherwise override forever: before it existed, clearing on
+  // `coz-2101-connector-research` fell straight back to COZ-2101 and
+  // there was no way to say the work is not that ticket.
+  // Any all-whitespace string, not just `""`: the store trims on the
+  // way in, but a hand-edited state.json can carry `"  "`, and letting
+  // that fall through would quietly resurrect the slug's id under an
+  // override whose whole purpose was to suppress it.
+  if (typeof stored === "string" && stored.trim() === "") return null;
   const s = stored?.trim();
   if (s) return s.toUpperCase();
   return issueIdForSlug(slug);

@@ -298,6 +298,14 @@ export function setSlugGithubIssue(slug: string, issue: number | null): void {
  * `--clear-id`, TUI `I`). Null clears, restoring the slug-parsed
  * fallback. The id is uppercased here so the store holds one spelling.
  */
+/**
+ * Set, clear, or blank a slug's tracker-id override.
+ *
+ * `null` REMOVES the override (readers fall back to parsing the slug);
+ * `""` stores an asserted none (readers report no issue at all). The
+ * two are different answers on any slug that carries an id, which is
+ * why `resolveIssueId` distinguishes absent from empty.
+ */
 export function setSlugIssueId(slug: string, id: string | null): void {
   withWtStateLock(() => {
     const state = readWtState();

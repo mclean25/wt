@@ -38,6 +38,7 @@ import type { HarnessId } from "../../core/harness/index.ts";
 import type { DerivedState } from "../../core/harness/status.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import { capitalizeFirst, slugLabel } from "../../core/stage.ts";
+import { resolveIssueId } from "../../core/issue-tracker.ts";
 import type { SpineCell } from "../../core/stack-layout.ts";
 import { StatusKind, type Status } from "../../core/types.ts";
 import type { GithubData } from "../../state/queries/github.ts";
@@ -148,7 +149,14 @@ export function rowLabel(row: WorktreeRow): string {
   // section header carried the ID. Stacks render inside the human's
   // sections now and there is no such header, so dropping it just cost
   // those rows their identifier.
-  const { id } = slugLabel(row.wt.slug);
+  //
+  // Resolved, not parsed. This is the row's identifier, so it has to be
+  // the same id the issue row links, `i` opens and `{{issue_id}}`
+  // renders — reading the slug directly made the list the one surface
+  // that ignored the override, so an overridden row was labelled with
+  // the ticket it is explicitly NOT, and a row asserted to have no
+  // issue still wore one.
+  const id = resolveIssueId(row.wt.slug, row.issueId);
   const numId = id ? id.replace(/^[A-Z]+-/, "") : null;
   return numId ? `${numId}: ${text}` : text;
 }

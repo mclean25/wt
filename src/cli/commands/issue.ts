@@ -18,6 +18,7 @@ import { cyan, dim, green, red } from "../colors.ts";
 
 const USAGE = `usage: wt issue <slug>              show the worktree's issue ids + urls
        wt issue <slug> --id <ID>    set the tracker id (overrides the slug)
+       wt issue <slug> --no-id      assert it has NO tracker issue
        wt issue <slug> --clear-id   drop the override, back to the slug
        wt issue <slug> --gh <n>     attach GitHub issue #n as the secondary id
        wt issue <slug> --clear-gh   detach the secondary GitHub issue
@@ -25,7 +26,12 @@ const USAGE = `usage: wt issue <slug>              show the worktree's issue ids
 <slug> also accepts a branch name. The primary id normally comes from the
 slug (eng-1935-… → ENG-1935); --id supplies one when the slug carries none
 (or carries the wrong one), and is what {{issue_id}} renders. Neither --id
-nor --gh ever changes the branch.`;
+nor --gh ever changes the branch.
+
+--no-id and --clear-id are different answers, and only on a slug that
+carries an id does the difference show: --no-id asserts the worktree has
+no ticket (nothing renders, the tracker automation stays put), while
+--clear-id removes the override so the slug's own id applies again.`;
 
 export async function run(argv: string[]): Promise<number> {
   if (hasHelpFlag(argv)) {
@@ -66,6 +72,20 @@ export async function run(argv: string[]): Promise<number> {
     console.log(green(`✓ ${wt.slug} ← ${id}`));
     const url = issueUrlForId(id);
     if (url) console.log(`  ${dim(url)}`);
+    return 0;
+  }
+  if (rest[0] === "--no-id") {
+    // The third state: an asserted none. `--clear-id` drops the
+    // override and falls back to the slug, which on a slug that
+    // carries an id can never reach "this worktree has no ticket".
+    setSlugIssueId(wt.slug, "");
+    const parsed = issueIdForSlug(wt.slug);
+    console.log(green(`✓ ${wt.slug} has no tracker id`));
+    if (parsed) {
+      console.log(
+        dim(`  (overrides ${parsed} from the slug; --clear-id restores it)`),
+      );
+    }
     return 0;
   }
   if (rest[0] === "--clear-id") {

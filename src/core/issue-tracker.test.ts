@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { issueIdForSlug, repoWebUrl } from "./issue-tracker.ts";
+import { issueIdForSlug, repoWebUrl, resolveIssueId } from "./issue-tracker.ts";
 
 describe("issueIdForSlug", () => {
   test("extracts and uppercases an id at the head of a slug", () => {
@@ -44,5 +44,35 @@ describe("repoWebUrl", () => {
 
   test("null for bare ssh-config host aliases (no real hostname)", () => {
     expect(repoWebUrl("github-personal:micthiesen/wt.git")).toBeNull();
+  });
+});
+
+describe("resolveIssueId — three states", () => {
+  // The distinction only shows on a slug that CARRIES an id, which is
+  // exactly the population `--no-id` exists for: before the empty
+  // string meant something, clearing the override on `coz-2101-…` fell
+  // straight back to COZ-2101 and there was no way to say otherwise.
+  test("absent override falls back to the slug", () => {
+    expect(resolveIssueId("coz-2101-connector", undefined)).toBe("COZ-2101");
+    expect(resolveIssueId("coz-2101-connector", null)).toBe("COZ-2101");
+  });
+
+  test("a value overrides the slug", () => {
+    expect(resolveIssueId("coz-2101-connector", "COZ-9")).toBe("COZ-9");
+  });
+
+  test("the empty string is an asserted none, and beats the slug", () => {
+    expect(resolveIssueId("coz-2101-connector", "")).toBeNull();
+  });
+
+  test("an asserted none on a slug with no id is still none", () => {
+    expect(resolveIssueId("quick-spike", "")).toBeNull();
+    expect(resolveIssueId("quick-spike", undefined)).toBeNull();
+  });
+
+  test("a whitespace-only override is a none, not a fallback", () => {
+    // It reaches the store trimmed, but a hand-edited state.json can
+    // carry one and "  " must not silently resurrect the slug's id.
+    expect(resolveIssueId("coz-2101-connector", "   ")).toBeNull();
   });
 });
