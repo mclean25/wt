@@ -418,12 +418,14 @@ const RemoteRowView = memo(function RemoteRowView({
   panelWidth,
   githubData,
   archived = false,
+  unavailable = false,
 }: {
   entry: RemoteListEntry;
   selected: boolean;
   panelWidth: number;
   githubData?: GithubData;
   archived?: boolean;
+  unavailable?: boolean;
 }) {
   const status: Status = isRemoteSummary(entry)
     ? {
@@ -448,12 +450,15 @@ const RemoteRowView = memo(function RemoteRowView({
           undefined,
         )
       : statusBadge(status);
-  const baseLabel = remoteRowLabel(entry);
-  const label = archived ? `${entry.hostLabel} · ${baseLabel}` : baseLabel;
+  const label = remoteRowLabel(entry);
   const pr = isRemoteSummary(entry) ? githubData?.prs[entry.branch] : undefined;
   const mq = isRemoteSummary(entry)
     ? githubData?.mergeQueue?.[entry.branch]
     : undefined;
+  // Two cells for the PUA monitor glyph. It sits immediately before the
+  // name so location reads as part of row identity, not as one more
+  // right-aligned status badge.
+  const remoteCells = 2;
   const badgeCells = remoteBadgeClusterCells(pr, mq);
   return (
     <box
@@ -469,25 +474,24 @@ const RemoteRowView = memo(function RemoteRowView({
       <box width={1} flexShrink={0}>
         <text> </text>
       </box>
+      <box width={remoteCells} flexShrink={0}>
+        <text fg={archived ? theme.fgDim : unavailable ? theme.warn : theme.info}>
+          {NF.remote}
+        </text>
+      </box>
       <box flexGrow={1} flexShrink={1} overflow="hidden">
         <text
           fg={selected ? theme.fgBright : archived ? theme.fgDim : theme.fg}
           attributes={selected ? TextAttributes.BOLD : 0}
           wrapMode="none"
         >
-          {truncateEnd(label, Math.max(0, panelWidth - 8 - badgeCells))}
+          {truncateEnd(label, Math.max(0, panelWidth - 8 - remoteCells - badgeCells))}
         </text>
       </box>
       <RemoteBadgeCluster pr={pr} mq={mq} archived={archived} />
     </box>
   );
 });
-
-const REMOTE_SECTION_PREFIX = "\0remote:";
-
-function remoteSectionKey(entry: RemoteListEntry): string {
-  return `${REMOTE_SECTION_PREFIX}${entry.hostKey}`;
-}
 
 /**
  * Memoized: every prop is identity-stable across unrelated App renders
@@ -674,25 +678,18 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
               ? prev.kind === "wt"
                 ? prev.row.section
                 : prev.kind === "remote"
-                  ? remoteSectionKey(prev.entry)
+                  ? isRemoteSummary(prev.entry) ? prev.entry.section : null
                   : prev.sectionKey
               : undefined;
 
             if (item.kind === "remote") {
-              const section = remoteSectionKey(item.entry);
+              const section = isRemoteSummary(item.entry) ? item.entry.section : null;
               return (
                 <Fragment key={`active:remote:${remoteEntryKey(item.entry)}`}>
                   {prevSection !== section ? (
                     <>
                       <box height={1} flexShrink={0} />
-                      <Divider
-                        label={item.entry.hostLabel}
-                        width={width}
-                        icon={{
-                          glyph: NF.remote,
-                          fg: remoteUnavailable ? theme.warn : theme.info,
-                        }}
-                      />
+                      <Divider label={section ?? INBOX_LABEL} width={width} />
                     </>
                   ) : null}
                   <RemoteRowView
@@ -700,6 +697,7 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                     selected={i === selectedIndex}
                     panelWidth={width}
                     githubData={githubData}
+                    unavailable={remoteUnavailable}
                   />
                 </Fragment>
               );
@@ -822,6 +820,7 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                       panelWidth={width}
                       githubData={githubData}
                       archived
+                      unavailable={remoteUnavailable}
                     />
                   );
                 }

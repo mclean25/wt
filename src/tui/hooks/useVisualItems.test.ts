@@ -45,7 +45,7 @@ function remote(slug: string, section: string | null): RemoteWorktreeSummary {
 }
 
 describe("buildActiveItems", () => {
-  test("keeps remote rows ahead of locally sectioned rows", () => {
+  test("places remote rows beside local rows in their normal section", () => {
     const items = buildActiveItems({
       rows: [local("local-paused", "Paused"), local("local-inbox", null)],
       foldedSections: new Set(),
@@ -61,15 +61,15 @@ describe("buildActiveItems", () => {
           ? `remote:${"slug" in item.entry ? item.entry.slug : item.entry.input}`
           : `section:${item.sectionKey}`,
     )).toEqual([
-      "remote:remote-paused",
-      "remote:remote-inbox",
       "local:local-paused",
+      "remote:remote-paused",
       "local:local-inbox",
+      "remote:remote-inbox",
     ]);
   });
 
-  test("folding a local section does not absorb remote-host rows", () => {
-    const items = buildActiveItems({
+  test("folds local and remote members into one shared section header", () => {
+    const [item] = buildActiveItems({
       rows: [local("local", "Paused")],
       foldedSections: new Set(["Paused"]),
       remoteCreation: null,
@@ -77,14 +77,13 @@ describe("buildActiveItems", () => {
       archivedKeys: new Set(),
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["remote", "section"]);
-    const section = items[1];
-    if (section?.kind !== "section") throw new Error("expected folded section");
-    expect(section.sectionKey).toBe("Paused");
-    expect(section.members.map((member) => member.kind)).toEqual(["wt"]);
+    expect(item?.kind).toBe("section");
+    if (item?.kind !== "section") throw new Error("expected folded section");
+    expect(item.sectionKey).toBe("Paused");
+    expect(item.members.map((member) => member.kind)).toEqual(["wt", "remote"]);
   });
 
-  test("keeps transient remote creation in the remote-host group", () => {
+  test("files transient remote creation into Inbox", () => {
     const [item] = buildActiveItems({
       rows: [],
       foldedSections: new Set([GROUP_INBOX]),
@@ -99,6 +98,6 @@ describe("buildActiveItems", () => {
       archivedKeys: new Set(),
     });
 
-    expect(item).toMatchObject({ kind: "remote" });
+    expect(item).toMatchObject({ kind: "section", sectionKey: GROUP_INBOX });
   });
 });
