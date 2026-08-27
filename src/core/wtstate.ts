@@ -56,6 +56,7 @@ export {
 
 export {
   toggleGlobalAutomationsPaused,
+  toggleRemovedAutomationsPaused,
   toggleSlugAutomationsPaused,
   toggleStackAutomationsPaused,
 } from "./wtstate/automations-pause.ts";

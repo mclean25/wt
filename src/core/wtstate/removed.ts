@@ -84,6 +84,14 @@ export function recordRemovedWorktrees(
       // after the reap and would otherwise blank what the dispatch
       // recorded.
       const work = e.work ?? state.slugs[e.slug]?.work ?? prev?.work;
+      // Same first-hand read as `work`, and for the same reason: the
+      // reap takes the per-slug entry with the worktree, and a
+      // post-merge `external` run outlives both — so this copy is what
+      // a pause set before the merge still has to act through. A later
+      // minimal confirm must not blank a pause toggled on the archived
+      // row since, hence `prev` last rather than first.
+      const automationsPaused = e.automationsPaused ??
+        state.slugs[e.slug]?.automationsPaused ?? prev?.automationsPaused;
       bySlug.set(e.slug, {
         ...prev,
         slug: e.slug,
@@ -94,6 +102,7 @@ export function recordRemovedWorktrees(
         ...(e.prUrl !== undefined ? { prUrl: e.prUrl } : {}),
         ...(e.prState !== undefined ? { prState: e.prState } : {}),
         ...(work !== undefined ? { work } : {}),
+        ...(automationsPaused === true ? { automationsPaused: true } : {}),
       });
     }
     const cutoff = Date.now() - REMOVED_MAX_AGE_MS;

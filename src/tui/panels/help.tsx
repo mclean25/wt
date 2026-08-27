@@ -180,7 +180,7 @@ const KEY_BLOCKS: Block[] = [
     note: "Config-driven [[automations]] fire actions off PR/stack state. Runs appear as normal action output (killable with !). While paused the title bar shows an inverse `auto ⏸` chip; `auto N queued` (dim) counts fires waiting on the settle window.",
     items: [
       { key: "A", label: "pause / resume all automations (persisted)" },
-      { key: "ctrl+a", label: "pause / resume automations for current worktree — whole stack if it's a stack member or header (persisted)" },
+      { key: "ctrl+a", label: "pause / resume automations for current worktree — whole stack if it's a stack member or header; in the `h` history, the archived row (persisted)" },
     ],
   },
   {

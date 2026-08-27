@@ -31,6 +31,8 @@ export type RemovedViewKeysCtx = {
   doYank: (slug: string, label: string, value: string | null) => void;
   setModal: (m: Modal | null) => void;
   toast: (message: string, color?: string, ms?: number) => void;
+  /** Ctrl+A on the archived row. Null when the slug left the history. */
+  toggleRemovedAutomationsPaused: (slug: string) => Promise<boolean | null>;
 };
 
 export function handleRemovedViewKey(k: KeyEvent, ctx: RemovedViewKeysCtx): void {
@@ -44,6 +46,7 @@ export function handleRemovedViewKey(k: KeyEvent, ctx: RemovedViewKeysCtx): void
     doYank,
     setModal,
     toast,
+    toggleRemovedAutomationsPaused,
   } = ctx;
       if (k.name === "escape" || isPlainLetter(k, "h")) {
         setRemovedView(false);
@@ -71,6 +74,32 @@ export function handleRemovedViewKey(k: KeyEvent, ctx: RemovedViewKeysCtx): void
       const entry = removedEntries[removedCursor];
       if (!entry) return;
       const removedLog = createLogger(entry.slug);
+      // Ctrl+A, same key as on a live row. The target is the removed
+      // entry rather than `slugs`, which the reap already dropped —
+      // and the automations still able to fire for an archived slug
+      // (post-merge `external` runs) are exactly the ones this stops.
+      if (k.ctrl && k.name === "a") {
+        void (async () => {
+          const paused = await toggleRemovedAutomationsPaused(entry.slug);
+          if (paused === null) {
+            toast("not in the archive record", theme.fgDim, 1500);
+            return;
+          }
+          removedLog.event.info(
+            paused
+              ? "automations paused for this archived worktree"
+              : "automations resumed for this archived worktree",
+          );
+          toast(
+            paused
+              ? `automations paused for ${entry.slug}`
+              : `automations resumed for ${entry.slug}`,
+            paused ? theme.warn : theme.ok,
+            2000,
+          );
+        })();
+        return;
+      }
       if (isPlainLetter(k, "p")) {
         if (!entry.prUrl) {
           removedLog.event.warn("no PR recorded for this branch");

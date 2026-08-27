@@ -56,6 +56,34 @@ export function toggleStackAutomationsPaused(
   });
 }
 
+/**
+ * Toggle the automations pause on an ARCHIVED row (Ctrl+A in the `h`
+ * view). Writes the removed-history entry rather than `slugs`, because
+ * the per-slug record is already gone by then — the reap drops it with
+ * the worktree, while a post-merge `external` automation deliberately
+ * outlives both.
+ *
+ * Returns the new paused state, or null when the slug isn't in the
+ * history (nothing to pause, and creating an entry here would invent a
+ * removal that never happened).
+ */
+export function toggleRemovedAutomationsPaused(slug: string): boolean | null {
+  return withWtStateLock(() => {
+    const state = readWtState();
+    const idx = state.removed.findIndex((e) => e.slug === slug);
+    if (idx === -1) return null;
+    const entry = state.removed[idx]!;
+    const paused = entry.automationsPaused !== true;
+    const next = { ...entry };
+    if (paused) next.automationsPaused = true;
+    else delete next.automationsPaused;
+    const removed = [...state.removed];
+    removed[idx] = next;
+    writeWtState({ ...state, removed });
+    return paused;
+  });
+}
+
 /** Toggle the persisted GLOBAL automations pause (Shift+A). Returns the new state. */
 export function toggleGlobalAutomationsPaused(): boolean {
   return withWtStateLock(() => {

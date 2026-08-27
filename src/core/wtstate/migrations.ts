@@ -23,7 +23,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 12;
+export const WT_STATE_VERSION = 13;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -140,6 +140,16 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // later branch rename leaves it stale and authoritative-looking —
     // the one shape this store is not allowed to grow.
     to: 12,
+    up: (raw) => raw,
+  },
+  {
+    // v13: additive — `automationsPaused` on a REMOVED entry, so the
+    // per-worktree pause survives the reap that takes the per-slug
+    // record. No backfill: the flag it would copy from is already gone
+    // by definition for every existing entry, and absence means not
+    // paused, which is the honest answer for history written before
+    // the pause could outlive its row.
+    to: 13,
     up: (raw) => raw,
   },
 ];

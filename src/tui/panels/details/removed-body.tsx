@@ -87,6 +87,20 @@ export function RemovedBody({ entry, width }: { entry: RemovedWorktree; width: n
           </text>
         </RRRow>
       ) : null}
+      {/* Same shape as the live pane's `AutomationsPausedLine`. It
+          matters more here than there: a post-merge `external` run
+          outlives the checkout, so this is the only surface that can
+          say whether one is still going to fire for this slug. */}
+      {entry.automationsPaused ? (
+        <box marginTop={1}>
+          <text wrapMode="none" truncate>
+            <span fg={theme.warn}>{"⏸ "}</span>
+            <span fg={theme.fgDim}>
+              {"automations paused for this archived worktree (ctrl+a resumes)"}
+            </span>
+          </text>
+        </box>
+      ) : null}
       {entry.prUrl ? (
         <box marginTop={1}>
           <text fg={theme.fgDim} wrapMode="none" truncate>
@@ -104,7 +118,7 @@ export function RemovedBody({ entry, width }: { entry: RemovedWorktree; width: n
           padding on each side. */}
       <text fg={theme.fgDim} wrapMode="none">
         {truncateEnd(
-          "⏎ restore worktree · p PR · i issue · y yank branch · h back",
+          "⏎ restore · p PR · i issue · y yank · ctrl+a autos · h back",
           Math.max(0, width - 4),
         )}
       </text>

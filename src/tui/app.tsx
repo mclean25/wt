@@ -129,6 +129,7 @@ export function App({ onExit }: Props) {
     toggleSectionFold,
     setSectionFolded,
     toggleAutomationsPaused,
+    toggleRemovedAutomationsPaused,
     toggleStackAutomationsPaused,
     mutate,
     cyclePrimaryHarness,
@@ -866,6 +867,7 @@ export function App({ onExit }: Props) {
         doYank,
         setModal,
         toast,
+        toggleRemovedAutomationsPaused,
       });
       return;
     }

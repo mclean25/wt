@@ -112,6 +112,7 @@ import {
   setSlugWorkStatus as setSlugWorkStatusOnDisk,
   swapOrders as swapOrdersOnDisk,
   toggleSectionFolded as toggleSectionFoldedOnDisk,
+  toggleRemovedAutomationsPaused as toggleRemovedAutomationsPausedOnDisk,
   toggleSlugAutomationsPaused as toggleSlugAutomationsPausedOnDisk,
   toggleStackAutomationsPaused as toggleStackAutomationsPausedOnDisk,
 } from "../core/wtstate.ts";
@@ -861,6 +862,17 @@ export function useWtActions() {
     async toggleAutomationsPaused(slug: string): Promise<boolean> {
       const paused = toggleSlugAutomationsPausedOnDisk(slug);
       await qc.invalidateQueries({ queryKey: qk.wtState() });
+      return paused;
+    },
+    /**
+     * Toggle the automations pause on an ARCHIVED row (Ctrl+A in the
+     * `h` view). Writes the removed-history entry, since the per-slug
+     * record was reaped with the worktree while post-merge `external`
+     * automations were not. Null when the slug isn't in the history.
+     */
+    async toggleRemovedAutomationsPaused(slug: string): Promise<boolean | null> {
+      const paused = toggleRemovedAutomationsPausedOnDisk(slug);
+      if (paused !== null) await qc.invalidateQueries({ queryKey: qk.wtState() });
       return paused;
     },
     /**

@@ -221,6 +221,22 @@ export type RemovedWorktree = {
    * "nothing was owed".
    */
   work?: WorkStatusRecord;
+  /**
+   * The per-worktree automations pause (Ctrl+A), copied off
+   * `slugs[slug].automationsPaused` by `recordRemovedWorktrees` and
+   * toggleable on the archived row itself.
+   *
+   * It has to outlive the checkout because the automations that fire
+   * for a slug with no checkout are exactly the ones a pause is wanted
+   * for: a post-merge `external` run survives its row's death by
+   * design (`isPostMergeExternalRun`), so before this the pause a human
+   * set was reaped by the sweep seconds after the merge and the run it
+   * was set to stop fired anyway.
+   *
+   * Unlike `work`, absence here is not "unknown" — it means not paused,
+   * exactly as an absent flag on a live row does.
+   */
+  automationsPaused?: boolean;
 };
 
 /**

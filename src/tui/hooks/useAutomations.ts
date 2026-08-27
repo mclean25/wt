@@ -343,6 +343,13 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
   for (const [slug, st] of Object.entries(wtState.data?.slugs ?? {})) {
     if (st.automationsPaused === true) pausedSlugs.add(slug);
   }
+  // Archived rows count too. A post-merge `external` run is exempted
+  // from the row's death on purpose, so the slugs whose automations are
+  // still live are precisely the ones with no per-slug entry left to
+  // carry a pause — read it off the removed history instead.
+  for (const e of wtState.data?.removed ?? []) {
+    if (e.automationsPaused === true) pausedSlugs.add(e.slug);
+  }
   const pausedStackIds = new Set(wtState.data?.pausedStacks ?? []);
   if (pausedStackIds.size > 0) {
     for (const row of opts.rows) {
