@@ -99,7 +99,11 @@ export const wtDevQuery = (
 
 export const wtMergedQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
   queryOptions({
-    queryKey: qk.wt(wt.slug).merged(),
+    // The branch is in the key, not just closed over by the queryFn —
+    // otherwise a repointed row keeps serving the previous branch's
+    // answer until the staleTime expires, and across a restart the
+    // persisted entry serves it indefinitely.
+    queryKey: qk.wt(wt.slug).merged(wt.branch ?? ""),
     queryFn: async (): Promise<boolean> =>
       wt.branch ? branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path }) : false,
     staleTime: STALE.mid,
@@ -107,7 +111,7 @@ export const wtMergedQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
 
 export const wtGoneQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
   queryOptions({
-    queryKey: qk.wt(wt.slug).gone(),
+    queryKey: qk.wt(wt.slug).gone(wt.branch ?? ""),
     queryFn: async (): Promise<boolean> =>
       wt.branch ? branchIsGone(wt.branch, wt.path) : false,
     staleTime: STALE.mid,

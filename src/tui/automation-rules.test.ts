@@ -733,3 +733,50 @@ describe("branch.advanced", () => {
     expect(fires[0]!.quiesceSlugs).toEqual([]);
   });
 });
+
+describe("wt.merged — delete-branch evidence", () => {
+  const r = rule({ id: "del", on: "wt.merged", run: "builtin:delete-branch" });
+
+  test("a PR-merged fire names the PR and freezes its number", () => {
+    const row = makeRow("a", {
+      pr: makePr({ number: 1618, state: "MERGED" }),
+      status: { kind: StatusKind.Merged, label: "merged" },
+    });
+    const [fire] = evaluateAutomations([r], [row], FRESH);
+    expect(fire?.deleteBranch).toBe("michael/a");
+    expect(fire?.deleteBranchPr).toBe(1618);
+    expect(fire?.detail).toContain("#1618 merged");
+  });
+
+  test("a LOCAL-merged fire does not claim the PR merged", () => {
+    // The incident: the merged verdict came from the local leg (a
+    // cached answer computed for a previous branch) while the row
+    // carried a fresh, OPEN PR. The line said "#1631 merged", which is
+    // wt asserting something false in its own audit trail — and it is
+    // what sent two readers looking for whoever closed the PR.
+    const row = makeRow("a", {
+      pr: makePr({ number: 1631, state: "OPEN" }),
+      // What the stale slug-keyed cache actually produced: the derived
+      // status says merged (computed for the PREVIOUS branch) while the
+      // PR on the row is fresh, current, and open.
+      status: { kind: StatusKind.Merged, label: "merged" },
+      fields: { ...makeRow("a").fields, merged: field(true) },
+    });
+    const [fire] = evaluateAutomations([r], [row], FRESH);
+    expect(fire).toBeDefined();
+    expect(fire?.detail).not.toContain("#1631 merged");
+    expect(fire?.detail).toContain("not observed merged");
+    // Frozen so the dispatch can confirm the claim before deleting.
+    expect(fire?.deleteBranchPr).toBe(1631);
+  });
+
+  test("no PR at all freezes null, so the dispatch may proceed on local evidence", () => {
+    const row = makeRow("a", {
+      status: { kind: StatusKind.Merged, label: "merged" },
+      fields: { ...makeRow("a").fields, merged: field(true) },
+    });
+    const [fire] = evaluateAutomations([r], [row], FRESH);
+    expect(fire?.deleteBranchPr).toBeNull();
+    expect(fire?.detail).toBe("branch landed on trunk — deleting remote branch michael/a");
+  });
+});

@@ -104,7 +104,14 @@ export const CACHE_DB = config.paths.cacheDb;
 // v26: `RemoteWorktreeSummary` gained `section`. Restoring v25 rows would
 // temporarily file every remote checkout into Inbox instead of its remote-owned
 // manual section, so discard those inventories rather than flash false grouping.
-const CACHE_BUSTER = "v26";
+// v27: `merged` / `gone` are now keyed on the BRANCH, not the slug alone.
+// The new key simply misses the old entries, so nothing stale is served
+// either way — the bust is to evict them rather than leave every user
+// carrying an orphaned per-slug verdict forever, and to clear the ones
+// already poisoned: a repointed row served the previous branch's
+// "merged" for as long as the entry survived, which fired
+// builtin:delete-branch against a branch with an OPEN PR.
+const CACHE_BUSTER = "v27";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

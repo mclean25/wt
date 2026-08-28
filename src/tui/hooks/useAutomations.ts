@@ -66,7 +66,7 @@ import {
   tripBreaker,
 } from "../../core/automations.ts";
 import { config, type AutomationTrigger } from "../../core/config.ts";
-import { closeGithubIssue, deleteRemoteBranch } from "../../core/github.ts";
+import { closeGithubIssue, deleteRemoteBranch, viewPrInfo } from "../../core/github.ts";
 import { lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { notifyMacos } from "../../core/notify.ts";
@@ -576,6 +576,31 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       const branch = fire.deleteBranch;
       if (branch === null) {
         wtLog.event.dim(`auto ${rule.id}: fire carried no branch — nothing to delete`);
+        return { declined: null };
+      }
+      // CONFIRM before deleting. The condition that produced this fire
+      // is derived from cached state, and deleting a remote ref is the
+      // one effect here wt cannot undo — GitHub also CLOSES any open PR
+      // whose head ref disappears, with no close event to explain it,
+      // so a wrong delete destroys a PR and hides why. A live read is
+      // one gh call on a path that runs once per merged branch.
+      const live = await viewPrInfo(branch);
+      const confirmed = live
+        ? live.state === "MERGED"
+        // No PR on the branch at all: only the fire that claimed local
+        // containment may proceed. A fire that NAMED a PR and now finds
+        // none cannot confirm its own claim, and unknown is not fine.
+        : fire.deleteBranchPr === null;
+      if (!confirmed) {
+        const why = live
+          ? `#${live.number} is ${live.state.toLowerCase()}, not merged`
+          : `no PR found for it, and the fire claimed #${fire.deleteBranchPr}`;
+        // Attention, not the firehose: this is wt declining to act on
+        // its own conclusion, which means something upstream produced a
+        // merged verdict for an unmerged branch and is worth a look.
+        wtLog.attention.warn(
+          `auto ${rule.id}: NOT deleting ${branch} — ${why}`,
+        );
         return { declined: null };
       }
       const r = await deleteRemoteBranch(branch);

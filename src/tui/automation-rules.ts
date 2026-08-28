@@ -82,6 +82,24 @@ export type AutomationFire = {
    */
   deleteBranch: string | null;
   /**
+   * The PR whose merge this `builtin:delete-branch` fire is claiming,
+   * or null when the evidence was local containment (branch landed on
+   * trunk, no PR). Frozen alongside `deleteBranch` so the dispatch can
+   * CONFIRM the claim against GitHub before deleting a ref, instead of
+   * trusting the condition that produced the fire.
+   *
+   * The fire's condition can be wrong: the merged/gone answers are
+   * cached and were once keyed on the slug alone, so a repointed row
+   * served the previous branch's verdict and this rule deleted the
+   * remote ref of an open PR — GitHub then closed that PR as a side
+   * effect of its head ref vanishing, with no close event to explain
+   * it. Keying those queries on the branch fixes the cause; confirming
+   * here is what makes the consequence unreachable from any future
+   * cause, because deleting a ref is the one thing in this file wt
+   * cannot undo.
+   */
+  deleteBranchPr: number | null;
+  /**
    * `branch.advanced` only: the branch and the commit range its tip
    * moved across, FROZEN at fire time for the same reason `closeIssue`
    * is — the watermark advances on dispatch, so a re-read at delivery
@@ -245,6 +263,7 @@ function singleRowFire(
     stackId: null,
     closeIssue: null,
     deleteBranch: null,
+    deleteBranchPr: null,
     branchRange: null,
     frozenVars: null,
     detail,
@@ -354,7 +373,18 @@ function evaluateRowTrigger(
       const prDone = ctx.githubFresh && row.pr?.state === "MERGED";
       if (!localDone && !prDone) return null;
       if (!isCleanCandidate(row)) return null;
-      const landed = row.pr ? `#${row.pr.number} merged` : "branch landed on trunk";
+      // Name the evidence that actually fired, not the PR that happens
+      // to be on the row. `#N merged` was emitted whenever a PR
+      // existed, including when the merged verdict came from the LOCAL
+      // leg — so wt asserted "#1631 merged" in its own audit trail
+      // about a PR opened three minutes earlier and never merged,
+      // which is what made the incident undiagnosable from GitHub's
+      // side and had two readers concluding a human closed it.
+      const landed = prDone
+        ? `#${row.pr!.number} merged`
+        : row.pr
+          ? `branch landed on trunk (#${row.pr.number} not observed merged)`
+          : "branch landed on trunk";
       if (closesIssue) {
         // Only fire when there's actually an issue to close — a fire
         // with nothing behind it would still burn a ledger key and
@@ -376,6 +406,7 @@ function evaluateRowTrigger(
           stackId: null,
           closeIssue: issue,
           deleteBranch: null,
+          deleteBranchPr: null,
     branchRange: null,
     frozenVars: null,
           detail: `${landed} — closing issue #${issue}`,
@@ -398,6 +429,7 @@ function evaluateRowTrigger(
           stackId: null,
           closeIssue: null,
           deleteBranch: branch,
+          deleteBranchPr: row.pr?.number ?? null,
           branchRange: null,
           frozenVars: null,
           detail: `${landed} — deleting remote branch ${branch}`,
@@ -420,6 +452,7 @@ function evaluateRowTrigger(
           stackId: null,
           closeIssue: null,
           deleteBranch: null,
+          deleteBranchPr: null,
           branchRange: null,
           // Everything the command needs, taken while the row is still
           // here. `{{issue_id}}` above all: it is the whole point of
@@ -623,6 +656,7 @@ function evaluateStackTrigger(
       stackId,
       closeIssue: null,
       deleteBranch: null,
+      deleteBranchPr: null,
     branchRange: null,
     frozenVars: null,
       detail: `${parts.join(" + ")} under ${pluralize(open.length, "open member")}`,
@@ -697,6 +731,7 @@ function evaluateBranchTrigger(
     stackId: null,
     closeIssue: null,
     deleteBranch: null,
+    deleteBranchPr: null,
     branchRange: { branch, from: tip.seen, to: tip.now },
     frozenVars: null,
     detail: `${branch} advanced ${tip.seen.slice(0, 7)}..${tip.now.slice(0, 7)}`,

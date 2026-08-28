@@ -122,8 +122,25 @@ export const qk = {
        */
       dev: (sessionExists: boolean | null) =>
         ["wt", slug, "dev", sessionExists] as const,
-      merged: () => ["wt", slug, "merged"] as const,
-      gone: () => ["wt", slug, "gone"] as const,
+      /**
+       * "Did this BRANCH land" / "is its remote ref gone" — both are
+       * facts about the branch, so the branch drives the key, same as
+       * `sync`/`gitActivity` above. Keyed on the slug alone they
+       * outlived the branch they described: repoint a worktree at a
+       * new branch and the answer computed for the OLD one is served
+       * for the new, persisted across restarts like every other query.
+       *
+       * That is not a display nit. `wt.merged` automations read these
+       * through `row.status`, so a row whose previous branch had
+       * merged fired `builtin:delete-branch` against its NEW branch —
+       * deleting the remote ref of an open PR, which GitHub then
+       * closed as a side effect of the ref vanishing. Observed on
+       * coz-2100-open-internet: #1618 merged one day, #1631 opened
+       * three minutes before the second firing and was never merged
+       * at all.
+       */
+      merged: (branch: string) => ["wt", slug, "merged", branch] as const,
+      gone: (branch: string) => ["wt", slug, "gone", branch] as const,
       /**
        * Sync counts vs (a) `@{u}` and (b) effective base. Keyed by
        * the resolved base so a stack-parent flip cache-misses into a
