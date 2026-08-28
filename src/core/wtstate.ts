@@ -1,7 +1,7 @@
 /**
  * Barrel re-exporting the original `core/wtstate.ts` surface. The
  * implementation now lives under `core/wtstate/` in strict layers:
- * `types.ts` (leaf types) → `io.ts` (state-file read/write/lock) →
+ * `types.ts` (leaf types) → `io.ts` (SQLite read/write/lock) →
  * `{sections,removed,automations-pause}.ts` (mutators). See those
  * files for the actual logic and comments.
  */

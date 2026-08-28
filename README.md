@@ -52,7 +52,16 @@ Updating is a fast-forward of that clone: `wt update` does it on demand, and the
 
 ## Configure
 
-`wt` refuses to start without a config. The minimal `~/.config/wt/config.toml`:
+Keep personal defaults in `~/.config/wt/config.toml`, then initialize each
+repository from anywhere inside it:
+
+```sh
+wt init
+```
+
+This creates a repository-local `.wt.toml`, detects the trunk branch, and
+assigns a path-derived namespace (`~/dev/cz/cozee-dev` becomes
+`dev-cz-cozee-dev`). The minimal merged configuration is:
 
 ```toml
 [paths]
@@ -65,7 +74,7 @@ prefix = "yourname"   # branches you create get `yourname/<id>-<slug>`
 
 Everything else is optional and section-gated: add `[deploy.sst]`, `[issue_tracker]`, `[review_bot]`, `[ai]`, or `[github.events]` to turn on or retarget that integration; omit it and the related rows hide themselves (the review-bot track defaults to CodeRabbit). The loader validates everything at startup and prints every missing or malformed field at once.
 
-For multiple repositories, put shared personal defaults in the user config and add a `.wt.toml` at each repository root. Running `wt` within a repository recursively merges its nearest `.wt.toml` over the user config, so repository-specific paths and settings win.
+For multiple repositories, put shared personal defaults in the user config and add a `.wt.toml` at each repository root. Running `wt` within a repository recursively merges its nearest `.wt.toml` over the user config, so repository-specific paths and settings win. Durable state for every repository lives in `~/.local/state/wt/wt.sqlite`, partitioned by that namespace; disposable query caches and runtime files remain under `~/.cache/wt/<repo-id>/`.
 
 The full reference — every option, default, the `[[actions]]` menu, and `[[automations]]` — is in **[docs/configuration.md](docs/configuration.md)**.
 

@@ -1,21 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-
-import { config } from "./config.ts";
 import { withFileLock } from "./locks.ts";
 import { createLogger } from "./logger.ts";
+import { readArchivedKeys, writeArchivedKeys } from "./state-db.ts";
 import {
   isRemoteWorktreeLedgerKey,
   remoteWorktreeLedgerKey,
   remoteWorktreeLedgerPrefix,
 } from "./worktree-ref.ts";
 
-const ARCHIVE_FILE = join(config.paths.cacheRoot, "archive.json");
 const log = createLogger("[archive]");
-
-// `slugs` is retained as the on-disk field name for compatibility; entries
-// are location-aware ledger keys now, with local slugs remaining unchanged.
-type ArchiveFile = { slugs: string[] };
 
 /**
  * Read the archived-slug set from disk. Returns an empty set on any
@@ -23,24 +15,16 @@ type ArchiveFile = { slugs: string[] };
  * than crashing on a corrupt file.
  */
 export function readArchived(): Set<string> {
-  if (!existsSync(ARCHIVE_FILE)) return new Set();
   try {
-    const raw = readFileSync(ARCHIVE_FILE, "utf8");
-    const data = JSON.parse(raw) as ArchiveFile;
-    return new Set(Array.isArray(data?.slugs) ? data.slugs : []);
+    return readArchivedKeys();
   } catch (err) {
-    log.error(err instanceof Error ? err : String(err), { file: ARCHIVE_FILE });
+    log.error(err instanceof Error ? err : String(err));
     return new Set();
   }
 }
 
 function writeArchived(set: Set<string>): void {
-  mkdirSync(dirname(ARCHIVE_FILE), { recursive: true });
-  const data: ArchiveFile = { slugs: [...set].sort() };
-  // Write-then-rename so a concurrent reader never sees a torn file.
-  const tmp = `${ARCHIVE_FILE}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
-  renameSync(tmp, ARCHIVE_FILE);
+  writeArchivedKeys(set);
 }
 
 /**
@@ -94,7 +78,7 @@ export function clearArchived(slug: string): void {
 /**
  * Drop archive entries that no longer correspond to a live worktree.
  * Run at TUI startup to sweep ghosts left behind by destroys (which
- * intentionally don't touch archive.json — see `removeWorktree`) or by
+ * intentionally retain archive state — see `removeWorktree`) or by
  * external operations (`git worktree remove` from the shell). No-op
  * when nothing to drop, so the common case is a single read.
  */

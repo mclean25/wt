@@ -23,14 +23,16 @@
  * reload is intentionally not supported — the TUI reads a stable
  * snapshot for its lifetime.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
 import type { BackendKind } from "./backend/types.ts";
 import {
   mergeConfig,
+  pathNamespace,
   repositoryConfigPath,
+  repositoryNamespace,
   REPOSITORY_CONFIG_ENV,
   type RawConfig,
 } from "./config-layer.ts";
@@ -699,6 +701,10 @@ export type AutomationDef = {
 };
 
 export type Config = {
+  /** Path-derived namespace for every durable state row owned by this repository. */
+  repoId: string;
+  /** Canonical repository identity stored beside repoId as a collision guard. */
+  repoPath: string;
   paths: {
     mainClone: string;
     worktreeRoot: string;
@@ -708,15 +714,13 @@ export type Config = {
     lockDir: string;
     /** SQLite blob holding the persisted TanStack Query cache. */
     cacheDb: string;
+    /** Authoritative state for every repository, partitioned by repoId. */
+    stateDb: string;
     /**
-     * `dirname(cacheDb)` — the root for ALL cross-process wt state
-     * (state.json, archive.json, session-name registries, automations
-     * ledger, manager reports, tmux conf, shell logs, dev scripts).
-     * `cache_db` is deliberately the single knob that relocates the
-     * whole state universe: point it into a fresh directory and a
-     * second wt instance (another repo, a test/dogfood setup) shares
-     * nothing with the first. New cross-process files go under this,
-     * never under a hardcoded `~/.cache/wt`.
+     * `dirname(cacheDb)` — the root for disposable cache data and runtime
+     * files (session registries, automation delivery, reports, logs,
+     * locks, tmux config and message sockets). Durable user state lives in
+     * `stateDb`; deleting this directory must not lose board organization.
      */
     cacheRoot: string;
     /** WezTerm CLI used for tab naming; null falls back to PATH lookup. */
@@ -1148,7 +1152,11 @@ function loadRaw(path: string, present: boolean, errs: Errors): Raw {
   }
 }
 
-function build(raw: Raw, errs: Errors): Config {
+function build(
+  raw: Raw,
+  errs: Errors,
+  repositoryConfig: string | null = null,
+): Config {
   const paths = obj(raw.paths);
   const branch = obj(raw.branch);
   const stage = obj(raw.stage);
@@ -1179,10 +1187,23 @@ function build(raw: Raw, errs: Errors): Config {
   const keepFresh = strArr(branch?.keep_fresh, []).filter((b) => b.trim() !== "");
 
   const mainClone = expandHome(errs.reqStr(paths, "paths", "main_clone"));
+  const repoPath = repositoryConfig
+    ? dirname(realpathSync(repositoryConfig))
+    : existsSync(mainClone) ? realpathSync(mainClone) : mainClone;
+  const repoId = repositoryConfig
+    ? repositoryNamespace(repositoryConfig, HOME)
+    : pathNamespace(mainClone, HOME);
   const worktreeRoot = expandHome(errs.reqStr(paths, "paths", "worktree_root"));
-  const cacheDb = expandHome(errs.optStr(paths, "cache_db", GENERIC_DEFAULTS.paths.cacheDb));
-  // Everything cross-process anchors here; log_dir/lock_dir default
-  // relative to it so relocating cache_db moves the whole universe.
+  const defaultCacheDb = repositoryConfig
+    ? join(HOME, ".cache", "wt", repoId, "cache.sqlite")
+    : GENERIC_DEFAULTS.paths.cacheDb;
+  const cacheDb = expandHome(errs.optStr(paths, "cache_db", defaultCacheDb));
+  const defaultStateDb = repositoryConfig
+    ? join(HOME, ".local", "state", "wt", "wt.sqlite")
+    : join(dirname(cacheDb), "wt.sqlite");
+  const stateDb = expandHome(errs.optStr(paths, "state_db", defaultStateDb));
+  // Disposable/runtime files anchor here; durable board state is in stateDb.
+  // log_dir/lock_dir remain relative so relocating cache_db moves that runtime.
   const cacheRoot = dirname(cacheDb);
   const logDir = expandHome(errs.optStr(paths, "log_dir", join(cacheRoot, "logs")));
   // Sibling subdir for structured app logs — keeps daily `wt-*.log`
@@ -1402,7 +1423,7 @@ function build(raw: Raw, errs: Errors): Config {
   // child process, so a session already spawned under it must keep
   // resolving the same server no matter what the config says.
   const tmuxSocket = process.env.WT_TMUX_SOCKET?.trim() ||
-    errs.optStr(obj(raw.tmux), "socket", "wt");
+    errs.optStr(obj(raw.tmux), "socket", repositoryConfig ? `wt-${repoId}` : "wt");
 
   const rows = strArr(ui?.rows, GENERIC_DEFAULTS.ui.rows);
   const hiddenBadges = new Set<BadgeSlot>();
@@ -1506,6 +1527,8 @@ function build(raw: Raw, errs: Errors): Config {
   const automations = parseAutomations(raw.automations, actions, { base: branchBase, keepFresh }, errs);
 
   return {
+    repoId,
+    repoPath,
     paths: {
       mainClone,
       worktreeRoot,
@@ -1513,6 +1536,7 @@ function build(raw: Raw, errs: Errors): Config {
       appLogDir,
       lockDir,
       cacheDb,
+      stateDb,
       cacheRoot,
       weztermCli,
       dotfiles,
@@ -1963,7 +1987,7 @@ function load(): { cfg: Config; path: string } {
     sourcePath = repository;
     process.env[REPOSITORY_CONFIG_ENV] = repository;
   }
-  const cfg = build(raw, errs);
+  const cfg = build(raw, errs, repository);
   // `[paths]` naturally lives in a repository `.wt.toml`; a bare `wt`
   // outside any repo then fails with "paths.main_clone is required" and
   // no clue where the field was expected. Name both candidate homes.

@@ -353,7 +353,7 @@ export async function allocateDevPort(slug: string): Promise<number> {
   }
   // Probe (async, unlocked) for a handful of OS-level-free candidates,
   // then claim atomically: `claimDevPort` re-checks the wtstate record
-  // under the state-file lock, so two processes allocating concurrently
+  // under the repository-state lock, so two processes allocating concurrently
   // can't both persist the same port — the loser lands on the next
   // candidate. Several candidates so one lost race doesn't force a
   // rescan.

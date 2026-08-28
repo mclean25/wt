@@ -248,11 +248,11 @@ export async function createWorktree(
     return { ok: false, reason: `Another wt process is busy with ${slug}` };
   }
 
-  // Reset any stale archive / state.json entry left over from a prior
+  // Reset any stale archive / repository-state entry left over from a prior
   // destroy of the same slug. Done after lock acquire so a racing
   // destroy of the same slug (would have failed `tryAcquireLock` above)
   // can't have its archive entry wiped from under it. We deliberately
-  // don't clean these up at destroy time: clearing archive.json while
+  // don't clean these up at destroy time: clearing archive state while
   // the parent TUI's worktreesQuery cache still includes the row makes
   // the row "un-archive" mid-destroy and flash back into the active
   // list. Clearing here, paired with the lock guarantee that no
@@ -680,7 +680,7 @@ export async function removeWorktree(
       untrustCodexWorkspace(wt.path);
     }
 
-    // Note: archive.json / state.json entries for THIS slug are NOT
+    // Note: archive / repository-state entries for THIS slug are NOT
     // cleared here. Doing so from the child process while the parent
     // TUI's worktreesQuery cache still includes this slug causes the
     // row to visibly "un-archive" mid-destroy: the archive query
@@ -689,7 +689,7 @@ export async function removeWorktree(
     // until the next worktrees refetch. The fresh-start guarantee for
     // re-creates lives in createWorktree (which clears both files for
     // the new slug); the stale-entry sweep for external destroys lives
-    // in `reapStartup` so archive.json/state.json don't accumulate
+    // in `reapStartup` so durable state doesn't accumulate
     // ghosts. (Dependents' fork-base records were already reparented
     // above when the branch was deleted.)
 
@@ -697,7 +697,7 @@ export async function removeWorktree(
     // destroy flows already wrote a rich snapshot (title, PR) at
     // dispatch; this minimal upsert preserves those fields and covers
     // the CLI paths that never went through the TUI. Best-effort — a
-    // state-file IO failure must not fail an already-completed remove.
+    // durable-state IO failure must not fail an already-completed remove.
     if (wt.branch) {
       try {
         recordRemovedWorktrees([

@@ -8,6 +8,13 @@
 
 It then searches from the current directory upward for the nearest `.wt.toml` and recursively merges that repository config over the user config. This lets one user config hold personal defaults while each repository supplies its own clone, worktree root, trunk branch, integrations, actions, and other overrides. Run `wt` from within the repository you want to manage.
 
+`wt init [directory]` creates that repository file without requiring an
+already-valid wt config. It derives a readable repository id from the config
+directory (`~/dev/cz/cozee-dev` → `dev-cz-cozee-dev`). That id partitions the
+global durable state database and names the default cache directory and tmux
+socket, so existing and future worktrees in different repositories cannot
+reap or rearrange one another.
+
 TOML tables merge by key. Scalar values and arrays replace the user value completely, so a repository's `[[actions]]` or `[[automations]]` list is authoritative when present. `$WT_CONFIG` selects a different user config; it does not disable repository overrides. Internally, `wt` carries the selected repository file into child processes with `$WT_REPO_CONFIG`, which also provides an explicit repository-config path for scripts that cannot preserve the invocation directory.
 
 For example, shared personal defaults can live in `~/.config/wt/config.toml`:
@@ -56,15 +63,16 @@ The source of truth for the schema is [`src/core/config.ts`](../src/core/config.
 | `worktree_root` | **yes** | — | Directory where worktrees are created (`<worktree_root>/<slug>`). |
 | `log_dir` | no | `<cache root>/logs` | Per-worktree destroy logs live here; daily structured app logs go to the derived `<log_dir>/app` subdirectory. |
 | `lock_dir` | no | `<cache root>/locks` | Per-slug operation locks (what drives the "setting up…" busy state). |
-| `cache_db` | no | `~/.cache/wt/cache.sqlite` | SQLite blob persisting the TanStack Query cache between runs. Its directory (the **cache root**) anchors every other cross-process file wt writes — `state.json`, `archive.json`, session-name registries, the automations ledger, manager reports, shell logs, the generated `tmux.conf`, the per-session message sockets in `insp/`, and the `shims/` dir kept on each session's PATH. Point `cache_db` into a fresh directory and that instance shares no state with any other. |
+| `cache_db` | no | with `.wt.toml`: `~/.cache/wt/<repo-id>/cache.sqlite`; otherwise `~/.cache/wt/cache.sqlite` | Disposable TanStack Query cache. Its directory (the **cache root**) also anchors rebuildable/runtime files: session registries, automation delivery files, manager reports, logs, locks, generated `tmux.conf`, message sockets, and shims. Durable section/status/archive state is not stored here. |
+| `state_db` | no | with `.wt.toml`: `~/.local/state/wt/wt.sqlite`; user-config-only compatibility mode: `<cache root>/wt.sqlite` | Authoritative SQLite state shared by local repositories and partitioned by `repo_id`. Normally leave this unset. The canonical repository path stored with each id is a collision guard. |
 | `wezterm_cli` | no | macOS: `/Applications/WezTerm.app/Contents/MacOS/wezterm`; elsewhere: `wezterm` from `PATH` | WezTerm CLI executable used to set the tab title to `wt` when `WEZTERM_PANE` is present. Supports `~` expansion. |
 | `dotfiles` | no | `~/.dotfiles` | Repo behind the general-purpose config session (`/` and its `\` palette). **The slot hides itself entirely when the directory doesn't exist** — no footer button, and `/` / `\` fall through — so a machine without a dotfiles repo isn't offered a key that can only cold-start a harness in a missing directory. |
 
-> **Upgrade note (Aug 2026):** wt used to keep all of this cross-process state at a fixed `~/.cache/wt` no matter where `cache_db` pointed. If you had `cache_db` at a custom location before the cache-root change, wt now looks for `state.json` & co. next to it and will start fresh — move the files from `~/.cache/wt` into `cache_db`'s directory (or drop your `cache_db` override) before upgrading. With the default `cache_db` nothing changes.
+> **Upgrade note (Aug 2026):** `wt state migrate` imports the current repository's attributable records from the former shared `~/.cache/wt/state.json` and `archive.json`, writes timestamped backups, and prunes only records successfully imported. It is idempotent; use `--keep-legacy` for a copy-only first pass or `--from <dir>` for a relocated legacy cache.
 
 ### Running a second isolated instance
 
-Two wt instances (another repo, a test setup) stay fully independent when they differ on two knobs: a relocated `cache_db` (own cache root → own state universe) and a distinct tmux socket (own tmux server — session names are only slug-scoped, so sharing a socket would cross-wire same-named sessions, most dangerously the singleton `manager`). Both can live in the same config file:
+Repository `.wt.toml` files are isolated automatically: their path-derived id partitions durable database rows and derives distinct cache roots and tmux sockets. Explicit overrides remain useful for test/dogfood instances:
 
 ```toml
 [paths]
@@ -82,7 +90,7 @@ Pick it with `WT_CONFIG=/path/to/config.toml` (or let a repo `.wt.toml` supply t
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `socket` | no | `"wt"` | Socket name (`tmux -L <socket>`) for the wt-private tmux server that hosts every agent, shell, diff, dev-server and action session. Change it only to isolate a second instance (above). `WT_TMUX_SOCKET` wins when set. |
+| `socket` | no | with `.wt.toml`: `"wt-<repo-id>"`; otherwise `"wt"` | Socket name (`tmux -L <socket>`) for the wt-private tmux server that hosts every agent, shell, diff, dev-server and action session. `WT_TMUX_SOCKET` wins when set. |
 
 ## `[branch]`
 
@@ -150,7 +158,7 @@ deleted worktrees.
 
 Section assignment comes from the remote host's authoritative wt state; fold
 state and archiving remain local to the controlling TUI. Archiving a remote row
-records a location-aware (`host` + `slug`) key in the local `archive.json`; it
+records a location-aware (`host` + `slug`) key in the local SQLite archive table; it
 does not move or mutate the checkout on the SSH host.
 Filesystem, Git, tmux, and destructive operations continue to execute remotely.
 The schema currently accepts one `[remote]`, but stored identity and query

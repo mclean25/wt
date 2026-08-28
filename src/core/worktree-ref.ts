@@ -4,8 +4,8 @@
  * operations run locally or over SSH. Local ledgers use this key so remote
  * worktrees can participate without pretending their checkout is local.
  *
- * Local keys remain bare slugs for backwards compatibility with the existing
- * archive.json format. Remote keys live in a reserved, encoded namespace.
+ * Local keys remain bare slugs for compatibility with the former archive.json
+ * format. Remote keys live in a reserved, encoded namespace.
  */
 export type WorktreeRef =
   | { kind: "local"; slug: string }

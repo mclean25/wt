@@ -24,12 +24,10 @@
  *      `<slug>/rebase-{merge,apply}` — a rebase starting/ending in any
  *      worktree, for the conflict probe's mid-rebase state (see
  *      `watchRebaseState`).
- *   5. `~/.cache/wt/` non-recursive, filtered to `state.json` /
- *      `archive.json` — cross-process state writes (CLI `wt base`
+ *   5. the durable SQLite state directory, filtered to its db/WAL files —
+ *      cross-process state writes (CLI `wt base`
  *      ops, `wt base set`, the detached destroy, another wt instance).
- *      Prefix-matched because both writers go through a
- *      `<file>.<pid>.tmp` → rename dance (see the marker watcher in
- *      events/store.ts for the same trick).
+ *      Prefix-matched to include SQLite's `-wal` and `-shm` sidecars.
  *
  * Both paths debounce since FSEvents bursts. ENOENT or setup errors log
  * and fall through to the polling backstop on each query — never crash
@@ -46,11 +44,12 @@
  * becomes painful.
  */
 import { mkdirSync, watch, type FSWatcher } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { createLogger } from "./logger.ts";
 import { closeSilent } from "./tail-util.ts";
 import { WT_STATE_DIR } from "./wtstate.ts";
+import { config } from "./config.ts";
 
 const log = createLogger("[repo-watch]");
 
@@ -327,8 +326,7 @@ export function watchRebaseState(
 export type WtStateFile = "state" | "archive";
 
 /**
- * Subscribe to writes of the cross-process state files (`state.json`,
- * `archive.json` under `~/.cache/wt/`). Catches mutations from OUTSIDE
+ * Subscribe to writes of the durable SQLite state database. Catches mutations from OUTSIDE
  * this process — CLI stack ops run in a Claude session, `wt base set`
  * from a shell, the detached destroy's slug-state reap — so section /
  * stack / archive changes surface without `r`. The TUI's own writes
@@ -336,12 +334,9 @@ export type WtStateFile = "state" | "archive";
  * invalidation those paths already do (debounced, and the refetch is a
  * cheap file read).
  *
- * Watches the DIRECTORY because both writers rename `<file>.<pid>.tmp`
- * into place and a single-file watch breaks across atomic replaces on
- * macOS; prefix-matching the filename covers the temp and final names
- * (same trick as the github-events marker watcher). The dir also hosts
- * high-churn neighbors (cache.sqlite + WAL); the prefix filter keeps
- * those from over-firing.
+ * Watches the directory because SQLite writes the database and its WAL
+ * sidecars. State and archive share one transaction store, so either
+ * query is cheaply invalidated for each observed commit.
  */
 export function watchWtStateFiles(
   onChange: (file: WtStateFile) => void,
@@ -357,6 +352,7 @@ export function watchWtStateFiles(
   let watcher: FSWatcher | null = null;
   try {
     mkdirSync(WT_STATE_DIR, { recursive: true });
+    const dbName = basename(config.paths.stateDb);
     watcher = watch(WT_STATE_DIR, { persistent: false }, (_event, filename) => {
       if (filename == null) {
         // Unknown target — fire both rather than miss a write.
@@ -364,8 +360,10 @@ export function watchWtStateFiles(
         debouncers.archive.trigger();
         return;
       }
-      if (filename.startsWith("state.json")) debouncers.state.trigger();
-      else if (filename.startsWith("archive.json")) debouncers.archive.trigger();
+      if (filename.startsWith(dbName)) {
+        debouncers.state.trigger();
+        debouncers.archive.trigger();
+      }
     });
     watcher.on("error", (err) => {
       log.warn("wt-state watcher error", { err: String(err), dir: WT_STATE_DIR });

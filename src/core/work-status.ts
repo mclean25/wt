@@ -381,7 +381,7 @@ const GATED_STATES: readonly WorkState[] = ["ready", "todo"];
  * Whether a record is held back by an external gate. One predicate so
  * the dot, the banner, the sort, the CLI and the automation gate can't
  * drift on what "blocked" means — and so a gate hand-written onto a
- * state that can't carry one (state.json is editable) is inert
+ * state that can't carry one (durable payloads can be imported) is inert
  * everywhere rather than inert in some places.
  */
 export function isGated(record: WorkStatusRecord | null | undefined): boolean {
@@ -666,7 +666,7 @@ export function parseWorkStatus(raw: unknown): WorkStatusRecord | null {
   if (typeof rec.at !== "string" || rec.at.trim() === "") return null;
   const out: WorkStatusRecord = { state: rec.state as WorkState, at: rec.at };
   if (typeof rec.note === "string") {
-    // Defense in depth: the CLI sanitizes on write, but state.json is
+    // Defense in depth: the CLI sanitizes on write, but durable state is
     // hand-editable and other writers may exist.
     const note = sanitizeWorkNote(rec.note);
     if (note !== "") out.note = note;

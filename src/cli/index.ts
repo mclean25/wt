@@ -1,6 +1,8 @@
 const HELP = `usage: wt <command> [options]
 
 commands:
+  init         create an isolated .wt.toml for a repository
+  state        migrate durable repository state into SQLite
   ls           list all worktrees
   fleet       audit the fleet: asserted status vs session + PR reality
   new         create a new worktree
@@ -48,6 +50,8 @@ type Loader = () => Promise<{ run: Runner }>;
  * file names it.
  */
 const RUNNERS: Record<string, Loader> = {
+  init: () => import("./commands/init.ts"),
+  state: () => import("./commands/state.ts"),
   ls: () => import("./commands/ls.ts"),
   fleet: () => import("./commands/fleet.ts"),
   new: () => import("./commands/new.ts"),

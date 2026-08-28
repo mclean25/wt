@@ -4,6 +4,22 @@
 
 Environment variables: `WT_CONFIG` points at an explicit config file; `XDG_CONFIG_HOME` relocates the default lookup (see [configuration.md](configuration.md)). Both are forwarded into the `wt events` launchd daemon so it loads the same config.
 
+### `wt init [directory]`
+
+Create `.wt.toml` at the containing Git repository root. This command does not
+require an existing valid wt config. It detects the trunk branch, creates
+defaults for a sibling worktree root, and assigns path-derived cache and tmux
+namespaces. It refuses to overwrite an existing file.
+
+### `wt state migrate [--from <legacy-cache-dir>] [--keep-legacy]`
+
+One-time upgrade for repositories that used the former shared `state.json` and
+`archive.json`. Imports only live records attributable to the current
+repository into `~/.local/state/wt/wt.sqlite`, backs up both legacy files, and
+then removes only the imported records. Ambiguous removed history and bare
+branch watermarks stay in the backup. Reruns are safe; current SQLite values
+win. `--keep-legacy` performs a copy-only pass.
+
 ### `wt remote [<command> ...]`
 
 With no arguments, allocate an SSH terminal and enter the `[remote]` host's

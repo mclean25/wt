@@ -1,15 +1,38 @@
 import { describe, expect, test } from "bun:test";
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
   mergeConfig,
+  pathNamespace,
   repositoryConfigPath,
+  repositoryNamespace,
   REPOSITORY_CONFIG_ENV,
 } from "./config-layer.ts";
+
+describe("repositoryNamespace", () => {
+  test("slugs the repository path below home", () => {
+    expect(
+      repositoryNamespace(
+        "/Users/alex/dev/cz/cozee-dev/.wt.toml",
+        "/Users/alex",
+      ),
+    ).toBe("dev-cz-cozee-dev");
+  });
+
+  test("uses the full path outside home and normalizes punctuation", () => {
+    expect(repositoryNamespace("/srv/Team App/.wt.toml", "/Users/alex"))
+      .toBe("srv-team-app");
+  });
+
+  test("can derive the same namespace directly from a repository path", () => {
+    expect(pathNamespace("/Users/alex/dev/cz/cozee-dev", "/Users/alex"))
+      .toBe("dev-cz-cozee-dev");
+  });
+});
 
 describe("repositoryConfigPath", () => {
   test("finds the nearest .wt.toml above the invocation directory", () => {
@@ -97,7 +120,10 @@ reviewers = false
         const { reviewBadge } = await import(${JSON.stringify(badgesModule)});
         const { githubQuery, reviewRequestsQuery } = await import(${JSON.stringify(githubQueriesModule)});
         console.log(JSON.stringify({
+          repoId: config.repoId,
+          repoPath: config.repoPath,
           paths: config.paths,
+          tmux: config.tmux,
           branch: config.branch,
           lifecycle: config.lifecycle,
           github: config.github,
@@ -120,8 +146,17 @@ reviewers = false
       });
 
       expect(result.exitCode).toBe(0);
+      const repoId = repositoryNamespace(join(repo, ".wt.toml"));
       expect(JSON.parse(result.stdout.toString())).toMatchObject({
-        paths: { mainClone: "/local/repo", worktreeRoot: "/global/worktrees" },
+        repoId,
+        repoPath: realpathSync(repo),
+        paths: {
+          mainClone: "/local/repo",
+          worktreeRoot: "/global/worktrees",
+          cacheDb: join(homedir(), ".cache", "wt", repoId, "cache.sqlite"),
+          stateDb: join(homedir(), ".local", "state", "wt", "wt.sqlite"),
+        },
+        tmux: { socket: `wt-${repoId}` },
         branch: { prefix: "alex", base: "develop" },
         lifecycle: { copyGlobs: [".agents/**"] },
         github: { reviewers: false },

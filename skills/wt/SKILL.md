@@ -39,6 +39,11 @@ in each one.
 ## Subcommands
 
 - `wt` — interactive TUI (vim keys: `j`/`k`/Enter, `?` for help).
+- `wt init [directory]` — create a repository-local `.wt.toml` with an
+  isolated path-derived repository namespace; does not require an existing
+  valid wt config.
+- `wt state migrate` — one-time import of this repository's records from the
+  legacy shared JSON files into the global, repo-partitioned SQLite state DB.
 - `wt ls` — list worktrees (`--json` for scripts; includes issue links and
   work status).
 - `wt new <input>` — create a worktree (and branch). Input is an issue id with

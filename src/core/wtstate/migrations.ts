@@ -1,15 +1,14 @@
 /**
- * Schema-version + forward-only migrations for `state.json` — the one
- * durable, non-rebuildable store (fork-base records, sections, work
- * statuses, removed-worktree history). wt self-updates hot from git
+ * Schema-version + forward-only migrations for the serialized repository
+ * state payload stored in SQLite (fork-base records, sections, work statuses,
+ * removed-worktree history). wt self-updates hot from git
  * `main`; when the shape of `WtState`/`WtSlugState` changes, a
  * migration transforms the file in place instead of the new code
  * silently dropping/misreading old data.
  *
  * Contract:
- *  - Migrations are FORWARD-ONLY. There is no down-migration path — a
- *    code rollback recovers via the pre-migration backup `io.ts` writes
- *    (`state.json.bak-v<from>`), not by running anything here backward.
+ *  - Migrations are FORWARD-ONLY. There is no down-migration path; a newer
+ *    payload is read leniently and never down-stamped by the read path.
  *  - Each entry operates on the RAW parsed JSON (`Record<string,
  *    unknown>`), not the typed `WtState` — the whole point is to move
  *    data that no longer matches the current type definitions.
@@ -33,7 +32,7 @@ export type WtStateMigration = {
 };
 
 /**
- * Version 0 (no `version` field — every state.json written before this
+ * Version 0 (no `version` field — every legacy state payload written before this
  * system existed) to 1 was pure stamping, no shape change, so it has no
  * entry.
  */

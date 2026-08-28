@@ -157,7 +157,7 @@ export function tryAcquireLock(
 /**
  * Run `fn` while holding an exclusive flock on `<lockDir>/<name>.lock`,
  * BLOCKING until the lock is free. For short synchronous critical
- * sections only (e.g. a state-file read-modify-write): the kernel wait
+ * sections only (e.g. a repository-state read-modify-write): the kernel wait
  * blocks this thread, which is fine when every holder releases in
  * sub-millisecond time, and fd-close-on-crash means a dead holder can't
  * wedge anyone. Long-held operation locks keep using `tryAcquireLock`.

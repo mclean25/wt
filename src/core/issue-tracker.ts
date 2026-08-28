@@ -85,7 +85,7 @@ export function resolveIssueId(
   // `coz-2101-connector-research` fell straight back to COZ-2101 and
   // there was no way to say the work is not that ticket.
   // Any all-whitespace string, not just `""`: the store trims on the
-  // way in, but a hand-edited state.json can carry `"  "`, and letting
+  // way in, but imported/corrupt durable state can carry `"  "`, and letting
   // that fall through would quietly resurrect the slug's id under an
   // override whose whole purpose was to suppress it.
   if (typeof stored === "string" && stored.trim() === "") return null;

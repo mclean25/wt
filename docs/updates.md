@@ -114,12 +114,13 @@ first) plus current / last-good / skipped shas.
 
 Three stores, three policies:
 
-- **`state.json`** (fork bases, sections, work statuses, removed
-  history — durable, not rebuildable): versioned with forward-only
-  migrations (`core/wtstate/migrations.ts`, `WT_STATE_VERSION`). A
-  migration writes a backup first (`state.json.bak-v<from>` beside the
-  file), transforms, and stamps. State written by *newer* code (after
-  a rollback) is read leniently and never down-stamped or rewritten.
+- **`~/.local/state/wt/wt.sqlite`** (fork bases, sections, work statuses,
+  archives and removed history — durable, not rebuildable): one database for
+  the machine, with every row scoped by a path-derived `repo_id`. SQL schema
+  changes use the forward-only `schema_migrations` ledger in
+  `core/state-db.ts`. The repository-state payload retains its existing
+  forward-only `WT_STATE_VERSION` transformations, so the proven migration
+  helpers remain the compatibility boundary while storage evolves.
 - **`cache.sqlite`** (persisted queries — fully rebuildable): no
   migrations, ever. `CACHE_BUSTER` in `src/state/client.ts` busts the
   whole persisted cache on any shape change; busting is the *correct*
@@ -130,55 +131,18 @@ Three stores, three policies:
   defaults or a fail-fast error with a copy-pasteable snippet. A
   config that loaded yesterday must load today.
 
-Known limitation: rolling back *across* a state migration runs old
-code against newer-shaped state. Parsing is lenient so it degrades
-rather than breaks, but a subsequent write by old code can drop fields
-it doesn't know. The pre-migration backup helps with that repair, with
-an honest caveat: it snapshots the file at migration time, so edits
-made after the migration aren't in it — restoring is a revert to that
-snapshot, not a surgical recovery. Backups are one small file per
-version bump (`state.json.bak-v<N>`, overwritten on repeat), so they
-don't meaningfully accumulate.
+`wt state migrate` is the boundary from the former shared JSON store. It
+selects only records attributable to the current repository, imports them in
+one SQLite transaction, backs up the source files, and removes only the rows
+successfully imported. The command is idempotent and current SQLite values
+win, so `--keep-legacy` is available for a copy-only first pass.
 
-The same field-dropping applies WITHOUT a rollback during the mixed-
-version window after an additive field ships: a still-running TUI on
-the previous build strips the new field on its next state write (its
-`parseWtState` doesn't know the key), and new-code CLI processes
-re-migrate the file right back — so values written to a brand-new
-field can silently vanish until every long-lived wt process has
-restarted onto the new build (observed live with `edges` at v3).
-Bounded by restart, but worth knowing when a freshly-shipped record
-"didn't stick".
-
-**This is now detected rather than remembered.** Relying on a human to
-recall the caveat failed exactly as you'd expect: seven merge edges
-were stripped this way and were only noticed because someone re-listed
-them on a hunch — from the outside, the board simply didn't contain
-what an agent said it had recorded. Every write from a current build
-records `state.writer.json` beside the state file, holding the mtime it
-just produced; on read, a mismatch means something wrote `state.json`
-that doesn't maintain that stamp, which is reported on the attention
-feed (naming the older build's state version when the file was
-down-stamped, since that identifies the culprit). The signal has to
-live outside `state.json` precisely because an older build both strips
-unknown fields — so an in-file writer stamp is the first thing to go —
-and rewrites `version` to its own on write, leaving neither the stamp
-nor the version to compare. It self-expires: the next write from a
-current build re-syncs the pair, which is exactly when the danger
-window closes. It is reported once per occurrence, not once per
-process, and the recovery it names is the one nobody thinks to take —
-re-assert what you recorded recently, and restart long-lived wt
-processes to close the window.
-
-The blast radius is exactly the fields that are new to the running
-build, and nothing else. `parseWtState` is a whitelist parser: it
-rebuilds each record from the fields it knows, so a field an old build
-knows (`section`, `order`, `work`, `baseBranch`, …) round-trips through
-that build untouched. A downgrade write can therefore never drop or
-default a pre-existing value — if long-standing state looks like it
-moved on its own, the cause is elsewhere, and the daily log is where to
-settle it (section moves and fold toggles are recorded there for exactly
-this reason).
+A rollback to a pre-SQLite wt build cannot corrupt the database because that
+build does not know it exists; it will continue writing the legacy JSON files.
+Those post-migration legacy writes are intentionally not merged
+automatically. Restart long-lived wt processes together when crossing this
+storage boundary, and retain the migration backup until the new build has
+been exercised.
 
 ## Escape hatches
 
