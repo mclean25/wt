@@ -5,6 +5,10 @@ import { expectedStage } from "../core/stage-safety.ts";
 import type { MergeQueueEntry, PullRequest, Status } from "../core/types.ts";
 import { StatusKind } from "../core/types.ts";
 import type { WorkStatusRecord } from "../core/work-status.ts";
+import {
+  DEV_SERVER_STOPPED,
+  type DevServerStatus,
+} from "../core/dev-server.ts";
 import { worktreeLedgerKey } from "../core/worktree-ref.ts";
 import {
   localWorktreeTarget,
@@ -48,6 +52,7 @@ export type WorktreeModel = {
   githubIssue: number | null;
   work: WorkStatusRecord | null;
   deployed: boolean;
+  dev: DevServerStatus;
   dirty: boolean | null;
   unpushed: number | null;
   blockedReason: string | null;
@@ -85,6 +90,7 @@ export function localWorktreeModel(row: WorktreeRow): WorktreeModel {
     githubIssue: row.githubIssue,
     work: row.work,
     deployed: row.fields?.deploy?.data ?? false,
+    dev: row.fields?.dev?.data ?? DEV_SERVER_STOPPED,
     dirty: dirty === undefined ? null : dirty.length > 0,
     unpushed: sync
       ? sync.remote === null
@@ -96,20 +102,6 @@ export function localWorktreeModel(row: WorktreeRow): WorktreeModel {
       row.fields?.dev?.data?.running === true ||
       row.fields?.dev?.data?.starting === true ||
       row.fields?.dev?.data?.crashed === true,
-  };
-}
-
-function remoteWork(row: RemoteWorktreeSummary): WorkStatusRecord | null {
-  if (!row.workState || !row.workAt) return null;
-  return {
-    state: row.workState,
-    at: row.workAt,
-    ...(row.workNote ? { note: row.workNote } : {}),
-    ...(row.workRisk ? { risk: row.workRisk } : {}),
-    ...(row.workBlockedOn ? { blockedOn: row.workBlockedOn } : {}),
-    ...(row.workVerifyAfterMerge
-      ? { verifyAfterMerge: row.workVerifyAfterMerge }
-      : {}),
   };
 }
 
@@ -128,29 +120,26 @@ export function remoteWorktreeModel(
     branch: row.branch,
     path: row.path,
     stage: row.stage,
-    base: row.base ?? config.branch.base,
-    baseBranch: row.base ?? config.branch.base,
+    base: row.base,
+    baseBranch: row.base,
     section: row.section,
     archived,
     exists: row.exists,
-    status: {
-      kind: row.status,
-      label: row.statusLabel,
-      age: row.statusAge ?? undefined,
-      op: row.statusOp ?? undefined,
-    },
+    status: row.status,
     pr: githubData?.prs[row.branch],
     mq: githubData?.mergeQueue?.[row.branch],
     issueId: resolveIssueId(row.slug, row.issueId),
-    githubIssue: null,
-    work: remoteWork(row),
+    githubIssue: row.githubIssue,
+    work: row.work,
     deployed: row.deployed,
+    dev: row.dev ?? DEV_SERVER_STOPPED,
     dirty: row.dirty,
     unpushed: row.unpushed,
-    blockedReason: row.status === StatusKind.Busy ? row.statusLabel : null,
-    // Pane existence is not in the remote inventory yet. Keep the shared
-    // viewer reachable; the remote `wt dev logs` response is authoritative.
-    devLogsAvailable: true,
+    blockedReason: row.status.kind === StatusKind.Busy ? row.status.label : null,
+    devLogsAvailable:
+      row.dev?.running === true ||
+      row.dev?.starting === true ||
+      row.dev?.crashed === true,
   };
 }
 

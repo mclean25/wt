@@ -1,19 +1,5 @@
-/**
- * The right-aligned badge cluster a worktree row shows in the list pane:
- * action-running glyph, deploy bolt, harness session glyph, review-bot /
- * review hints, PR-state (or merge-queue) slot, CI rollup. Extracted from
- * the list panel so the folded section/stack summaries in the details
- * pane render the exact same cluster per member — same glyphs, same
- * colors, same order. Individual glyph/color rules still come from
- * `badges.ts`; this module owns the composition.
- *
- * Slot visibility is `ui.hidden_badges` (see `BADGE_SLOTS`), applied via
- * `shows()`. It only suppresses glyphs here — the details pane keeps
- * every signal, so hiding a slot declutters the list without losing
- * information.
- */
+/** One location-neutral badge renderer for local and SSH-hosted rows. */
 import {
-  type Badge,
   checkBadge,
   mqStateBadge,
   prSlotBadge,
@@ -21,189 +7,197 @@ import {
   reviewBadge,
   reviewBotBadge,
   showReviewBot,
+  type Badge,
 } from "./badges.ts";
+import { stateColor } from "./claude-state.ts";
 import { NF } from "./icons.ts";
 import { theme } from "./theme.ts";
-import { getHarness } from "../core/harness/index.ts";
-import type { HarnessId } from "../core/harness/index.ts";
+import { config, type BadgeSlot } from "../core/config.ts";
+import { getHarness, type HarnessId } from "../core/harness/index.ts";
 import type { DerivedState } from "../core/harness/status.ts";
-import { stateColor } from "./claude-state.ts";
 import {
   REVIEW_BOT_NONE,
   StatusKind,
   type MergeQueueEntry,
   type PullRequest,
 } from "../core/types.ts";
-import { type BadgeSlot, config } from "../core/config.ts";
 import type { WorktreeRow } from "./hooks/useWorktreeRows.ts";
+import type { WorktreeModel } from "./worktree-model.ts";
 
-/**
- * Whether a cluster slot renders, per `ui.hidden_badges`. Every slot
- * below routes through this — `badgeClusterCells` and the JSX must agree
- * on which slots are present or the slug column's width is wrong.
- */
 function shows(slot: BadgeSlot): boolean {
   return !config.ui.hiddenBadges.has(slot);
 }
 
+/** Every input the renderer needs, with location deliberately absent. */
+export type WorktreeBadgeSignals = {
+  pr: PullRequest | undefined;
+  mq: MergeQueueEntry | undefined;
+  archived: boolean;
+  actionRunning: boolean;
+  environmentLive: boolean;
+  dirty: Badge | null;
+  rebase: Badge | null;
+  activeHarnessId: HarnessId | undefined;
+  sessionState: DerivedState | undefined;
+};
+
+export function localBadgeSignals(
+  row: WorktreeRow,
+  actionRunning: boolean,
+  activeHarnessId: HarnessId | undefined,
+  sessionState?: DerivedState,
+): WorktreeBadgeSignals {
+  return {
+    pr: row.pr,
+    mq: row.mq,
+    archived: row.archived,
+    actionRunning,
+    environmentLive:
+      (row.fields.deploy.data ?? false) || (row.fields.dev.data?.running ?? false),
+    dirty:
+      row.status.kind === StatusKind.Dirty
+        ? { glyph: NF.pencil, fg: theme.warn }
+        : null,
+    rebase: rebaseBadge(
+      row.fields.lock.data,
+      row.fields.conflict.data,
+      sessionState,
+    ),
+    activeHarnessId,
+    sessionState,
+  };
+}
+
+/** Adapter for inventory-normalized rows (used by every remote surface). */
+export function modelBadgeSignals(
+  model: WorktreeModel,
+  actionRunning: boolean,
+): WorktreeBadgeSignals {
+  return {
+    pr: model.pr,
+    mq: model.mq,
+    archived: model.archived,
+    actionRunning,
+    environmentLive: model.deployed || model.dev.running,
+    dirty: model.status.kind === StatusKind.Dirty
+      ? { glyph: NF.pencil, fg: theme.warn }
+      : null,
+    rebase: null,
+    activeHarnessId: undefined,
+    sessionState: undefined,
+  };
+}
+
+type VisibleSignals = {
+  action: boolean;
+  session: boolean;
+  deploy: boolean;
+  dirty: Badge | null;
+  rebase: Badge | null;
+  pr: PullRequest | undefined;
+  mq: MergeQueueEntry | undefined;
+  bot: Badge | null;
+  review: Badge | null;
+  checks: Badge | null;
+};
+
+/** Apply hidden-badge policy once for both width calculation and JSX. */
+function visible(signals: WorktreeBadgeSignals): VisibleSignals {
+  const pr = shows("pr") ? signals.pr : undefined;
+  const mq = shows("pr") ? signals.mq : undefined;
+  const bot = signals.pr && shows("review_bot") && showReviewBot(signals.pr)
+    ? reviewBotBadge(signals.pr.reviewBot ?? REVIEW_BOT_NONE)
+    : null;
+  const review = signals.pr && shows("review") && signals.pr.state === "OPEN" &&
+      !signals.pr.isDraft
+    ? reviewBadge(signals.pr.review)
+    : null;
+  const checks = signals.pr && shows("checks") && signals.pr.state === "OPEN" &&
+      signals.pr.checks !== "none"
+    ? checkBadge(signals.pr.checks)
+    : null;
+  return {
+    action: signals.actionRunning && shows("action"),
+    session: signals.activeHarnessId !== undefined && shows("session"),
+    deploy: signals.environmentLive && shows("deploy"),
+    dirty: shows("dirty") ? signals.dirty : null,
+    rebase: shows("rebase") ? signals.rebase : null,
+    pr,
+    mq,
+    bot,
+    review,
+    checks,
+  };
+}
+
+export function worktreeBadgeClusterCells(signals: WorktreeBadgeSignals): number {
+  const v = visible(signals);
+  const content =
+    (v.action ? 2 : 0) +
+    (v.dirty ? 2 : 0) +
+    (v.rebase ? 2 : 0) +
+    (v.deploy ? 2 : 0) +
+    (v.session ? 2 : 0) +
+    (v.bot ? 2 : 0) +
+    (v.review ? 2 : 0) +
+    (v.mq ? 4 : v.pr ? 2 : 0) +
+    (v.checks ? 2 : 0);
+  return content === 0 ? 0 : content + 2;
+}
+
 /**
- * Cells the badge cluster occupies for a given row. Mirrors the
- * width-prop layout in the JSX below: 2-cell leading gap + each present
- * badge's box width. Returns 0 when no badges are rendered so the slug
- * column reclaims the space. The action-running hint, when present,
- * sits as the leftmost slot inside the cluster.
+ * Shared list/details cluster. Remote location is represented beside the row
+ * title; it is not a rendering mode and therefore cannot change these badges.
  */
+export function WorktreeBadgeCluster({ signals }: { signals: WorktreeBadgeSignals }) {
+  if (worktreeBadgeClusterCells(signals) === 0) return null;
+  const v = visible(signals);
+  const dim = signals.archived ? theme.fgDim : undefined;
+  const prBadge = v.pr ? prSlotBadge(v.pr, v.mq) : null;
+  const mqText = v.mq
+    ? `${NF.mergeQueue} ${v.mq.position >= 10 ? "+" : String(v.mq.position)}`
+    : "";
+  const harnessId = signals.activeHarnessId;
+  return (
+    <box flexShrink={0} flexDirection="row">
+      <text>  </text>
+      {v.action ? <box width={2} flexShrink={0}><text fg={theme.ok}>{NF.comment}</text></box> : null}
+      {v.dirty ? <box width={2} flexShrink={0}><text fg={dim ?? v.dirty.fg}>{v.dirty.glyph}</text></box> : null}
+      {v.rebase ? <box width={2} flexShrink={0}><text fg={dim ?? v.rebase.fg}>{v.rebase.glyph}</text></box> : null}
+      {v.deploy ? <box width={2} flexShrink={0}><text fg={dim ?? theme.warn}>{NF.bolt}</text></box> : null}
+      {v.session && harnessId ? (
+        <box width={2} flexShrink={0}>
+          <text fg={signals.sessionState
+            ? stateColor(harnessId, signals.sessionState)
+            : getHarness(harnessId).color}>
+            {getHarness(harnessId).glyph}
+          </text>
+        </box>
+      ) : null}
+      {v.bot ? <box width={2} flexShrink={0}><text fg={dim ?? v.bot.fg}>{v.bot.glyph}</text></box> : null}
+      {v.review ? <box width={2} flexShrink={0}><text fg={dim ?? v.review.fg}>{v.review.glyph}</text></box> : null}
+      {v.mq ? (
+        <box width={4} flexShrink={0}><text fg={dim ?? mqStateBadge(v.mq.state).fg}>{mqText}</text></box>
+      ) : prBadge ? (
+        <box width={2} flexShrink={0}><text fg={dim ?? prBadge.fg}>{prBadge.glyph}</text></box>
+      ) : null}
+      {v.checks ? <box width={2} flexShrink={0}><text fg={dim ?? v.checks.fg}>{v.checks.glyph}</text></box> : null}
+    </box>
+  );
+}
+
+/** Local adapter retained for callers that still own a WorktreeRow. */
 export function badgeClusterCells(
   row: WorktreeRow,
   actionRunning: boolean,
   activeHarnessId: HarnessId | undefined,
 ): number {
-  const isDeployed = boltLit(row);
-  const showAction = actionRunning && shows("action");
-  const mq = shows("pr") ? row.mq : null;
-  const prSlot = shows("pr") ? row.pr : null;
-  const showChecks =
-    shows("checks") &&
-    !!row.pr &&
-    row.pr.state === "OPEN" &&
-    row.pr.checks !== "none";
-  // Action and harness-glyph slots coexist (e.g. a row running an
-  // action while hosting a live session shows both glyphs).
-  const showSessionSlot = activeHarnessId !== undefined && shows("session");
-  const rebase = rebaseHint(row);
-  const dirty = dirtyHint(row);
-  const bot = reviewBotHint(row);
-  const review = reviewHint(row);
-  const hasAnyBadge =
-    showAction ||
-    showSessionSlot ||
-    !!rebase ||
-    !!dirty ||
-    !!(prSlot || mq || isDeployed) ||
-    !!bot ||
-    !!review ||
-    showChecks;
-  if (!hasAnyBadge) return 0;
-  let cells = 2; // leading gap
-  if (showAction) cells += 2;
-  if (dirty) cells += 2;
-  if (showSessionSlot) cells += 2;
-  if (rebase) cells += 2;
-  if (bot) cells += 2;
-  if (review) cells += 2;
-  // The PR-state slot doubles as the merge-queue slot: a queued PR
-  // swaps the PR glyph for the mq indicator and the slot widens to 4
-  // (icon + space + position digit); otherwise it's the 2-cell PR icon.
-  if (mq) cells += 4;
-  else if (prSlot) cells += 2;
-  if (showChecks) cells += 2;
-  if (isDeployed) cells += 2;
-  return cells;
+  return worktreeBadgeClusterCells(
+    localBadgeSignals(row, actionRunning, activeHarnessId),
+  );
 }
 
-/**
- * "<mq-glyph> N" for a merge-queue position: nerd-font merge-queue
- * octicon + 1-based position (`+` if there are ≥10 ahead). Rendered in
- * place of the PR-state glyph when the PR is queued, so the slot widens
- * to 4 cells (2-cell icon + 1-cell space + 1-cell digit). Only called
- * when `row.mq` exists; the empty fallback is defensive.
- */
-function mqGlyph(row: WorktreeRow): string {
-  const mq = row.mq;
-  if (!mq) return "";
-  const pos = mq.position;
-  const digit = pos >= 10 ? "+" : String(pos);
-  return `${NF.mergeQueue} ${digit}`;
-}
-
-/**
- * Tiny CI rollup glyph rendered next to the PR badge. Glyph/color from
- * `checkBadge`; only shown for live PRs — after merge/close the check
- * state is noise. Falls back to the empty 2-cell slot for the quiet
- * `none` state so the cluster stays aligned.
- */
-function checkGlyph(row: WorktreeRow): Badge {
-  const pr = row.pr;
-  if (!pr || pr.state !== "OPEN") return { glyph: "  ", fg: theme.fgDim };
-  return checkBadge(pr.checks) ?? { glyph: "  ", fg: theme.fgDim };
-}
-
-/**
- * Rebase-lifecycle hint: restack running (accent) / mid-rebase or
- * conflict-being-resolved (warn) / unattended pre-flight conflict
- * (err). Glyph/color from `rebaseBadge`; `clean` and `unknown`
- * (unresolved ref, ancient git, still loading) stay silent, so the
- * cluster reads "absence == fine". `sessionState` only shifts the
- * conflict color (red ↔ warn), never presence — `badgeClusterCells`
- * relies on that and omits it.
- */
-function rebaseHint(
-  row: WorktreeRow,
-  sessionState?: DerivedState,
-): Badge | null {
-  if (!shows("rebase")) return null;
-  return rebaseBadge(row.fields.lock.data, row.fields.conflict.data, sessionState);
-}
-
-/**
- * Uncommitted-changes hint (the pencil the leftmost gutter used to
- * carry before the work-status dot claimed that slot). Shown only when
- * the derived status IS dirty — the loud states (busy/gone/merged)
- * still own the gutter and would make a duplicate pencil here noise.
- * Clean renders nothing (absence-as-signal).
- */
-function dirtyHint(row: WorktreeRow): Badge | null {
-  if (!shows("dirty")) return null;
-  if (row.status.kind !== StatusKind.Dirty) return null;
-  return { glyph: NF.pencil, fg: theme.warn };
-}
-
-/**
- * The bolt slot lights for either "environment is live" source: an SST
- * stage deployed for this worktree, or its `[dev_server]` running.
- * They share the slot because they answer the same question — "is
- * there a live environment serving this branch" — and never coexist
- * meaningfully on one repo.
- */
-function boltLit(row: WorktreeRow): boolean {
-  if (!shows("deploy")) return false;
-  return (row.fields.deploy.data ?? false) || (row.fields.dev.data?.running ?? false);
-}
-
-/**
- * Human-review hint. Glyph/color from `reviewBadge`; gated to OPEN
- * non-draft PRs (mirrors `reviewLabel` + `buildPrSegments` in pr.tsx).
- */
-function reviewHint(row: WorktreeRow): Badge | null {
-  const pr = row.pr;
-  if (!shows("review")) return null;
-  if (!pr || pr.state !== "OPEN" || pr.isDraft) return null;
-  return reviewBadge(pr.review);
-}
-
-/**
- * Review-bot hint. Glyph/color from `reviewBotBadge`; visibility (incl.
- * the mode-specific draft rule) from the shared `showReviewBot`.
- */
-function reviewBotHint(row: WorktreeRow): Badge | null {
-  const pr = row.pr;
-  if (!shows("review_bot")) return null;
-  if (!pr || !showReviewBot(pr)) return null;
-  return reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE);
-}
-
-/**
- * Compact badge cluster: only present badges render, butted up
- * right-aligned. Each badge sits in an explicit-width box so opentui's
- * flex layout reserves the right number of buffer cells regardless of
- * whether `Bun.stringWidth` and the native renderer agree on the icon's
- * width. The leading 2-space gap visually separates the cluster from
- * the label to its left; the whole cluster is omitted (null) when no
- * badges are present so the label can extend into the freed space.
- * Archived rows dim every slot except the action/session glyphs —
- * running work or a live session against an archived worktree is worth
- * seeing.
- */
+/** Local adapter retained for list/section composition. */
 export function BadgeCluster({
   row,
   actionRunning,
@@ -211,203 +205,13 @@ export function BadgeCluster({
   sessionState,
 }: {
   row: WorktreeRow;
-  /** Whether a tracked headless action is currently running on this slug. */
   actionRunning: boolean;
-  /** The harness of this slug's active (F12-target) session, or
-   *  undefined when no session is live. */
   activeHarnessId: HarnessId | undefined;
-  /** Derived state of that active session — tints the harness glyph
-   *  with `stateColor` when known, else the harness brand color. */
   sessionState: DerivedState | undefined;
 }) {
-  const prb = row.pr
-    ? prSlotBadge(row.pr, row.mq)
-    : { glyph: "  ", fg: theme.fgDim };
-  const prFg = row.archived ? theme.fgDim : prb.fg;
-  const c = checkGlyph(row);
-  const checkFg = row.archived ? theme.fgDim : c.fg;
-  const isDeployed = boltLit(row);
-  const deployFg = row.archived
-    ? theme.fgDim
-    : isDeployed
-      ? theme.warn
-      : theme.fgDim;
-  // `pr` covers the shared PR-state / merge-queue slot; hiding it drops
-  // both, since they're one slot that swaps contents.
-  const mq = shows("pr") ? row.mq : null;
-  const prSlot = shows("pr") ? row.pr : null;
-  const mqFg = row.archived || !mq ? theme.fgDim : mqStateBadge(mq.state).fg;
-  const mqText = mqGlyph(row);
-  const showChecks =
-    shows("checks") &&
-    !!row.pr &&
-    row.pr.state === "OPEN" &&
-    row.pr.checks !== "none";
-  const bot = reviewBotHint(row);
-  const review = reviewHint(row);
-  const botFg = row.archived || !bot ? theme.fgDim : bot.fg;
-  const reviewFg = row.archived || !review ? theme.fgDim : review.fg;
-  // Two independent 2-cell slots: action (comment glyph, green) and
-  // harness glyph (tinted with the harness's own color). They coexist
-  // so a row running an action while hosting a live session shows both.
-  const showAction = actionRunning && shows("action");
-  const showSessionSlot = activeHarnessId !== undefined && shows("session");
-  const rebase = rebaseHint(row, sessionState);
-  const dirty = dirtyHint(row);
-  const hasAnyBadge =
-    showAction ||
-    showSessionSlot ||
-    !!rebase ||
-    !!dirty ||
-    !!(prSlot || mq || isDeployed) ||
-    !!bot ||
-    !!review ||
-    showChecks;
-  if (!hasAnyBadge) return null;
   return (
-    <box flexShrink={0} flexDirection="row">
-      <text>  </text>
-      {showAction ? (
-        <box width={2} flexShrink={0}>
-          <text fg={theme.ok}>{NF.comment}</text>
-        </box>
-      ) : null}
-      {/* Uncommitted-changes pencil — relocated from the left gutter,
-          which the work-status dot now owns. */}
-      {dirty ? (
-        <box width={2} flexShrink={0}>
-          <text fg={row.archived ? theme.fgDim : dirty.fg}>{dirty.glyph}</text>
-        </box>
-      ) : null}
-      {/* Rebase-lifecycle slot (restacking / mid-rebase / conflict) —
-          sits just left of the PR-signal sub-cluster so it reads as
-          "this branch/PR is moving (or won't land cleanly)". Dimmed on
-          archived rows like the rest of the cluster. */}
-      {rebase ? (
-        <box width={2} flexShrink={0}>
-          <text fg={row.archived ? theme.fgDim : rebase.fg}>{rebase.glyph}</text>
-        </box>
-      ) : null}
-      {/* Ephemeral / scattered badges are left-anchored so they don't
-          displace the PR-status run on the right, ordered by
-          transience: action-running → stage/deploy bolt. */}
-      {isDeployed ? (
-        <box width={2} flexShrink={0}>
-          <text fg={deployFg}>{NF.bolt}</text>
-        </box>
-      ) : null}
-      {showSessionSlot && activeHarnessId ? (
-        <box width={2} flexShrink={0}>
-          <text
-            fg={
-              sessionState
-                ? stateColor(activeHarnessId, sessionState)
-                : getHarness(activeHarnessId).color
-            }
-          >
-            {getHarness(activeHarnessId).glyph}
-          </text>
-        </box>
-      ) : null}
-      {/* Bot and review hints sit immediately to the left of the PR icon
-          so the eye reads "[bot] [review] [pr]" as a tight cluster of
-          "what's the state of this PR" signals. Each is omitted entirely
-          when its hint helper returns null, so a row with no review
-          activity collapses cleanly instead of leaving dead space. */}
-      {bot ? (
-        <box width={2} flexShrink={0}>
-          <text fg={botFg}>{bot.glyph}</text>
-        </box>
-      ) : null}
-      {review ? (
-        <box width={2} flexShrink={0}>
-          <text fg={reviewFg}>{review.glyph}</text>
-        </box>
-      ) : null}
-      {/* PR-state slot, doubling as the merge-queue slot: a queued PR
-          shows the mq indicator (icon + position) in place of the PR
-          glyph, widening to 4 cells. */}
-      {mq ? (
-        <box width={4} flexShrink={0}>
-          <text fg={mqFg}>{mqText}</text>
-        </box>
-      ) : prSlot ? (
-        <box width={2} flexShrink={0}>
-          <text fg={prFg}>{prb.glyph}</text>
-        </box>
-      ) : null}
-      {showChecks ? (
-        <box width={2} flexShrink={0}>
-          <text fg={checkFg}>{c.glyph}</text>
-        </box>
-      ) : null}
-    </box>
-  );
-}
-
-/** Width of the GitHub-only cluster used by SSH-hosted worktree rows. */
-export function remoteBadgeClusterCells(
-  pr: PullRequest | undefined,
-  mq: MergeQueueEntry | undefined,
-  actionRunning = false,
-): number {
-  const action = actionRunning && shows("action");
-  if (!pr) return action ? 4 : 0;
-  const bot = pr && shows("review_bot") && showReviewBot(pr)
-    ? reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE)
-    : null;
-  const review = pr && shows("review") && pr.state === "OPEN" && !pr.isDraft
-    ? reviewBadge(pr.review)
-    : null;
-  const prSlot = shows("pr");
-  const checks = shows("checks") && pr.state === "OPEN" && pr.checks !== "none";
-  if (!action && !bot && !review && !prSlot && !checks) return 0;
-  return 2 + (action ? 2 : 0) + (bot ? 2 : 0) + (review ? 2 : 0) +
-    (prSlot ? (mq ? 4 : 2) : 0) + (checks ? 2 : 0);
-}
-
-/** PR/check/review badges for a remote row; checkout-local signals stay remote. */
-export function RemoteBadgeCluster({
-  pr,
-  mq,
-  archived,
-  actionRunning = false,
-}: {
-  pr: PullRequest | undefined;
-  mq: MergeQueueEntry | undefined;
-  archived: boolean;
-  actionRunning?: boolean;
-}) {
-  const showAction = actionRunning && shows("action");
-  if (remoteBadgeClusterCells(pr, mq, actionRunning) === 0) return null;
-  const bot = pr && shows("review_bot") && showReviewBot(pr)
-    ? reviewBotBadge(pr.reviewBot ?? REVIEW_BOT_NONE)
-    : null;
-  const review = pr && shows("review") && pr.state === "OPEN" && !pr.isDraft
-    ? reviewBadge(pr.review)
-    : null;
-  const showPr = shows("pr");
-  const showChecks = !!pr && shows("checks") && pr.state === "OPEN" && pr.checks !== "none";
-  const prBadge = pr ? prSlotBadge(pr, mq) : null;
-  const checks = pr ? checkBadge(pr.checks) : null;
-  const dim = archived ? theme.fgDim : undefined;
-  const mqText = mq
-    ? `${NF.mergeQueue} ${mq.position >= 10 ? "+" : String(mq.position)}`
-    : "";
-  return (
-    <box flexShrink={0} flexDirection="row">
-      <text>  </text>
-      {showAction ? <box width={2} flexShrink={0}><text fg={theme.ok}>{NF.comment}</text></box> : null}
-      {bot ? <box width={2} flexShrink={0}><text fg={dim ?? bot.fg}>{bot.glyph}</text></box> : null}
-      {review ? <box width={2} flexShrink={0}><text fg={dim ?? review.fg}>{review.glyph}</text></box> : null}
-      {showPr && mq ? (
-        <box width={4} flexShrink={0}><text fg={dim ?? mqStateBadge(mq.state).fg}>{mqText}</text></box>
-      ) : showPr && prBadge ? (
-        <box width={2} flexShrink={0}><text fg={dim ?? prBadge.fg}>{prBadge.glyph}</text></box>
-      ) : null}
-      {showChecks && checks ? (
-        <box width={2} flexShrink={0}><text fg={dim ?? checks.fg}>{checks.glyph}</text></box>
-      ) : null}
-    </box>
+    <WorktreeBadgeCluster
+      signals={localBadgeSignals(row, actionRunning, activeHarnessId, sessionState)}
+    />
   );
 }

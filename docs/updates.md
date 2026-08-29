@@ -114,7 +114,7 @@ first) plus current / last-good / skipped shas.
 
 Three stores, three policies:
 
-- **`~/.local/state/wt/wt.sqlite`** (fork bases, sections, work statuses,
+- **`~/.local/state/wt/wt.sqlite`** (fork bases, controller-owned local/remote sections, work statuses,
   archives and removed history — durable, not rebuildable): one database for
   the machine, with every row scoped by a path-derived `repo_id`. SQL schema
   changes use the forward-only `schema_migrations` ledger in

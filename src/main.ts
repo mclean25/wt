@@ -40,6 +40,10 @@ async function main(): Promise<number> {
   // No args + TTY → interactive TUI. Every user action runs in-TUI now
   // (no CLI handoff for `new` or `clean`), so this is a single call.
   const { config } = await import("./core/config.ts");
+  if (config.instance.role === "worker") {
+    console.error("wt TUI is disabled in worker mode; launch it on the controller");
+    return 2;
+  }
   // Skills/instructions freshness check BEFORE the TUI takes the
   // terminal, so accepted updates are live for every agent session
   // spawned from this run. Silent when nothing is pending.

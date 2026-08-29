@@ -101,9 +101,8 @@ export const CACHE_DB = config.paths.cacheDb;
 // entry is indistinguishable from a fresh one, which is what makes this
 // a bust rather than a shape bump. (v22 busted `firstCommit` alone for
 // the narrower stale-remote-ref version of the same failure.)
-// v26: `RemoteWorktreeSummary` gained `section`. Restoring v25 rows would
-// temporarily file every remote checkout into Inbox instead of its remote-owned
-// manual section, so discard those inventories rather than flash false grouping.
+// v26: `RemoteWorktreeSummary` gained `section` under the former remote-owned
+// layout model. Restoring v25 rows would have flashed false grouping then.
 // v27: `merged` / `gone` are now keyed on the BRANCH, not the slug alone.
 // The new key simply misses the old entries, so nothing stale is served
 // either way — the bust is to evict them rather than leave every user
@@ -111,7 +110,14 @@ export const CACHE_DB = config.paths.cacheDb;
 // already poisoned: a repointed row served the previous branch's
 // "merged" for as long as the entry survived, which fired
 // builtin:delete-branch against a branch with an OPEN PR.
-const CACHE_BUSTER = "v27";
+// v28: remote `section` changed authority without changing shape. A worker's
+// persisted section must never flash before the controller-owned layout joins
+// it, so discard inventories written under the former ownership model.
+// v29: `RemoteWorktreeSummary` gained the worker-observed dev-server state.
+// An old cached row has no value and would briefly render as falsely stopped.
+// v30: remote inventory now restores the canonical nested snapshot shape
+// (`status` and `work` objects) rather than the former flattened CLI fields.
+const CACHE_BUSTER = "v30";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

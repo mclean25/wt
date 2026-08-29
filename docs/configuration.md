@@ -55,6 +55,25 @@ prefix = "yourname"
 
 The source of truth for the schema is [`src/core/config.ts`](../src/core/config.ts).
 
+## `[instance]`
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `role` | no | `"controller"` | `controller` owns the TUI/layout. `worker` accepts SSH execution and agent-status commands but disables the TUI and `wt section`. |
+
+Use the same wt installation on both machines. A remote execution host opts
+into worker mode in its user config:
+
+```toml
+[instance]
+role = "worker"
+```
+
+The controller verifies this role, the worker protocol version, and the
+running build during its SSH handshake. Protocol compatibility controls
+whether commands may run; a differing build remains usable but is shown as a
+version warning so development snapshots can be synchronized deliberately.
+
 ## `[paths]`
 
 | key | required | default | meaning |
@@ -141,7 +160,8 @@ is an independent clone with its own refs — see
 ## `[remote]` — optional SSH worktree host
 
 Configure a second machine whose own `wt` installation, clone, config, and
-worktree root remain authoritative. The local TUI polls that host's worktree
+worktree root remain authoritative for execution. Set `[instance] role =
+"worker"` on that machine. The controller TUI polls the worker's worktree
 summaries and renders them in the same sections as local worktrees, with a
 small remote indicator on each row. `Ctrl+N` forwards the normal `wt new`
 lifecycle over SSH; F10/F11/F12 on one of those rows attach to that
@@ -154,12 +174,22 @@ continue to create locally.
 The last successful remote inventory is persisted with the rest of wt's query
 cache. If the host sleeps or becomes unreachable, those rows remain visible as
 last-known state and are marked `host unavailable`; they are not interpreted as
-deleted worktrees.
+deleted worktrees. The inventory carries agent work-status assertions and the
+worker's full dev-server health snapshot, so the controller renders the same
+status dot, live bolt, URL, startup/restart/queue state, and crash diagnostics
+as it does for local rows.
 
-Section assignment comes from the remote host's authoritative wt state; fold
-state and archiving remain local to the controlling TUI. Archiving a remote row
-records a location-aware (`host` + `slug`) key in the local SQLite archive table; it
-does not move or mutate the checkout on the SSH host.
+The controller fetches this through the versioned hidden `_snapshot` contract,
+not by treating the human-facing `wt ls --json` schema as an RPC. Local and
+remote adapters therefore produce the same nested application state; SSH
+location changes execution routing and adds the server glyph, not feature or
+badge behavior.
+
+Section assignment, ordering, fold state, and archiving all belong to the
+controller. A worker-reported section is ignored; a newly discovered remote row
+starts in the controller's Inbox. Moving it records a host-qualified (`host` +
+`slug`) layout entry in the controller's SQLite state and never mutates the
+worker checkout or database. Archiving uses the same location-aware identity.
 Filesystem, Git, tmux, and destructive operations continue to execute remotely.
 The schema currently accepts one `[remote]`, but stored identity and query
 caches are host-qualified; future multiple-remote support will not conflate
@@ -178,8 +208,9 @@ wt_path = "~/.wt/bin/wt"       # optional
 | `label` | no | `host` | Short name in the prompt, event log, and remote WezTerm tab title. |
 | `wt_path` | no | `~/.wt/bin/wt` | Remote executable. The `~/` prefix expands in the remote account. |
 
-The remote machine needs its own `~/.config/wt/config.toml`; do not point the
-local process at a mounted remote filesystem. `wt remote [args…]` remains a
+The remote machine needs its own `~/.config/wt/config.toml`, including
+`[instance] role = "worker"`; do not point the local process at a mounted
+remote filesystem. `wt remote [args…]` remains a
 diagnostic/admin escape hatch, but normal work happens from the unified local
 Inbox.
 

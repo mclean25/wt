@@ -30,6 +30,7 @@ import { listWorktrees } from "../../core/worktree.ts";
 import {
   GROUP_INBOX,
   readWtState,
+  removeSection,
   renameSection,
   setSlugSection,
   stackIdFromSectionKey,
@@ -37,6 +38,7 @@ import {
 import type { WtState } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red } from "../colors.ts";
+import { config } from "../../core/config.ts";
 
 const USAGE = `usage: wt section <subcommand> [options]
 
@@ -315,10 +317,9 @@ function runRemove(positional: string[]): number {
     console.error(red(`no such section: ${positional[0]}`));
     return 1;
   }
-  const rows = slugsIn(state, name, null);
-  for (const slug of rows) setSlugSection(slug, null);
+  const rowCount = removeSection(name);
   console.log(
-    `${green("✓")} dropped ${bold(name)}${rows.length ? dim(` · ${rows.length} row${rows.length === 1 ? "" : "s"} → inbox`) : ""}`,
+    `${green("✓")} dropped ${bold(name)}${rowCount ? dim(` · ${rowCount} row${rowCount === 1 ? "" : "s"} → inbox`) : ""}`,
   );
   return 0;
 }
@@ -327,6 +328,10 @@ export async function run(argv: string[]): Promise<number> {
   if (hasHelpFlag(argv)) {
     console.log(USAGE);
     return 0;
+  }
+  if (config.instance.role === "worker") {
+    console.error(red("sections are controller-owned; run this command on the controller"));
+    return 1;
   }
   const positional: string[] = [];
   let json = false;

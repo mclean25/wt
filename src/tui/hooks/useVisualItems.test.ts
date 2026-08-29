@@ -4,6 +4,7 @@ import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
 import { GROUP_INBOX } from "./useWorktreeRows.ts";
 import { buildActiveItems } from "./useVisualItems.ts";
+import { DEV_SERVER_STOPPED } from "../../core/dev-server.ts";
 
 function local(slug: string, section: string | null): WorktreeRow {
   return {
@@ -26,22 +27,17 @@ function remote(slug: string, section: string | null): RemoteWorktreeSummary {
     deployed: false,
     section,
     exists: true,
-    status: "clean",
-    statusLabel: "clean",
-    statusAge: null,
-    statusOp: null,
+    status: { kind: "clean", label: "clean" },
+    dev: DEV_SERVER_STOPPED,
     dirty: false,
     unpushed: 0,
     pushed: true,
     aheadOfBase: 0,
     issueUrl: null,
     issueId: null,
-    workState: null,
-    workNote: null,
-    workRisk: null,
-    workBlockedOn: null,
-    workVerifyAfterMerge: null,
-    workAt: null,
+    githubIssue: null,
+    githubIssueUrl: null,
+    work: null,
   };
 }
 
@@ -93,6 +89,7 @@ describe("buildActiveItems", () => {
         hostKey: "dellserver",
         hostLabel: "Dell server",
         input: "new-task",
+        previousKeys: [],
         status: "creating",
       },
       remoteWorktrees: [],
@@ -100,5 +97,51 @@ describe("buildActiveItems", () => {
     });
 
     expect(item).toMatchObject({ kind: "section", sectionKey: GROUP_INBOX });
+  });
+
+  test("replaces a transient creation when a differently-slugged row appears", () => {
+    const items = buildActiveItems({
+      rows: [],
+      foldedSections: new Set(),
+      remoteCreation: {
+        remote: { host: "dellserver", label: "Dell server", wtPath: "wt" },
+        hostKey: "dellserver",
+        hostLabel: "Dell server",
+        input: "COZ-123",
+        previousKeys: ["dellserver:existing"],
+        status: "creating",
+      },
+      remoteWorktrees: [remote("existing", null), remote("coz-123-calm-otter", null)],
+      archivedKeys: new Set(),
+    });
+
+    expect(items.map((item) =>
+      item.kind === "remote" && "slug" in item.entry
+        ? item.entry.slug
+        : "placeholder",
+    )).toEqual(["existing", "coz-123-calm-otter"]);
+  });
+
+  test("keeps a transient creation while inventory contains only prior rows", () => {
+    const items = buildActiveItems({
+      rows: [],
+      foldedSections: new Set(),
+      remoteCreation: {
+        remote: { host: "dellserver", label: "Dell server", wtPath: "wt" },
+        hostKey: "dellserver",
+        hostLabel: "Dell server",
+        input: "COZ-123",
+        previousKeys: ["dellserver:existing"],
+        status: "creating",
+      },
+      remoteWorktrees: [remote("existing", null)],
+      archivedKeys: new Set(),
+    });
+
+    expect(items).toHaveLength(2);
+    expect(items[1]).toMatchObject({
+      kind: "remote",
+      entry: { input: "COZ-123" },
+    });
   });
 });

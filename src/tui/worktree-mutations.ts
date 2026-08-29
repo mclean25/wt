@@ -1,30 +1,17 @@
-import { runWorktreeWt } from "../core/worktree-executor.ts";
 import type { WorktreeTarget } from "../core/worktree-target.ts";
+import { worktreeTargetKey } from "../core/worktree-target.ts";
 
 export type WorktreeMutationDeps = {
-  setLocalSection: (slug: string, section: string | null) => Promise<void>;
-  refreshRemote: () => Promise<unknown>;
+  setControllerSection: (key: string, section: string | null) => Promise<void>;
 };
 
-/** Persistence boundary for mutations whose authority lives with the host. */
+/** Persistence boundary for controller-owned fleet layout. */
 export function makeWorktreeMutations(deps: WorktreeMutationDeps) {
   async function setSection(
     target: WorktreeTarget,
     section: string | null,
   ): Promise<void> {
-    if (target.location.kind === "local") {
-      return deps.setLocalSection(target.slug, section);
-    }
-    const code = await runWorktreeWt(target, [
-      "section",
-      "mv",
-      target.slug,
-      section ?? "-",
-    ]);
-    if (code !== 0) {
-      throw new Error(`remote section move exited ${code}`);
-    }
-    await deps.refreshRemote();
+    return deps.setControllerSection(worktreeTargetKey(target), section);
   }
 
   return { setSection };

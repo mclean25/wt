@@ -27,6 +27,11 @@ import { createLogger } from "../../core/logger.ts";
 import { workStatusSuffix, type WorkStatusRecord } from "../../core/work-status.ts";
 import type { WtState } from "../../core/wtstate.ts";
 import {
+  remoteWorktreeLedgerKey,
+  worktreeLedgerLabel,
+} from "../../core/worktree-ref.ts";
+import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
+import {
   consumeSelfSectionWrite,
   consumeSelfStatusWrite,
 } from "../../state/self-writes.ts";
@@ -47,7 +52,10 @@ function describe(record: WorkStatusRecord): string {
   }
 }
 
-export function useWtStateEvents(wtState: WtState | undefined): void {
+export function useWtStateEvents(
+  wtState: WtState | undefined,
+  remoteRows: readonly RemoteWorktreeSummary[] = [],
+): void {
   // slug → last-seen assertion timestamp (the identity of one
   // assertion). `null` = seen with no status. Undefined map = not yet
   // seeded.
@@ -56,6 +64,7 @@ export function useWtStateEvents(wtState: WtState | undefined): void {
   // kept in its own map so a status assertion and a section move on
   // the same slug each narrate independently.
   const seenSectionsRef = useRef<Map<string, string | null> | null>(null);
+  const seenRemoteRef = useRef<Map<string, string | null> | null>(null);
   useEffect(() => {
     if (!wtState) return;
     const next = new Map<string, string | null>();
@@ -63,6 +72,9 @@ export function useWtStateEvents(wtState: WtState | undefined): void {
     for (const [slug, entry] of Object.entries(wtState.slugs)) {
       next.set(slug, entry.work?.at ?? null);
       nextSections.set(slug, entry.section);
+    }
+    for (const [key, layout] of Object.entries(wtState.remoteLayouts)) {
+      nextSections.set(key, layout.section);
     }
     const prev = seenRef.current;
     const prevSections = seenSectionsRef.current;
@@ -75,7 +87,7 @@ export function useWtStateEvents(wtState: WtState | undefined): void {
         // grouping already set, which is placement, not a move.
         if (!prevSections.has(slug)) continue;
         if (prevSections.get(slug) === section) continue;
-        const log = createLogger(slug);
+        const log = createLogger(worktreeLedgerLabel(slug));
         const text = section ? `moved to ${section}` : "moved to the inbox";
         // Ours (the `l` picker / Shift+J-K across a boundary): routine,
         // firehose only — the keystroke already acked. Anyone else's:
@@ -104,4 +116,26 @@ export function useWtStateEvents(wtState: WtState | undefined): void {
       else log.attention.info(text, opts);
     }
   }, [wtState]);
+
+  useEffect(() => {
+    const next = new Map<string, string | null>();
+    for (const row of remoteRows) {
+      next.set(remoteWorktreeLedgerKey(row.hostKey, row.slug), row.work?.at ?? null);
+    }
+    const prev = seenRemoteRef.current;
+    seenRemoteRef.current = next;
+    if (prev === null) return;
+    for (const row of remoteRows) {
+      if (!row.work) continue;
+      const key = remoteWorktreeLedgerKey(row.hostKey, row.slug);
+      if (!prev.has(key) || prev.get(key) === row.work.at) continue;
+      const record = row.work;
+      const log = createLogger(worktreeLedgerLabel(key));
+      const text = describe(record);
+      if (record.state === "needs-human") log.attention.err(text);
+      else if (record.state === "ready") log.attention.ok(text);
+      else if (record.state === "needs-testing") log.attention.warn(text);
+      else log.attention.info(text);
+    }
+  }, [remoteRows]);
 }

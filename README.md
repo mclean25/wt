@@ -87,7 +87,8 @@ The bottom pane defaults to a curated **attention feed** (status transitions, ne
 wt also distributes the agent skills and instructions that make all of that work: at startup it offers pending updates y/n (declines remembered per version), following your symlinks and rulesync/dotfiles setup to install them durably for every harness on the machine — see [docs/skills.md](docs/skills.md).
 
 An optional `[remote]` SSH target lets `Ctrl+N` create worktrees on a second
-machine while keeping them in the same sections as local rows (marked only by
+machine configured with `[instance] role = "worker"`, while the controller
+keeps their layout beside local rows (marked only by
 the server icon). F10/F11/F12 route the selected row's shell, diff, or AI
 session over SSH; `!` runs the same action picker against that checkout; and
 `d` removes it on that host using the same safety checks as a local worktree. See

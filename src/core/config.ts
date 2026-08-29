@@ -701,6 +701,8 @@ export type AutomationDef = {
 };
 
 export type Config = {
+  /** Runtime responsibility. Controllers own the TUI/layout; workers execute SSH requests. */
+  instance: { role: "controller" | "worker" };
   /** Path-derived namespace for every durable state row owned by this repository. */
   repoId: string;
   /** Canonical repository identity stored beside repoId as a collision guard. */
@@ -1157,6 +1159,7 @@ function build(
   errs: Errors,
   repositoryConfig: string | null = null,
 ): Config {
+  const instance = obj(raw.instance);
   const paths = obj(raw.paths);
   const branch = obj(raw.branch);
   const stage = obj(raw.stage);
@@ -1167,6 +1170,14 @@ function build(
   const linearRaw = tracker ? obj(tracker.linear) : null;
   const remoteRaw = obj(raw.remote);
   const ui = obj(raw.ui);
+
+  const instanceRole = errs.optEnum(
+    instance,
+    "instance",
+    "role",
+    ["controller", "worker"] as const,
+    "controller",
+  );
 
   const branchPrefix = errs.reqStr(branch, "branch", "prefix");
   const branchBase = errs.optStr(branch, "base", GENERIC_DEFAULTS.branch.base);
@@ -1527,6 +1538,7 @@ function build(
   const automations = parseAutomations(raw.automations, actions, { base: branchBase, keepFresh }, errs);
 
   return {
+    instance: { role: instanceRole },
     repoId,
     repoPath,
     paths: {

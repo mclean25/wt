@@ -107,7 +107,7 @@ import {
   renameSection as renameSectionOnDisk,
   setSectionFolded as setSectionFoldedOnDisk,
   setSlugBase as setSlugBaseOnDisk,
-  setSlugSection as setSlugSectionOnDisk,
+  setWorktreeSection as setWorktreeSectionOnDisk,
   setSlugIssueId as setSlugIssueIdOnDisk,
   setSlugWorkStatus as setSlugWorkStatusOnDisk,
   swapOrders as swapOrdersOnDisk,
@@ -739,7 +739,7 @@ export function useWtActions() {
      * to the bottom of the target group — the picker convention. Awaits
      * invalidation so cursor-follow can read fresh rows.
      */
-    async setSection(slug: string, section: string | null): Promise<void> {
+    async setSection(key: string, section: string | null): Promise<void> {
       // Narration is NOT emitted here. `wt section` writes this same
       // field from another process, so the only place that sees every
       // move is the wtstate diff in `useWtStateEvents` — emitting at
@@ -747,8 +747,8 @@ export function useWtActions() {
       // Marking the write first lets that diff tell "the human just
       // pressed `l`" (firehose) from "something else rearranged their
       // board" (attention).
-      markSelfSectionWrite(slug, section);
-      setSlugSectionOnDisk(slug, section);
+      markSelfSectionWrite(key, section);
+      setWorktreeSectionOnDisk(key, section);
       await qc.invalidateQueries({ queryKey: qk.wtState() });
     },
     /**

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
 import { StatusKind, type PullRequest } from "../core/types.ts";
+import { DEV_SERVER_STOPPED } from "../core/dev-server.ts";
 import {
   localWorktreeTarget,
   remoteWorktreeTarget,
@@ -47,22 +48,17 @@ function remoteRow(): RemoteWorktreeSummary {
     deployed: true,
     section: null,
     exists: true,
-    status: StatusKind.Clean,
-    statusLabel: "clean",
-    statusAge: null,
-    statusOp: null,
+    status: { kind: StatusKind.Clean, label: "clean" },
+    dev: DEV_SERVER_STOPPED,
     dirty: false,
     unpushed: 0,
     pushed: true,
     aheadOfBase: 1,
     issueUrl: null,
     issueId: "COZ-42",
-    workState: null,
-    workNote: null,
-    workRisk: null,
-    workBlockedOn: null,
-    workVerifyAfterMerge: null,
-    workAt: null,
+    githubIssue: null,
+    githubIssueUrl: null,
+    work: null,
   };
 }
 

@@ -21,7 +21,7 @@ type Props = {
  */
 function reasonFor(candidate: CleanCandidate): string {
   const status =
-    candidate.kind === "local" ? candidate.row.status.kind : candidate.entry.status;
+    candidate.kind === "local" ? candidate.row.status.kind : candidate.entry.status.kind;
   if (status === StatusKind.Merged) return "merged";
   if (status === StatusKind.Gone) return "gone";
   if (

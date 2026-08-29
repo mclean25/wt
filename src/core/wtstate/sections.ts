@@ -1,4 +1,8 @@
 import { sameWorkClaim, type WorkStatusRecord } from "../work-status.ts";
+import {
+  isRemoteWorktreeLedgerKey,
+  remoteWorktreeLedgerPrefix,
+} from "../worktree-ref.ts";
 import { readWtState, withWtStateLock, writeWtState } from "./io.ts";
 import { GROUP_INBOX, stackIdFromSectionKey } from "./types.ts";
 import type { WtSlugState, WtState } from "./types.ts";
@@ -13,7 +17,7 @@ import type { WtSlugState, WtState } from "./types.ts";
  */
 function prunedSectionsOrder(state: WtState): string[] {
   const live = new Set<string>();
-  for (const v of Object.values(state.slugs)) {
+  for (const v of [...Object.values(state.slugs), ...Object.values(state.remoteLayouts)]) {
     if (v.section !== null) live.add(v.section);
   }
   return state.sectionsOrder.filter((s) => {
@@ -43,7 +47,7 @@ export function clearSlugState(slug: string): void {
 /** Max order in a given section. Returns `null` when section is empty. */
 function maxOrderIn(state: WtState, section: string | null): number | null {
   let max = -Infinity;
-  for (const v of Object.values(state.slugs)) {
+  for (const v of [...Object.values(state.slugs), ...Object.values(state.remoteLayouts)]) {
     if (v.section === section && v.order > max) max = v.order;
   }
   return Number.isFinite(max) ? max : null;
@@ -52,7 +56,7 @@ function maxOrderIn(state: WtState, section: string | null): number | null {
 /** Min order in a given section. Returns `null` when section is empty. */
 function minOrderIn(state: WtState, section: string | null): number | null {
   let min = Infinity;
-  for (const v of Object.values(state.slugs)) {
+  for (const v of [...Object.values(state.slugs), ...Object.values(state.remoteLayouts)]) {
     if (v.section === section && v.order < min) min = v.order;
   }
   return Number.isFinite(min) ? min : null;
@@ -325,6 +329,33 @@ export function setSlugSection(slug: string, section: string | null): void {
 }
 
 /**
+ * Controller-side section assignment for either a local slug or a
+ * host-qualified remote ledger key. Remote layout never enters `slugs`, whose
+ * records remain owned by the machine executing those worktrees.
+ */
+export function setWorktreeSection(key: string, section: string | null): void {
+  if (!isRemoteWorktreeLedgerKey(key)) {
+    setSlugSection(key, section);
+    return;
+  }
+  withWtStateLock(() => {
+    let state = readWtState();
+    if (section !== null) state = ensureSection(state, section);
+    const max = maxOrderIn(state, section);
+    const next: WtState = {
+      ...state,
+      remoteLayouts: { ...state.remoteLayouts },
+    };
+    next.remoteLayouts[key] = {
+      section,
+      order: max === null ? 0 : max + 1,
+    };
+    next.sectionsOrder = prunedSectionsOrder(next);
+    writeWtState(next);
+  });
+}
+
+/**
  * Set (or clear, with `record = null`) a slug's asserted work status
  * (`wt status` / the TUI `u` picker). Mirrors `setSlugGithubIssue`'s
  * create-on-first-write / no-op-when-absent shape. Validation (risk
@@ -416,32 +447,55 @@ export function renameSection(oldName: string, newName: string): void {
   if (!trimmed || trimmed === oldName) return;
   withWtStateLock(() => {
     const state = readWtState();
-    const referenced = Object.values(state.slugs).some((v) => v.section === oldName);
+    const referenced = [...Object.values(state.slugs), ...Object.values(state.remoteLayouts)]
+      .some((v) => v.section === oldName);
     if (!referenced && !state.sectionsOrder.includes(oldName)) return;
-    const next: WtState = { ...state, slugs: { ...state.slugs } };
+    const next: WtState = {
+      ...state,
+      slugs: { ...state.slugs },
+      remoteLayouts: { ...state.remoteLayouts },
+    };
+    const layouts = (): Array<{
+      key: string;
+      value: { section: string | null; order: number };
+      remote: boolean;
+    }> => [
+      ...Object.entries(next.slugs).map(([key, value]) => ({ key, value, remote: false })),
+      ...Object.entries(next.remoteLayouts).map(([key, value]) => ({ key, value, remote: true })),
+    ];
+    const writeLayout = (
+      key: string,
+      value: { section: string | null; order: number },
+      remote: boolean,
+    ): void => {
+      if (remote) next.remoteLayouts[key] = value;
+      else next.slugs[key] = { ...next.slugs[key], ...value };
+    };
     const isMerge =
       trimmed !== oldName &&
       (next.sectionsOrder.includes(trimmed) ||
-        Object.values(next.slugs).some((v) => v.section === trimmed));
+        layouts().some(({ value }) => value.section === trimmed));
     if (isMerge) {
       // Source slugs in their current within-source display order
       // (ascending by `order`), so the merge appends them after Y's
       // existing items in a sensible sequence.
-      const sourceSlugs = Object.entries(next.slugs)
-        .filter(([, v]) => v.section === oldName)
-        .sort((a, b) => a[1].order - b[1].order);
+      const sourceSlugs = layouts()
+        .filter(({ value }) => value.section === oldName)
+        .sort((a, b) => a.value.order - b.value.order);
       const max = maxOrderIn(next, trimmed);
       let cursor = max === null ? 0 : max + 1;
-      for (const [k, v] of sourceSlugs) {
-        next.slugs[k] = { ...v, section: trimmed, order: cursor++ };
+      for (const { key, value, remote } of sourceSlugs) {
+        writeLayout(key, { ...value, section: trimmed, order: cursor++ }, remote);
       }
       // Drop oldName from the index; trimmed already lives there.
       next.sectionsOrder = next.sectionsOrder.filter((s) => s !== oldName);
       // The merged-away key is gone; keep the target's fold state as-is.
       next.foldedSections = next.foldedSections.filter((s) => s !== oldName);
     } else {
-      for (const [k, v] of Object.entries(next.slugs)) {
-        if (v.section === oldName) next.slugs[k] = { ...v, section: trimmed };
+      for (const { key, value, remote } of layouts()) {
+        if (value.section === oldName) {
+          writeLayout(key, { ...value, section: trimmed }, remote);
+        }
       }
       // Replace oldName with trimmed in-place so the section keeps its
       // display position — and carries its folded state to the new name.
@@ -450,6 +504,37 @@ export function renameSection(oldName: string, newName: string): void {
     }
     next.sectionsOrder = prunedSectionsOrder(next);
     writeWtState(next);
+  });
+}
+
+/** Drop a manual section across local and remote controller layout. */
+export function removeSection(name: string): number {
+  return withWtStateLock(() => {
+    const state = readWtState();
+    const local = Object.entries(state.slugs).filter(([, value]) => value.section === name);
+    const remote = Object.entries(state.remoteLayouts)
+      .filter(([, value]) => value.section === name);
+    if (
+      local.length === 0 &&
+      remote.length === 0 &&
+      !state.sectionsOrder.includes(name)
+    ) return 0;
+    const next: WtState = {
+      ...state,
+      slugs: { ...state.slugs },
+      remoteLayouts: { ...state.remoteLayouts },
+      foldedSections: state.foldedSections.filter((section) => section !== name),
+    };
+    let cursor = (maxOrderIn(next, null) ?? -1) + 1;
+    for (const [key, value] of local) {
+      next.slugs[key] = { ...value, section: null, order: cursor++ };
+    }
+    for (const [key, value] of remote) {
+      next.remoteLayouts[key] = { ...value, section: null, order: cursor++ };
+    }
+    next.sectionsOrder = prunedSectionsOrder(next);
+    writeWtState(next);
+    return local.length + remote.length;
   });
 }
 
@@ -611,6 +696,37 @@ export function reapWtState(liveSlugs: ReadonlySet<string>): void {
     for (const [k, v] of Object.entries(state.slugs)) {
       if (liveSlugs.has(k)) next.slugs[k] = v;
     }
+    next.sectionsOrder = prunedSectionsOrder(next);
+    writeWtState(next);
+  });
+}
+
+/**
+ * Reap one reachable worker's controller-owned layout after a successful
+ * inventory. SSH failure never calls this, so an offline host cannot be
+ * mistaken for an empty one.
+ */
+export function reapRemoteLayouts(host: string, liveSlugs: ReadonlySet<string>): void {
+  const prefix = remoteWorktreeLedgerPrefix(host);
+  withWtStateLock(() => {
+    const state = readWtState();
+    const remoteLayouts = { ...state.remoteLayouts };
+    let changed = false;
+    for (const key of Object.keys(remoteLayouts)) {
+      if (!key.startsWith(prefix)) continue;
+      const encodedSlug = key.slice(prefix.length);
+      let slug: string;
+      try {
+        slug = decodeURIComponent(encodedSlug);
+      } catch {
+        slug = encodedSlug;
+      }
+      if (liveSlugs.has(slug)) continue;
+      delete remoteLayouts[key];
+      changed = true;
+    }
+    if (!changed) return;
+    const next = { ...state, remoteLayouts };
     next.sectionsOrder = prunedSectionsOrder(next);
     writeWtState(next);
   });

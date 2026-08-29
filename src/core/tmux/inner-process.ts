@@ -1,4 +1,5 @@
 import { browserSessionName } from "../browser.ts";
+import { delimiter, join } from "node:path";
 import {
   clearInspectorSocket,
   ensureInspectorDir,
@@ -11,6 +12,12 @@ import { harnessIdForKind, type SessionKind } from "./naming.ts";
 import { probeSessionNames } from "./process.ts";
 
 const log = createLogger("[tmux]");
+const SOURCE_WT_BIN_DIR = join(import.meta.dir, "..", "..", "..", "bin");
+
+/** The installation that launched this wt, with source checkout fallback. */
+function launcherBinDir(): string {
+  return process.env.WT_LAUNCHER_DIR || SOURCE_WT_BIN_DIR;
+}
 
 type InnerSessionKind = Exclude<SessionKind, "action" | "dev">;
 
@@ -125,8 +132,10 @@ export async function prepareInspectorSocket(
  *   socket its messages arrive through — see
  *   `core/harness/claude/inject/transport.ts`. Opening it is inert
  *   until something connects.
- * - `PATH` with wt's shim dir in front (claude only), so bun programs
- *   the agent runs don't inherit `BUN_INSPECT` and fight their parent
+ * - `PATH` with this checkout's wt launcher in front (every session),
+ *   so an agent on a worker can assert `wt status` without relying on a
+ *   machine-global install. Claude additionally receives wt's shim dir,
+ *   so bun programs don't inherit `BUN_INSPECT` and fight their parent
  *   for its socket — see `inject/shims.ts`.
  *
  * All of it goes in the `env` prefix rather than tmux's `-e`: tmux's
@@ -165,6 +174,10 @@ export function wrapInnerArgs(opts: {
   // and its browser tabs closing with that agent's worktree.
   const unset: string[] = ["TMUX", "TMUX_PANE", "WT_AGENT", "BROWSER_CONTROL_SESSION"];
   if (slug && harnessIdForKind(kind) !== null) extraEnv.push(`WT_AGENT=${slug}`);
+  const sessionPath = kind === "claude"
+    ? `${launcherBinDir()}${delimiter}${pathWithShims()}`
+    : `${launcherBinDir()}${delimiter}${process.env.PATH ?? ""}`;
+  extraEnv.push(`PATH=${sessionPath}`);
   if (kind === "claude") {
     unset.push(...CLAUDE_INHERITED_ENV);
     if (tmuxName) {
@@ -178,7 +191,6 @@ export function wrapInnerArgs(opts: {
         });
       }
     }
-    extraEnv.push(`PATH=${pathWithShims()}`);
   }
   const envPrefix = [
     "env",

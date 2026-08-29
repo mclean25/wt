@@ -44,6 +44,19 @@ describe("parseWtState", () => {
     });
   });
 
+  test("round-trips controller-owned remote layouts and discovers their sections", () => {
+    const state = parseWtState({
+      remoteLayouts: {
+        "@remote/dellserver/remote-task": { section: "Remote batch", order: 4 },
+      },
+      sectionsOrder: ["\0inbox"],
+    });
+    expect(state.remoteLayouts).toEqual({
+      "@remote/dellserver/remote-task": { section: "Remote batch", order: 4 },
+    });
+    expect(state.sectionsOrder).toContain("Remote batch");
+  });
+
   test("drops a malformed work record without dropping the slug", () => {
     const state = parseWtState({
       slugs: {
@@ -89,6 +102,7 @@ describe("parseWtState", () => {
     for (const raw of [null, undefined, 42, "x", { slugs: "nope" }]) {
       const state = parseWtState(raw);
       expect(state.slugs).toEqual({});
+      expect(state.remoteLayouts).toEqual({});
       expect(Array.isArray(state.sectionsOrder)).toBe(true);
     }
   });

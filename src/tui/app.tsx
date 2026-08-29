@@ -6,9 +6,16 @@ import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 import { config } from "../core/config.ts";
 import { createLogger } from "../core/logger.ts";
 import { markKeypress } from "../core/perf.ts";
-import { perfSnapshotQuery, qk, remoteWorktreesQuery, useWtActions } from "../state/index.ts";
+import {
+  perfSnapshotQuery,
+  qk,
+  remoteWorkerInfoQuery,
+  remoteWorktreesQuery,
+  useWtActions,
+} from "../state/index.ts";
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
 import { remoteWorktreeLedgerKey } from "../core/worktree-ref.ts";
+import { wtVersion } from "../core/update.ts";
 import { worktreeActionKey } from "../core/worktree-target.ts";
 
 import { Details } from "./panels/details.tsx";
@@ -81,7 +88,10 @@ import { useSessionsPickerData } from "./hooks/useSessionsPickerData.ts";
 import { writeClipboard } from "../core/macos.ts";
 import { theme } from "./theme.ts";
 import { showToast } from "./toast.ts";
-import type { RemoteCreation } from "./remote-creation.ts";
+import {
+  discoveredRemoteCreation,
+  type RemoteCreation,
+} from "./remote-creation.ts";
 import {
   isRemoteCleanCandidate,
   type CleanCandidate,
@@ -101,9 +111,13 @@ export function App({ onExit }: Props) {
   const renderer = useRenderer();
   const { rows, githubData, archivedKeys, isLoading } = useWorktreeRows();
   const remoteWorktreeList = useQuery(remoteWorktreesQuery());
-  const remoteRows = remoteWorktreeList.data ?? EMPTY_REMOTE_ROWS;
-  const remoteUnavailable = remoteWorktreeList.isError;
-  const remoteError = remoteWorktreeList.error?.message ?? null;
+  const remoteWorkerInfo = useQuery(remoteWorkerInfoQuery());
+  const remoteInventory = remoteWorktreeList.data ?? EMPTY_REMOTE_ROWS;
+  const remoteUnavailable = remoteWorktreeList.isError || remoteWorkerInfo.isError;
+  const remoteError =
+    remoteWorkerInfo.error?.message ?? remoteWorktreeList.error?.message ?? null;
+  const remoteVersionMismatch =
+    !!remoteWorkerInfo.data && remoteWorkerInfo.data.build !== wtVersion();
   const {
     refreshAll,
     refreshStale,
@@ -267,12 +281,21 @@ export function App({ onExit }: Props) {
   });
 
   const { wtStateForStacks, foldedSections } = useStackSections();
+  const remoteRows = useMemo(
+    () =>
+      remoteInventory.map((row) => ({
+        ...row,
+        section:
+          wtStateForStacks.data?.remoteLayouts[
+            remoteWorktreeLedgerKey(row.hostKey, row.slug)
+          ]?.section ?? null,
+      })),
+    [remoteInventory, wtStateForStacks.data?.remoteLayouts],
+  );
 
   // Narrate work-status transitions (from any process) into the
   // attention feed.
-  useWtStateEvents(wtStateForStacks.data);
-  // Detached dev supervisors can fail after their start command exits.
-  useDevServerEvents(rows);
+  useWtStateEvents(wtStateForStacks.data, remoteRows);
   // New PR comments from other people → attention feed.
   usePrCommentEvents(rows, githubData);
   // `wt manager report` spool → attention feed (cross-process watcher).
@@ -333,6 +356,10 @@ export function App({ onExit }: Props) {
     archivedKeys,
     githubData,
   });
+
+  // Detached dev supervisors can fail after their start command exits. The
+  // shared model lets the same narrator read logs locally or through SSH.
+  useDevServerEvents(worktrees);
 
   // A row can also leave without any wt-side action behind it — an
   // external `wt rm`, another wt instance, a branch swept by an
@@ -529,8 +556,7 @@ export function App({ onExit }: Props) {
   }
 
   const { setSection: setWorktreeSection } = makeWorktreeMutations({
-    setLocalSection: setSection,
-    refreshRemote: () => remoteWorktreeList.refetch(),
+    setControllerSection: setSection,
   });
 
   // Section-management flows (Shift+J/K moves, the section picker,
@@ -961,7 +987,7 @@ export function App({ onExit }: Props) {
   });
 
   const pendingRemoteCount =
-    remoteCreation && !remoteRows.some((row) => row.slug === remoteCreation.input)
+    remoteCreation && !discoveredRemoteCreation(remoteCreation, remoteRows)
       ? 1
       : 0;
   const remoteArchivedCount = remoteRows.filter((row) =>
@@ -986,6 +1012,7 @@ export function App({ onExit }: Props) {
         activeCount={activeCount}
         archivedCount={archivedCount}
         remoteUnavailable={remoteUnavailable}
+        remoteVersionMismatch={remoteVersionMismatch}
         automationsConfigured={automations.configured}
         automationsPaused={automations.paused}
         automationsPending={automations.pendingCount}

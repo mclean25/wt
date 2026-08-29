@@ -43,7 +43,11 @@ export function useSectionDetail({
               kind: "remote" as const,
               label: remoteRowLabel(member.entry),
               entry: member.entry,
+              model: member.model,
               archived: member.archived,
+              actionRunning: member.model
+                ? activeActions.has(member.model.key)
+                : false,
             }
           : {
               kind: "wt" as const,

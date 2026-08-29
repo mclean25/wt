@@ -22,7 +22,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 14;
+export const WT_STATE_VERSION = 15;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -161,6 +161,14 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // bump is here so a downgrade-then-upgrade has a version to see.
     to: 14,
     up: (raw) => raw,
+  },
+  {
+    // v15: controller-owned, host-qualified layout for remote worktrees.
+    // Existing remote sections are deliberately not imported: workers do
+    // not own presentation state, so their rows begin in the controller's
+    // Inbox until arranged there.
+    to: 15,
+    up: (raw) => ("remoteLayouts" in raw ? raw : { ...raw, remoteLayouts: {} }),
   },
 ];
 

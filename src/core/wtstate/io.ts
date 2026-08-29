@@ -181,6 +181,23 @@ export function parseWtState(raw: unknown): WtState {
       if (work) slugs[k]!.work = work;
     }
   }
+  const remoteLayouts: WtState["remoteLayouts"] = {};
+  if (data?.remoteLayouts && typeof data.remoteLayouts === "object") {
+    for (const [key, value] of Object.entries(data.remoteLayouts)) {
+      if (!value || typeof value !== "object") continue;
+      const rec = value as { section?: unknown; order?: unknown };
+      remoteLayouts[key] = {
+        section:
+          typeof rec.section === "string" && rec.section.trim() !== ""
+            ? rec.section
+            : null,
+        order:
+          typeof rec.order === "number" && Number.isFinite(rec.order)
+            ? rec.order
+            : 0,
+      };
+    }
+  }
   const rawOrder: string[] = [];
   if (Array.isArray(data?.sectionsOrder)) {
     const seen = new Set<string>();
@@ -210,7 +227,7 @@ export function parseWtState(raw: unknown): WtState {
   // Self-heal: any manual section referenced by a slug but missing from
   // sectionsOrder gets appended in discovery order.
   const known = new Set(sectionsOrder);
-  for (const v of Object.values(slugs)) {
+  for (const v of [...Object.values(slugs), ...Object.values(remoteLayouts)]) {
     if (v.section !== null && !known.has(v.section)) {
       sectionsOrder.push(v.section);
       known.add(v.section);
@@ -277,6 +294,7 @@ export function parseWtState(raw: unknown): WtState {
   return {
     version: WT_STATE_VERSION,
     slugs,
+    remoteLayouts,
     sectionsOrder,
     foldedSections,
     pausedStacks,
@@ -297,6 +315,7 @@ export function emptyWtState(): WtState {
   return {
     version: WT_STATE_VERSION,
     slugs: {},
+    remoteLayouts: {},
     sectionsOrder: [],
     foldedSections: [],
     pausedStacks: [],

@@ -15,6 +15,7 @@ export {
 } from "./wtstate/types.ts";
 export type {
   RemovedWorktree,
+  WorktreeLayout,
   WtSlugState,
   WtState,
 } from "./wtstate/types.ts";
@@ -27,6 +28,8 @@ export {
   clearSlugState,
   moveGroupPast,
   placeSlug,
+  reapRemoteLayouts,
+  removeSection,
   reapWtState,
   renameSection,
   reparentBaseReferences,
@@ -37,6 +40,7 @@ export {
   setSlugGithubIssue,
   setSlugIssueId,
   setSlugSection,
+  setWorktreeSection,
   setSlugWorkStatus,
   setSectionFolded,
   swapOrders,

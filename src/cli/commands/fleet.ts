@@ -12,6 +12,7 @@
  * seconds if it cares (the query itself is what triggers the compute).
  */
 import { branchIsGone, branchIsMerged, revParse } from "../../core/git.ts";
+import { config } from "../../core/config.ts";
 import { fetchGithub, hasGh, pickPrForWorktree, repoSlug } from "../../core/github.ts";
 import { readRegistry } from "../../core/harness/claude/registry.ts";
 import { listSessions } from "../../core/tmux.ts";
@@ -289,7 +290,10 @@ export async function run(argv: string[]): Promise<number> {
     const headSha = heads[i] ?? null;
     return {
       wt: w,
-      section: slugStates[w.slug]?.section ?? null,
+      section:
+        config.instance.role === "worker"
+          ? null
+          : slugStates[w.slug]?.section ?? null,
       work: record
         ? { ...record, stale: !!(record.sha && headSha && record.sha !== headSha) }
         : null,

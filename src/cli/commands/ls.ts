@@ -1,6 +1,5 @@
 import { config } from "../../core/config.ts";
 import { fetchPrs } from "../../core/github.ts";
-import { githubIssueUrl, issueUrlForId, resolveIssueId } from "../../core/issue-tracker.ts";
 import { verifyStepsHeadline, workAge } from "../../core/work-status.ts";
 import {
   isMergedRemoval,
@@ -11,13 +10,7 @@ import {
   verificationOwedAtRemoval,
 } from "../../core/wtstate.ts";
 import type { Worktree } from "../../core/types.ts";
-import { StatusKind } from "../../core/types.ts";
-import {
-  fetchOrigin,
-  listWorktrees,
-  pushCounts,
-  worktreeStatus,
-} from "../../core/worktree.ts";
+import { fetchOrigin, listWorktrees, worktreeStatus } from "../../core/worktree.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { dim, red, yellow } from "../colors.ts";
 import {
@@ -27,8 +20,7 @@ import {
   renderStatusCell,
   renderTable,
 } from "../render.ts";
-import { existsSync } from "node:fs";
-import { isOurStageDeployed } from "../../core/stage-safety.ts";
+import { collectWorktreeSnapshots } from "../../core/worktree-snapshot.ts";
 
 const USAGE = `usage: wt ls [options]
 
@@ -37,7 +29,7 @@ configured, PR, status). Worktrees destroyed in the last 48h stay
 visible as a dim "recently merged" footer, so an empty fleet says why.
 
   --json    machine-readable array (slug, branch, path, stage, section,
-            base, status, dirty, issue_id, issue_url, …). Recently-removed rows
+            base, status, dev, dirty, issue_id, issue_url, …). Recently-removed rows
             are appended with pr and archived_at. Every row carries kind:
             filter kind == "live" for the worktrees that exist, "merged" /
             "removed" for the history. Same field, same values, on
@@ -65,81 +57,79 @@ export async function run(argv: string[]): Promise<number> {
 
   if (jsonOut) {
     const slugStates = readWtState().slugs;
-    const payload = await Promise.all(
-      rows.map(async (w) => {
-        const st = await worktreeStatus(w);
-        const dirty = st.kind === StatusKind.Dirty;
-        const push = await pushCounts(w.path);
-        return {
-          slug: w.slug,
-          branch: w.branch,
-          path: w.path,
-          stage: w.stage,
-          deployed: isOurStageDeployed(w),
-          // Positive discriminator, matching `wt status --all --json`.
-          // Live rows used to carry nothing, so the only way to drop the
-          // appended removed-history rows was a negative test — and a
-          // negative test reads as "this command has no discriminator"
-          // rather than as a deliberate absence. A manager cross-checked
-          // this count against `wt section ls`, found four extra rows,
-          // and concluded wt was failing to prune on remove.
-          kind: "live" as const,
-          // Manual TUI section (human grouping intent, e.g. "Merge
-          // after Release"); null = inbox. Never a stack key — those
-          // groupings are inferred at render time, not stored.
-          section: slugStates[w.slug]?.section ?? null,
-          // Effective merge target: the recorded fork base (stacked
-          // worktrees) or the configured trunk. Never null — consumers
-          // were probing for a `base` field and reading its absence as
-          // "no base recorded".
-          base: slugStates[w.slug]?.baseBranch ?? config.branch.base,
-          exists: existsSync(w.path),
-          status: st.kind,
-          status_label: st.label,
-          status_age: st.age ?? null,
-          status_op: st.op ?? null,
-          dirty,
-          // True unpushed: commits `origin/<branch>` doesn't have. When
-          // the branch has no origin counterpart this is the
-          // ahead-of-base count and `pushed` is false, so consumers
-          // needn't infer. null = couldn't determine (see pushCounts) —
-          // surfaced as-is so JSON consumers can distinguish it from 0.
-          unpushed: push.unpushed,
-          pushed: push.pushed,
-          // Commits ahead of the branch's upstream/base — restack
-          // pressure, the old meaning of `unpushed`.
-          ahead_of_base: push.aheadOfBase,
-          // Resolved, not slug-parsed: a consumer filtering on
-          // `issue_id` is asking which ticket this worktree is, and
-          // the stored override is the answer whenever there is one.
-          issue_id: resolveIssueId(w.slug, slugStates[w.slug]?.issueId),
-          issue_url: issueUrlForId(resolveIssueId(w.slug, slugStates[w.slug]?.issueId)),
-          gh_issue: slugStates[w.slug]?.githubIssue ?? null,
-          gh_issue_url: slugStates[w.slug]?.githubIssue
-            ? githubIssueUrl(slugStates[w.slug]!.githubIssue!)
-            : null,
-          // Work status (agent-asserted; see `wt status`). Rides this
-          // payload so `remoteWorktreesQuery` (the remote host's
-          // `wt ls --json`) carries statuses across SSH for free.
-          work_state: slugStates[w.slug]?.work?.state ?? null,
-          work_note: slugStates[w.slug]?.work?.note ?? null,
-          work_risk: slugStates[w.slug]?.work?.risk ?? null,
-          // Non-null means DO NOT MERGE regardless of `work_state`.
-          // Added to every surface carrying a work status in the same
-          // change: a gate visible on one and absent on another is a
-          // consumer reading `ready` off the surface that dropped it.
-          work_blocked_on: slugStates[w.slug]?.work?.blockedOn ?? null,
-          // A deployed-environment check this branch owes once it
-          // lands. Same rule as the gate: every surface carrying a
-          // work status carries it, in the same change, because one
-          // that drops it silently releases a merged worktree back to
-          // the remote host's clean sweep.
-          work_verify_after_merge:
-            slugStates[w.slug]?.work?.verifyAfterMerge ?? null,
-          work_at: slugStates[w.slug]?.work?.at ?? null,
-        };
-      }),
-    );
+    const snapshots = await collectWorktreeSnapshots(rows);
+    const payload = snapshots.map((snapshot) => ({
+      slug: snapshot.slug,
+      branch: snapshot.branch,
+      path: snapshot.path,
+      stage: snapshot.stage,
+      deployed: snapshot.deployed,
+      // Positive discriminator, matching `wt status --all --json`.
+      // Live rows used to carry nothing, so the only way to drop the
+      // appended removed-history rows was a negative test — and a
+      // negative test reads as "this command has no discriminator"
+      // rather than as a deliberate absence. A manager cross-checked
+      // this count against `wt section ls`, found four extra rows,
+      // and concluded wt was failing to prune on remove.
+      kind: "live" as const,
+      // Manual TUI section (human grouping intent, e.g. "Merge
+      // after Release"); null = inbox. Never a stack key — those
+      // groupings are inferred at render time, not stored.
+      section:
+        config.instance.role === "worker"
+          ? null
+          : slugStates[snapshot.slug]?.section ?? null,
+      // Effective merge target: the recorded fork base (stacked
+      // worktrees) or the configured trunk. Never null — consumers
+      // were probing for a `base` field and reading its absence as
+      // "no base recorded".
+      base: snapshot.base,
+      exists: snapshot.exists,
+      status: snapshot.status.kind,
+      status_label: snapshot.status.label,
+      status_age: snapshot.status.age ?? null,
+      status_op: snapshot.status.op ?? null,
+      // Execution health belongs to the worker, but its controller
+      // needs the same live/starting/crashed signal it has for local
+      // rows. This snapshot is intentionally part of inventory so
+      // no second SSH-side state model is introduced.
+      dev: snapshot.dev,
+      dirty: snapshot.dirty,
+      // True unpushed: commits `origin/<branch>` doesn't have. When
+      // the branch has no origin counterpart this is the
+      // ahead-of-base count and `pushed` is false, so consumers
+      // needn't infer. null = couldn't determine (see pushCounts) —
+      // surfaced as-is so JSON consumers can distinguish it from 0.
+      unpushed: snapshot.unpushed,
+      pushed: snapshot.pushed,
+      // Commits ahead of the branch's upstream/base — restack
+      // pressure, the old meaning of `unpushed`.
+      ahead_of_base: snapshot.aheadOfBase,
+      // Resolved, not slug-parsed: a consumer filtering on
+      // `issue_id` is asking which ticket this worktree is, and
+      // the stored override is the answer whenever there is one.
+      issue_id: snapshot.issueId,
+      issue_url: snapshot.issueUrl,
+      gh_issue: snapshot.githubIssue,
+      gh_issue_url: snapshot.githubIssueUrl,
+      // Work status remains in the public flat JSON shape. The private
+      // worker snapshot carries the nested record directly.
+      work_state: snapshot.work?.state ?? null,
+      work_note: snapshot.work?.note ?? null,
+      work_risk: snapshot.work?.risk ?? null,
+      // Non-null means DO NOT MERGE regardless of `work_state`.
+      // Added to every surface carrying a work status in the same
+      // change: a gate visible on one and absent on another is a
+      // consumer reading `ready` off the surface that dropped it.
+      work_blocked_on: snapshot.work?.blockedOn ?? null,
+      // A deployed-environment check this branch owes once it
+      // lands. Same rule as the gate: every surface carrying a
+      // work status carries it, in the same change, because one
+      // that drops it silently releases a merged worktree back to
+      // the remote host's clean sweep.
+      work_verify_after_merge: snapshot.work?.verifyAfterMerge ?? null,
+      work_at: snapshot.work?.at ?? null,
+    }));
     console.log(
       JSON.stringify([...payload, ...recentRemoved.map(removedJsonEntry)], null, 2),
     );

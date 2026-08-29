@@ -17,10 +17,10 @@ export function isRemoteCleanCandidate(
   archived: boolean,
   pr?: Pick<PullRequest, "state">,
 ): boolean {
-  if (archived || entry.status === StatusKind.Busy) return false;
+  if (archived || entry.status.kind === StatusKind.Busy) return false;
   return (
-    entry.status === StatusKind.Merged ||
-    entry.status === StatusKind.Gone ||
+    entry.status.kind === StatusKind.Merged ||
+    entry.status.kind === StatusKind.Gone ||
     pr?.state === "MERGED"
   );
 }
@@ -37,10 +37,10 @@ export function remoteCleanHazardLabel(
   entry: RemoteWorktreeSummary,
 ): string | null {
   if (entry.dirty) return "uncommitted changes";
-  if (entry.unpushed > 0) {
+  if ((entry.unpushed ?? 0) > 0) {
     return `${entry.unpushed} unpushed commit${entry.unpushed === 1 ? "" : "s"}`;
   }
-  if (entry.workVerifyAfterMerge && entry.workState !== "verified") {
+  if (entry.work?.verifyAfterMerge && entry.work.state !== "verified") {
     // Same scan-line reasoning as `destroyHazardLabel`, which this
     // mirrors for rows on another host.
     return "post-merge verification still owed";

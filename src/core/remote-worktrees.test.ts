@@ -1,29 +1,48 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseRemoteWorktrees } from "./remote-worktrees.ts";
+import { DEV_SERVER_STOPPED } from "./dev-server.ts";
+import { parseRemoteWorkerWorktrees } from "./remote-worktrees.ts";
+import { WORKER_PROTOCOL_VERSION } from "./worker-info.ts";
 
-describe("parseRemoteWorktrees", () => {
-  test("normalizes wt ls JSON with host identity", () => {
-    const rows = parseRemoteWorktrees(JSON.stringify([{
-      slug: "remote-test",
-      branch: "alex/remote-test",
-      base: null,
-      path: "/home/alex/dev/client-app-worktrees/remote-test",
-      stage: "alex-123",
-      deployed: false,
-      section: null,
-      exists: true,
-      status: "busy",
-      status_label: "init: pnpm install",
-      status_age: "2m",
-      status_op: "init",
-      dirty: false,
-      unpushed: 2,
-      pushed: true,
-      ahead_of_base: 5,
-      issue_url: null,
-    }]), "Cachy", "cachy.internal");
-    expect(rows[0]).toEqual({
+function row(extra: Record<string, unknown> = {}) {
+  return {
+    slug: "remote-test",
+    branch: "alex/remote-test",
+    base: "main",
+    path: "/home/alex/dev/worktrees/remote-test",
+    stage: "remote-test",
+    deployed: false,
+    exists: true,
+    status: { kind: "clean", label: "clean" },
+    dev: DEV_SERVER_STOPPED,
+    dirty: false,
+    unpushed: 0,
+    pushed: true,
+    aheadOfBase: 1,
+    issueId: null,
+    issueUrl: null,
+    githubIssue: null,
+    githubIssueUrl: null,
+    work: null,
+    ...extra,
+  };
+}
+
+function payload(rows: unknown[], protocol = WORKER_PROTOCOL_VERSION): string {
+  return JSON.stringify({ protocol, worktrees: rows });
+}
+
+describe("parseRemoteWorkerWorktrees", () => {
+  test("adds endpoint identity without changing the execution snapshot", () => {
+    const [parsed] = parseRemoteWorkerWorktrees(
+      payload([row({
+        status: { kind: "busy", label: "init: pnpm install", age: "2m", op: "init" },
+        unpushed: 2,
+      })]),
+      "Cachy",
+      "cachy.internal",
+    );
+    expect(parsed).toMatchObject({
       remote: {
         host: "cachy.internal",
         label: "Cachy",
@@ -31,133 +50,69 @@ describe("parseRemoteWorktrees", () => {
       },
       hostKey: "cachy.internal",
       hostLabel: "Cachy",
+      section: null,
       slug: "remote-test",
-      branch: "alex/remote-test",
-      base: null,
-      path: "/home/alex/dev/client-app-worktrees/remote-test",
-      stage: "alex-123",
-      deployed: false,
-      section: null,
-      exists: true,
-      status: "busy",
-      statusLabel: "init: pnpm install",
-      statusAge: "2m",
-      statusOp: "init",
-      dirty: false,
+      status: { kind: "busy", label: "init: pnpm install", age: "2m", op: "init" },
       unpushed: 2,
-      pushed: true,
-      aheadOfBase: 5,
-      issueUrl: null,
-      issueId: null,
-      workState: null,
-      workNote: null,
-      workRisk: null,
-      workBlockedOn: null,
-      workVerifyAfterMerge: null,
-      workAt: null,
     });
   });
 
-  test("defaults missing unpushed metadata for older remote binaries", () => {
-    const [row] = parseRemoteWorktrees(JSON.stringify([{
-      slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
-      status: "clean", status_label: "clean", dirty: false,
-    }]), "cachy");
-    // pushed/ahead_of_base absent on old remotes ⇒ null, never a
-    // fabricated "never pushed" / 0.
-    expect(row).toMatchObject({
-      unpushed: 0,
-      pushed: null,
-      aheadOfBase: null,
-      statusOp: null,
-      workState: null,
-      section: null,
+  test("carries nested lifecycle and dev-server state as one snapshot", () => {
+    const [parsed] = parseRemoteWorkerWorktrees(payload([row({
+      dev: {
+        running: false,
+        starting: true,
+        crashed: false,
+        port: 4312,
+        url: null,
+        since: 123,
+        waiting: { rank: 2, since: 100 },
+        rebasedSince: false,
+        restarts: { count: 1, lastExit: 75 },
+      },
+      work: {
+        state: "needs-human",
+        at: "2026-08-28T12:00:00.000Z",
+        note: "login required",
+      },
+    })]), "cachy");
+    expect(parsed?.dev).toMatchObject({
+      starting: true,
+      port: 4312,
+      waiting: { rank: 2, since: 100 },
+      restarts: { count: 1, lastExit: 75 },
+    });
+    expect(parsed?.work).toMatchObject({
+      state: "needs-human",
+      note: "login required",
     });
   });
 
-  test("preserves the remote-owned manual section", () => {
-    const [row] = parseRemoteWorktrees(JSON.stringify([{
-      slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
-      status: "clean", status_label: "clean", dirty: false,
-      section: "Paused",
-    }]), "cachy");
-    expect(row?.section).toBe("Paused");
-  });
-
-  test("drops malformed pushed/ahead_of_base values to null", () => {
-    const [row] = parseRemoteWorktrees(JSON.stringify([{
-      slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
-      status: "clean", status_label: "clean", dirty: false,
-      unpushed: 1, pushed: "yes", ahead_of_base: -3,
-    }]), "cachy");
-    expect(row).toMatchObject({ unpushed: 1, pushed: null, aheadOfBase: null });
-  });
-
-  test("parses a work state and drops unknown vocabulary", () => {
-    const rows = parseRemoteWorktrees(JSON.stringify([
-      {
-        slug: "a", branch: "a", path: "/a", stage: "a", exists: true,
-        status: "clean", status_label: "clean", dirty: false,
-        work_state: "needs-human",
-      },
-      {
-        slug: "b", branch: "b", path: "/b", stage: "b", exists: true,
-        status: "clean", status_label: "clean", dirty: false,
-        work_state: "from-the-future",
-      },
-    ]), "cachy");
-    expect(rows[0]?.workState).toBe("needs-human");
-    expect(rows[1]?.workState).toBeNull();
-  });
-
-  test("infers an init lock from older remote status labels", () => {
-    const [row] = parseRemoteWorktrees(JSON.stringify([{
-      slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
-      status: "busy", status_label: "init: pnpm install", dirty: false,
-    }]), "cachy");
-    expect(row?.statusOp).toBe("init");
-  });
-
-  test("rejects malformed status values", () => {
-    expect(() => parseRemoteWorktrees(JSON.stringify([{
-      slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
-      status: "wat", status_label: "wat", dirty: false,
-    }]), "cachy")).toThrow("status is invalid");
-  });
-
-  test("tolerates login-shell banner noise around the JSON payload", () => {
-    const payload = JSON.stringify([{
-      slug: "x", branch: "x", path: "/x", stage: "x", exists: true,
-      status: "clean", status_label: "clean", dirty: false, unpushed: 0,
-    }], null, 2);
-    const polluted = `Welcome to CachyOS!\ndirenv: loading .envrc\n${payload}\n`;
-    const [row] = parseRemoteWorktrees(polluted, "cachy");
-    expect(row?.slug).toBe("x");
-  });
-
-  test("gives a distinct diagnostic when stdout has no JSON at all", () => {
-    expect(() => parseRemoteWorktrees("command not found: wt\n", "cachy")).toThrow(
-      "did not return JSON",
+  test("rejects a mismatched protocol before interpreting rows", () => {
+    expect(() => parseRemoteWorkerWorktrees(payload([row()], 1), "cachy")).toThrow(
+      "uses protocol 1",
     );
   });
 
-  // The remote runs its own wt build, so every `kind` this field has ever
-  // meant can arrive here at once. Keeping a live row is what fails
-  // silently: dropping them all renders an empty host section, which is
-  // indistinguishable from a host that genuinely has no worktrees.
-  test("keeps live rows across every wt version's `kind` convention", () => {
-    const row = (slug: string, extra: Record<string, unknown>) => ({
-      slug, branch: slug, path: `/${slug}`, stage: slug, exists: true,
-      status: "clean", status_label: "clean", dirty: false, ...extra,
-    });
-    const rows = parseRemoteWorktrees(JSON.stringify([
-      row("old-remote", {}),                       // before `kind` existed
-      row("new-remote", { kind: "live" }),         // positive discriminator
-      { slug: "landed", branch: "landed", kind: "merged", archived_at: "z" },
-      { slug: "gone", branch: "gone", kind: "removed", archived_at: "z" },
-      { slug: "future", branch: "future", kind: "something-new" },
-      { slug: "legacy", branch: "legacy", state: "removed" },
-    ]), "cachy");
-    expect(rows.map((r) => r.slug)).toEqual(["old-remote", "new-remote"]);
+  test("rejects malformed required status and dev state", () => {
+    expect(() => parseRemoteWorkerWorktrees(
+      payload([row({ status: { kind: "future", label: "future" } })]),
+      "cachy",
+    )).toThrow("status.kind is invalid");
+    expect(() => parseRemoteWorkerWorktrees(
+      payload([row({ dev: { running: "yes" } })]),
+      "cachy",
+    )).toThrow("dev.running is invalid");
+  });
+
+  test("tolerates login-shell banner noise around the object", () => {
+    const noisy = `Welcome to CachyOS!\ndirenv: loading .envrc\n${payload([row()])}\n`;
+    expect(parseRemoteWorkerWorktrees(noisy, "cachy")[0]?.slug).toBe("remote-test");
+  });
+
+  test("gives a distinct diagnostic when stdout has no JSON", () => {
+    expect(() => parseRemoteWorkerWorktrees("command not found: wt\n", "cachy")).toThrow(
+      "did not return JSON",
+    );
   });
 });

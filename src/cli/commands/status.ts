@@ -14,6 +14,7 @@
  * git (see status.test.ts); `run` only resolves worktrees and does IO.
  */
 import { agentIdentity } from "../../core/agent-identity.ts";
+import { config } from "../../core/config.ts";
 import { baseTipSha, revParse } from "../../core/git.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Worktree } from "../../core/types.ts";
@@ -868,7 +869,10 @@ export async function run(argv: string[]): Promise<number> {
               // archived row instead.
               kind: "live" as const,
               // Manual TUI section (human grouping intent); null = inbox.
-              section: state.slugs[w.slug]?.section ?? null,
+              section:
+                config.instance.role === "worker"
+                  ? null
+                  : state.slugs[w.slug]?.section ?? null,
               state: record?.state ?? null,
               note: record?.note ?? null,
               risk: record?.risk ?? null,

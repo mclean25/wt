@@ -14,7 +14,10 @@ import {
   remoteWorktreeTarget,
   type WorktreeTarget,
 } from "../../core/worktree-target.ts";
-import { remoteEntryKey } from "../remote-creation.ts";
+import {
+  discoveredRemoteCreation,
+  remoteEntryKey,
+} from "../remote-creation.ts";
 import {
   buildWorktreeModels,
   type WorktreeModel,
@@ -87,7 +90,10 @@ export function buildActiveItems({
       archived: false,
     });
   }
-  if (remoteCreation && !remoteWorktrees.some((row) => row.slug === remoteCreation.input)) {
+  if (
+    remoteCreation &&
+    !discoveredRemoteCreation(remoteCreation, remoteWorktrees)
+  ) {
     ensure(GROUP_INBOX).push({
       kind: "remote",
       entry: remoteCreation,

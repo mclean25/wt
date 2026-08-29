@@ -12,7 +12,11 @@ import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import { setSlugGithubIssue, type RemovedWorktree } from "../../core/wtstate.ts";
 import { parseNewInput } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
-import { remoteEntryKey, type RemoteCreation } from "../remote-creation.ts";
+import {
+  discoveredRemoteCreation,
+  remoteEntryKey,
+  type RemoteCreation,
+} from "../remote-creation.ts";
 import { theme } from "../theme.ts";
 
 const newLog = createLogger("[new]");
@@ -132,14 +136,15 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     if (parsed.base) args.push("--base", parsed.base);
 
     const remoteLog = createLogger(`[remote:${remote.label}]`);
+    const previousKeys = new Set(remoteWorktrees.map(remoteEntryKey));
     const creation: RemoteCreation = {
       remote,
       hostKey: remote.host,
       hostLabel: remote.label,
       input: parsed.input,
+      previousKeys: [...previousKeys],
       status: "creating",
     };
-    const previousKeys = new Set(remoteWorktrees.map(remoteEntryKey));
     setRemoteCreation(creation);
     setSel(`remote:${remoteEntryKey(creation)}`);
     remoteLog.event.info(`creating ${parsed.input}`);
@@ -183,10 +188,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       // The CLI input may be an issue id or title rather than the final slug,
       // so transfer focus from the optimistic placeholder to the newly
       // discovered authoritative row by fleet identity, not input spelling.
-      const created = refreshed.find(
-        (row) =>
-          row.hostKey === remote.host && !previousKeys.has(remoteEntryKey(row)),
-      );
+      const created = discoveredRemoteCreation(creation, refreshed);
       if (created) setSel(`remote:${remoteEntryKey(created)}`);
       toast(`ready on ${remote.label}`, theme.ok, 1800);
     } finally {

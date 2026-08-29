@@ -12,16 +12,17 @@ import { useEffect, useRef } from "react";
 
 import {
   devServerCrashSummary,
-  devServerLogs,
-  readDevCrashLog,
 } from "../../core/dev-server.ts";
 import { createLogger } from "../../core/logger.ts";
-import type { WorktreeRow } from "./useWorktreeRows.ts";
+import { readWorktreeDevLogs } from "../../core/worktree-executor.ts";
+import { worktreeLedgerLabel } from "../../core/worktree-ref.ts";
+import type { WorktreeModel } from "../worktree-model.ts";
 
 type DevServerEventRow = {
+  key: string;
+  slug: string;
   archived: boolean;
-  wt: { slug: string };
-  fields: { dev: { data: { crashed: boolean } | undefined } };
+  dev: { crashed: boolean };
 };
 
 /** Update the seen-state map and return crash transitions in this pass. */
@@ -33,11 +34,10 @@ export function newDevServerCrashes(
   const live = new Set<string>();
   for (const row of rows) {
     if (row.archived) continue;
-    const slug = row.wt.slug;
-    const current = row.fields.dev.data?.crashed ?? false;
-    live.add(slug);
-    if (seen.get(slug) === false && current) crashed.push(slug);
-    seen.set(slug, current);
+    const current = row.dev.crashed;
+    live.add(row.key);
+    if (seen.get(row.key) === false && current) crashed.push(row.key);
+    seen.set(row.key, current);
   }
   for (const slug of seen.keys()) {
     if (!live.has(slug)) seen.delete(slug);
@@ -45,7 +45,7 @@ export function newDevServerCrashes(
   return crashed;
 }
 
-export function useDevServerEvents(rows: readonly WorktreeRow[]): void {
+export function useDevServerEvents(rows: readonly WorktreeModel[]): void {
   const seenRef = useRef<Map<string, boolean> | null>(null);
   useEffect(() => {
     if (seenRef.current === null) {
@@ -54,19 +54,25 @@ export function useDevServerEvents(rows: readonly WorktreeRow[]): void {
       seenRef.current = seed;
       return;
     }
-    const slugs = newDevServerCrashes(rows, seenRef.current);
-    if (slugs.length === 0) return;
+    const keys = newDevServerCrashes(rows, seenRef.current);
+    if (keys.length === 0) return;
+    const byKey = new Map(rows.map((row) => [row.key, row]));
     void Promise.all(
-      slugs.map(async (slug) => {
-        const output =
-          (await devServerLogs(slug).catch(() => null)) ?? readDevCrashLog(slug);
-        return { slug, summary: output === null ? null : devServerCrashSummary(output) };
+      keys.map(async (key) => {
+        const row = byKey.get(key);
+        if (!row) return null;
+        const output = await readWorktreeDevLogs(row.target).catch(() => null);
+        return {
+          key,
+          summary: output === null ? null : devServerCrashSummary(output),
+        };
       }),
     ).then((events) => {
-      for (const { slug, summary } of events) {
-        createLogger(slug).attention.err(
-          summary
-            ? `dev server crashed — ${summary} · wt dev logs`
+      for (const event of events) {
+        if (!event) continue;
+        createLogger(worktreeLedgerLabel(event.key)).attention.err(
+          event.summary
+            ? `dev server crashed — ${event.summary} · wt dev logs`
             : "dev server crashed — see wt dev logs",
         );
       }

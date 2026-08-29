@@ -58,6 +58,8 @@ import { NF } from "../icons.ts";
 import { statusBadge } from "../badges.ts";
 import { remoteRowLabel } from "./list.tsx";
 import { PrLine } from "../rows/pr.tsx";
+import { DevStatusText } from "../rows/dev.tsx";
+import { DEV_SERVER_STOPPED } from "../../core/dev-server.ts";
 import { Row } from "./details/row-cell.tsx";
 import { RebaseBlock } from "./details/rebase-block.tsx";
 import {
@@ -573,30 +575,15 @@ function RemoteDetails({
   const mq = model?.mq ?? (summary ? github.data?.mergeQueue?.[summary.branch] : undefined);
   const valueWidth = valueWidthFor(width);
   const mechanical = model?.status ?? (summary
-    ? {
-        kind: summary.status,
-        label: summary.statusLabel,
-        age: summary.statusAge ?? undefined,
-        op: summary.statusOp ?? undefined,
-      }
+    ? summary.status
     : entry.status === "creating"
       ? { kind: StatusKind.Busy, label: "creating", op: "init" }
       : { kind: StatusKind.Clean, label: "ready" });
   const mechanicalBadge = statusBadge(mechanical);
-  const work: WorkStatusRecord | null = model?.work ??
-    (summary?.workState
-      ? {
-          state: summary.workState,
-          at: summary.workAt ?? "",
-          note: summary.workNote ?? undefined,
-          risk: summary.workRisk ?? undefined,
-          blockedOn: summary.workBlockedOn ?? undefined,
-          verifyAfterMerge: summary.workVerifyAfterMerge ?? undefined,
-        }
-      : null);
+  const work: WorkStatusRecord | null = model?.work ?? summary?.work ?? null;
   const landed =
-    summary?.status === StatusKind.Merged ||
-    summary?.status === StatusKind.Gone ||
+    mechanical.kind === StatusKind.Merged ||
+    mechanical.kind === StatusKind.Gone ||
     pr?.state === "MERGED";
   const title = pr?.title ?? remoteRowLabel(entry);
 
@@ -636,8 +623,8 @@ function RemoteDetails({
       if (!config.sst) return null;
       return (
         <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH}>
-          <text fg={theme.fgDim} wrapMode="none" truncate>
-            {summary ? `${summary.stage} · remote status unavailable` : "—"}
+          <text fg={model?.deployed ? theme.warn : theme.fgDim} wrapMode="none" truncate>
+            {model ? `${model.stage} · ${model.deployed ? "deployed" : "not deployed"}` : "—"}
           </text>
         </Row>
       );
@@ -646,9 +633,7 @@ function RemoteDetails({
       if (!config.devServer) return null;
       return (
         <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH}>
-          <text fg={theme.fgDim} wrapMode="none" truncate>
-            {NF.remote}  managed on {entry.hostLabel}
-          </text>
+          <DevStatusText dev={model?.dev ?? DEV_SERVER_STOPPED} />
         </Row>
       );
     }
@@ -687,8 +672,8 @@ function RemoteDetails({
             <span fg={unavailable ? theme.warn : mechanicalBadge.fg}>
               {mechanicalBadge.glyph}  {unavailable ? "host unavailable" : mechanical.label}
             </span>
-            {summary && summary.unpushed > 0 ? (
-              <span fg={theme.warn}>{` · ${summary.unpushed} unpushed`}</span>
+            {model && (model.unpushed ?? 0) > 0 ? (
+              <span fg={theme.warn}>{` · ${model.unpushed} unpushed`}</span>
             ) : null}
             {summary?.aheadOfBase ? (
               <span fg={theme.fgDim}>{` · ${summary.aheadOfBase} ahead of base`}</span>

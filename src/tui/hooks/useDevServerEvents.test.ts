@@ -3,9 +3,10 @@ import { describe, expect, test } from "bun:test";
 import { newDevServerCrashes } from "./useDevServerEvents.ts";
 
 const row = (slug: string, crashed: boolean, archived = false) => ({
+  key: slug,
+  slug,
   archived,
-  wt: { slug },
-  fields: { dev: { data: { crashed } } },
+  dev: { crashed },
 });
 
 describe("newDevServerCrashes", () => {

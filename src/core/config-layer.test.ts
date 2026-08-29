@@ -89,6 +89,9 @@ describe("config loader integration", () => {
 main_clone = "/global/repo"
 worktree_root = "/global/worktrees"
 
+[instance]
+role = "worker"
+
 [branch]
 prefix = "alex"
 base = "main"
@@ -121,6 +124,7 @@ reviewers = false
         const { githubQuery, reviewRequestsQuery } = await import(${JSON.stringify(githubQueriesModule)});
         console.log(JSON.stringify({
           repoId: config.repoId,
+          instance: config.instance,
           repoPath: config.repoPath,
           paths: config.paths,
           tmux: config.tmux,
@@ -149,6 +153,7 @@ reviewers = false
       const repoId = repositoryNamespace(join(repo, ".wt.toml"));
       expect(JSON.parse(result.stdout.toString())).toMatchObject({
         repoId,
+        instance: { role: "worker" },
         repoPath: realpathSync(repo),
         paths: {
           mainClone: "/local/repo",

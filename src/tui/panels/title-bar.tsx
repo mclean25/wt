@@ -25,6 +25,7 @@ type Props = {
   activeCount: number;
   archivedCount: number;
   remoteUnavailable: boolean;
+  remoteVersionMismatch: boolean;
   automationsConfigured: boolean;
   automationsPaused: boolean;
   automationsPending: number;
@@ -36,6 +37,7 @@ export const TitleBar = memo(function TitleBar({
   activeCount,
   archivedCount,
   remoteUnavailable,
+  remoteVersionMismatch,
   automationsConfigured,
   automationsPaused,
   automationsPending,
@@ -68,6 +70,8 @@ export const TitleBar = memo(function TitleBar({
         <RefreshWave count={isLoading ? 0 : fetchingCount} fg={theme.fgDim} />
         {remoteUnavailable ? (
           <text fg={theme.warn}>{` ⚠ ${config.remote?.label ?? "remote"} offline`}</text>
+        ) : remoteVersionMismatch ? (
+          <text fg={theme.warn}>{` ⚠ ${config.remote?.label ?? "remote"} version mismatch`}</text>
         ) : null}
       </box>
       {automationsConfigured && automationsPaused ? (

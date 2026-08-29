@@ -87,12 +87,21 @@ Three related invariants:
 - A chunked fetch **fails whole or not at all**. Each chunk retries on transient failure (5xx, GitHub's timeout copy, HTTP/2 CANCEL, truncated body) and never on a rate limit; if one still fails, `fetchGithub` throws rather than returning its siblings' data, because partial results would blank the PR badge on exactly the failed chunk's branches — indistinguishable from "no PR there". Retries live in the core module, so only the failed chunk re-runs and the CLI callers and webhook daemon inherit them; the query client's global `retry: false` still governs everything a keystroke drives.
 - Anything that *mutates* GitHub state must invalidate `["github"]` (via `refreshGithub()` in `state/hooks.ts`), not the worktree — the github query is keyed by branch list, not slug.
 
-## Remote execution
+## Controller and worker execution
 
-The optional `[remote]` host owns its clone, worktree paths, locks, and tmux
-processes, while the Mac owns the single visible TUI. `remoteWorktreesQuery`
-polls the host's `wt ls --json` and renders those summaries in their remote-owned
-manual section (or Inbox), alongside local rows; remote filesystem paths are never
+The optional `[remote]` host runs the same wt source in explicit
+`[instance] role = "worker"` mode. It owns its clone, worktree paths, fork
+bases, agent statuses, locks, and tmux/dev processes, while the controller owns
+the single visible TUI and every presentation decision. `remoteWorktreesQuery`
+handshakes role + protocol + build, polls the host's versioned `_snapshot`
+endpoint, and renders
+those summaries—including agent lifecycle assertions and the worker-observed
+dev-server state—in the controller-owned manual section (or Inbox), alongside
+local rows. Sessions receive that worker checkout's `bin/wt` at the front of
+`PATH`, so `wt status` writes to the same worker state the inventory reads;
+the controller narrates newly polled assertions through the same attention-feed
+rules as local state changes.
+Remote filesystem paths are never
 accessed as if they were local.
 The query's successful inventory is persisted for offline startup and retained
 across refetch failures. SSH failure changes host health only: the host header
@@ -122,9 +131,11 @@ an effect in `app.tsx` adopts whatever now occupies it, so the selection
 is a live key again instead of a dead one that drifts on the next
 re-sort. See [tui.md](tui.md#navigation) for the user-facing statement.
 
-Presentation/coordination state owned by this TUI (currently the archive
-ledger) uses the location-aware key, so remote rows participate like local rows
-without ever making their paths look local. Operations that need the checkout
+Presentation/coordination state owned by this TUI (sections, ordering, folds,
+and the archive ledger) uses the location-aware key, so remote rows participate
+like local rows without ever making their paths look local. The worker's own
+legacy section value is ignored and worker-mode fleet JSON reports `null` for
+it. Operations that need the checkout
 itself dispatch by target: direct calls for local rows, the target's captured
 endpoint for SSH rows. Remote query caches are likewise keyed by SSH host, not
 by the singleton config slot or display label. These are deliberate
@@ -135,7 +146,15 @@ not migrating identities or teaching features about a second remote-only model.
 `core/remote.ts` drives SSH, while `core/remote-protocol.ts` base64url-encodes
 the complete argv into a single shell-safe token. The remote `_remote` CLI
 entrypoint decodes that token and re-enters normal dispatch, avoiding any
-dependency on remote login-shell quoting.
+dependency on remote login-shell quoting. `_hello` is the compatibility
+boundary: the worker must report the worker role and matching protocol before
+inventory or commands are trusted; its build string is compared separately so
+same-protocol development snapshots warn rather than fail.
+`_snapshot` is the protocol's sole inventory contract. It returns the nested,
+location-neutral `WorktreeSnapshot` (`status`, `work`, `dev`, and Git facts),
+while `wt ls --json` remains a public compatibility view over the same
+collector. Controller layout, archive state, GitHub data, and endpoint
+coordinates are joined locally and never enter the worker snapshot.
 
 `Ctrl+N` forwards `wt new` and refreshes the remote-row query when creation
 finishes. F10/F11/F12 on a remote row use the hidden `_session` entrypoint;

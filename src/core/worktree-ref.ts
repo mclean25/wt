@@ -29,3 +29,14 @@ export function remoteWorktreeLedgerPrefix(host: string): string {
 export function isRemoteWorktreeLedgerKey(key: string): boolean {
   return key.startsWith(REMOTE_LEDGER_PREFIX);
 }
+
+/** Human-facing identity for logs sourced from a location-aware ledger key. */
+export function worktreeLedgerLabel(key: string): string {
+  if (!isRemoteWorktreeLedgerKey(key)) return key;
+  const [host = "remote", slug = key] = key.slice(REMOTE_LEDGER_PREFIX.length).split("/", 2);
+  try {
+    return `${decodeURIComponent(slug)} @ ${decodeURIComponent(host)}`;
+  } catch {
+    return key;
+  }
+}

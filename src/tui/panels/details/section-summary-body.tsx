@@ -21,7 +21,13 @@ import {
   workStateGlyph,
   workStatusBadge,
 } from "../../badges.ts";
-import { BadgeCluster, badgeClusterCells } from "../../badge-cluster.tsx";
+import {
+  BadgeCluster,
+  WorktreeBadgeCluster,
+  badgeClusterCells,
+  modelBadgeSignals,
+  worktreeBadgeClusterCells,
+} from "../../badge-cluster.tsx";
 import { NF } from "../../icons.ts";
 import {
   rowSpine,
@@ -38,6 +44,7 @@ import {
   remoteEntryKey,
   type RemoteListEntry,
 } from "../../remote-creation.ts";
+import type { WorktreeModel } from "../../worktree-model.ts";
 
 /**
  * What the detail pane shows when a FOLDED section header is the cursor.
@@ -71,7 +78,9 @@ export type SectionMember = {
   kind: "remote";
   label: string;
   entry: RemoteListEntry;
+  model: WorktreeModel | null;
   archived: boolean;
+  actionRunning: boolean;
 };
 
 export type SectionDetail = {
@@ -94,7 +103,7 @@ export type SectionDetail = {
  *  is exactly the drift this module exists to prevent. */
 function memberState(m: SectionMember): WorkState | null {
   if (m.kind === "remote") {
-    return isRemoteSummary(m.entry) ? m.entry.workState : null;
+    return m.model?.work?.state ?? null;
   }
   return (
     effectiveWorkState(m.row.work, m.sessionState, rowHasLanded(m.row))?.state ?? null
@@ -106,7 +115,7 @@ function memberState(m: SectionMember): WorkState | null {
 function memberRisk(m: SectionMember): WorkRisk | undefined {
   if (memberState(m) !== "ready") return undefined;
   return m.kind === "remote"
-    ? isRemoteSummary(m.entry) ? m.entry.workRisk ?? undefined : undefined
+    ? m.model?.work?.risk
     : m.row.work?.risk;
 }
 
@@ -142,7 +151,9 @@ function memberColumns(members: SectionMember[]): { risk: number; badges: number
     badges = Math.max(
       badges,
       m.kind === "remote"
-        ? 0
+        ? m.model
+          ? worktreeBadgeClusterCells(modelBadgeSignals(m.model, m.actionRunning))
+          : 0
         : badgeClusterCells(m.row, m.actionRunning, m.activeHarnessId),
     );
   }
@@ -260,21 +271,14 @@ function MemberRow({
 }) {
   if (m.kind === "remote") {
     const dim = m.archived;
-    const status: Status = isRemoteSummary(m.entry)
-      ? {
-          kind: m.entry.status,
-          label: m.entry.statusLabel,
-          age: m.entry.statusAge ?? undefined,
-          op: m.entry.statusOp ?? undefined,
-        }
+    const status: Status = m.model
+      ? m.model.status
       : m.entry.status === "creating"
         ? { kind: StatusKind.Busy, label: "creating", op: "init" }
         : { kind: StatusKind.Clean, label: "ready" };
     const marker = status.kind === StatusKind.Clean
       ? workStatusBadge(
-          isRemoteSummary(m.entry) && m.entry.workState
-            ? { state: m.entry.workState, at: "" }
-            : null,
+          m.model?.work ?? null,
           undefined,
         )
       : statusBadge(status);
@@ -301,7 +305,18 @@ function MemberRow({
           </box>
         ) : null}
         {cols.badges > 0 ? (
-          <box width={cols.badges} flexShrink={0} />
+          <box
+            width={cols.badges}
+            flexShrink={0}
+            flexDirection="row"
+            justifyContent="flex-end"
+          >
+            {m.model ? (
+              <WorktreeBadgeCluster
+                signals={modelBadgeSignals(m.model, m.actionRunning)}
+              />
+            ) : null}
+          </box>
         ) : null}
       </box>
     );
@@ -425,7 +440,7 @@ function BlockedNotes({
           {clipLines(
             m.kind === "wt"
               ? m.row.work?.note ?? ""
-              : isRemoteSummary(m.entry) ? m.entry.workNote ?? "" : "",
+              : m.model?.work?.note ?? "",
             Math.max(10, width - 4),
             perNote,
           ).map((line, i) => (
@@ -479,7 +494,7 @@ export function SectionSummaryBody({
       memberState(m) === "needs-human" &&
       (m.kind === "wt"
         ? m.row.work?.note
-        : isRemoteSummary(m.entry) && m.entry.workNote),
+        : m.model?.work?.note),
   );
   // Everything the body draws before the first note line: label, the
   // rollup, the facts line when there is one, a blank, the member rows

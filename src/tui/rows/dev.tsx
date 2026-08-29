@@ -1,5 +1,8 @@
 import { config } from "../../core/config.ts";
-import { DEV_SERVER_STOPPED } from "../../core/dev-server.ts";
+import {
+  DEV_SERVER_STOPPED,
+  type DevServerStatus,
+} from "../../core/dev-server.ts";
 import { NF } from "../icons.ts";
 import { ageMsToText } from "../text.ts";
 import { theme } from "../theme.ts";
@@ -12,13 +15,8 @@ import type { RowModule } from "./types.ts";
  * with the recovery hint, since the bolt alone can't say "was running,
  * gave up".
  */
-export const devRow: RowModule = {
-  id: "dev",
-  label: "dev",
-  visible: () => config.devServer !== null,
-  sources: ({ row }) => [row.fields.dev],
-  render: ({ row }) => {
-    const dev = row.fields.dev.data ?? DEV_SERVER_STOPPED;
+/** Shared rendering for controller-local and worker-reported dev health. */
+export function DevStatusText({ dev }: { dev: DevServerStatus }) {
     if (dev.running) {
       // A running server whose start commit is no longer in the tree's
       // history: anything it derived from the tree (a migrated database
@@ -86,5 +84,15 @@ export const devRow: RowModule = {
         {NF.boltOff}  not running
       </text>
     );
+}
+
+export const devRow: RowModule = {
+  id: "dev",
+  label: "dev",
+  visible: () => config.devServer !== null,
+  sources: ({ row }) => [row.fields.dev],
+  render: ({ row }) => {
+    const dev = row.fields.dev.data ?? DEV_SERVER_STOPPED;
+    return <DevStatusText dev={dev} />;
   },
 };

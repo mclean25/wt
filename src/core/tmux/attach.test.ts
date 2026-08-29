@@ -34,6 +34,25 @@ async function runWrapped(kind: "shell" | "claude", message: string) {
 }
 
 describe("tmux inner-process browser identity", () => {
+  test("every session can invoke this checkout's wt launcher", async () => {
+    for (const kind of ["shell", "claude"] as const) {
+      const proc = Bun.spawn(
+        wrapInnerArgs({
+          kind,
+          stderrPath: "/dev/null",
+          innerArgs: ["sh", "-c", "command -v wt"],
+        }),
+        { stdout: "pipe", stderr: "ignore" },
+      );
+      const [exitCode, stdout] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+      ]);
+      expect(exitCode).toBe(0);
+      expect(stdout.trim()).toEndWith("/bin/wt");
+    }
+  });
+
   test("the harness inherits its worktree's browser session name", async () => {
     const proc = Bun.spawn(
       wrapInnerArgs({

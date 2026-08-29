@@ -41,7 +41,14 @@ export const GROUP_INBOX = "\0inbox";
  */
 export const GROUP_ARCHIVED = "\0archived";
 
-export type WtSlugState = {
+export type WorktreeLayout = {
+  /** Section name. `null` = the controller's Inbox. */
+  section: string | null;
+  /** Manual ordering scalar within the section. Lower = earlier. */
+  order: number;
+};
+
+export type WtSlugState = WorktreeLayout & {
   /** Section name. `null` = unsectioned (rendered at top, no header). */
   section: string | null;
   /** Manual ordering scalar within (section, archived) bucket. Lower = earlier. */
@@ -267,6 +274,12 @@ export type WtState = {
    */
   version: number;
   slugs: Record<string, WtSlugState>;
+  /**
+   * Controller-owned placement for worktrees executed on another host.
+   * Keys are location-aware ledger keys (`@remote/<host>/<slug>`), so a
+   * remote slug never collides with a local operational slug record.
+   */
+  remoteLayouts: Record<string, WorktreeLayout>;
   sectionsOrder: string[];
   /** Section keys the user has folded in the list (persisted across restarts). */
   foldedSections: string[];

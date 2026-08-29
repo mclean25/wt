@@ -18,9 +18,11 @@ import {
 } from "../../core/wtstate.ts";
 import {
   BadgeCluster,
-  RemoteBadgeCluster,
+  WorktreeBadgeCluster,
   badgeClusterCells,
-  remoteBadgeClusterCells,
+  modelBadgeSignals,
+  worktreeBadgeClusterCells,
+  type WorktreeBadgeSignals,
 } from "../badge-cluster.tsx";
 import {
   rowSpine,
@@ -433,6 +435,7 @@ const RemoteRowView = memo(function RemoteRowView({
   selected,
   panelWidth,
   githubData,
+  model,
   archived = false,
   unavailable = false,
   actionRunning = false,
@@ -441,20 +444,16 @@ const RemoteRowView = memo(function RemoteRowView({
   selected: boolean;
   panelWidth: number;
   githubData?: GithubData;
+  model: WorktreeModel | null;
   archived?: boolean;
   unavailable?: boolean;
   actionRunning?: boolean;
 }) {
-  const status: Status = isRemoteSummary(entry)
-    ? {
-        kind: entry.status,
-        label: entry.statusLabel,
-        age: entry.statusAge ?? undefined,
-        op: entry.statusOp ?? undefined,
-      }
+  const status: Status = model?.status ?? (isRemoteSummary(entry)
+    ? entry.status
     : entry.status === "creating"
       ? { kind: StatusKind.Busy, label: "creating", op: "init" }
-      : { kind: StatusKind.Clean, label: "ready" };
+      : { kind: StatusKind.Clean, label: "ready" });
   // Remote rows have no badge cluster, so unlike local rows the dirty
   // pencil keeps the marker slot here; only a CLEAN remote row cedes it
   // to the (SSH-carried) work-status dot — which, like local rows,
@@ -462,22 +461,33 @@ const RemoteRowView = memo(function RemoteRowView({
   const marker =
     status.kind === StatusKind.Clean
       ? workStatusBadge(
-          isRemoteSummary(entry) && entry.workState
-            ? { state: entry.workState, at: "" }
-            : null,
+          model?.work ?? (isRemoteSummary(entry) ? entry.work : null),
           undefined,
         )
       : statusBadge(status);
   const label = remoteRowLabel(entry);
-  const pr = isRemoteSummary(entry) ? githubData?.prs[entry.branch] : undefined;
-  const mq = isRemoteSummary(entry)
+  const pr = model?.pr ?? (isRemoteSummary(entry) ? githubData?.prs[entry.branch] : undefined);
+  const mq = model?.mq ?? (isRemoteSummary(entry)
     ? githubData?.mergeQueue?.[entry.branch]
-    : undefined;
+    : undefined);
   // Two cells for the PUA monitor glyph. It sits immediately before the
   // name so location reads as part of row identity, not as one more
   // right-aligned status badge.
   const remoteCells = 2;
-  const badgeCells = remoteBadgeClusterCells(pr, mq, actionRunning);
+  const badgeSignals: WorktreeBadgeSignals = model
+    ? modelBadgeSignals(model, actionRunning)
+    : {
+        pr,
+        mq,
+        archived,
+        actionRunning,
+        environmentLive: false,
+        dirty: null,
+        rebase: null,
+        activeHarnessId: undefined,
+        sessionState: undefined,
+      };
+  const badgeCells = worktreeBadgeClusterCells(badgeSignals);
   return (
     <box
       id={`remote:${remoteEntryKey(entry)}`}
@@ -506,7 +516,7 @@ const RemoteRowView = memo(function RemoteRowView({
           {truncateEnd(label, Math.max(0, panelWidth - 8 - remoteCells - badgeCells))}
         </text>
       </box>
-      <RemoteBadgeCluster pr={pr} mq={mq} archived={archived} actionRunning={actionRunning} />
+      <WorktreeBadgeCluster signals={badgeSignals} />
     </box>
   );
 });
@@ -712,6 +722,7 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                   ) : null}
                   <RemoteRowView
                     entry={item.entry}
+                    model={item.model}
                     selected={i === selectedIndex}
                     panelWidth={width}
                     githubData={githubData}
@@ -838,6 +849,7 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
                     <RemoteRowView
                       key={`archived:remote:${remoteEntryKey(item.entry)}`}
                       entry={item.entry}
+                      model={item.model}
                       selected={globalIndex === selectedIndex}
                       panelWidth={width}
                       githubData={githubData}

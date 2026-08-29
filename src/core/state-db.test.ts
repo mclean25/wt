@@ -66,6 +66,37 @@ test("one database isolates repository state by path-derived id", () => {
   expect(firstRead.stdout.toString().trim()).toBe("one-section");
 });
 
+test("controller keeps host-qualified remote layout separate from local slug state", () => {
+  const root = mkdtempSync(join(tmpdir(), "wt-remote-layout-"));
+  roots.push(root);
+  const db = join(root, "state", "wt.sqlite");
+  const user = join(root, "config.toml");
+  const repo = join(root, "repo");
+  writeFileSync(user, "[branch]\nprefix = \"test\"\n");
+  writeRepoConfig(repo, repo, db);
+
+  const write = run(repo, user, `
+    const state = await import(${WTSTATE});
+    state.setSlugSection("same-slug", "Local");
+    state.setWorktreeSection("@remote/dellserver/same-slug", "Remote");
+    console.log(JSON.stringify(state.readWtState()));
+  `);
+  expect(write.exitCode, write.stderr.toString()).toBe(0);
+  const state = JSON.parse(write.stdout.toString());
+  expect(state.slugs["same-slug"].section).toBe("Local");
+  expect(state.remoteLayouts["@remote/dellserver/same-slug"].section).toBe("Remote");
+
+  const reap = run(repo, user, `
+    const state = await import(${WTSTATE});
+    state.reapRemoteLayouts("dellserver", new Set());
+    console.log(JSON.stringify(state.readWtState()));
+  `);
+  expect(reap.exitCode, reap.stderr.toString()).toBe(0);
+  const reaped = JSON.parse(reap.stdout.toString());
+  expect(reaped.slugs["same-slug"].section).toBe("Local");
+  expect(reaped.remoteLayouts).toEqual({});
+});
+
 test("a namespace collision refuses the second canonical repository path", () => {
   const root = mkdtempSync(join(tmpdir(), "wt-state-collision-"));
   roots.push(root);

@@ -919,7 +919,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         // cached busy flag. The host may have recovered since that read, and
         // remote `wt rm` performs the authoritative live lock check with a
         // bounded SSH timeout. A real refusal is surfaced by doRemoteRemove.
-        const force = selectedRemote.dirty || selectedRemote.unpushed > 0;
+        const force = selectedRemote.dirty || (selectedRemote.unpushed ?? 0) > 0;
         const forceDetail = selectedRemote.dirty
           ? "Uncommitted changes will be lost. The remote branch will also be deleted."
           : `${selectedRemote.unpushed} unpushed commit${selectedRemote.unpushed === 1 ? "" : "s"} will be lost. The remote branch will also be deleted.`;
