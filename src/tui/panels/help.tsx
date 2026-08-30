@@ -105,7 +105,7 @@ const KEY_BLOCKS: Block[] = [
         key: "y",
         label: "on a folded section: yank the batch — name (n), slugs (s), branches (b), list (l)",
       },
-      { key: "t", label: "regenerate AI summary" },
+      { key: "t", label: "regenerate worktree summary" },
       {
         key: "V",
         label:

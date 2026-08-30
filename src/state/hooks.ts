@@ -632,7 +632,7 @@ export function useWtActions() {
      * `aiSummary` is hash-keyed; force regen refetches the diff
      * context, then `invalidateQueries` on the AI summary entry for
      * the resulting hash. The active observer refetches the queryFn
-     * (calling the AI endpoint), and `placeholderData: keepPreviousData`
+     * (starting the naming harness), and `placeholderData: keepPreviousData`
      * keeps the prior summary on screen during the gap. Using
      * `invalidateQueries` instead of `removeQueries` is deliberate:
      * deleting the entry blanks the display because the observer's

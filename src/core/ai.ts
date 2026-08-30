@@ -1,18 +1,16 @@
 /**
- * AI client for worktree summaries.
+ * Harness-backed naming for worktree summaries.
  *
- * Supports OpenAI-compatible `/v1/chat/completions` endpoints (optionally
- * authenticated), OpenAI's `/v1/responses` protocol (hosted gpt-5.6-era
- * models reject chat completions), and Google's Gemini
- * `models.generateContent` endpoint. No streaming — the TUI just waits for
- * the full response.
+ * Uses the configured coding-agent harness's non-interactive CLI, so naming
+ * shares the user's existing harness authentication and model access. The
+ * run is isolated and read-only; see `harness/completion.ts`.
  *
  * One call produces both a title and a description via a line-prefixed
  * format that's robust to small-model formatting drift. Co-generation
  * shares one round trip and one diff-context build per cache key.
  */
-import { config, type AiConfig } from "./config.ts";
-import { chainSignal } from "./proc.ts";
+import { config } from "./config.ts";
+import { runHarnessCompletion } from "./harness/completion.ts";
 
 const SYSTEM_PROMPT = `You summarise git changes for a developer scanning their worktrees.
 
@@ -44,30 +42,6 @@ Rules:
 
 Return only the TITLE line.`;
 
-type ChatResponse = {
-  choices?: Array<{ message?: { content?: string } }>;
-  error?: { message?: string };
-};
-
-type ResponsesResponse = {
-  output?: Array<{
-    type?: string;
-    content?: Array<{ type?: string; text?: string }>;
-  }>;
-  status?: string;
-  incomplete_details?: { reason?: string };
-  error?: { message?: string };
-};
-
-type GeminiResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{ text?: string }>;
-    };
-  }>;
-  error?: { message?: string };
-};
-
 export type AiSummary = {
   /** LLM-authored title. Null when the model failed to emit a TITLE: line. */
   title: string | null;
@@ -83,24 +57,22 @@ export type AiSummary = {
 };
 
 /**
- * Call the configured LLM endpoint with the prepared diff context.
- * Throws on transport / HTTP / parse errors so react-query surfaces
+ * Call the configured naming harness with the prepared diff context.
+ * Throws on process / parse errors so react-query surfaces
  * them; the details pane renders errors verbatim once retries are
  * exhausted.
  *
  * When `external` is provided (queryFn `signal`), it's chained with
  * the timeout so observer cancellation aborts the in-flight LM call.
  * Without this, switching worktrees fast leaves the prior
- * megabyte-prompt request running to completion against the AI endpoint,
+ * megabyte-prompt process running to completion,
  * burning latency on a result nobody sees.
  */
 export async function summarizeDiff(
   prompt: string,
   external?: AbortSignal,
 ): Promise<AiSummary> {
-  // max_tokens bump from prior 200 to give title + description headroom
-  // without inviting rambling. ~3 sentences fits comfortably here.
-  const content = await callChat(SYSTEM_PROMPT, prompt, 260, external);
+  const content = await callNamingHarness(SYSTEM_PROMPT, prompt, external);
   return parseTitleDescription(content);
 }
 
@@ -136,7 +108,7 @@ export async function summarizeStack(
     const prompt = lastRejected
       ? `${userPrompt}\n\nYour previous answer "${lastRejected}" just echoed words from the instructions. Name the actual WORK these branches do, not the tool or the grouping.`
       : userPrompt;
-    const content = await callChat(STACK_SYSTEM_PROMPT, prompt, 30, external);
+    const content = await callNamingHarness(STACK_SYSTEM_PROMPT, prompt, external);
     const titleMatch = content.match(/^TITLE:\s*(.+?)\s*$/m);
     const raw = (titleMatch?.[1] ?? content).trim();
     const cleaned = cleanInline(raw);
@@ -178,56 +150,53 @@ export function isStackTitleMetaOnly(title: string): boolean {
 }
 
 /**
- * Module-level serial queue over the configured AI endpoint. A restack /
+ * Module-level serial queue over the configured naming harness. A restack /
  * rebase flips many diff hashes at once, and the resulting burst of
  * concurrent summary fetches can stampede the model into request timeouts.
  * One in-flight request at a time keeps each call fast and the failure mode
  * boring. Tasks run on settled predecessors, so one failure doesn't poison
  * the queue.
  */
-let chatQueueTail: Promise<unknown> = Promise.resolve();
+let namingQueueTail: Promise<unknown> = Promise.resolve();
 
-function enqueueChat<T>(task: () => Promise<T>): Promise<T> {
-  const next = chatQueueTail.then(task, task);
-  chatQueueTail = next.catch(noop);
+function enqueueNaming<T>(task: () => Promise<T>): Promise<T> {
+  const next = namingQueueTail.then(task, task);
+  namingQueueTail = next.catch(noop);
   return next;
 }
 
 /**
- * Single round-trip to the configured AI endpoint. Shared by
- * `summarizeDiff` and `summarizeStack` so both
- * use the same abort chaining, timeout handling, and error messages.
+ * One ephemeral CLI turn through the selected harness. Shared by diff and
+ * stack naming so both use the same serialization and retry behavior.
  *
- * Calls are serialized through `enqueueChat`, and the per-call timeout
+ * Calls are serialized through `enqueueNaming`, and the per-call timeout
  * starts when the request actually goes out — not while it waits in the
  * queue, which would re-create the stampede failure with extra steps.
  * A failed attempt gets one retry (transient resets from a busy /
  * model-swapping server recover on the spot); an external abort — the
  * observer was cancelled, nobody wants the result — does not.
  */
-async function callChat(
+async function callNamingHarness(
   systemPrompt: string,
   userPrompt: string,
-  maxTokens: number,
   external?: AbortSignal,
 ): Promise<string> {
-  const ai = config.ai;
-  if (!ai) {
-    throw new Error("AI is not configured ([ai] missing in config.toml)");
+  const naming = config.naming;
+  if (!naming) {
+    throw new Error("naming is not configured ([naming] missing in config.toml)");
   }
-  return enqueueChat(async () => {
+  return enqueueNaming(async () => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
-      // The caller may have been cancelled while this call sat in the
-      // queue (or during the retry pause) — bail before sending.
       external?.throwIfAborted();
       if (attempt > 0) await sleep(500);
       try {
-        return ai.provider === "gemini"
-          ? await requestGeminiChat(ai, systemPrompt, userPrompt, maxTokens, external)
-          : ai.protocol === "responses"
-            ? await requestOpenAiResponses(ai, systemPrompt, userPrompt, maxTokens, external)
-            : await requestOpenAiChat(ai, systemPrompt, userPrompt, maxTokens, external);
+        return await runHarnessCompletion(
+          naming,
+          `${systemPrompt}\n\nINPUT:\n${userPrompt}`,
+          config.paths.mainClone,
+          external,
+        );
       } catch (err) {
         if (external?.aborted) throw err;
         lastErr = err;
@@ -235,279 +204,6 @@ async function callChat(
     }
     throw lastErr;
   });
-}
-
-/**
- * Request headers for the openai provider. With `api_key_env` set the
- * key is read fresh per request and sent as a bearer token; without it
- * the request stays header-bare like the original local-endpoint
- * behavior. The key VALUE never leaves this function except inside the
- * header itself — error messages only ever name the env var.
- */
-function openAiHeaders(
-  ai: Extract<AiConfig, { provider: "openai" }>,
-): Record<string, string> {
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (ai.apiKeyEnv) {
-    const key = process.env[ai.apiKeyEnv];
-    if (!key) {
-      throw new Error(`OpenAI API key env var ${ai.apiKeyEnv} is not set`);
-    }
-    headers.authorization = `Bearer ${key}`;
-  }
-  return headers;
-}
-
-/** One HTTP attempt against the chat endpoint. Timeout + abort scoped
- *  to this attempt; retry policy lives in `callChat`. */
-async function requestOpenAiChat(
-  ai: Extract<AiConfig, { provider: "openai" }>,
-  systemPrompt: string,
-  userPrompt: string,
-  maxTokens: number,
-  external?: AbortSignal,
-): Promise<string> {
-  // Resolve headers (and the missing-key error) before any transport
-  // setup so a bad api_key_env doesn't masquerade as "unreachable".
-  const headers = openAiHeaders(ai);
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ai.timeoutMs);
-  // Forward an external abort (queryFn cancellation) into the same
-  // controller so fetch sees a single signal.
-  const cleanupAbort = external
-    ? chainSignal(external, () => ctrl.abort())
-    : noop;
-  let res: Response;
-  try {
-    res = await fetch(`${ai.endpoint}/v1/chat/completions`, {
-      method: "POST",
-      headers,
-      signal: ctrl.signal,
-      body: JSON.stringify({
-        model: ai.model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.2,
-        max_tokens: maxTokens,
-        stream: false,
-      }),
-    });
-  } catch (err) {
-    // One message for every fetch failure, including the timeout abort —
-    // so "unreachable" can also mean "timed out after ai.timeout_ms".
-    // Known conflation, accepted: both cases have the same user remedy
-    // (check the endpoint / bump the timeout) and the appended err.message
-    // carries the distinction when it matters.
-    throw new Error(
-      `AI endpoint unreachable at ${ai.endpoint}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  } finally {
-    clearTimeout(timer);
-    cleanupAbort();
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    // Squash to one line because some local endpoints return full HTML error
-    // page, which otherwise dumps line-by-line into the activity pane.
-    const oneLine = body.replace(/\s+/g, " ").trim().slice(0, 160);
-    throw new Error(`AI endpoint HTTP ${res.status}: ${oneLine || res.statusText}`);
-  }
-
-  let parsed: ChatResponse;
-  try {
-    parsed = (await res.json()) as ChatResponse;
-  } catch (err) {
-    throw new Error(
-      `AI endpoint returned non-JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  if (parsed.error?.message) {
-    throw new Error(`AI endpoint: ${parsed.error.message}`);
-  }
-  const content = parsed.choices?.[0]?.message?.content?.trim();
-  if (!content) {
-    throw new Error("AI endpoint returned no content");
-  }
-  return content;
-}
-
-/**
- * One HTTP attempt against `/v1/responses` — the protocol hosted OpenAI
- * models like the gpt-5.6 family require (they hard-reject
- * `/v1/chat/completions`). Same timeout/abort/retry contract as the
- * chat path. Deliberate parameter differences from chat: the system
- * prompt rides `instructions`, the cap is `max_output_tokens`, and
- * `temperature` is omitted — gpt-5-era reasoning models reject
- * non-default sampling params.
- */
-async function requestOpenAiResponses(
-  ai: Extract<AiConfig, { provider: "openai" }>,
-  systemPrompt: string,
-  userPrompt: string,
-  maxTokens: number,
-  external?: AbortSignal,
-): Promise<string> {
-  const headers = openAiHeaders(ai);
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ai.timeoutMs);
-  const cleanupAbort = external
-    ? chainSignal(external, () => ctrl.abort())
-    : noop;
-  let res: Response;
-  try {
-    res = await fetch(`${ai.endpoint}/v1/responses`, {
-      method: "POST",
-      headers,
-      signal: ctrl.signal,
-      body: JSON.stringify({
-        model: ai.model,
-        instructions: systemPrompt,
-        input: userPrompt,
-        max_output_tokens: maxTokens,
-        reasoning: { effort: ai.reasoningEffort },
-        stream: false,
-      }),
-    });
-  } catch (err) {
-    throw new Error(
-      `AI endpoint unreachable at ${ai.endpoint}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  } finally {
-    clearTimeout(timer);
-    cleanupAbort();
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    const oneLine = body.replace(/\s+/g, " ").trim().slice(0, 160);
-    throw new Error(`AI endpoint HTTP ${res.status}: ${oneLine || res.statusText}`);
-  }
-
-  let parsed: ResponsesResponse;
-  try {
-    parsed = (await res.json()) as ResponsesResponse;
-  } catch (err) {
-    throw new Error(
-      `AI endpoint returned non-JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  return extractResponsesText(parsed);
-}
-
-/**
- * Pull the assistant text out of a `/v1/responses` payload: concatenate
- * `output_text` parts across `message` items (reasoning items are
- * skipped). Exported for tests. The empty-but-incomplete case gets its
- * own message because it has its own remedy — with a reasoning effort
- * above "none", thinking tokens can exhaust `max_output_tokens` before
- * any text is emitted, and "no content" alone would point away from
- * the fix.
- */
-export function extractResponsesText(parsed: ResponsesResponse): string {
-  if (parsed.error?.message) {
-    throw new Error(`AI endpoint: ${parsed.error.message}`);
-  }
-  const content = (parsed.output ?? [])
-    .filter((item) => item.type === "message")
-    .flatMap((item) => item.content ?? [])
-    .filter((part) => part.type === "output_text")
-    .map((part) => part.text ?? "")
-    .join("")
-    .trim();
-  if (!content) {
-    if (parsed.status === "incomplete") {
-      const reason = parsed.incomplete_details?.reason ?? "unknown reason";
-      throw new Error(
-        `AI endpoint response incomplete (${reason}) with no text — if the reason is max_output_tokens, lower [ai].reasoning_effort or raise the cap`,
-      );
-    }
-    throw new Error("AI endpoint returned no content");
-  }
-  return content;
-}
-
-async function requestGeminiChat(
-  ai: Extract<AiConfig, { provider: "gemini" }>,
-  systemPrompt: string,
-  userPrompt: string,
-  maxTokens: number,
-  external?: AbortSignal,
-): Promise<string> {
-  const apiKey = process.env[ai.apiKeyEnv];
-  if (!apiKey) {
-    throw new Error(`Gemini API key env var ${ai.apiKeyEnv} is not set`);
-  }
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ai.timeoutMs);
-  const cleanupAbort = external
-    ? chainSignal(external, () => ctrl.abort())
-    : noop;
-  let res: Response;
-  try {
-    res = await fetch(
-      `${ai.endpoint}/${geminiModelPath(ai.model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        signal: ctrl.signal,
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: systemPrompt }],
-          },
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: userPrompt }],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: maxTokens,
-          },
-        }),
-      },
-    );
-  } catch (err) {
-    throw new Error(
-      `Gemini unreachable at ${ai.endpoint}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  } finally {
-    clearTimeout(timer);
-    cleanupAbort();
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    const oneLine = body.replace(/\s+/g, " ").trim().slice(0, 160);
-    throw new Error(`Gemini HTTP ${res.status}: ${oneLine || res.statusText}`);
-  }
-
-  let parsed: GeminiResponse;
-  try {
-    parsed = (await res.json()) as GeminiResponse;
-  } catch (err) {
-    throw new Error(
-      `Gemini returned non-JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  if (parsed.error?.message) {
-    throw new Error(`Gemini: ${parsed.error.message}`);
-  }
-  const content = parsed.candidates?.[0]?.content?.parts
-    ?.map((part) => part.text ?? "")
-    .join("")
-    .trim();
-  if (!content) {
-    throw new Error("Gemini returned no content");
-  }
-  return content;
-}
-
-function geminiModelPath(model: string): string {
-  return model.startsWith("models/") ? model : `models/${model}`;
 }
 
 /**

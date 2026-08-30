@@ -2,7 +2,8 @@
  * Which harness a message aimed at a worktree should go to.
  *
  * `readPrimaryHarness` answers a different question than it looks like
- * it answers. It is ONE GLOBAL setting — `<cacheRoot>/harness.json`,
+ * it answers. It is one repository-level setting — `<cacheRoot>/harness.json`
+ * with `[harness].primary` as its fallback,
  * cycled by Shift+Tab in the TUI — so it says "what F12 would spawn
  * next", not "what is working on this branch". Routing `wt agent send`
  * through it meant a worktree whose Codex session wt had itself

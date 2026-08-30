@@ -88,11 +88,11 @@ export const aiSummaryQuery = (
       if (!ctx) {
         throw new Error("aiSummaryQuery: ctx is null (enabled guard missed)");
       }
-      aiLog.event.dim(`calling AI endpoint for ${slug} (${pluralize(ctx.prompt.length, "char")})...`);
+      aiLog.event.dim(`asking naming harness for ${slug} (${pluralize(ctx.prompt.length, "char")})...`);
       const start = Date.now();
       try {
         const out = await summarizeDiff(ctx.prompt, signal);
-        aiLog.event.dim(`called AI endpoint for ${slug} (${formatDuration(Date.now() - start)})`);
+        aiLog.event.dim(`named ${slug} (${formatDuration(Date.now() - start)})`);
         return out;
       } catch (err) {
         // A cancelled observer (diff hash flipped again, row unmounted)
@@ -101,7 +101,7 @@ export const aiSummaryQuery = (
         if (signal.aborted) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         aiLog.event.err(
-          `AI endpoint failed for ${slug} (${formatDuration(Date.now() - start)}): ${msg}`,
+          `naming harness failed for ${slug} (${formatDuration(Date.now() - start)}): ${msg}`,
         );
         throw err;
       }
@@ -200,7 +200,7 @@ export const stackTitleQuery = (
         throw err;
       }
     },
-    enabled: members.length > 0 && !!config.ai,
+    enabled: members.length > 0 && !!config.naming,
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: Number.POSITIVE_INFINITY,
   });

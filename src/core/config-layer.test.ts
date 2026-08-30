@@ -92,6 +92,16 @@ worktree_root = "/global/worktrees"
 [instance]
 role = "worker"
 
+[harness]
+primary = "codex"
+
+[naming]
+harness = "primary"
+reasoning_effort = "low"
+
+[naming.models]
+codex = "gpt-cheap"
+
 [branch]
 prefix = "alex"
 base = "main"
@@ -109,6 +119,9 @@ base = "develop"
 [lifecycle]
 copy_globs = [".agents/**"]
 
+[browser]
+chrome_profile = "Profile 3"
+
 [github]
 reviewers = false
 `);
@@ -125,11 +138,14 @@ reviewers = false
         console.log(JSON.stringify({
           repoId: config.repoId,
           instance: config.instance,
+          harness: config.harness,
+          naming: config.naming,
           repoPath: config.repoPath,
           paths: config.paths,
           tmux: config.tmux,
           branch: config.branch,
           lifecycle: config.lifecycle,
+          browser: config.browser,
           github: config.github,
           rows: config.ui.rows,
           reviewerBadgeHidden: reviewBadge("unrequested") === null,
@@ -154,6 +170,14 @@ reviewers = false
       expect(JSON.parse(result.stdout.toString())).toMatchObject({
         repoId,
         instance: { role: "worker" },
+        harness: { primary: "codex" },
+        naming: {
+          harness: "primary",
+          models: { codex: "gpt-cheap" },
+          reasoningEffort: "low",
+          maxInputTokens: 8000,
+          timeoutMs: 120000,
+        },
         repoPath: realpathSync(repo),
         paths: {
           mainClone: "/local/repo",
@@ -164,6 +188,7 @@ reviewers = false
         tmux: { socket: `wt-${repoId}` },
         branch: { prefix: "alex", base: "develop" },
         lifecycle: { copyGlobs: [".agents/**"] },
+        browser: { chromeProfile: "Profile 3" },
         github: { reviewers: false },
         rows: ["branch", "git"],
         reviewerBadgeHidden: true,
@@ -207,6 +232,41 @@ copy_globs = ["/tmp/**", "../secrets/**"]
       expect(result.exitCode).toBe(1);
       expect(result.stderr.toString()).toContain(
         "lifecycle.copy_globs entries must be relative paths without '..' segments",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("points legacy AI config at harness-backed naming", () => {
+    const root = mkdtempSync(join(tmpdir(), "wt-config-ai-migration-"));
+    try {
+      const userConfig = join(root, "config.toml");
+      writeFileSync(userConfig, `
+[paths]
+main_clone = "/repo"
+worktree_root = "/worktrees"
+
+[branch]
+prefix = "alex"
+
+[ai]
+provider = "gemini"
+model = "gemini-flash"
+`);
+      const configModule = pathToFileURL(join(import.meta.dir, "config.ts")).href;
+      const result = Bun.spawnSync(
+        [process.execPath, "-e", `await import(${JSON.stringify(configModule)})`],
+        {
+          cwd: root,
+          env: { ...process.env, WT_CONFIG: userConfig },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain(
+        "[ai] is no longer supported; use [naming]",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

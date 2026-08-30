@@ -3,10 +3,34 @@
  * assumption noted in the README.
  */
 import { hideFrontmostTerminal } from "./zed.ts";
+import { config } from "./config.ts";
+
+/**
+ * Build the macOS launcher command for a URL. A configured Chrome profile
+ * applies only to web URLs: custom schemes such as `linear://` still need
+ * Launch Services to route them to their owning application.
+ */
+export function openUrlCommand(
+  url: string,
+  chromeProfile = config.browser.chromeProfile,
+): string[] {
+  if (chromeProfile && /^https?:\/\//i.test(url)) {
+    return [
+      "open",
+      "-a",
+      "Google Chrome",
+      "--args",
+      `--profile-directory=${chromeProfile}`,
+      "--ignore-profile-directory-if-not-exists",
+      url,
+    ];
+  }
+  return ["open", url];
+}
 
 /** Fire-and-forget `open <url>`. The macOS `open` binary returns immediately. */
 export function openUrl(url: string): void {
-  Bun.spawn(["open", url], {
+  Bun.spawn(openUrlCommand(url), {
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",

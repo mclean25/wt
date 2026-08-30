@@ -426,43 +426,65 @@ Id parsing itself is driven by the slug shape (`[a-z]+-\d+`), independent of `[b
 
 **Secondary GitHub issue:** independent of the slug id, a worktree can carry an attached GitHub issue number (`wt new … --gh 970`, `wt issue <slug> --gh 970` — see [cli.md](cli.md)). The issue row shows it after the primary (`ENG-1935 · #970`), and it becomes the most-specific target for `i` / `y i`; `I` / `y I` keep targeting the primary.
 
-## `[ai]` — optional integration
+## `[harness]` — coding-agent default
 
-Omit to disable the AI-generated title/brief/description in the details pane. Two providers:
+The initial primary harness used by F12, agent messages, prompt actions, and
+`harness = "primary"` integrations. An intentional selection made with Tab
+is stored per repository and wins until changed; repositories with no saved
+selection use this configured default.
 
 ```toml
-# OpenAI-compatible endpoint (LM Studio, Ollama, llama.cpp, an actual OpenAI-style server…)
-[ai]
-endpoint = "http://127.0.0.1:1234"   # required for provider = "openai"
-model    = "gemma-3-e4b-it-mlx"
-
-# hosted OpenAI (authenticated; gpt-5.6-era models reject chat completions,
-# so they also need protocol = "responses")
-[ai]
-endpoint    = "https://api.openai.com"
-model       = "gpt-5.6-luna"
-protocol    = "responses"
-api_key_env = "OPENAI_API_KEY"
-
-# or Gemini
-[ai]
-provider    = "gemini"
-model       = "gemini-3.5-flash"
-api_key_env = "GEMINI_API_KEY"       # required for provider = "gemini"
+[harness]
+primary = "codex"
 ```
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `provider` | no | `"openai"` | `"openai"` or `"gemini"`. |
-| `model` | **yes** | — | Model id as the provider names it. |
-| `endpoint` | openai: **yes** | gemini: `https://generativelanguage.googleapis.com/v1beta` | Base URL, no trailing slash. |
-| `protocol` | no | `"chat"` | openai only. `"chat"` = `/v1/chat/completions` (every local OpenAI-compatible server); `"responses"` = `/v1/responses`, required by hosted OpenAI models that reject chat completions (the gpt-5.6 family). Explicit because a local server can serve any model id — the name proves nothing. |
-| `api_key_env` | gemini: **yes** | openai: *(unset)* | Name of the environment variable holding the API key. For openai it's optional: set → `Authorization: Bearer` on every request; unset → unauthenticated local-endpoint behavior. The key value itself never appears in config, logs, or errors. |
-| `reasoning_effort` | no | `"none"` | openai `protocol = "responses"` only: `none`/`minimal`/`low`/`medium`/`high`. Default `none` because reasoning tokens count against the small per-summary output cap — higher efforts can spend the whole budget before emitting text. |
+| `primary` | no | `"claude"` | `"claude"`, `"codex"`, or `"opencode"`. Used when this repository has no persisted override. |
+
+## `[naming]` — optional generated worktree names
+
+Omit to disable generated title/brief/description text. Naming invokes the
+configured coding-agent harness's non-interactive CLI using its existing
+authentication; wt does not require or call a separate model API. Runs are
+serialized, short-lived, and read-only. Codex runs ephemerally without project
+rules, Claude disables tools and session persistence, and OpenCode uses its
+isolated `--pure` mode.
+
+```toml
+[naming]
+harness          = "primary"
+reasoning_effort = "low"
+
+[naming.models]
+codex = "gpt-5.6-luna"
+```
+
+| key | required | default | meaning |
+|---|---|---|---|
+| `harness` | no | `"primary"` | `"primary"` follows the repository's effective primary harness; `"claude"`, `"codex"`, or `"opencode"` pins naming independently. |
+| `models.<harness>` | no | *(harness default)* | Harness-native model override for `claude`, `codex`, or `opencode`. Per-harness keys keep `harness = "primary"` valid when the selected primary changes. |
+| `reasoning_effort` | no | `"low"` | Naming-only effort/variant: `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Claude maps `minimal` to `low`. Model support is enforced by the selected CLI. |
 | `max_input_tokens` | no | `8000` | Soft prompt budget; diff hunks are dropped largest-first to stay under it. |
-| `timeout_ms` | no | `120000` | Per-request timeout. Generous by default because local LLMs cold-start slowly. |
+| `timeout_ms` | no | `120000` | Per-process timeout, including harness startup. |
 
 Summaries are content-addressed by a hash of the diff, so identical diffs (across rebases, amends, branch renames) reuse the cached result.
+
+## `[browser]` — optional Chrome profile routing
+
+By default, wt opens links through macOS and lets the default browser choose
+the active profile. A repository can instead route every HTTP(S) link wt opens
+(PRs, issues, stages, and dev servers) to a specific Google Chrome profile:
+
+```toml
+[browser]
+chrome_profile = "Profile 3"
+```
+
+`chrome_profile` is Chrome's on-disk directory name, not the profile's display
+name. Find it at `chrome://version` under **Profile Path** (`Default`,
+`Profile 1`, and so on). Custom URL schemes such as `linear://` continue
+through macOS Launch Services.
 
 ## `[github]`
 

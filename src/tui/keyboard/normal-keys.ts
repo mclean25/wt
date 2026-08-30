@@ -1161,8 +1161,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       return;
     }
     if (isPlainLetter(k, "t")) {
-      if (!config.ai) {
-        toast("AI summary not configured", theme.warn, 2000);
+      if (!config.naming) {
+        toast("worktree naming not configured", theme.warn, 2000);
         return;
       }
       if (current.status.kind === StatusKind.Busy) {
@@ -1172,7 +1172,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       const slug = current.wt.slug;
       void (async () => {
         const ok = await refreshAiSummary(slug);
-        if (ok) rowLog.event.dim("regenerating AI summary");
+        if (ok) rowLog.event.dim("regenerating worktree summary");
         else toast("no diff context yet", theme.warn, 2000);
       })();
       return;

@@ -4,8 +4,9 @@
  * the top-right info bar advertises. TAB cycles through the registered
  * impls; this file is the source of truth across runs.
  *
- * Lives in `<cacheRoot>/harness.json` rather than `wtState.json` so the
- * existing per-slug state file stays focused on section/order.
+ * Lives in `<cacheRoot>/harness.json` rather than durable repository
+ * state. An explicit per-repository selection wins; otherwise
+ * `[harness].primary` supplies the default.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,7 +22,15 @@ const log = createLogger("[harness]");
 
 type FileShape = { primary?: HarnessId };
 
-const DEFAULT_PRIMARY: HarnessId = "claude";
+export function resolvePrimaryHarness(
+  file: FileShape,
+  fallback: HarnessId,
+): HarnessId {
+  const selected = file.primary;
+  return selected && HARNESSES.some((h) => h.id === selected)
+    ? selected
+    : fallback;
+}
 
 function readFile(): FileShape {
   if (!existsSync(STATE_FILE)) return {};
@@ -45,12 +54,9 @@ function writeFile(shape: FileShape): void {
   }
 }
 
-/** Current primary harness id. Default `claude` when never set. */
+/** Current primary harness id. Config supplies the default when never set. */
 export function readPrimaryHarness(): HarnessId {
-  const file = readFile();
-  const p = file.primary;
-  if (p && HARNESSES.some((h) => h.id === p)) return p;
-  return DEFAULT_PRIMARY;
+  return resolvePrimaryHarness(readFile(), config.harness.primary);
 }
 
 /** Persist a new primary selection. Validated against the registry. */

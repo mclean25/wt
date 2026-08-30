@@ -342,9 +342,10 @@ fall back to the `Shift+Tab` primary only when nothing is running there.
 `--harness <claude|codex|opencode>` addresses one explicitly; an unknown value
 is an error rather than a silent default.
 
-That routing rule is the whole point of the command. The primary is ONE GLOBAL
-setting (`<cacheRoot>/harness.json` — "what F12 would spawn next"), not a
-per-worktree one, and routing by it alone sent three fleet messages to a Claude
+That routing rule is the whole point of the command. The primary is one
+repository-level setting (`<cacheRoot>/harness.json` — "what F12 would spawn
+next", falling back to `[harness].primary`), not a per-worktree one, and routing
+by it alone sent three fleet messages to a Claude
 session that `send` cold-started for the occasion while the Codex session wt had
 itself launched in that worktree got none of them. Because `send` cold-starts,
 the failure *creates* a plausible-looking session instead of erroring, so every

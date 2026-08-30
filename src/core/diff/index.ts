@@ -89,7 +89,7 @@ export async function buildDiffContext(
   effectiveBase?: string | null,
   signal?: AbortSignal,
 ): Promise<DiffContext | null> {
-  if (!config.ai) return null;
+  if (!config.naming) return null;
   const base = await effectiveBaseOrTrunk(wtPath, effectiveBase);
 
   // Short-circuit between awaits when the caller has cancelled. Without
@@ -109,7 +109,7 @@ export async function buildDiffContext(
   // excluded files (lockfiles &c). There's no content worth a model
   // call, so return null: `aiSummaryQuery` is gated `enabled: !!ctx`,
   // so this lands in the exact same "no summary" state as an
-  // unconfigured pipeline rather than firing the AI endpoint with an empty
+  // unconfigured pipeline rather than starting a harness with an empty
   // `File summary:` prompt.
   if (!stat && !log && !rawDiff.trim()) return null;
 
@@ -123,7 +123,7 @@ export async function buildDiffContext(
   const filesTotal = parts.length;
 
   const headerChars = stat.length + log.length + SCAFFOLD_OVERHEAD_CHARS;
-  const totalBudgetChars = config.ai.maxInputTokens * CHARS_PER_TOKEN;
+  const totalBudgetChars = config.naming.maxInputTokens * CHARS_PER_TOKEN;
   const fileBudget = Math.max(1000, totalBudgetChars - headerChars);
   const fit = fitParts(parts, fileBudget);
 

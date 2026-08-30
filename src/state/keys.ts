@@ -33,7 +33,7 @@ export const qk = {
     ["harnessSessions", harnessId, slug] as const,
   /**
    * Currently-selected primary harness id. Persisted at
-   * `~/.cache/wt/harness.json`. Drives F12 / top-right indicator /
+   * `<cacheRoot>/harness.json`, falling back to `[harness].primary`. Drives F12 / top-right indicator /
    * TAB cycle. Single global key.
    */
   primaryHarness: () => ["primaryHarness"] as const,

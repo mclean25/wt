@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { extractResponsesText, isStackTitleMetaOnly } from "./ai.ts";
+import {
+  isStackTitleMetaOnly,
+  parseTitleDescription,
+} from "./ai.ts";
 
 describe("isStackTitleMetaOnly", () => {
   test("rejects a bare leaked meta word", () => {
@@ -31,43 +34,20 @@ describe("isStackTitleMetaOnly", () => {
   });
 });
 
-describe("extractResponsesText", () => {
-  test("concatenates output_text parts and skips reasoning items", () => {
-    expect(
-      extractResponsesText({
-        output: [
-          { type: "reasoning" },
-          {
-            type: "message",
-            content: [
-              { type: "output_text", text: "TITLE: Fix the thing\n" },
-              { type: "output_text", text: "DESCRIPTION: Done." },
-            ],
-          },
-        ],
-      }),
-    ).toBe("TITLE: Fix the thing\nDESCRIPTION: Done.");
+describe("parseTitleDescription", () => {
+  test("extracts the naming contract from harness output", () => {
+    expect(parseTitleDescription(
+      "TITLE: Fix the thing\nBRIEF: Thing fix\nDESCRIPTION: Done.",
+    )).toEqual({
+      title: "Fix the thing",
+      brief: "Thing fix",
+      description: "Done.",
+    });
   });
 
-  test("surfaces the API error message", () => {
-    expect(() =>
-      extractResponsesText({ error: { message: "invalid model" } }),
-    ).toThrow("AI endpoint: invalid model");
-  });
-
-  test("empty incomplete response points at the reasoning budget", () => {
-    expect(() =>
-      extractResponsesText({
-        output: [{ type: "reasoning" }],
-        status: "incomplete",
-        incomplete_details: { reason: "max_output_tokens" },
-      }),
-    ).toThrow(/incomplete \(max_output_tokens\)/);
-  });
-
-  test("empty complete response is a plain no-content error", () => {
-    expect(() => extractResponsesText({ output: [] })).toThrow(
-      "AI endpoint returned no content",
-    );
+  test("tolerates harness noise around the formatted answer", () => {
+    expect(parseTitleDescription(
+      "startup notice\nTITLE: Fix the thing\nBRIEF: Thing fix\nDESCRIPTION: Done.",
+    ).title).toBe("Fix the thing");
   });
 });

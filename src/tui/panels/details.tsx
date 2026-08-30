@@ -373,7 +373,7 @@ function DescriptionBlock({
 }: {
   summary: string | null;
   /**
-   * True only while the AI endpoint call itself is in flight — *not* for
+   * True only while the naming harness itself is in flight — *not* for
    * the cheap diff-context revalidation. Drives the refresh glyph and
    * the "generating summary…" placeholder. Intentionally narrower than
    * the per-row staleness glyph elsewhere: a hash-stable cache check
@@ -438,7 +438,7 @@ const DetailsBody = memo(function DetailsBody({
   // The diff context is `base..HEAD` only — uncommitted work is never
   // included, so a dirty tree doesn't change what the AI would see.
   // Only pause for busy worktrees, where racing the destroy is unsafe.
-  const aiEnabled = !!config.ai;
+  const aiEnabled = !!config.naming;
   const allowFetch = aiEnabled && !isBusy;
 
   // Diff context + summary observers are duplicated with `useWorktreeRows`

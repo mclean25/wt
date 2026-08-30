@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
 import type { BackendKind } from "./backend/types.ts";
+import type { HarnessId } from "./harness/types.ts";
 import {
   mergeConfig,
   pathNamespace,
@@ -280,6 +281,14 @@ export type GithubEventsConfig = {
 
 export type PullRequestTarget = "github" | "linear";
 
+export type BrowserConfig = {
+  /**
+   * Chrome's on-disk profile directory (for example `Default` or
+   * `Profile 3`). Null preserves the macOS default-browser behavior.
+   */
+  chromeProfile: string | null;
+};
+
 export type GithubConfig = {
   /** Whether this repository uses GitHub's human-reviewer workflow. */
   reviewers: boolean;
@@ -352,59 +361,26 @@ export type EditorConfig = {
   command: string | null;
 };
 
-export type AiProvider = "openai" | "gemini";
+export type NamingReasoningEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 
-type BaseAiConfig = {
-  provider: AiProvider;
-  /** Model id as exposed by the provider. */
-  model: string;
+export type NamingConfig = {
+  /** Resolve through the selected primary harness, or pin one explicitly. */
+  harness: HarnessId | "primary";
+  /** Optional model override per harness; absent entries use that CLI's default. */
+  models: Partial<Record<HarnessId, string>>;
+  /** Harness-native effort/variant used only for these short naming calls. */
+  reasoningEffort: NamingReasoningEffort;
   /** Soft budget for the prompt; we drop diff hunks largest-first to stay under it. */
   maxInputTokens: number;
-  /** Per-request timeout in ms. */
+  /** Per-process timeout in ms. */
   timeoutMs: number;
 };
-
-/**
- * Wire protocol for the openai provider. `"chat"` is
- * `/v1/chat/completions` — every local OpenAI-compatible server
- * (LM Studio, Ollama, llama.cpp) and older hosted models. `"responses"`
- * is `/v1/responses` — required by hosted OpenAI models that reject
- * chat completions outright (the gpt-5.6 family returns "not
- * accessible via the /chat/completions endpoint"). Explicit config
- * rather than endpoint/model sniffing: local servers are free to serve
- * any model id, so the name proves nothing about the protocol.
- */
-export type OpenAiProtocol = "chat" | "responses";
-
-export type OpenAiAiConfig = BaseAiConfig & {
-  provider: "openai";
-  /** OpenAI-compatible endpoint (no trailing slash). */
-  endpoint: string;
-  protocol: OpenAiProtocol;
-  /**
-   * Environment variable holding a bearer API key; sent as
-   * `Authorization: Bearer <key>` on both protocols. Null preserves the
-   * original unauthenticated local-endpoint behavior (no header at all).
-   */
-  apiKeyEnv: string | null;
-  /**
-   * `reasoning.effort` for the responses protocol (chat ignores it).
-   * Defaults to "none": the summary task wants fast plain completion,
-   * and reasoning tokens would eat the small max_output_tokens budget
-   * before any text is emitted.
-   */
-  reasoningEffort: "none" | "minimal" | "low" | "medium" | "high";
-};
-
-export type GeminiAiConfig = BaseAiConfig & {
-  provider: "gemini";
-  /** Gemini API base endpoint (no trailing slash). */
-  endpoint: string;
-  /** Environment variable containing the Gemini API key. */
-  apiKeyEnv: string;
-};
-
-export type AiConfig = OpenAiAiConfig | GeminiAiConfig;
 
 /**
  * Pre-built action surfaced by the `!` modal. Two flavors:
@@ -823,9 +799,11 @@ export type Config = {
   reviewBot: ReviewBotConfig;
   devServer: DevServerConfig | null;
   remote: RemoteConfig | null;
-  ai: AiConfig | null;
+  harness: { primary: HarnessId };
+  naming: NamingConfig | null;
   diff: DiffConfig;
   editor: EditorConfig;
+  browser: BrowserConfig;
   github: GithubConfig;
   actions: readonly ActionDef[];
   automations: readonly AutomationDef[];
@@ -956,15 +934,17 @@ const GENERIC_DEFAULTS = {
     // plumbing.
     command: "revdiff --vim-motion --compact {{base}}",
   },
-  ai: {
-    provider: "openai" as const satisfies AiProvider,
-    geminiEndpoint: "https://generativelanguage.googleapis.com/v1beta",
+  harness: {
+    primary: "claude" as const satisfies HarnessId,
+  },
+  naming: {
+    harness: "primary" as const,
+    reasoningEffort: "low" as const satisfies NamingReasoningEffort,
     maxInputTokens: 8000,
-    // Local LLMs running on CPU/Metal can take 30s+ on a cold cache,
-    // and the first request after model load is slower still. 2 min
-    // gives Gemma-class models headroom; users on faster hardware can
-    // dial down via [ai].timeout_ms.
     timeoutMs: 120_000,
+  },
+  browser: {
+    chromeProfile: null,
   },
   github: {
     reviewers: true,
@@ -1160,6 +1140,7 @@ function build(
   repositoryConfig: string | null = null,
 ): Config {
   const instance = obj(raw.instance);
+  const harnessRaw = obj(raw.harness);
   const paths = obj(raw.paths);
   const branch = obj(raw.branch);
   const stage = obj(raw.stage);
@@ -1177,6 +1158,13 @@ function build(
     "role",
     ["controller", "worker"] as const,
     "controller",
+  );
+  const primaryHarness = errs.optEnum(
+    harnessRaw,
+    "harness",
+    "primary",
+    ["claude", "codex", "opencode"] as const,
+    GENERIC_DEFAULTS.harness.primary,
   );
 
   const branchPrefix = errs.reqStr(branch, "branch", "prefix");
@@ -1364,62 +1352,47 @@ function build(
       wtPath: errs.optStr(remoteRaw, "wt_path", "~/.wt/bin/wt"),
     };
 
-  const aiRaw = obj(raw.ai);
-  const aiProvider = errs.optEnum(
-    aiRaw,
-    "ai",
-    "provider",
-    ["openai", "gemini"] as const satisfies readonly AiProvider[],
-    GENERIC_DEFAULTS.ai.provider,
-  );
-  const aiBase = aiRaw === null
+  const namingRaw = obj(raw.naming);
+  const namingModelsRaw = namingRaw ? obj(namingRaw.models) : null;
+  const namingClaudeModel = errs.optStrOrNull(namingModelsRaw, "claude");
+  const namingCodexModel = errs.optStrOrNull(namingModelsRaw, "codex");
+  const namingOpencodeModel = errs.optStrOrNull(namingModelsRaw, "opencode");
+  if (obj(raw.ai) !== null) {
+    errs.add("[ai] is no longer supported; use [naming] with a coding-agent harness");
+  }
+  const naming: NamingConfig | null = namingRaw === null
     ? null
     : {
-      model: errs.reqStr(aiRaw, "ai", "model"),
+      harness: errs.optEnum(
+        namingRaw,
+        "naming",
+        "harness",
+        ["primary", "claude", "codex", "opencode"] as const,
+        GENERIC_DEFAULTS.naming.harness,
+      ),
+      models: {
+        ...(namingClaudeModel ? { claude: namingClaudeModel } : {}),
+        ...(namingCodexModel ? { codex: namingCodexModel } : {}),
+        ...(namingOpencodeModel ? { opencode: namingOpencodeModel } : {}),
+      },
+      reasoningEffort: errs.optEnum(
+        namingRaw,
+        "naming",
+        "reasoning_effort",
+        ["minimal", "low", "medium", "high", "xhigh", "max"] as const,
+        GENERIC_DEFAULTS.naming.reasoningEffort,
+      ),
       maxInputTokens: errs.optNum(
-        aiRaw,
+        namingRaw,
         "max_input_tokens",
-        GENERIC_DEFAULTS.ai.maxInputTokens,
+        GENERIC_DEFAULTS.naming.maxInputTokens,
       ),
       timeoutMs: errs.optNum(
-        aiRaw,
+        namingRaw,
         "timeout_ms",
-        GENERIC_DEFAULTS.ai.timeoutMs,
+        GENERIC_DEFAULTS.naming.timeoutMs,
       ),
     };
-  const ai: AiConfig | null = aiBase === null
-    ? null
-    : aiProvider === "gemini"
-      ? {
-        provider: "gemini",
-        endpoint: errs.optStr(
-          aiRaw,
-          "endpoint",
-          GENERIC_DEFAULTS.ai.geminiEndpoint,
-        ).replace(/\/+$/, ""),
-        apiKeyEnv: errs.reqStr(aiRaw, "ai", "api_key_env"),
-        ...aiBase,
-      }
-      : {
-        provider: "openai",
-        endpoint: errs.reqStr(aiRaw, "ai", "endpoint").replace(/\/+$/, ""),
-        protocol: errs.optEnum(
-          aiRaw,
-          "ai",
-          "protocol",
-          ["chat", "responses"] as const satisfies readonly OpenAiProtocol[],
-          "chat",
-        ),
-        apiKeyEnv: errs.optStrOrNull(aiRaw, "api_key_env"),
-        reasoningEffort: errs.optEnum(
-          aiRaw,
-          "ai",
-          "reasoning_effort",
-          ["none", "minimal", "low", "medium", "high"] as const,
-          "none",
-        ),
-        ...aiBase,
-      };
 
   const diffRaw = obj(raw.diff);
   const diff: DiffConfig = {
@@ -1428,6 +1401,10 @@ function build(
 
   const editor: EditorConfig = {
     command: errs.optStrOrNull(obj(raw.editor), "command"),
+  };
+
+  const browser: BrowserConfig = {
+    chromeProfile: errs.optStrOrNull(obj(raw.browser), "chrome_profile"),
   };
 
   // `WT_TMUX_SOCKET` wins: it is the knob that propagates into every
@@ -1539,6 +1516,7 @@ function build(
 
   return {
     instance: { role: instanceRole },
+    harness: { primary: primaryHarness },
     repoId,
     repoPath,
     paths: {
@@ -1563,9 +1541,10 @@ function build(
     reviewBot,
     devServer,
     remote,
-    ai,
+    naming,
     diff,
     editor,
+    browser,
     github,
     actions,
     automations,
