@@ -39,54 +39,82 @@ export function parseWorkerInfo(raw: string): WorkerInfo {
   return { role: info.role, protocol: info.protocol, build: info.build };
 }
 
-const successful = new Map<string, WorkerInfo>();
-const inFlight = new Map<string, Promise<WorkerInfo>>();
-
-/** Handshake once per endpoint/process; only successful answers are cached. */
-export async function fetchRemoteWorkerInfo(
+type WorkerInfoLoader = (
   remote: RemoteConfig,
   signal?: AbortSignal,
-): Promise<WorkerInfo> {
-  const key = `${remote.host}\0${remote.wtPath}`;
-  const cached = successful.get(key);
-  if (cached) return cached;
-  const pending = inFlight.get(key);
-  if (pending) return pending;
-  const request = (async () => {
-    const result = await run(
-      [
-        "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=5",
-        remote.host,
-        remoteWtCommand(remote, ["_hello"]),
-      ],
-      { cwd: process.cwd(), timeoutMs: 15_000, signal },
-    );
-    if (result.exitCode !== 0) {
-      const detail = result.stderr.trim() || result.stdout.trim() || `SSH exited ${result.exitCode}`;
-      throw new Error(`remote worker handshake failed: ${detail}`);
+) => Promise<WorkerInfo>;
+
+/**
+ * Cache policy for worker handshakes. Normal inventory polls reuse the latest
+ * successful answer; the dedicated worker-info query forces a fresh answer
+ * while still sharing any concurrent request from the same endpoint.
+ */
+export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
+  const successful = new Map<string, WorkerInfo>();
+  const inFlight = new Map<string, Promise<WorkerInfo>>();
+
+  const fetch = async (
+    remote: RemoteConfig,
+    signal?: AbortSignal,
+    force = false,
+  ): Promise<WorkerInfo> => {
+    const key = `${remote.host}\0${remote.wtPath}`;
+    if (force) successful.delete(key);
+    const cached = successful.get(key);
+    if (cached) return cached;
+    const pending = inFlight.get(key);
+    if (pending) return pending;
+    const request = load(remote, signal).then((info) => {
+      successful.set(key, info);
+      return info;
+    });
+    inFlight.set(key, request);
+    try {
+      return await request;
+    } finally {
+      inFlight.delete(key);
     }
-    const info = parseWorkerInfo(result.stdout);
-    if (info.role !== "worker") {
-      throw new Error(
-        `remote ${remote.label} is configured as ${info.role}; set [instance] role = "worker" there`,
-      );
-    }
-    if (info.protocol !== WORKER_PROTOCOL_VERSION) {
-      throw new Error(
-        `remote ${remote.label} uses protocol ${info.protocol}; this controller requires ${WORKER_PROTOCOL_VERSION} — run sync-wt`,
-      );
-    }
-    successful.set(key, info);
-    return info;
-  })();
-  inFlight.set(key, request);
-  try {
-    return await request;
-  } finally {
-    inFlight.delete(key);
-  }
+  };
+
+  return {
+    fetch: (remote: RemoteConfig, signal?: AbortSignal) => fetch(remote, signal),
+    refresh: (remote: RemoteConfig, signal?: AbortSignal) => fetch(remote, signal, true),
+  };
 }
+
+const workerInfoFetcher = createWorkerInfoFetcher(async (remote, signal) => {
+  const result = await run(
+    [
+      "ssh",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=5",
+      remote.host,
+      remoteWtCommand(remote, ["_hello"]),
+    ],
+    { cwd: process.cwd(), timeoutMs: 15_000, signal },
+  );
+  if (result.exitCode !== 0) {
+    const detail = result.stderr.trim() || result.stdout.trim() || `SSH exited ${result.exitCode}`;
+    throw new Error(`remote worker handshake failed: ${detail}`);
+  }
+  const info = parseWorkerInfo(result.stdout);
+  if (info.role !== "worker") {
+    throw new Error(
+      `remote ${remote.label} is configured as ${info.role}; set [instance] role = "worker" there`,
+    );
+  }
+  if (info.protocol !== WORKER_PROTOCOL_VERSION) {
+    throw new Error(
+      `remote ${remote.label} uses protocol ${info.protocol}; this controller requires ${WORKER_PROTOCOL_VERSION} — run sync-wt`,
+    );
+  }
+  return info;
+});
+
+/** Reuse the latest successful handshake for ordinary worker inventory polls. */
+export const fetchRemoteWorkerInfo = workerInfoFetcher.fetch;
+
+/** Force a live handshake, deduplicating any request already in flight. */
+export const refreshRemoteWorkerInfo = workerInfoFetcher.refresh;

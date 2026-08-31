@@ -3,7 +3,7 @@ import { keepPreviousData, queryOptions } from "@tanstack/react-query";
 import { config } from "../../core/config.ts";
 import { reapRemoteArchived } from "../../core/archive.ts";
 import { fetchRemoteWorktrees } from "../../core/remote-worktrees.ts";
-import { fetchRemoteWorkerInfo } from "../../core/worker-info.ts";
+import { refreshRemoteWorkerInfo } from "../../core/worker-info.ts";
 import { DEV_SERVER_STOPPED } from "../../core/dev-server.ts";
 import { qk } from "../keys.ts";
 
@@ -11,8 +11,9 @@ export const remoteWorkerInfoQuery = (remote = config.remote) =>
   queryOptions({
     queryKey: qk.remoteWorkerInfo(remote?.host),
     queryFn: ({ signal }) =>
-      remote ? fetchRemoteWorkerInfo(remote, signal) : Promise.resolve(null),
+      remote ? refreshRemoteWorkerInfo(remote, signal) : Promise.resolve(null),
     staleTime: Infinity,
+    refetchInterval: 15_000,
     retry: false,
   });
 
