@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { plistProgramOf } from "./events.ts";
+import { plistProgramOf, restartLaunchdAgent } from "./events.ts";
 
 /**
  * The plist bakes an interpreter path, and on Homebrew that path is
@@ -43,5 +43,57 @@ describe("plistProgramOf", () => {
   test("an unrecognised document answers null rather than guessing", () => {
     expect(plistProgramOf("<plist><dict></dict></plist>")).toBeNull();
     expect(plistProgramOf("")).toBeNull();
+  });
+});
+
+describe("restartLaunchdAgent", () => {
+  test("unloads before loading", async () => {
+    const calls: Array<{ action: string; ignoreFailure: boolean }> = [];
+    const exit = await restartLaunchdAgent({
+      control: async (action, opts) => {
+        calls.push({ action, ignoreFailure: opts?.ignoreFailure ?? false });
+        return 0;
+      },
+      waitUntilRunning: async () => true,
+    });
+    expect(exit).toBe(0);
+    expect(calls).toEqual([
+      { action: "unload", ignoreFailure: true },
+      { action: "load", ignoreFailure: false },
+    ]);
+  });
+
+  test("still loads an installed agent that was not running", async () => {
+    const calls: string[] = [];
+    const exit = await restartLaunchdAgent({
+      control: async (action) => {
+        calls.push(action);
+        return action === "unload" ? 1 : 0;
+      },
+      waitUntilRunning: async () => true,
+    });
+    expect(exit).toBe(0);
+    expect(calls).toEqual(["unload", "load"]);
+  });
+
+  test("returns the load failure", async () => {
+    const exit = await restartLaunchdAgent({
+      control: async (action) => (action === "load" ? 7 : 0),
+      waitUntilRunning: async () => true,
+    });
+    expect(exit).toBe(7);
+  });
+
+  test("fails when launchd loads but no new daemon becomes ready", async () => {
+    const seenPreviousPids: Array<number | null> = [];
+    const exit = await restartLaunchdAgent({
+      control: async () => 0,
+      waitUntilRunning: async (previousPid) => {
+        seenPreviousPids.push(previousPid);
+        return false;
+      },
+    });
+    expect(exit).toBe(1);
+    expect(seenPreviousPids).toHaveLength(1);
   });
 });

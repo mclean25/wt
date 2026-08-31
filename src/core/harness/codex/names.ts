@@ -63,13 +63,40 @@ function withNamesLock<T>(fn: () => T): T {
   return withFileLock("__codex_names__", fn);
 }
 
-function assignMissingNames(
+export function assignCodexNames(
   existing: Readonly<Record<string, string>>,
   sessionIds: readonly string[],
 ): { names: Record<string, string>; changed: boolean } {
-  const names = { ...existing };
-  const used = new Set(Object.values(names));
-  let changed = false;
+  const wanted = new Set(sessionIds);
+  const names: Record<string, string> = {};
+  const used = new Set<string>();
+  let changed = Object.keys(existing).some((sessionId) => !wanted.has(sessionId));
+
+  // Repair legacy/corrupt mappings while preserving every valid assignment.
+  // `0`, duplicate names, and arbitrary strings used to survive forever and
+  // could leave the picker with no visible `primary` row.
+  for (const [sessionId, name] of Object.entries(existing)) {
+    if (!wanted.has(sessionId)) continue;
+    const canonical = name === "primary" || /^[2-9]\d*$/.test(name);
+    if (!canonical || used.has(name)) {
+      changed = true;
+      continue;
+    }
+    names[sessionId] = name;
+    used.add(name);
+  }
+
+  // A stale session may have owned `primary`. Promote the newest visible
+  // session instead of leaving every picker row numeric and making F12 fall
+  // back to recency without a durable primary identity.
+  if (sessionIds.length > 0 && !used.has("primary")) {
+    const promotedId = sessionIds[0]!;
+    const oldName = names[promotedId];
+    if (oldName) used.delete(oldName);
+    names[promotedId] = "primary";
+    used.add("primary");
+    changed = true;
+  }
 
   for (const sessionId of sessionIds) {
     if (names[sessionId]) continue;
@@ -100,7 +127,7 @@ export function reconcileCodexNames(
   try {
     return withNamesLock(() => {
       const shape = readFile();
-      const { names, changed } = assignMissingNames(
+      const { names, changed } = assignCodexNames(
         shape[slug] ?? {},
         sessionIds,
       );
@@ -115,7 +142,7 @@ export function reconcileCodexNames(
     // Fall back to this scan's stable ordering; a later successful poll
     // will persist the same assignments.
     log.error(err instanceof Error ? err : String(err), { file: STATE_FILE });
-    return assignMissingNames({}, sessionIds).names;
+    return assignCodexNames({}, sessionIds).names;
   }
 }
 

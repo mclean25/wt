@@ -19,6 +19,15 @@ function session(sessionId: string, lastActiveMs: number | null): HarnessSession
   };
 }
 
+function managedSession(
+  sessionId: string,
+  managedName: string,
+  lastActiveMs: number,
+): HarnessSession {
+  const value = session(sessionId, lastActiveMs);
+  return { ...value, extras: { ...value.extras, managedName } };
+}
+
 describe("slotSessionResumeTarget", () => {
   test("does not resume multi-slot harnesses", () => {
     expect(
@@ -36,12 +45,20 @@ describe("slotSessionResumeTarget", () => {
     ).toEqual({ resumeSessionId: null, freshSlot: false });
   });
 
-  test("resumes the newest discovered single-slot session when closed", () => {
+  test("resumes the mapped primary even when another session is newer", () => {
+    expect(
+      slotSessionResumeTarget({ singleSlot: true }, false, [
+        managedSession("primary-id", "primary", 100),
+        managedSession("newer-id", "2", 300),
+      ]),
+    ).toEqual({ resumeSessionId: "primary-id", freshSlot: true });
+  });
+
+  test("falls back to newest when old discovery data has no wt mapping", () => {
     expect(
       slotSessionResumeTarget({ singleSlot: true }, false, [
         session("older", 100),
         session("newer", 300),
-        session("unknown-time", null),
       ]),
     ).toEqual({ resumeSessionId: "newer", freshSlot: true });
   });

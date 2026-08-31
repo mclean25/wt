@@ -8,6 +8,7 @@ function codexSession(
   sessionId: string,
   derivedState: HarnessSession["extras"]["derivedState"],
   lastActiveMs = 1_000,
+  managedName: string | null = null,
 ): HarnessSession {
   return {
     displayName: sessionId,
@@ -16,7 +17,7 @@ function codexSession(
     lastActiveMs,
     isLive: false,
     extras: {
-      managedName: null,
+      managedName,
       derivedState,
       queued: 0,
       tailEndedAt: lastActiveMs,
@@ -60,5 +61,44 @@ describe("computeHarnessSessions single-slot state normalization", () => {
 
     expect(result.f12Target?.isLive).toBe(true);
     expect(result.f12Target?.extras.derivedState).toBe("waiting");
+  });
+
+  test("closed Codex F12 target is wt's primary, not the newest session", () => {
+    const result = computeHarnessSessions(
+      new Map([
+        [
+          "codex",
+          [
+            codexSession("secondary-id", "waiting", 3_000, "2"),
+            codexSession("primary-id", "waiting", 1_000, "primary"),
+          ],
+        ],
+      ]),
+      new Set(),
+      "demo",
+      "codex",
+      10_000,
+    );
+
+    expect(result.f12Target?.sessionId).toBe("primary-id");
+    expect(result.f12Target?.displayName).toBe("primary-id");
+  });
+
+  test("live selected primary harness wins over a newer live secondary harness", () => {
+    const claude = codexSession("claude-id", "waiting", 5_000);
+    claude.tmuxSessionName = "demo";
+    const result = computeHarnessSessions(
+      new Map([
+        ["claude", [claude]],
+        ["codex", [codexSession("codex-id", "working", 1_000, "primary")]],
+      ]),
+      new Set(["demo", "demo-codex"]),
+      "demo",
+      "codex",
+      10_000,
+    );
+
+    expect(result.f12Target?.harnessId).toBe("codex");
+    expect(result.f12Target?.sessionId).toBe("codex-id");
   });
 });

@@ -12,10 +12,9 @@
  *     tagged with its harness id, sorted by `compareSessionsForDisplay`
  *     (live first, then most-recently-active) — the order both session
  *     pickers consume directly.
- *   - `f12Target` is the session F12 would attach to right now: the
- *     most-recently-active session that's currently live, or the
- *     primary harness's most-recently-active dead session, or null
- *     when nothing exists for any harness.
+ *   - `f12Target` is the session F12 would attach to right now: a live
+ *     session in the selected primary harness, then another live session,
+ *     then the primary harness's durable primary conversation, or null.
  */
 import { useMemo } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
@@ -24,6 +23,7 @@ import type { NotifyOnChangeProps } from "@tanstack/react-query";
 import {
   getHarness,
   HARNESSES,
+  primarySingleSlotSession,
   type HarnessId,
   type HarnessSession,
 } from "../../core/harness/index.ts";
@@ -76,9 +76,9 @@ export function compareSessionsForDisplay(
 export type UseHarnessSessionsResult = {
   sessions: ReadonlyArray<HarnessSessionEntry>;
   /**
-   * Most-recently-active session that's currently live (across any
-   * harness). When nothing is live, the primary's most-recently-
-   * active dead session. When no sessions exist anywhere, null.
+   * Live selected-primary session, otherwise another live session. When
+   * nothing is live, the selected harness's durable primary conversation.
+   * When no sessions exist anywhere, null.
    * F12 attaches to this; if null, F12 spawns the primary fresh.
    */
   f12Target: HarnessSessionEntry | null;
@@ -219,21 +219,22 @@ export function computeHarnessSessions(
     all.push(...annotated);
   }
   all.sort(compareSessionsForDisplay);
-  // F12 target: prefer a live session; if none live, fall back to the
-  // most-recently-active session in the primary harness (so the hint
-  // shown in the AI row reflects what F12 will spawn). `all` is sorted
-  // live-first then recency-desc, so the first live entry is the most
-  // recent live one, and `find` over the primary harness yields its
-  // most-recently-active (here necessarily dead) session.
+  // F12 target: prefer a live session in the selected primary harness,
+  // then a live session in another harness. Recency only breaks ties
+  // inside those buckets. Without the primary-first rule, concurrent
+  // discovery/tail updates could make a secondary Claude session briefly
+  // out-rank a working Codex primary and flash the wrong glyph in the list.
+  // If nothing is live, resolve the primary harness's durable resume target.
   let f12Target: HarnessSessionEntry | null = null;
-  for (const e of all) {
-    if (e.isLive) {
-      f12Target = e;
-      break;
-    }
-  }
+  f12Target =
+    all.find((e) => e.isLive && e.harnessId === primary) ??
+    all.find((e) => e.isLive) ??
+    null;
   if (!f12Target) {
-    f12Target = all.find((e) => e.harnessId === primary) ?? null;
+    const primarySessions = all.filter((e) => e.harnessId === primary);
+    f12Target = getHarness(primary).singleSlot
+      ? primarySingleSlotSession(primarySessions)
+      : primarySessions[0] ?? null;
   }
   return { sessions: all, f12Target };
 }

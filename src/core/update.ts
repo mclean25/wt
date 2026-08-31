@@ -10,11 +10,13 @@
 export {
   gitSync,
   logSafe,
+  restartEventsDaemonAfterUpdate,
   shortSha,
   spawnFreshWt,
   WT_REPO_ROOT,
   wtVersion,
 } from "./update/exec.ts";
+export type { EventsDaemonRestartResult } from "./update/exec.ts";
 export {
   armBootSentinel,
   cancelBootPromotion,

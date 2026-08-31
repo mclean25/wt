@@ -16,6 +16,7 @@ import {
   recordUpdateApplied,
   rememberUpdateCheck,
   rememberUpdateDecline,
+  restartEventsDaemonAfterUpdate,
   repoUpdateState,
   selectOffer,
   shortSha,
@@ -302,6 +303,12 @@ export async function startupUpdatePrompt(): Promise<"updated" | null> {
     recordUpdateApplied({ now: Date.now(), fromSha: sel.fresh.headSha, toSha: target });
     if (result.depsWarning) console.error(yellow(`⚠ ${result.depsWarning}`));
     console.log(green(`✓ updated to ${wtVersion()}`));
+    const daemon = await restartEventsDaemonAfterUpdate();
+    if (daemon.status === "restarted") {
+      console.log(dim("  restarted the events daemon on the new build"));
+    } else if (daemon.status === "failed") {
+      console.error(yellow(`⚠ events daemon restart failed (${daemon.detail}); starting wt anyway`));
+    }
     return "updated";
   } catch (err) {
     logSafe("error", err instanceof Error ? err.stack ?? err.message : String(err));

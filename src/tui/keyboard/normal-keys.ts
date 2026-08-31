@@ -714,9 +714,9 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       return;
     }
     // F12 — toggle into the selected worktree's "F12 target" harness
-    // session. Target = most-recently-active live session across any
-    // harness; if nothing live, the primary's most-recent dead
-    // session; if nothing at all, spawn primary fresh. tmux's
+    // session. Target = a live session in the selected primary harness,
+    // otherwise another live harness, otherwise the selected harness's
+    // durable primary conversation; if none exists, spawn fresh. tmux's
     // `new-session -A` makes attach-or-create idempotent. From inside
     // the session, the wt-private tmux config binds F12 to
     // detach-client so the same physical key flips between contexts.

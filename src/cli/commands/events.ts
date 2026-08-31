@@ -3,7 +3,7 @@
  *
  * The daemon (`serve`) is a long-lived loopback HTTP server that refreshes
  * the github query on webhook delivery instead of polling. `install`
- * writes a launchd agent; `start`/`stop` load/unload it; `status` reports
+ * writes a launchd agent; `start`/`stop`/`restart` control it; `status` reports
  * liveness; `secret` mints the HMAC secret you paste into the repo
  * webhook. See `core/events/` for the daemon + on-disk contract.
  */
@@ -40,6 +40,7 @@ subcommands:
   uninstall   stop and remove the launchd agent
   start       load the launchd agent (launchctl)
   stop        unload the launchd agent
+  restart     unload, reconcile, and reload the launchd agent
   secret      generate + store an HMAC secret, print webhook setup`;
 
 function readFileSafe(path: string): string | null {
@@ -206,7 +207,10 @@ function secretDisplay(info: SecretInfo): string {
   return info.alreadyConfigured ? dim("(your existing secret)") : info.secret;
 }
 
-async function launchctl(action: "load" | "unload"): Promise<number> {
+async function launchctl(
+  action: "load" | "unload",
+  opts: { ignoreFailure?: boolean } = {},
+): Promise<number> {
   const plist = plistPath();
   if (!existsSync(plist)) {
     console.error(red(`no launchd agent at ${plist} — run \`wt events install\` first`));
@@ -229,13 +233,60 @@ async function launchctl(action: "load" | "unload"): Promise<number> {
     }
   }
   const r = await sh(["launchctl", action, "-w", plist]);
-  if (r.stderr.trim()) process.stderr.write(r.stderr.endsWith("\n") ? r.stderr : `${r.stderr}\n`);
+  if (r.stderr.trim() && !(opts.ignoreFailure && r.exitCode !== 0)) {
+    process.stderr.write(r.stderr.endsWith("\n") ? r.stderr : `${r.stderr}\n`);
+  }
   if (r.exitCode !== 0) {
+    if (opts.ignoreFailure) return 1;
     console.error(red(`launchctl ${action} failed (exit ${r.exitCode})`));
     return 1;
   }
   console.log(`${green("✓")} ${action === "load" ? "started" : "stopped"} ${LAUNCHD_LABEL}`);
   return 0;
+}
+
+/**
+ * Restart an installed agent, starting it even when it was not currently
+ * loaded. `launchctl unload` returns nonzero for that harmless case, so the
+ * load is authoritative: if the old job really could not be unloaded, the
+ * load will fail rather than falsely reporting a restart.
+ */
+type RestartLaunchdDeps = {
+  control?: (
+    action: "load" | "unload",
+    opts?: { ignoreFailure?: boolean },
+  ) => Promise<number>;
+  waitUntilRunning?: (previousPid: number | null) => Promise<boolean>;
+};
+
+async function waitForRestartedDaemon(previousPid: number | null): Promise<boolean> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const state = readState();
+    if (
+      state &&
+      state.pid !== previousPid &&
+      isProcessAlive(state.pid)
+    ) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+export async function restartLaunchdAgent(
+  deps: RestartLaunchdDeps = {},
+): Promise<number> {
+  const control = deps.control ?? launchctl;
+  const previousPid = readState()?.pid ?? null;
+  await control("unload", { ignoreFailure: true });
+  const loaded = await control("load");
+  if (loaded !== 0) return loaded;
+  const running = await (deps.waitUntilRunning ?? waitForRestartedDaemon)(previousPid);
+  if (running) return 0;
+  console.error(red("events daemon did not become ready within 10s after restart"));
+  return 1;
 }
 
 function requireEventsConfigured(): boolean {
@@ -278,7 +329,7 @@ function cmdStatus(): number {
     const wrote = snap.writerSha ? snap.writerSha.slice(0, 7) : "unstamped";
     console.log(`  build         ${yellow(`stale (wrote ${wrote}, this build ${(buildSha() ?? "?").slice(0, 7)})`)}`);
     console.log(dim("                the TUI is ignoring its snapshot and fetching live; it restarts itself on its next fetch"));
-    console.log(dim("                — `wt events stop && wt events start` does it now"));
+    console.log(dim("                — `wt events restart` does it now"));
   }
   const program = plistProgram();
   if (program && !existsSync(program)) {
@@ -348,6 +399,8 @@ export async function run(argv: string[]): Promise<number> {
       return requireEventsConfigured() ? launchctl("load") : 1;
     case "stop":
       return launchctl("unload");
+    case "restart":
+      return requireEventsConfigured() ? restartLaunchdAgent() : 1;
     case "secret":
       return cmdSecret();
     case undefined:

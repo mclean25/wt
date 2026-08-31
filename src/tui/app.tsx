@@ -396,6 +396,8 @@ export function App({ onExit }: Props) {
   // harness + derived state F12 would attach to, computed for EVERY
   // worktree through the same `computeHarnessSessions` rule the
   // current-row hook, the details-pane AI row, and the F12 keybind use.
+  // The selected primary harness wins whenever it is live, so a newer
+  // secondary-harness event cannot flash a different glyph.
   // This is the single source of truth — the list glyph can't drift from
   // what F12 does or what the details pane shows. Fans session discovery
   // across all worktrees (cached at the query layer); codex/opencode get

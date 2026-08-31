@@ -1,6 +1,10 @@
 import { join } from "node:path";
 
-import { getHarness, type HarnessId } from "../harness/index.ts";
+import {
+  getHarness,
+  primarySingleSlotSession,
+  type HarnessId,
+} from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
 import { buildInnerArgs, sessionsDir, tmuxClientCwd } from "./attach.ts";
 import { ensureConfig } from "./config.ts";
@@ -47,6 +51,25 @@ export async function startHarnessSessionDetached(
   // server. Rewriting config there could kill every live session.
   const configPath = ensureConfig();
   const stderrPath = join(sessionsDir(), `${name}.err`);
+  let resumeSessionId: string | null = null;
+  if (harness.singleSlot) {
+    let sessions;
+    try {
+      sessions = await harness.discoverSessions({ slug, wtPath: cwd });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      log.error("detached harness resume discovery failed", {
+        slug,
+        harnessId,
+        reason,
+      });
+      return {
+        ok: false,
+        reason: `could not resolve ${harness.label} primary session: ${reason}`,
+      };
+    }
+    resumeSessionId = primarySingleSlotSession(sessions)?.sessionId ?? null;
+  }
   // buildInnerArgs also calls harness.ensureTrusted?.(cwd).
   const innerArgs = buildInnerArgs({
     slug,
@@ -54,7 +77,7 @@ export async function startHarnessSessionDetached(
     kind: harnessId,
     harness,
     managedNameNorm: managedName,
-    resumeSessionId: null,
+    resumeSessionId,
   });
   // Before the spawn, so a leftover socket from a dead session of the
   // same name can't cost this one its inspector (see the helper).

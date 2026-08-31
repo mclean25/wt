@@ -13,6 +13,7 @@ import {
 } from "../../core/harness/claude/names.ts";
 import {
   getHarness,
+  primarySingleSlotSession,
   type Harness,
   type HarnessId,
   type HarnessSession,
@@ -48,18 +49,10 @@ export function slotSessionResumeTarget(
   if (!harness.singleSlot || slotAlive) {
     return { resumeSessionId: null, freshSlot: false };
   }
-  let latest: HarnessSession | null = null;
-  for (const session of sessions) {
-    if (
-      !latest ||
-      (session.lastActiveMs ?? 0) > (latest.lastActiveMs ?? 0)
-    ) {
-      latest = session;
-    }
-  }
+  const primary = primarySingleSlotSession(sessions);
   return {
-    resumeSessionId: latest?.sessionId ?? null,
-    freshSlot: latest !== null,
+    resumeSessionId: primary?.sessionId ?? null,
+    freshSlot: primary !== null,
   };
 }
 

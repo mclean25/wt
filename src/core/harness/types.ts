@@ -16,15 +16,15 @@ import type { DerivedState } from "./status.ts";
 export type HarnessId = "claude" | "codex" | "opencode";
 
 /**
- * Optional extras only Claude can fill in today. Other harnesses
- * return `null` everywhere here. Keeping them out of the required
- * shape means Codex/OpenCode impls don't need to fake values.
+ * Optional cross-harness session metadata. Harnesses fill only the
+ * signals they can derive without inventing state.
  */
 export type HarnessExtras = {
   /**
-   * Wt-managed name used for tmux/session identity where supported.
-   * Null = primary for Claude; Codex keeps its friendly name in a
-   * separate ID-to-name registry because its tmux slot is shared.
+   * Wt-managed stable name. Null = Claude primary; Claude named sessions use
+   * their native managed name. Single-slot harnesses use wt's persisted
+   * `primary` / `2` / `3` mapping while their opaque session id remains the
+   * authoritative resume handle.
    */
   managedName: string | null;
   /**

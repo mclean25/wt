@@ -225,7 +225,7 @@ export const opencodeHarness: Harness = {
         // `useHarnessSessions` re-annotates against the live tmux set.
         isLive: false,
         extras: {
-          managedName: null,
+          managedName: friendlyNames[row.id] ?? null,
           derivedState,
           queued: 0,
           // Stash message age separately from the session metadata age.

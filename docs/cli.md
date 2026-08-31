@@ -308,7 +308,7 @@ Update wt itself. The install is a git clone (see the README), so updating is a 
 - `--check` — only report whether an update is available; don't apply.
 - `--head` — ignore the CI gate and target origin's tip.
 
-The TUI runs the same check at startup, before the terminal is taken over: at most once a day, prompting y/n, with a "no" remembered per offered version — it never re-asks until the offer changes. Skipped silently when the clone is dirty/ahead (a wt being developed updates itself by hand). An accepted update re-execs wt so the fresh code is what actually runs. `[update] startup_check = false` ([configuration.md](configuration.md#update)) disables the startup check; `WT_UPDATE=off` disables the whole update system for a single run (the probe harness arms this). The check's daily stamp, journal, and remembered declines live in `~/.cache/wt/update.json`, shared machine-wide like the skills memory.
+The TUI runs the same check at startup, before the terminal is taken over: at most once a day, prompting y/n, with a "no" remembered per offered version — it never re-asks until the offer changes. Skipped silently when the clone is dirty/ahead (a wt being developed updates itself by hand). An accepted update restarts an installed events daemon, then re-execs wt so both long-lived processes run the fresh code. A daemon restart failure is reported but does not prevent the TUI from starting. `[update] startup_check = false` ([configuration.md](configuration.md#update)) disables the startup check; `WT_UPDATE=off` disables the whole update system for a single run (the probe harness arms this). The check's daily stamp, journal, and remembered declines live in `~/.cache/wt/update.json`, shared machine-wide like the skills memory.
 
 ### `wt rollback [<ref>]`
 
@@ -327,7 +327,7 @@ The optional GitHub webhook daemon — see [github-events.md](github-events.md).
 | sub | what it does |
 |---|---|
 | `install` | write the launchd agent + generate the HMAC secret; prints the values to paste into GitHub's webhook settings |
-| `start` / `stop` | load / unload the launchd agent; `start` also rewrites the agent when the stored one no longer matches the environment (a `brew upgrade bun` makes the baked interpreter path unexecutable) |
+| `start` / `stop` / `restart` | load / unload / unload-and-reload the launchd agent; `start` and `restart` also rewrite the agent when the stored one no longer matches the environment (a `brew upgrade bun` makes the baked interpreter path unexecutable) |
 | `status` | liveness, bind address, pid, delivery count, last fetch/error, snapshot age, and a `build` line when the daemon is running older code than the caller (see [github-events.md](github-events.md#the-daemons-build-and-why-the-tui-checks-it)) |
 | `secret` | generate or show the HMAC secret |
 | `uninstall` | unload + remove the launchd agent |

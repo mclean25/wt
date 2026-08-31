@@ -13,6 +13,7 @@ It's a plain repo webhook — no GitHub App, no OAuth.
 ```sh
 wt events install     # writes a launchd agent + generates the HMAC secret
 wt events start       # load the daemon
+wt events restart     # reconcile and reload it on the current wt build
 wt events status      # liveness, last delivery, snapshot age
 ```
 
@@ -61,6 +62,11 @@ Two halves, in `core/build-id.ts`:
 `wt events status` prints a `build` line when the two disagree, so "running" and
 "up to date" stop being the same answer.
 
+An accepted pre-TUI update also runs `wt events restart` automatically when
+the launchd agent is installed. The daemon therefore moves to the new build
+before the fresh TUI starts. A restart failure is printed but does not block
+the TUI; rerun the command manually after fixing the reported launchd error.
+
 The identity is the committed sha, so an **uncommitted** edit moves the code
 without moving it — a daemon started mid-edit still looks current. That gap is
 deliberate: closing it means a `git status` per read, and a daemon is stale by
@@ -86,10 +92,12 @@ to the END of that PATH: it is a fallback for a bun that is not on PATH, never
 the primary.
 
 A source fix cannot repair a plist an older version already wrote, so
-`wt events start` **reconciles** — it rewrites the plist whenever the stored one
-differs from what the current environment would generate, and says so, naming
-the missing program when that is why. `wt events status` reports an
-`agent cannot exec` line for the same condition.
+`wt events start` and `wt events restart` **reconcile** — they rewrite the
+plist whenever the stored one differs from what the current environment would
+generate, and say so, naming the missing program when that is why. `wt events
+status` reports an `agent cannot exec` line for the same condition. `restart`
+also waits for a new live daemon PID before returning, so a launchd load that
+never reaches daemon readiness is reported as a failure.
 
 ## Fetch cadence
 

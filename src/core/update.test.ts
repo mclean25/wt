@@ -5,6 +5,7 @@ import {
   emptyUpdateMemory,
   findNewestEligible,
   parseUpdateMemory,
+  restartEventsDaemonAfterUpdate,
   selectOffer,
   startupCheckGate,
   UPDATE_CHECK_INTERVAL_MS,
@@ -74,6 +75,35 @@ describe("selectOffer", () => {
       action: "offer",
       target: "aaa",
     });
+  });
+});
+
+describe("restartEventsDaemonAfterUpdate", () => {
+  test("skips cleanly when the launchd agent is not installed", async () => {
+    expect(
+      await restartEventsDaemonAfterUpdate({ plist: "/tmp/wt-test-events-agent-does-not-exist.plist" }),
+    ).toEqual({ status: "not-installed" });
+  });
+
+  test("runs the newly checked-out events restart command", async () => {
+    const calls: string[][] = [];
+    const result = await restartEventsDaemonAfterUpdate({
+      plist: "/dev/null",
+      run: async (argv) => {
+        calls.push(argv);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+    expect(result).toEqual({ status: "restarted" });
+    expect(calls).toEqual([[`${process.cwd()}/bin/wt`, "events", "restart"]]);
+  });
+
+  test("reports a restart failure without throwing", async () => {
+    const result = await restartEventsDaemonAfterUpdate({
+      plist: "/dev/null",
+      run: async () => ({ stdout: "", stderr: "launchctl load failed\n", exitCode: 1 }),
+    });
+    expect(result).toEqual({ status: "failed", detail: "launchctl load failed" });
   });
 });
 

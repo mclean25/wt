@@ -16,7 +16,6 @@
 import {
   existsSync,
   readdirSync,
-  readFileSync,
   statSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -42,7 +41,6 @@ const CODEX_COLOR = "#4d56d6";
 const CODEX_TMUX_INFIX = "-codex";
 
 const CODEX_SESSIONS_DIR = join(homedir(), ".codex", "sessions");
-const CODEX_SESSION_INDEX = join(homedir(), ".codex", "session_index.jsonl");
 /** Initial backwards window for state derivation. Expanded when a large
  * response/tool line pushed the latest task lifecycle marker farther back. */
 const TAIL_BYTES = 64 * 1024;
@@ -110,7 +108,6 @@ export function discoverCodexSessionsSync(
   slug: string,
   wtPath: string,
 ): HarnessSession[] {
-  const titles = readSessionIndex();
   const rollouts = scanRollouts(wtPath).sort((a, b) => b.mtimeMs - a.mtimeMs);
   const friendlyNames = reconcileCodexNames(
     slug,
@@ -124,22 +121,19 @@ export function discoverCodexSessionsSync(
   // can find the right file without its own scan.
   const out: HarnessSession[] = [];
   for (const r of rollouts) {
-    // A Codex-native `/rename` title wins when present. Otherwise use
-    // wt's stable friendly name; UUID prefixes are only a defensive
-    // fallback if persistence fails.
-    const title =
-      titles.get(r.sessionId) ??
-      friendlyNames[r.sessionId] ??
-      r.sessionId.slice(0, 8);
+    // The wt name is the stable UI and resume identity. Codex's generated
+    // thread title is intentionally not used here: it changes independently
+    // and previously hid which UUID wt had assigned to `primary`.
+    const managedName = friendlyNames[r.sessionId] ?? r.sessionId.slice(0, 8);
     const tail = readCodexTail(r.path, r.mtimeMs, r.size);
     out.push({
-      displayName: title,
+      displayName: managedName,
       sessionId: r.sessionId,
       tmuxSessionName: tmuxName,
       lastActiveMs: r.mtimeMs,
       isLive: false,
       extras: {
-        managedName: null,
+        managedName,
         // Liveness-independent best guess; `useHarnessSessions`
         // finalizes it against the live tmux set (dead cleanly → idle,
         // dead mid-turn → abandoned, live slot keeps working/waiting).
@@ -340,35 +334,6 @@ function readRolloutMeta(path: string): RolloutMetaRaw | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Map of session id → user-given thread name from
- * `~/.codex/session_index.jsonl`. Used to label entries in the picker
- * with the same title the user sees inside codex itself.
- */
-function readSessionIndex(): Map<string, string> {
-  const out = new Map<string, string>();
-  if (!existsSync(CODEX_SESSION_INDEX)) return out;
-  let raw: string;
-  try {
-    raw = readFileSync(CODEX_SESSION_INDEX, "utf8");
-  } catch (err) {
-    log.warn("read session_index.jsonl failed", { err: String(err) });
-    return out;
-  }
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const obj = JSON.parse(line) as { id?: string; thread_name?: string };
-      if (typeof obj.id === "string" && typeof obj.thread_name === "string") {
-        out.set(obj.id, obj.thread_name);
-      }
-    } catch {
-      // skip malformed lines
-    }
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------
