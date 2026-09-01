@@ -145,6 +145,11 @@ the human asks.
   and `archived_at` — so an empty active fleet with merged rows means
   "everything landed", while a truly empty array means nothing exists
   (worth checking that creates aren't silently failing). Start every
+  `base` is the row's effective merge target (never null) and `edges` are the
+  merge edges touching that slug, both directions, with `stale` — the stack
+  and its ordering, in the row. A `base` naming another row's branch IS a
+  chain; a fresh `blocks` edge is a hard dependency, a stale one steers
+  nothing, and absence of an edge means no known constraint, never safe.
   triage/digest/audit pass here; the commands below are the finer probes.
 - `wt status --all --json` — the status-only view: asserted state, risk,
   note, staleness (appends the same recently-removed rows).

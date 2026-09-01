@@ -15,6 +15,7 @@ import { branchIsGone, branchIsMerged, revParse } from "../../core/git.ts";
 import { config } from "../../core/config.ts";
 import { fetchGithub, hasGh, pickPrForWorktree, repoSlug } from "../../core/github.ts";
 import { readRegistry } from "../../core/harness/claude/registry.ts";
+import { edgeIsStaleBySha, type MergeEdge } from "../../core/merge-edges.ts";
 import { listSessions } from "../../core/tmux.ts";
 import type {
   MergeableState,
@@ -59,6 +60,14 @@ reads as "nothing exists".
             unavailable); removed rows carry pr and archived_at only.
             Same field, same values, on wt ls --json and
             wt status --all --json.
+
+Merge planning reads two more fields on every live row. base is the
+effective merge target — the recorded fork base for a stacked
+worktree, else [branch] base — never null, the same value wt ls --json
+carries. edges are the merge edges touching that slug, in the same
+shape as wt edge --json plus stale; an edge rides BOTH of its endpoint
+rows, so dedupe on from/to, and ignore stale ones for ordering exactly
+as wt edge does.
 
 Merge fields report "computing" while GitHub is still calculating
 mergeability (its UNKNOWN state) — re-run after a few seconds; the
@@ -162,6 +171,23 @@ type FleetRow = {
   landed: boolean;
   session: SessionInfo;
   pr: PullRequest | undefined;
+  /**
+   * Effective merge target — the recorded fork base, else trunk. Same
+   * derivation (and same never-null contract) as `wt ls --json`'s
+   * `base`; it was on that surface and not this one, so the manager,
+   * whose primary sense this is, could read a real stack as four
+   * independent branches and report that no ordering existed.
+   */
+  base: string;
+  /**
+   * Merge edges touching this slug, either direction — so an edge
+   * appears on both endpoint rows and readers dedupe on from/to.
+   * `wt edge --help` has promised that this surface carries them since
+   * edges existed; it did not, and absence of an edge is defined to
+   * mean "no known constraint", so the omission read as a clean
+   * answer rather than a missing field.
+   */
+  edges: (MergeEdge & { stale: boolean })[];
 };
 
 function workCell(row: FleetRow): string {
@@ -260,7 +286,8 @@ export async function run(argv: string[]): Promise<number> {
   const json = argv.includes("--json");
 
   const wts = (await listWorktrees()).filter((w) => !w.isMain);
-  const slugStates = readWtState().slugs;
+  const wtState = readWtState();
+  const slugStates = wtState.slugs;
   const removed = recentlyRemovedWorktrees(new Set(wts.map((w) => w.slug)));
   const branches = wts.filter((w) => w.branch).map((w) => w.branch);
 
@@ -285,11 +312,25 @@ export async function run(argv: string[]): Promise<number> {
     sessions.claude.filter((e) => e.name === null).map((e) => e.slug),
   );
 
+  // Staleness for edges reuses the HEADs already resolved above (one
+  // per live worktree). An endpoint that is not a live worktree maps
+  // to null, which `edgeIsStaleBySha` reads as "unknown, not stale by
+  // this side" — the same treatment `wt edge` gives it.
+  const headBySlug = new Map<string, string | null>(
+    wts.map((w, i) => [w.slug, heads[i] ?? null]),
+  );
+  const edges = wtState.edges.map((e) => ({
+    ...e,
+    stale: edgeIsStaleBySha(e, (slug) => headBySlug.get(slug) ?? null),
+  }));
+
   const rows: FleetRow[] = wts.map((w, i) => {
     const record = slugStates[w.slug]?.work;
     const headSha = heads[i] ?? null;
     return {
       wt: w,
+      base: slugStates[w.slug]?.baseBranch ?? config.branch.base,
+      edges: edges.filter((e) => e.from === w.slug || e.to === w.slug),
       section:
         config.instance.role === "worker"
           ? null
@@ -320,6 +361,10 @@ export async function run(argv: string[]): Promise<number> {
       ...rows.map((r) => ({
         slug: r.wt.slug,
         branch: r.wt.branch,
+        // The effective merge target, never null — trunk when nothing
+        // is recorded. Reading a stack off this surface needs it: two
+        // rows whose `base` names another row's branch ARE a chain.
+        base: r.base,
         path: r.wt.path,
         // Positive discriminator, same value and meaning on every JSON
         // surface that appends removed history — see ls.ts.
@@ -329,6 +374,14 @@ export async function run(argv: string[]): Promise<number> {
         // Inferred stack groupings deliberately don't appear here: they
         // are derivable reality (base records + PRs), not assertion.
         section: r.section,
+        // Pairwise ordering assertions touching this slug, in either
+        // direction, verbatim from `wt edge --json` plus `stale`.
+        // Spread rather than rebuilt field-by-field: this row schema
+        // has already dropped a field that way, and an edge that reads
+        // differently depending on which command printed it is the
+        // same failure one level down. `stale` means an endpoint moved
+        // past its anchor — ignore those for ordering.
+        edges: r.edges,
         work: r.work
           ? {
               state: r.work.state,
@@ -437,6 +490,33 @@ export async function run(argv: string[]): Promise<number> {
       { header: "ci", getter: (r) => ciCell(r as FleetRow) },
     ]);
     console.log(table);
+  }
+  // The ordering constraints, on the surface that plans merges. An
+  // edge whose endpoint is not a live row says nothing about this
+  // fleet; a stale one is ignored by ordering everywhere else, so it
+  // is counted rather than listed.
+  const liveSlugs = new Set(rows.map((r) => r.wt.slug));
+  const fleetEdges = edges.filter(
+    (e) => liveSlugs.has(e.from) && liveSlugs.has(e.to),
+  );
+  if (fleetEdges.length > 0) {
+    const fresh = fleetEdges.filter((e) => !e.stale);
+    console.log("");
+    console.log(dim("merge edges:"));
+    for (const e of fresh) {
+      const arrow = e.kind === "conflicts" ? "\u00d7" : "\u25b6";
+      const strength = e.strength === "blocks" ? red("blocks") : dim("prefer");
+      const why = e.why ? dim(` \u00b7 ${e.why}`) : "";
+      console.log(
+        `  ${cyan(e.from)} ${dim(`\u2500${e.kind}\u2500${arrow}`)} ${cyan(e.to)}   ${strength}${why}`,
+      );
+    }
+    const staleCount = fleetEdges.length - fresh.length;
+    if (staleCount > 0) {
+      console.log(
+        dim(`  ${staleCount} stale (endpoint moved) \u2014 \`wt edge\` lists them`),
+      );
+    }
   }
   if (note) console.log(dim(`note: ${note}`));
   if (removed.length > 0) {
