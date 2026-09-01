@@ -128,7 +128,16 @@ Three stores, three policies:
   changes use the forward-only `schema_migrations` ledger in
   `core/state-db.ts`. The repository-state payload retains its existing
   forward-only `WT_STATE_VERSION` transformations, so the proven migration
-  helpers remain the compatibility boundary while storage evolves.
+  helpers remain the compatibility boundary while storage evolves. The
+  `repo_id` that scopes every row is derived from the REPOSITORY, never from
+  the working directory a command ran in — see
+  [configuration.md](configuration.md#repository-identity-is-a-property-of-the-repository-not-of-your-shell).
+  A build that got that wrong does not corrupt anything, it PARTITIONS: each
+  namespace stays internally consistent and simply cannot see the others, which
+  reads as data loss from every vantage point at once. `wt state migrate`
+  adopts stranded namespaces back, and is the pattern any future change to the
+  id must ship with — a source fix cannot heal state an earlier build already
+  filed elsewhere.
 - **`cache.sqlite`** (persisted queries — fully rebuildable): no
   migrations, ever. `CACHE_BUSTER` in `src/state/client.ts` busts the
   whole persisted cache on any shape change; busting is the *correct*

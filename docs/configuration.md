@@ -82,12 +82,29 @@ version warning so development snapshots can be synchronized deliberately.
 | `worktree_root` | **yes** | — | Directory where worktrees are created (`<worktree_root>/<slug>`). |
 | `log_dir` | no | `<cache root>/logs` | Per-worktree destroy logs live here; daily structured app logs go to the derived `<log_dir>/app` subdirectory. |
 | `lock_dir` | no | `<cache root>/locks` | Per-slug operation locks (what drives the "setting up…" busy state). |
-| `cache_db` | no | with `.wt.toml`: `~/.cache/wt/<repo-id>/cache.sqlite`; otherwise `~/.cache/wt/cache.sqlite` | Disposable TanStack Query cache. Its directory (the **cache root**) also anchors rebuildable/runtime files: session registries, automation delivery files, manager reports, logs, locks, generated `tmux.conf`, message sockets, and shims. Durable section/status/archive state is not stored here. |
-| `state_db` | no | with `.wt.toml`: `~/.local/state/wt/wt.sqlite`; user-config-only compatibility mode: `<cache root>/wt.sqlite` | Authoritative SQLite state shared by local repositories and partitioned by `repo_id`. Normally leave this unset. The canonical repository path stored with each id is a collision guard. |
+| `cache_db` | no | repository with a `.wt.toml`: `~/.cache/wt/<repo-id>/cache.sqlite`; otherwise `~/.cache/wt/cache.sqlite` | Disposable TanStack Query cache. Its directory (the **cache root**) also anchors rebuildable/runtime files: session registries, automation delivery files, manager reports, logs, locks, generated `tmux.conf`, message sockets, and shims. Durable section/status/archive state is not stored here. |
+| `state_db` | no | repository with a `.wt.toml`: `~/.local/state/wt/wt.sqlite`; user-config-only compatibility mode: `<cache root>/wt.sqlite` | Authoritative SQLite state shared by local repositories and partitioned by `repo_id`. Normally leave this unset. The canonical repository path stored with each id is a collision guard. |
 | `wezterm_cli` | no | macOS: `/Applications/WezTerm.app/Contents/MacOS/wezterm`; elsewhere: `wezterm` from `PATH` | WezTerm CLI executable used to set the tab title to `wt` when `WEZTERM_PANE` is present. Supports `~` expansion. |
 | `dotfiles` | no | `~/.dotfiles` | Repo behind the general-purpose config session (`/` and its `\` palette). **The slot hides itself entirely when the directory doesn't exist** — no footer button, and `/` / `\` fall through — so a machine without a dotfiles repo isn't offered a key that can only cold-start a harness in a missing directory. |
 
-> **Upgrade note (Aug 2026):** `wt state migrate` imports the current repository's attributable records from the former shared `~/.cache/wt/state.json` and `archive.json`, writes timestamped backups, and prunes only records successfully imported. It is idempotent; use `--keep-legacy` for a copy-only first pass or `--from <dir>` for a relocated legacy cache.
+### Repository identity is a property of the repository, not of your shell
+
+Every default above keys on `<repo-id>`, and that id comes from the repository
+the command acts on — `paths.main_clone`, or the directory of a `.wt.toml`
+outside `worktree_root`. It deliberately does **not** come from whichever
+`.wt.toml` happens to be nearest the working directory. A worktree carries a
+copy of its repository's `.wt.toml` (the backends clone the whole tree) and a
+shell outside the repository finds none at all, so a cwd-derived id gives one
+repository several namespaces: several state databases, several cache roots and
+several tmux servers, each internally consistent and blind to the others. A
+status asserted in a worktree is then invisible everywhere else, `wt manager
+send` cold-starts a manager on a tmux server the TUI never reads, and a tracker
+id set in the TUI is invisible to the session it names.
+
+`wt` inside a worktree, in the main clone, and from an unrelated directory all
+resolve the same configuration, byte for byte.
+
+> **Upgrade note (Aug 2026):** `wt state migrate` imports the current repository's attributable records from the former shared `~/.cache/wt/state.json` and `archive.json`, writes timestamped backups, and prunes only records successfully imported. It also adopts records an earlier build filed under a per-worktree namespace or wrote into a second state database, and carries the non-rebuildable runtime files (the `automations.json` fire ledger, `harness.json`, and the harness session-name registries) into this repository's cache root. Stranded sources are read, never written or deleted, and current values win every conflict. It is idempotent; use `--keep-legacy` for a copy-only first pass or `--from <dir>` for a relocated legacy cache.
 
 ### Running a second isolated instance
 
@@ -109,7 +126,7 @@ Pick it with `WT_CONFIG=/path/to/config.toml` (or let a repo `.wt.toml` supply t
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `socket` | no | with `.wt.toml`: `"wt-<repo-id>"`; otherwise `"wt"` | Socket name (`tmux -L <socket>`) for the wt-private tmux server that hosts every agent, shell, diff, dev-server and action session. `WT_TMUX_SOCKET` wins when set. |
+| `socket` | no | repository with a `.wt.toml`: `"wt-<repo-id>"`; otherwise `"wt"` | Socket name (`tmux -L <socket>`) for the wt-private tmux server that hosts every agent, shell, diff, dev-server and action session. `WT_TMUX_SOCKET` wins when set. |
 
 ## `[branch]`
 

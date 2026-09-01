@@ -25,11 +25,13 @@
  */
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { BackendKind } from "./backend/types.ts";
 import type { HarnessId } from "./harness/types.ts";
 import {
+  canonicalRepositoryConfig,
+  isInsidePath,
   mergeConfig,
   pathNamespace,
   repositoryConfigPath,
@@ -1186,18 +1188,52 @@ function build(
   const keepFresh = strArr(branch?.keep_fresh, []).filter((b) => b.trim() !== "");
 
   const mainClone = expandHome(errs.reqStr(paths, "paths", "main_clone"));
-  const repoPath = repositoryConfig
-    ? dirname(realpathSync(repositoryConfig))
-    : existsSync(mainClone) ? realpathSync(mainClone) : mainClone;
-  const repoId = repositoryConfig
-    ? repositoryNamespace(repositoryConfig, HOME)
-    : pathNamespace(mainClone, HOME);
   const worktreeRoot = expandHome(errs.reqStr(paths, "paths", "worktree_root"));
-  const defaultCacheDb = repositoryConfig
+  const repositoryConfigDir = repositoryConfig
+    ? dirname(
+      existsSync(repositoryConfig) ? realpathSync(repositoryConfig) : resolve(repositoryConfig),
+    )
+    : null;
+  // A worktree carries a COPY of the repository's `.wt.toml` — the backends
+  // clone the whole tree — so a config found under `worktree_root` identifies
+  // a WORKTREE, never a repository. Deriving identity from the config's own
+  // directory therefore gave every worktree its own `repoId`, which
+  // partitioned durable state per worktree instead of per repository: a work
+  // status asserted in one worktree was invisible from every other, and
+  // `wt status --all` / `wt fleet` / `wt ls --json` answered differently
+  // depending on which worktree you ran them from, each seeing only its own
+  // row while every other read as "no status asserted". Same split in the
+  // other direction for records written from the main clone (a `--gh` issue
+  // attached at `wt new` was invisible from inside the worktree it named).
+  //
+  // The repository IS the main clone — that is what `paths.main_clone` names
+  // and what every worktree of it shares — so identity comes from there
+  // whenever the nearest config turns out to be a worktree's copy. A
+  // `.wt.toml` outside `worktree_root` is still a repository root and still
+  // names itself, which keeps multi-repo isolation intact.
+  const configIsWorktreeCopy = repositoryConfigDir !== null &&
+    isInsidePath(worktreeRoot, repositoryConfigDir);
+  const identifyByMainClone = repositoryConfig === null || configIsWorktreeCopy;
+  const repoPath = identifyByMainClone
+    ? (existsSync(mainClone) ? realpathSync(mainClone) : mainClone)
+    : repositoryConfigDir!;
+  const repoId = identifyByMainClone
+    ? pathNamespace(mainClone, HOME)
+    : repositoryNamespace(repositoryConfig!, HOME);
+  // Partitioned layout when the REPOSITORY declares itself with its own
+  // `.wt.toml`; the shared compatibility layout otherwise. Keyed on the same
+  // fact `repoId` is, and deliberately not on "did discovery find a file":
+  // discovery finds a worktree's copy from inside that worktree and nothing at
+  // all from a shell outside the repo, so that predicate answered differently
+  // for one repository depending on where the command ran — and every path
+  // below it followed, giving one board two state databases, two cache roots
+  // and two tmux servers that could not see each other.
+  const ownRepositoryConfig = !identifyByMainClone;
+  const defaultCacheDb = ownRepositoryConfig
     ? join(HOME, ".cache", "wt", repoId, "cache.sqlite")
     : GENERIC_DEFAULTS.paths.cacheDb;
   const cacheDb = expandHome(errs.optStr(paths, "cache_db", defaultCacheDb));
-  const defaultStateDb = repositoryConfig
+  const defaultStateDb = ownRepositoryConfig
     ? join(HOME, ".local", "state", "wt", "wt.sqlite")
     : join(dirname(cacheDb), "wt.sqlite");
   const stateDb = expandHome(errs.optStr(paths, "state_db", defaultStateDb));
@@ -1411,7 +1447,7 @@ function build(
   // child process, so a session already spawned under it must keep
   // resolving the same server no matter what the config says.
   const tmuxSocket = process.env.WT_TMUX_SOCKET?.trim() ||
-    errs.optStr(obj(raw.tmux), "socket", repositoryConfig ? `wt-${repoId}` : "wt");
+    errs.optStr(obj(raw.tmux), "socket", ownRepositoryConfig ? `wt-${repoId}` : "wt");
 
   const rows = strArr(ui?.rows, GENERIC_DEFAULTS.ui.rows);
   const hiddenBadges = new Set<BadgeSlot>();
@@ -1965,11 +2001,52 @@ function parseRequires(
   return parseTagArray(raw, tag, "requires", VALID_REQUIRE_TAGS, errs);
 }
 
+/**
+ * `[paths] main_clone` and `worktree_root` as they read BEFORE the repository
+ * config is chosen — the two values `canonicalRepositoryConfig` needs to tell a
+ * worktree's copy of a `.wt.toml` from a repository's own.
+ *
+ * Deliberately tolerant and silent: this is a pre-pass, and the file it peeks
+ * at is not necessarily the one wt ends up loading. Every parse error, missing
+ * key and wrong type is reported once, against the file actually used, by the
+ * real load below. Returning empty strings simply means "no repository config
+ * can be identified", which falls back to discovery.
+ */
+function peekRepositoryPaths(
+  userRaw: RawConfig,
+  discovered: string | null,
+): [mainClone: string, worktreeRoot: string] {
+  let raw = userRaw;
+  if (discovered && existsSync(discovered)) {
+    try {
+      raw = mergeConfig(userRaw, Bun.TOML.parse(readFileSync(discovered, "utf8")) as RawConfig);
+    } catch {
+      // Unparseable — the real load reports it.
+    }
+  }
+  const paths = obj(raw.paths);
+  const read = (key: string): string => {
+    const value = paths?.[key];
+    return typeof value === "string" ? expandHome(value) : "";
+  };
+  return [read("main_clone"), read("worktree_root")];
+}
+
 function load(): { cfg: Config; path: string } {
   const { path, present } = configPath();
   const errs = new Errors();
   const userRaw = loadRaw(path, present, errs);
-  const repository = repositoryConfigPath();
+  // Discovery answers "which .wt.toml is nearest my cwd"; identity has to
+  // answer "which repository is this", and the two differ for every worktree
+  // (each carries a copy of the file) and for every shell outside the repo
+  // (which finds none). Re-point at the repository's own file BEFORE building,
+  // so a `wt` run from a worktree, from the main clone, and from ~ all agree
+  // on the state database, the cache root and the tmux socket.
+  const discovered = repositoryConfigPath();
+  const repository = canonicalRepositoryConfig(
+    discovered,
+    ...peekRepositoryPaths(userRaw, discovered),
+  );
   let raw = userRaw;
   let sourcePath = path;
   if (repository) {
@@ -1977,6 +2054,10 @@ function load(): { cfg: Config; path: string } {
     raw = mergeConfig(userRaw, repositoryRaw);
     sourcePath = repository;
     process.env[REPOSITORY_CONFIG_ENV] = repository;
+  } else {
+    // A stale value inherited from a parent that resolved differently would
+    // otherwise short-circuit discovery in every child.
+    delete process.env[REPOSITORY_CONFIG_ENV];
   }
   const cfg = build(raw, errs, repository);
   // `[paths]` naturally lives in a repository `.wt.toml`; a bare `wt`

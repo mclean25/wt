@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  canonicalRepositoryConfig,
   mergeConfig,
   pathNamespace,
   repositoryConfigPath,
@@ -331,5 +332,240 @@ ${uiSection}
     const result = load("\n[ui]\nactivity_pane = \"bottom\"\n");
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain("ui.activity_pane");
+  });
+});
+
+describe("canonicalRepositoryConfig", () => {
+  function scaffold(): {
+    root: string;
+    mainClone: string;
+    worktreeRoot: string;
+    worktree: string;
+  } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wt-canonical-")));
+    const mainClone = join(root, "code", "myrepo");
+    const worktreeRoot = join(root, "code", "myrepo-wt");
+    const worktree = join(worktreeRoot, "some-branch");
+    mkdirSync(mainClone, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    return { root, mainClone, worktreeRoot, worktree };
+  }
+
+  test("a worktree's copy resolves to the repository's own config", () => {
+    const { root, mainClone, worktreeRoot, worktree } = scaffold();
+    try {
+      writeFileSync(join(mainClone, ".wt.toml"), "");
+      writeFileSync(join(worktree, ".wt.toml"), "");
+      expect(
+        canonicalRepositoryConfig(join(worktree, ".wt.toml"), mainClone, worktreeRoot),
+      ).toBe(join(mainClone, ".wt.toml"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("finding nothing still resolves to the repository's own config", () => {
+    const { root, mainClone, worktreeRoot } = scaffold();
+    try {
+      writeFileSync(join(mainClone, ".wt.toml"), "");
+      expect(canonicalRepositoryConfig(null, mainClone, worktreeRoot))
+        .toBe(join(mainClone, ".wt.toml"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a config outside worktree_root names itself", () => {
+    const { root, mainClone, worktreeRoot } = scaffold();
+    try {
+      const other = join(root, "code", "otherrepo");
+      mkdirSync(other, { recursive: true });
+      writeFileSync(join(mainClone, ".wt.toml"), "");
+      writeFileSync(join(other, ".wt.toml"), "");
+      expect(canonicalRepositoryConfig(join(other, ".wt.toml"), mainClone, worktreeRoot))
+        .toBe(join(other, ".wt.toml"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a repository with no config of its own keeps what was found", () => {
+    const { root, mainClone, worktreeRoot, worktree } = scaffold();
+    try {
+      writeFileSync(join(worktree, ".wt.toml"), "");
+      expect(
+        canonicalRepositoryConfig(join(worktree, ".wt.toml"), mainClone, worktreeRoot),
+      ).toBe(join(worktree, ".wt.toml"));
+      expect(canonicalRepositoryConfig(null, mainClone, worktreeRoot)).toBe(null);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an unknown main clone leaves discovery alone", () => {
+    // `[paths]` is missing; resolving "" would silently mean the CWD.
+    expect(canonicalRepositoryConfig("/a/b/.wt.toml", "", "")).toBe("/a/b/.wt.toml");
+    expect(canonicalRepositoryConfig(null, "", "")).toBe(null);
+  });
+});
+
+describe("repository identity across worktrees", () => {
+  // Every worktree carries a COPY of the repository's `.wt.toml`, and a shell
+  // outside the repo finds none at all. Deriving identity from whichever file
+  // discovery happened to land on gave each of those callers its own namespace
+  // — and the namespace picks the durable state database, the cache root and
+  // the tmux socket. The board then fragmented in a way that looked consistent
+  // from every single vantage point: a status asserted in one worktree was
+  // invisible from every other, `wt manager send` cold-started a manager on a
+  // tmux server the TUI never reads, and a tracker id set in the TUI was
+  // invisible to the session it named.
+  type Identity = {
+    repoId: string;
+    repoPath: string;
+    stateDb: string;
+    cacheRoot: string;
+    tmuxSocket: string;
+  };
+
+  function identityFrom(cwd: string, userConfig: string): Identity {
+    const configModule = pathToFileURL(join(import.meta.dir, "config.ts")).href;
+    const script = `
+      const { config } = await import(${JSON.stringify(configModule)});
+      console.log(JSON.stringify({
+        repoId: config.repoId,
+        repoPath: config.repoPath,
+        stateDb: config.paths.stateDb,
+        cacheRoot: config.paths.cacheRoot,
+        tmuxSocket: config.tmux.socket,
+      }));
+    `;
+    const env: Record<string, string | undefined> = { ...process.env, WT_CONFIG: userConfig };
+    delete env[REPOSITORY_CONFIG_ENV];
+    delete env.WT_TMUX_SOCKET;
+    const result = Bun.spawnSync([process.execPath, "-e", script], {
+      cwd,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.stderr.toString()).toBe("");
+    expect(result.exitCode).toBe(0);
+    return JSON.parse(result.stdout.toString()) as Identity;
+  }
+
+  function scaffold(prefix: string, withRepositoryConfig: boolean): {
+    root: string;
+    mainClone: string;
+    worktree: string;
+    outside: string;
+    userConfig: string;
+  } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+    const mainClone = join(root, "code", "myrepo");
+    const worktreeRoot = join(root, "code", "myrepo-wt");
+    const worktree = join(worktreeRoot, "some-branch");
+    const outside = join(root, "elsewhere");
+    mkdirSync(mainClone, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+
+    const userConfig = join(root, "user.toml");
+    writeFileSync(
+      userConfig,
+      `
+[paths]
+main_clone = ${JSON.stringify(mainClone)}
+worktree_root = ${JSON.stringify(worktreeRoot)}
+
+[branch]
+prefix = "alex"
+`,
+    );
+    if (withRepositoryConfig) {
+      // The same bytes the backends copy into every worktree.
+      const repoConfig = "\n[branch]\nbase = \"staging\"\n";
+      writeFileSync(join(mainClone, ".wt.toml"), repoConfig);
+      writeFileSync(join(worktree, ".wt.toml"), repoConfig);
+    }
+    return { root, mainClone, worktree, outside, userConfig };
+  }
+
+  test("a worktree, its repository and an unrelated cwd share one namespace", () => {
+    const { root, mainClone, worktree, outside, userConfig } = scaffold(
+      "wt-config-identity-",
+      true,
+    );
+    try {
+      const fromMainClone = identityFrom(mainClone, userConfig);
+      const fromWorktree = identityFrom(worktree, userConfig);
+      const fromOutside = identityFrom(outside, userConfig);
+
+      // Not just the id: the id is only interesting because these three follow
+      // it, and each one on its own is enough to split the board.
+      expect(fromWorktree).toEqual(fromMainClone);
+      expect(fromOutside).toEqual(fromMainClone);
+      expect(fromMainClone.repoPath).toBe(mainClone);
+      expect(fromMainClone.tmuxSocket).toBe(`wt-${fromMainClone.repoId}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a repository with no .wt.toml keeps the shared compatibility layout", () => {
+    const { root, mainClone, worktree, outside, userConfig } = scaffold(
+      "wt-config-identity-bare-",
+      false,
+    );
+    try {
+      const fromMainClone = identityFrom(mainClone, userConfig);
+      expect(identityFrom(worktree, userConfig)).toEqual(fromMainClone);
+      expect(identityFrom(outside, userConfig)).toEqual(fromMainClone);
+      expect(fromMainClone.tmuxSocket).toBe("wt");
+      expect(fromMainClone.stateDb).toBe(join(homedir(), ".cache", "wt", "wt.sqlite"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a worktree config survives the repository losing its own", () => {
+    // The repository has no `.wt.toml` to re-point at — the file was deleted
+    // after the worktrees were cloned — so the worktree's copy is still what
+    // supplies the content. Identity must come from `paths.main_clone`
+    // anyway, or that worktree becomes a repository of its own again.
+    const { root, mainClone, worktree, outside, userConfig } = scaffold(
+      "wt-config-identity-orphan-",
+      false,
+    );
+    try {
+      writeFileSync(join(worktree, ".wt.toml"), "\n[branch]\nbase = \"staging\"\n");
+      const fromMainClone = identityFrom(mainClone, userConfig);
+      expect(identityFrom(worktree, userConfig)).toEqual(fromMainClone);
+      expect(identityFrom(outside, userConfig)).toEqual(fromMainClone);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a second repository outside worktree_root stays isolated", () => {
+    const { root, mainClone, userConfig } = scaffold("wt-config-identity-other-", true);
+    try {
+      const other = join(root, "code", "otherrepo");
+      mkdirSync(other, { recursive: true });
+      writeFileSync(
+        join(other, ".wt.toml"),
+        `
+[paths]
+main_clone = ${JSON.stringify(other)}
+worktree_root = ${JSON.stringify(join(root, "code", "otherrepo-wt"))}
+`,
+      );
+      const mine = identityFrom(mainClone, userConfig);
+      const theirs = identityFrom(other, userConfig);
+      expect(theirs.repoId).not.toBe(mine.repoId);
+      expect(theirs.repoPath).toBe(other);
+      expect(theirs.tmuxSocket).not.toBe(mine.tmuxSocket);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

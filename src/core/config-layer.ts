@@ -43,6 +43,54 @@ function isTable(value: unknown): value is RawConfig {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Canonical absolute path, resolving symlinks when the target exists. */
+function canonicalPath(path: string): string {
+  const resolved = resolve(path);
+  return existsSync(resolved) ? realpathSync(resolved) : resolved;
+}
+
+/** Is `child` at or below `parent`? */
+export function isInsidePath(parent: string, child: string): boolean {
+  const rel = relative(canonicalPath(parent), canonicalPath(child));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
+ * The repository config that OWNS the repository, given whatever config
+ * discovery found walking up from the cwd.
+ *
+ * Discovery answers "which `.wt.toml` is nearest to where I was invoked",
+ * and that is not the same question as "which repository am I acting on".
+ * The backends clone the whole tree, so every worktree carries a COPY of
+ * the repository's `.wt.toml` — and a shell that never entered the repo at
+ * all finds nothing. Both are the same repository, so both must resolve to
+ * the same file: identity that varies with the caller's cwd partitions the
+ * durable state database, the cache root and the tmux socket into parallel
+ * universes that cannot see each other, while each one looks internally
+ * consistent.
+ *
+ * A `.wt.toml` OUTSIDE `worktree_root` is a repository root and still names
+ * itself, which is what keeps multiple repositories isolated. A main clone
+ * with no config of its own keeps whatever was discovered: the content is
+ * still wanted, and `build` identifies by `paths.main_clone` regardless.
+ */
+export function canonicalRepositoryConfig(
+  discovered: string | null,
+  mainClone: string,
+  worktreeRoot: string,
+): string | null {
+  // An absent path resolves to the CWD, which would make this answer depend on
+  // the very thing it exists to be independent of. Missing `[paths]` is a hard
+  // config error moments later; until then, discovery stands.
+  if (!mainClone) return discovered;
+  const own = join(canonicalPath(mainClone), REPOSITORY_CONFIG_FILE);
+  const ownExists = existsSync(own);
+  if (discovered === null) return ownExists ? own : null;
+  if (!worktreeRoot) return discovered;
+  if (!isInsidePath(worktreeRoot, dirname(canonicalPath(discovered)))) return discovered;
+  return ownExists ? own : discovered;
+}
+
 /** Find the nearest repository config, or honor the path inherited by a child process. */
 export function repositoryConfigPath(
   cwd = process.cwd(),

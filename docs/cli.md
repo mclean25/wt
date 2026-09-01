@@ -20,6 +20,16 @@ then removes only the imported records. Ambiguous removed history and bare
 branch watermarks stay in the backup. Reruns are safe; current SQLite values
 win. `--keep-legacy` performs a copy-only pass.
 
+Also repairs a board split by an earlier build that derived repository identity
+from the caller's working directory. It adopts rows filed under a per-worktree
+namespace or written into a second state database, merging them FIELD-wise so a
+tracker id recorded in one namespace and a work status asserted in the other
+both survive; and it carries the runtime files that do not regenerate — the
+`automations.json` once-only fire ledger, the `harness.json` primary-harness
+pick, and the harness session-name registries — into this repository's cache
+root. Those sources are read only: nothing is written to them and nothing is
+deleted.
+
 ### `wt remote [<command> ...]`
 
 With no arguments, allocate an SSH terminal and enter the `[remote]` host's

@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 
@@ -144,4 +144,59 @@ export function importRepositorySnapshot(stateJson: string, archived: ReadonlySe
     const now = Date.now();
     for (const key of [...archived].sort()) insert.run(config.repoId, key, now);
   })();
+}
+
+/**
+ * One repository's durable records, read out of an ARBITRARY state database.
+ *
+ * Exists for repair rather than for normal reads: a build that derived the
+ * repository namespace from the caller's cwd wrote this repository's records
+ * under a per-worktree id, and sometimes into a second database file
+ * altogether. Nothing in the normal read path can see those rows — the id and
+ * the file are both wrong — so `wt state migrate` opens the candidates itself
+ * and adopts what belongs here. Read-only and non-mutating: adoption must not
+ * be able to damage a database it may have misidentified.
+ */
+export type ForeignRepositoryRow = {
+  repoId: string;
+  repoPath: string;
+  data: string;
+  updatedAt: number;
+  archived: Set<string>;
+};
+
+export function readForeignRepositoryRows(dbPath: string): ForeignRepositoryRow[] {
+  if (!existsSync(dbPath)) return [];
+  let db: Database;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    return [];
+  }
+  try {
+    const rows = db.query<
+      { repo_id: string; repo_path: string; data: string; updated_at: number },
+      []
+    >(`
+      SELECT r.repo_id, r.repo_path, s.data, s.updated_at
+      FROM repositories r
+      JOIN repository_state s ON s.repo_id = r.repo_id
+    `).all();
+    return rows.map((row) => ({
+      repoId: row.repo_id,
+      repoPath: row.repo_path,
+      data: row.data,
+      updatedAt: row.updated_at,
+      archived: new Set(
+        db.query<{ worktree_key: string }, [string]>(
+          "SELECT worktree_key FROM archived_worktrees WHERE repo_id = ?",
+        ).all(row.repo_id).map((archived) => archived.worktree_key),
+      ),
+    }));
+  } catch {
+    // Not a wt state database, or written by a schema this build predates.
+    return [];
+  } finally {
+    db.close();
+  }
 }
