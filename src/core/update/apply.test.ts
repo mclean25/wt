@@ -33,8 +33,8 @@ describe("applyWtUpdateEffect lifecycle", () => {
     });
 
     await Effect.runPromise(Effect.gen(function* () {
-      const fiber = yield* Effect.fork(applyWtUpdateEffect("target-sha", deps));
-      yield* Effect.yieldNow();
+      const fiber = yield* Effect.forkChild(applyWtUpdateEffect("target-sha", deps));
+      yield* Effect.yieldNow;
       expect(commands).toBe(1);
       yield* Fiber.interrupt(fiber);
       expect(releases).toBe(1);

@@ -92,8 +92,11 @@ exec sleep 3
   const lifecycleModule = pathToFileURL(
     join(import.meta.dir, "lifecycle.ts"),
   ).href;
+  const effectModule = pathToFileURL(
+    join(import.meta.dir, "../../node_modules/effect/dist/index.js"),
+  ).href;
   const script = `
-    const { Effect } = await import("effect");
+    const { Effect } = await import(${JSON.stringify(effectModule)});
     const { createWorktree, createWorktreeEffect } = await import(${JSON.stringify(lifecycleModule)});
     const { lockStatus } = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "locks.ts")).href)});
     const result = await createWorktree("test/copy-agents", { runInstall: false });

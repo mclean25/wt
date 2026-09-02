@@ -91,7 +91,7 @@ export function runInEffect(
           Option.match({
             onSome: Effect.succeed,
             onNone: () =>
-              Effect.zipRight(
+              Effect.andThen(
                 Effect.sync(() => killUpdateProcessGroup(running.proc)),
                 Effect.fail(
                   new UpdateProcessError({ argv, operation: "timeout" }),
@@ -121,7 +121,7 @@ export function runInResultEffect(
   opts: { cwd: string; timeoutMs?: number },
 ): Effect.Effect<RunResult> {
   return runInEffect(argv, opts).pipe(
-    Effect.catchAll((error) => Effect.succeed(processFailureResult(error))),
+    Effect.catch((error) => Effect.succeed(processFailureResult(error))),
   );
 }
 
@@ -279,9 +279,10 @@ const acquireUpdateGitLockOnce = (): Effect.Effect<() => void, UpdateLockBusy> =
 export const acquireUpdateGitLockEffect: Effect.Effect<(() => void) | null> =
   acquireUpdateGitLockOnce().pipe(
     Effect.retry(
-      Schedule.spaced(Duration.millis(200)).pipe(
-        Schedule.intersect(Schedule.recurs(9)),
-      ),
+      Schedule.max([
+        Schedule.spaced(Duration.millis(200)),
+        Schedule.recurs(9),
+      ]),
     ),
     Effect.orElseSucceed(() => null),
   );

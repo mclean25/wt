@@ -510,7 +510,7 @@ export class HarnessTailRegistry {
   private runs: ReadonlyMap<string, HarnessRun> = new Map();
   private state = new Map<string, Entry>();
   private listeners = new Set<Listener>();
-  private poller: Fiber.RuntimeFiber<never, never> | null = null;
+  private poller: Fiber.Fiber<never, never> | null = null;
   private codexWorker: CodexTailWorker | null = null;
   private codexInFlight: number | null = null;
   private codexPumpAgain = false;

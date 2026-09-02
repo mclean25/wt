@@ -336,7 +336,7 @@ export function startupUpdatePromptEffect(): Effect.Effect<"updated" | null> {
       console.error(yellow(`⚠ events daemon restart failed (${daemon.detail}); starting wt anyway`));
     }
     return "updated" as const;
-  }).pipe(Effect.catchAllCause((cause) => Effect.sync(() => {
+  }).pipe(Effect.catchCause((cause) => Effect.sync(() => {
     logSafe("error", Cause.pretty(cause));
     console.error(dim("wt: update check failed (see app log); starting anyway"));
     return null;

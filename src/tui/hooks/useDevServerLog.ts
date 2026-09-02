@@ -26,7 +26,7 @@ export function devServerLogPollEffect(
     catch: (cause) => new DevLogReadError({ cause }),
   }).pipe(
     Effect.tap((next) => Effect.sync(() => onOutput(next))),
-    Effect.catchAll(() => Effect.void),
+    Effect.catch(() => Effect.void),
   );
   return Effect.forever(
     poll.pipe(Effect.andThen(Effect.sleep(`${intervalMs} millis`))),

@@ -362,7 +362,7 @@ function checkPr(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
     try: () => JSON.parse(r.stdout) as Record<string, unknown>,
     catch: (cause) => new DoctorCommandError({ cause }),
   }).pipe(
-    Effect.catchAll(() => Effect.succeed(null)),
+    Effect.catch(() => Effect.succeed(null)),
   );
   if (data === null) return mkCheck("pr", "warn", "gh returned non-JSON");
   const state = (data.state as string) || "UNKNOWN";
@@ -398,7 +398,7 @@ function checkSkillsFreshness(): Effect.Effect<Check, DoctorCommandError> {
     if (pending.length === 0) return mkCheck("agent skills", "ok", "up to date");
     const names = [...new Set(pending.map((r) => r.unit.name))];
     return mkCheck("agent skills", "warn", `${names.length} pending (${names.join(", ")}) — run \`wt skills sync\``);
-  }).pipe(Effect.catchAll(() => Effect.succeed(mkCheck("agent skills", "info", "check skipped (skills system errored)"))));
+  }).pipe(Effect.catch(() => Effect.succeed(mkCheck("agent skills", "info", "check skipped (skills system errored)"))));
 }
 
 /**
@@ -479,7 +479,7 @@ function checkMessageTransport(): Effect.Effect<Check, DoctorCommandError> {
           : ""
       }`,
     );
-  }).pipe(Effect.catchAll((err) => Effect.succeed(mkCheck("messaging", "info", `check skipped (${err instanceof Error ? err.message : String(err)})`))));
+  }).pipe(Effect.catch((err) => Effect.succeed(mkCheck("messaging", "info", `check skipped (${err instanceof Error ? err.message : String(err)})`))));
 }
 
 /**

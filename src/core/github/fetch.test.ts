@@ -165,7 +165,7 @@ describe("Effect chunk execution", () => {
     const controller = new AbortController();
     const result = Effect.runPromiseExit(
       fetchChunkEffect("owner", "repo", ["branch"], false, () =>
-        Effect.async((_resume, signal) => {
+        Effect.callback((_resume, signal) => {
           started = true;
           signal.addEventListener("abort", () => {});
         }),
@@ -177,7 +177,7 @@ describe("Effect chunk execution", () => {
     const exit = await result;
     expect(exit._tag).toBe("Failure");
     if (exit._tag === "Failure") {
-      expect(Cause.isInterruptedOnly(exit.cause)).toBe(true);
+      expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
     }
   });
 

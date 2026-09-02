@@ -20,7 +20,7 @@ function pruneBackupsInEffect(
   const out: PruneBackupsResult = { deleted: [], kept: [] };
   const args = ["for-each-ref", "--format=%(refname:short)", "refs/heads/backup/"];
   const r = yield* gitRunEffect(args, cwd).pipe(
-    Effect.catchAll(() => Effect.succeed(null)),
+    Effect.catch(() => Effect.succeed(null)),
   );
   if (r === null || r.exitCode !== 0) return out;
   for (const ref of r.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
@@ -34,7 +34,7 @@ function pruneBackupsInEffect(
       continue;
     }
     const del = yield* gitRunEffect(["branch", "-D", ref], cwd).pipe(
-      Effect.catchAll(() => Effect.succeed(null)),
+      Effect.catch(() => Effect.succeed(null)),
     );
     if (del?.exitCode === 0) {
       out.deleted.push(ref);
@@ -72,7 +72,7 @@ export function pruneStackBackupsEffect(
   const main = yield* pruneBackupsInEffect(undefined, cutoff, onLog);
   // Rift slices carry their own refs; sweep each independent clone too.
   const worktrees = yield* listWorktreesEffect().pipe(
-    Effect.catchAll(() => Effect.succeed([])),
+    Effect.catch(() => Effect.succeed([])),
   );
   const rift = yield* Effect.forEach(
     worktrees.filter((w) => !w.isMain && isRiftWorktree(w.path)),

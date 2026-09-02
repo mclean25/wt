@@ -18,12 +18,13 @@ describe("runInEffect lifecycle", () => {
 
   test("interruption waits for subprocess finalization", async () => {
     await Effect.runPromise(Effect.gen(function* () {
-      const fiber = yield* Effect.fork(runInEffect(
+      const fiber = yield* Effect.forkChild(runInEffect(
         [process.execPath, "-e", "setInterval(() => {}, 1000)"],
         { cwd: process.cwd() },
       ));
-      yield* Effect.yieldNow();
-      const interrupted = yield* Fiber.interrupt(fiber);
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(fiber);
+      const interrupted = yield* Fiber.await(fiber);
       expect(Exit.isFailure(interrupted)).toBeTrue();
     }));
   });

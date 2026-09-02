@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { Effect, Fiber, TestClock, TestContext } from "effect";
+import { Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 
 import {
   codexEventPollingEffect,
@@ -21,12 +22,12 @@ test("polling interruption stops and joins the worker", async () => {
   } as unknown as CodexEventsWorker;
 
   await Effect.runPromise(Effect.gen(function* () {
-    const fiber = yield* Effect.fork(codexEventPollingEffect(
+    const fiber = yield* Effect.forkChild(codexEventPollingEffect(
       () => [],
       undefined,
       { workerFactory: () => worker, intervalMs: 100 },
     ));
-    yield* Effect.yieldNow();
+    yield* Effect.yieldNow;
     expect(posted.filter((message) => message.type === "poll")).toHaveLength(0);
 
     yield* TestClock.adjust(100);
@@ -42,5 +43,5 @@ test("polling interruption stops and joins the worker", async () => {
     yield* TestClock.adjust(1_000);
     expect(posted.filter((message) => message.type === "poll")).toHaveLength(2);
     expect(terminated).toBe(1);
-  }).pipe(Effect.provide(TestContext.TestContext)));
+  }).pipe(Effect.provide(TestClock.layer())));
 });

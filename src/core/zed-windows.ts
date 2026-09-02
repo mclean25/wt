@@ -62,7 +62,7 @@ function yabaiQueryAllWindowsEffect(): Effect.Effect<YabaiWindow[] | null> {
         return null;
       }
     }),
-    Effect.catchAll(() => Effect.succeed(null)),
+    Effect.catch(() => Effect.succeed(null)),
   );
 }
 
@@ -92,14 +92,14 @@ function yabaiWindowExistsEffect(id: number): Effect.Effect<boolean> {
         return false;
       }
     }),
-    Effect.catchAll(() => Effect.succeed(false)),
+    Effect.catch(() => Effect.succeed(false)),
   );
 }
 
 function yabaiFocusEffect(id: number): Effect.Effect<boolean> {
   return runEffect(["yabai", "-m", "window", "--focus", String(id)]).pipe(
     Effect.map((r) => r.exitCode === 0),
-    Effect.catchAll(() => Effect.succeed(false)),
+    Effect.catch(() => Effect.succeed(false)),
   );
 }
 
@@ -156,7 +156,7 @@ export function waitForNewZedWindowEffect(
 }
 
 function spawnZedEffect(path: string): Effect.Effect<void, ZedWindowError> {
-  return Effect.async<void, ZedWindowError>((resume) => {
+  return Effect.callback<void, ZedWindowError>((resume) => {
     let child: ReturnType<typeof spawn>;
     let settled = false;
     try {

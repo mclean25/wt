@@ -31,7 +31,7 @@ class EventLog {
   private attention: readonly WtEvent[] = [];
   private listeners = new Set<Listener>();
   private nextId = 1;
-  private notifyFiber: Fiber.RuntimeFiber<void, never> | null = null;
+  private notifyFiber: Fiber.Fiber<void, never> | null = null;
   /**
    * Attention "seen" watermark (epoch ms; 0 = never marked). Events at
    * or before it render dim below a `── seen` rule in the attention

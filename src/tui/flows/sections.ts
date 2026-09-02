@@ -170,7 +170,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
               );
           }),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => reportActionError("move", error.cause)),
         ),
       ),
@@ -273,7 +273,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
         flowPromise(() =>
           swapOrder(slug, target.wt.slug, mover.section, bucket),
         ).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => reportActionError("reorder", error.cause)),
           ),
         ),
@@ -318,7 +318,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
             toast(`moved to ${sectionVal ?? "Inbox"}`, theme.info, 1200),
           ),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => reportActionError("move", error.cause)),
         ),
       ),
@@ -414,7 +414,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
               toast(`moved to Inbox${suffix}`, theme.info, 1500),
             ),
           ),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => reportActionError("move", error.cause)),
           ),
         ),
@@ -432,7 +432,7 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
               toast(`moved to ${target}${suffix}`, theme.info, 1500),
             ),
           ),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => reportActionError("move", error.cause)),
           ),
         ),

@@ -124,7 +124,7 @@ function fetchCheckStatusEffect(
         catch: (cause) => new CheckFetchError({ sha, cause }),
       }).pipe(Effect.map(classifyCheckRuns));
     }),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         logSafe("warn", `check-runs fetch failed for ${sha}: ${String(error)}`);
         return "unknown" as const;

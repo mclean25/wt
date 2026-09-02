@@ -45,7 +45,7 @@ export function setWezTermTabTitle(
 ): Promise<void> {
   return Effect.runPromise(
     setWezTermTabTitleEffect(title, configuredCliPath).pipe(
-      Effect.catchAll(() => Effect.void),
+      Effect.catch(() => Effect.void),
     ),
   );
 }

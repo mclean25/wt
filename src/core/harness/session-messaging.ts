@@ -38,7 +38,7 @@
  * Other harnesses have only terminal input and always take path 2.
  */
 import { agentIdentity } from "../agent-identity.ts";
-import { Data, Effect, Runtime } from "effect";
+import { Data, Effect } from "effect";
 import { withAsyncFileLockEffect } from "../locks.ts";
 import { createLogger } from "../logger.ts";
 import {
@@ -340,7 +340,7 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     const ensured = yield* promiseEffect("ensure session", (signal) =>
       deps.ensureInfo(identity, signal)).pipe(
         Effect.map((value) => ({ ok: true as const, value })),
-        Effect.catchAll((error) => Effect.succeed({ ok: false as const, error })),
+        Effect.catch((error) => Effect.succeed({ ok: false as const, error })),
       );
     if (!ensured.ok) {
       return {
@@ -405,7 +405,6 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
    */
   function sendEffect(target: SessionMessageTarget): Effect.Effect<SessionMessageResult, SessionMessagingOperationError> {
     return Effect.gen(function* () {
-    const runtime = yield* Effect.runtime<never>();
     // Emptiness is a question about what the CALLER sent, so it is
     // asked before stamping: from inside a wt session `stampSender`
     // turns "" into "[slug] ", which passed this guard and delivered a
@@ -434,12 +433,19 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     // reason; the key is distinct from the ones `ensureInfo` and the
     // terminal path take, and is always acquired before them.
     const tmuxName = claudeTmuxName(target.slug, target.managedName ?? null);
-    return yield* promiseEffect("session lock", (signal) =>
-      deps.lock(
-        `__claude_send__${tmuxName}`,
-        () => Runtime.runPromise(runtime)(sendToClaudeEffect({ ...target, text }), { signal }),
-        signal,
-      ));
+    const delivery = sendToClaudeEffect({ ...target, text });
+    if (!overrides.lock) {
+      return yield* withAsyncFileLockEffect(`__claude_send__${tmuxName}`, delivery).pipe(
+        Effect.mapError((cause) =>
+          new SessionMessagingOperationError({ operation: "session lock", cause })),
+      );
+    }
+    const context = yield* Effect.context<never>();
+    return yield* promiseEffect("session lock", (signal) => deps.lock(
+      `__claude_send__${tmuxName}`,
+      () => Effect.runPromiseWith(context)(delivery, { signal }),
+      signal,
+    ));
     });
   }
 

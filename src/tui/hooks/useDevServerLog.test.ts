@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Fiber, TestClock, TestContext } from "effect";
+import { Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 
 import { devServerLogPollEffect } from "./useDevServerLog.ts";
 
@@ -9,7 +10,7 @@ describe("devServerLogPollEffect", () => {
     const outputs: Array<string | null> = [];
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           devServerLogPollEffect(
             () =>
               ++reads === 1
@@ -19,15 +20,15 @@ describe("devServerLogPollEffect", () => {
             100,
           ),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         expect(reads).toBe(1);
         expect(outputs).toEqual([]);
         yield* TestClock.adjust(100);
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         expect(reads).toBe(2);
         expect(outputs).toEqual(["ready"]);
         yield* Fiber.interrupt(fiber);
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
   });
 });

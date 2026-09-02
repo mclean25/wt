@@ -72,7 +72,7 @@ export function handleActionPickerKey(
         Effect.runFork(
           actionEffect(() =>
             doAutoMerge(ap.slug, item.armed ? "disable" : "enable", ap.target),
-          ).pipe(Effect.catchAll(() => Effect.void)),
+          ).pipe(Effect.catch(() => Effect.void)),
         );
         return;
       }
@@ -88,7 +88,7 @@ export function handleActionPickerKey(
             Effect.tap(() =>
               Effect.sync(() => editorLog.event.info(`opened ${slot.path}`)),
             ),
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.sync(() =>
                 editorLog.event.err(
                   `editor open failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
@@ -113,7 +113,7 @@ export function handleActionPickerKey(
         setModal(null);
         Effect.runFork(
           actionEffect(() => launchSlotCommand(ap.slug, item.def, "")).pipe(
-            Effect.catchAll(() => Effect.void),
+            Effect.catch(() => Effect.void),
           ),
         );
         return;
@@ -155,7 +155,7 @@ export function handleActionPickerKey(
               undefined,
               ap.target,
             ),
-          ).pipe(Effect.catchAll(() => Effect.void)),
+          ).pipe(Effect.catch(() => Effect.void)),
         );
         return;
       }
@@ -275,13 +275,13 @@ export function handleActionPickerKey(
       if (def === null || def.fleet)
         Effect.runFork(
           actionEffect(() => launchSlotCommand(slug, def, extras.value)).pipe(
-            Effect.catchAll(() => Effect.void),
+            Effect.catch(() => Effect.void),
           ),
         );
       else if (rowSlug)
         Effect.runFork(
           actionEffect(() => launchAction(rowSlug, def, extras.value)).pipe(
-            Effect.catchAll(() => Effect.void),
+            Effect.catch(() => Effect.void),
           ),
         );
       else toast("no row selected", warnColor, 2000);
@@ -296,7 +296,7 @@ export function handleActionPickerKey(
             undefined,
             ap.target,
           ),
-        ).pipe(Effect.catchAll(() => Effect.void)),
+        ).pipe(Effect.catch(() => Effect.void)),
       );
     }
     return true;
@@ -339,7 +339,7 @@ export function handleArgPickerKey(
           undefined,
           modal.target,
         ),
-      ).pipe(Effect.catchAll(() => Effect.void)),
+      ).pipe(Effect.catch(() => Effect.void)),
     );
   };
   if (k.ctrl && k.name === "c") {

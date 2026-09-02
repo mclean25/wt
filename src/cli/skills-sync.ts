@@ -240,18 +240,18 @@ export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, Skill
         );
         const applied: UnitReport[] = [];
         for (const r of toApply) {
-          const result = yield* Effect.either(
+          const result = yield* Effect.result(
             Effect.try({
               try: () => applyReport(r),
               catch: (cause) => new SkillsSyncError({ operation: "apply", cause }),
             }),
           );
-          if (result._tag === "Right") {
+          if (result._tag === "Success") {
             applied.push(r);
             console.log(`${green("✓")} ${bold(r.unit.name)} ${dim("→")} ${targetLabel(r)}`);
           } else {
             failures++;
-            const cause = result.left.cause;
+            const cause = result.failure.cause;
             const msg = cause instanceof Error ? cause.message : String(cause);
             console.error(red(`✗ ${r.unit.name}: ${msg}`));
             log.error(cause instanceof Error ? cause : String(cause), {
@@ -312,7 +312,7 @@ export function startupSkillsPromptEffect(): Effect.Effect<void> {
     startup: true,
   }).pipe(
     Effect.asVoid,
-    Effect.catchAllCause((cause) =>
+    Effect.catchCause((cause) =>
       Effect.sync(() => {
         log.error(Cause.pretty(cause));
         console.error(dim("wt: skills startup check failed (see app log); starting anyway"));

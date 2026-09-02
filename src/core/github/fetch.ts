@@ -527,13 +527,15 @@ export function fetchGithubEffect(
 
     const groups = chunkBranches(branches, CHUNK_SIZE);
     return yield* fetchChunksEffect(owner, name, groups).pipe(
-      Effect.timeoutFail({
+      Effect.timeoutOrElse({
         duration: RETRY_DEADLINE_MS,
-        onTimeout: () =>
-          new GithubTransientError({
-            message: "github fetch retry budget exhausted",
-            result: { stdout: "", stderr: "", exitCode: -1, timedOut: true },
-          }),
+        orElse: () =>
+          Effect.fail(
+            new GithubTransientError({
+              message: "github fetch retry budget exhausted",
+              result: { stdout: "", stderr: "", exitCode: -1, timedOut: true },
+            }),
+          ),
       }),
       Effect.tapError((error) =>
         Effect.sync(() =>
@@ -571,7 +573,7 @@ export function fetchPrsEffect(): Effect.Effect<Map<string, PullRequest>> {
       .map((worktree) => worktree.branch as string);
     return (yield* fetchGithubEffect(branches)).prs;
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         console.error(
           `wt: ${error instanceof Error ? error.message : String(error)} (PR info omitted)`,

@@ -18,7 +18,7 @@ describe("wt logs tail lifecycle", () => {
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           tailLog("/tmp/wt-logs-cleanup.log", () => ({
             exited,
             get exitCode() {
@@ -31,7 +31,7 @@ describe("wt logs tail lifecycle", () => {
             },
           })),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* Fiber.interrupt(fiber);
       }),
     );

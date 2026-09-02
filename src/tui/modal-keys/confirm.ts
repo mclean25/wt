@@ -32,7 +32,7 @@ export function handleKillActionConfirmKey(
               if (killed) logWarn(`killed action "${actionName}" on ${slug}`);
             }),
           ),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     },
@@ -60,7 +60,7 @@ export function handleKillSessionConfirmKey(
             }),
           ),
           Effect.andThen(confirmPromise(refreshTmuxSessions)),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => {
               const msg =
                 error.cause instanceof Error
@@ -148,7 +148,7 @@ export function handleConfirmKey(
       if (pending === "d" && modal.target) {
         Effect.runFork(
           confirmPromise(() => doRemoveWorktree(modal.target!)).pipe(
-            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
           ),
         );
       } else if (pending === "d!" && modal.target) {
@@ -156,38 +156,38 @@ export function handleConfirmKey(
           confirmPromise(() =>
             doRemoveWorktree(modal.target!, { force: true }),
           ).pipe(
-            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
           ),
         );
       } else if (pending === "e" && slug) {
         Effect.runFork(
           confirmPromise(() => doMarkReady(slug)).pipe(
-            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
           ),
         );
       } else if (pending === "E" && slug) {
         Effect.runFork(
           confirmPromise(() => doShipPr(slug)).pipe(
-            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
           ),
         );
       } else if (pending === "review-wt" && modal.reviewBranch) {
         Effect.runFork(
           confirmPromise(() => doCheckoutReview(modal.reviewBranch!)).pipe(
-            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
           ),
         );
       } else if (pending === "restore" && modal.restoreEntry) {
         Effect.runFork(
           confirmPromise(() => doRestoreRemoved(modal.restoreEntry!)).pipe(
-            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
           ),
         );
       } else if (pending === "R") {
         logWarn("cleared all cached data; refetching from scratch");
         Effect.runFork(
           confirmPromise(clearAll).pipe(
-            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
           ),
         );
       }

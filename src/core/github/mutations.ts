@@ -11,7 +11,7 @@ const log = createLogger("[gh]");
 
 const parseJsonOrNullEffect = <A>(text: string): Effect.Effect<A | null> =>
   Effect.try(() => JSON.parse(text) as A).pipe(
-    Effect.catchAll(() => Effect.succeed(null)),
+    Effect.catch(() => Effect.succeed(null)),
   );
 
 /**
@@ -67,7 +67,7 @@ function runGhMutationEffect(
   const r = yield* runEffect(argv, {
     cwd: config.paths.mainClone,
     timeoutMs: 15_000,
-  }).pipe(Effect.catchAll((error) => Effect.succeed({
+  }).pipe(Effect.catch((error) => Effect.succeed({
     stdout: "",
     stderr: error.message,
     exitCode: -1,
@@ -111,7 +111,7 @@ function mergeQueueIdForBranchEffect(branch: string): Effect.Effect<string | nul
       "-f", `branch=${branch}`,
     ],
     { cwd: config.paths.mainClone, timeoutMs: 15_000 },
-  ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+  ).pipe(Effect.catch(() => Effect.succeed(null)));
   if (r === null) return null;
   if (r.exitCode !== 0) {
     log.warn("merge-queue probe failed", { branch, msg: (r.stderr || r.stdout).slice(0, 200) });
@@ -529,7 +529,7 @@ export function streamFailedRunLogEffect(
       "--json", "databaseId",
     ],
     { cwd: config.paths.mainClone, timeoutMs: 15_000 },
-  ).pipe(Effect.catchAll((error) => Effect.succeed({
+  ).pipe(Effect.catch((error) => Effect.succeed({
     stdout: "",
     stderr: error.message,
     exitCode: -1,
@@ -546,7 +546,7 @@ export function streamFailedRunLogEffect(
   const code = yield* runStreamingEffect(
     ["gh", "run", "view", String(runId), "--log-failed"],
     { cwd: config.paths.mainClone, onLine },
-  ).pipe(Effect.catchAll(() => Effect.succeed(-1)));
+  ).pipe(Effect.catch(() => Effect.succeed(-1)));
   if (code !== 0) return { ok: false, reason: `gh run view exited ${code}` };
   return { ok: true };
   });
@@ -575,7 +575,7 @@ export function viewPrInfoEffect(branch: string): Effect.Effect<LivePrInfo | nul
       "--json", "number,baseRefName,state,isDraft,title,id,headRefOid",
     ],
     { cwd: config.paths.mainClone, timeoutMs: 15_000 },
-  ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+  ).pipe(Effect.catch(() => Effect.succeed(null)));
   if (r === null) return null;
   if (r.exitCode !== 0) return null;
   const d = yield* parseJsonOrNullEffect<Partial<LivePrInfo>>(r.stdout);

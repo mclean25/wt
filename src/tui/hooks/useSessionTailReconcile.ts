@@ -104,7 +104,7 @@ export function useSessionTailReconcile({
               catch: (cause) => new DiffSessionRefreshError({ slug, cause }),
             }),
           ),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => {
               log.event.err(
                 `diff session refresh failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,

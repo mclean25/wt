@@ -241,7 +241,7 @@ export function withAsyncFileLockEffect<A, E, R>(
       ).pipe(
         Effect.retry(
           Schedule.spaced(Duration.millis(pollMs)).pipe(
-            Schedule.upTo(Duration.millis(timeoutMs)),
+            Schedule.upTo({ duration: Duration.millis(timeoutMs) }),
           ),
         ),
         Effect.mapError((error) =>

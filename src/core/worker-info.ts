@@ -1,4 +1,4 @@
-import { Data, Effect, Fiber, Ref, SynchronizedRef } from "effect";
+import { Data, Effect, Fiber, SynchronizedRef } from "effect";
 
 import type { RemoteConfig } from "./config.ts";
 import { runEffect } from "./proc.ts";
@@ -68,7 +68,7 @@ type WorkerInfoLoader = (
 ) => Effect.Effect<WorkerInfo, WorkerInfoError>;
 
 type SharedRequest = {
-  readonly fiber: Fiber.RuntimeFiber<WorkerInfo, WorkerInfoError>;
+  readonly fiber: Fiber.Fiber<WorkerInfo, WorkerInfoError>;
   readonly consumers: number;
   readonly token: object;
 };
@@ -87,7 +87,7 @@ const remoteKey = (remote: RemoteConfig): string =>
  * is cancelled only after its final consumer leaves.
  */
 export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
-  const state = SynchronizedRef.unsafeMake<FetcherState>({
+  const state = SynchronizedRef.makeUnsafe<FetcherState>({
     successful: new Map(),
     inFlight: new Map(),
   });
@@ -96,7 +96,9 @@ export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
     remote: RemoteConfig,
     force: boolean,
   ): Effect.Effect<WorkerInfo | SharedRequest, never> =>
-    state.modifyEffect<WorkerInfo | SharedRequest, never, never>((current) => {
+    SynchronizedRef.modifyEffect(state, (current): Effect.Effect<
+      readonly [WorkerInfo | SharedRequest, FetcherState]
+    > => {
       const key = remoteKey(remote);
       const successful = new Map(current.successful);
       if (force) successful.delete(key);
@@ -112,19 +114,9 @@ export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
       }
       return Effect.gen(function* () {
         const token = {};
-        const fiber = yield* Effect.forkDaemon(
-          Effect.yieldNow().pipe(
-            Effect.andThen(Effect.interruptible(load(remote))),
-            Effect.tap((info) =>
-              Ref.update(state, (latest) => ({
-                ...latest,
-                successful:
-                  latest.inFlight.get(key)?.token === token
-                    ? new Map(latest.successful).set(key, info)
-                    : latest.successful,
-              })),
-            ),
-          ),
+        const fiber = yield* Effect.forkDetach(
+          Effect.interruptible(load(remote)),
+          { startImmediately: true },
         );
         const shared = { fiber, consumers: 1, token };
         const inFlight = new Map(current.inFlight).set(key, shared);
@@ -138,7 +130,7 @@ export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
   ): Effect.Effect<void> => {
     if (!("fiber" in acquired)) return Effect.void;
     const key = remoteKey(remote);
-    return Ref.modify(state, (current) => {
+    return SynchronizedRef.modify(state, (current) => {
       const active = current.inFlight.get(key);
       if (!active || active.fiber !== acquired.fiber)
         return [undefined, current];
@@ -154,7 +146,7 @@ export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
       return [active.fiber, { ...current, inFlight }];
     }).pipe(
       Effect.flatMap((fiber) =>
-        fiber ? Fiber.interruptFork(fiber) : Effect.void,
+        fiber ? Fiber.interrupt(fiber) : Effect.void,
       ),
     );
   };
@@ -167,7 +159,21 @@ export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
       acquire(remote, force),
       (acquired) =>
         "fiber" in acquired
-          ? Fiber.join(acquired.fiber)
+          ? Fiber.join(acquired.fiber).pipe(
+              Effect.tap((info) =>
+                SynchronizedRef.update(state, (latest) => ({
+                  ...latest,
+                  successful:
+                    latest.inFlight.get(remoteKey(remote))?.token ===
+                      acquired.token
+                      ? new Map(latest.successful).set(
+                          remoteKey(remote),
+                          info,
+                        )
+                      : latest.successful,
+                })),
+              ),
+            )
           : Effect.succeed(acquired),
       (acquired) => release(remote, acquired),
     );

@@ -341,7 +341,7 @@ export function startOpencodeEventPolling(
     trimSnapshots();
     baselineEstablished = true;
   }).pipe(
-    Effect.catchAllCause((cause) => Cause.isInterruptedOnly(cause)
+    Effect.catchCause((cause) => Cause.hasInterruptsOnly(cause)
       ? Effect.failCause(cause)
       : Effect.sync(() => {
           log.warn("opencode event tick threw", { err: String(cause) });

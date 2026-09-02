@@ -127,7 +127,7 @@ export function regenRulesyncEffect(roots: RulesyncInfo[]): Effect.Effect<RegenR
         ok: r.exitCode === 0,
         output: [r.stdout, r.stderr].filter((s) => s.trim() !== "").join("\n"),
       })),
-      Effect.catchAll((err) => Effect.succeed({
+      Effect.catch((err) => Effect.succeed({
         root: rs.root,
         ok: false,
         output: err instanceof Error ? err.message : String(err),

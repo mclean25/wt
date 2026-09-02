@@ -116,7 +116,7 @@ export function usePrCommentEvents(
         Effect.tap((login) =>
           login ? Effect.sync(() => setMe(login)) : Effect.void,
         ),
-        Effect.catchAll(() => Effect.void),
+        Effect.catch(() => Effect.void),
       ),
     );
     return () => {

@@ -44,7 +44,7 @@ describe("worker handshake", () => {
     const fetcher = createWorkerInfoFetcher(() => {
       calls += 1;
       if (calls === 2) {
-        return Effect.async<WorkerInfo>((resume) => {
+        return Effect.callback<WorkerInfo>((resume) => {
           release = () =>
             resume(
               Effect.succeed({
@@ -82,7 +82,7 @@ describe("worker handshake", () => {
     let cancellations = 0;
     let complete: (() => void) | undefined;
     const fetcher = createWorkerInfoFetcher(() =>
-      Effect.async<WorkerInfo>((resume, signal) => {
+      Effect.callback<WorkerInfo>((resume, signal) => {
         calls += 1;
         signal.addEventListener("abort", () => {
           cancellations += 1;
@@ -100,7 +100,7 @@ describe("worker handshake", () => {
     const result = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const first = yield* Effect.forkScoped(fetcher.refreshEffect(remote));
       const second = yield* Effect.forkScoped(fetcher.refreshEffect(remote));
-      while (calls === 0) yield* Effect.yieldNow();
+      while (calls === 0) yield* Effect.yieldNow;
       expect(calls).toBe(1);
       yield* Fiber.interrupt(first);
       expect(cancellations).toBe(0);
@@ -124,7 +124,7 @@ describe("worker handshake", () => {
     );
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const waiting = yield* Effect.forkScoped(fetcher.refreshEffect(remote));
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
       yield* Fiber.interrupt(waiting);
     })));
     for (let attempt = 0; attempt < 20 && cancellations === 0; attempt++) {

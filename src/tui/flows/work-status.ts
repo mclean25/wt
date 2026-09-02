@@ -280,7 +280,7 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
             );
           }),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => reportActionError("set status", error.cause)),
         ),
       ),
@@ -380,7 +380,7 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
             }
           }),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => reportActionError("set status", error.cause)),
         ),
       ),

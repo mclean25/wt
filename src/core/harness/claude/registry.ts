@@ -185,7 +185,7 @@ const WATCH_DEBOUNCE_MS = 100;
  * than crashing the TUI.
  */
 export function watchRegistry(onChange: () => void): () => void {
-  let debounceFiber: Fiber.RuntimeFiber<void, never> | null = null;
+  let debounceFiber: Fiber.Fiber<void, never> | null = null;
   let disposed = false;
   const trigger = (): void => {
     if (debounceFiber !== null) Effect.runFork(Fiber.interrupt(debounceFiber));

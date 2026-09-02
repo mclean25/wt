@@ -127,7 +127,7 @@ export function handleFooterInputKey(
               toast(`renamed "${oldName}" to "${raw}"`, theme.info, 1800);
             }),
           ),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => {
               const msg =
                 error.cause instanceof Error
@@ -169,7 +169,7 @@ export function handleFooterInputKey(
                 if (!ok) restore();
               }),
             ),
-            Effect.catchAll(() => Effect.sync(restore)),
+            Effect.catch(() => Effect.sync(restore)),
           ),
         );
       } else {
@@ -180,7 +180,7 @@ export function handleFooterInputKey(
                 if (!ok) restore();
               }),
             ),
-            Effect.catchAll(() => Effect.sync(restore)),
+            Effect.catch(() => Effect.sync(restore)),
           ),
         );
       }

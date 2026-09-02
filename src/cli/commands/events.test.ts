@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Duration, Effect, Fiber, TestClock, TestContext } from "effect";
+import { Duration, Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 
 import { plistProgramOf, restartLaunchdAgentEffect, waitForRestartedDaemonEffect } from "./events.ts";
 
@@ -50,12 +51,12 @@ describe("restartLaunchdAgent", () => {
     let ready = false;
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(waitForRestartedDaemonEffect(null, () => ready));
+        const fiber = yield* Effect.forkChild(waitForRestartedDaemonEffect(null, () => ready));
         yield* TestClock.adjust(Duration.seconds(9));
         ready = true;
         yield* TestClock.adjust(Duration.millis(100));
         return yield* Fiber.join(fiber);
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
     expect(result).toBe(true);
   });

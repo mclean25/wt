@@ -130,7 +130,7 @@ function lsofScanEffect(
       return Effect.fail("timeout" as const);
     }),
     Effect.retry(Schedule.recurs(1)),
-    Effect.catchAll(() => Effect.sync(() => {
+    Effect.catch(() => Effect.sync(() => {
       log.attention.warn(`could not scan listeners for ${wtPath} — a dev server may still hold its ports`);
       return { out: "", complete: false };
     })),

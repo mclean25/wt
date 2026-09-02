@@ -98,6 +98,10 @@ const GIT_MOD = JSON.stringify(
   pathToFileURL(join(import.meta.dir, "git.ts")).href,
 );
 
+const EFFECT_MOD = JSON.stringify(
+  pathToFileURL(join(import.meta.dir, "../../node_modules/effect/dist/index.js")).href,
+);
+
 test("keep_fresh CREATES a local head the clone never had, and advances it", async () => {
   const { origin, seed } = buildOrigin();
   const root = tmp("wt-fo-root-");
@@ -215,7 +219,7 @@ test("a branch with no commits of its own counts 0 ahead through a stale clone r
     root,
     cfg,
     `const g = await import(${GIT_MOD});
-     const { Effect } = await import("effect");
+     const { Effect } = await import(${EFFECT_MOD});
      const base = await Effect.runPromise(g.freshBaseRevEffect(${JSON.stringify(wt)}, "origin/staging"));
      console.log(JSON.stringify(await Effect.runPromise(g.firstCommitSubjectEffect(${JSON.stringify(wt)}, base))));`,
   );
@@ -262,7 +266,7 @@ test("the BARE trunk name normalizes to the remote ref, not a frozen local branc
     root,
     cfg,
     `const g = await import(${GIT_MOD});
-     const { Effect } = await import("effect");
+     const { Effect } = await import(${EFFECT_MOD});
      const eff = await g.effectiveBaseOrTrunk(${JSON.stringify(wt)}, "staging");
      const base = await Effect.runPromise(g.freshBaseRevEffect(${JSON.stringify(wt)}, eff));
      const title = await Effect.runPromise(g.firstCommitSubjectEffect(${JSON.stringify(wt)}, base));

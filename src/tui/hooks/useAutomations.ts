@@ -386,8 +386,8 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
 
   const intents = useRef<Map<string, Intent>>(new Map());
   const executing = useRef<Map<string, Executing>>(new Map());
-  const passFiber = useRef<Fiber.RuntimeFiber<void, never> | null>(null);
-  const dispatchFibers = useRef(new Set<Fiber.RuntimeFiber<void, never>>());
+  const passFiber = useRef<Fiber.Fiber<void, never> | null>(null);
+  const dispatchFibers = useRef(new Set<Fiber.Fiber<void, never>>());
   const automationActive = useRef(true);
 
   // Boot reconciliation: match ledger entries stuck in `dispatched`
@@ -1022,7 +1022,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       wtLog.event.info(`auto ${rule.id}: ${fire.detail} — running ${rule.run}`, {
         toast: true,
       });
-      let dispatchFiber: Fiber.RuntimeFiber<void, never>;
+      let dispatchFiber: Fiber.Fiber<void, never>;
       const dispatch = execute(fire).pipe(
         Effect.match({
           onSuccess: (outcome) => {
@@ -1071,7 +1071,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
 
   function schedulePass(): void {
     if (passFiber.current) return;
-    let fiber: Fiber.RuntimeFiber<void, never>;
+    let fiber: Fiber.Fiber<void, never>;
     fiber = Effect.runFork(
       Effect.sleep(`${PASS_DEBOUNCE_MS} millis`).pipe(
         Effect.andThen(

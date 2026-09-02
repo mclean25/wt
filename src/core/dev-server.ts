@@ -296,7 +296,7 @@ export type PortProbe = "listening" | "free" | "unknown";
  * Hence `unknown`, never `free`.
  */
 function probePortOnceEffect(port: number, timeoutMs: number): Effect.Effect<PortProbe> {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     const sock = net.connect({ host: "127.0.0.1", port });
     let settled = false;
     const done = (result: PortProbe) => {
@@ -712,13 +712,13 @@ export function reclaimDevSlotsEffect(): Effect.Effect<string[]> {
   const slugs = yield* devSessionSlugsEffect();
   if (slugs === null || slugs.length === 0) return [];
   let live: Set<string>;
-  const worktrees = yield* Effect.either(listWorktreesEffect());
-  if (worktrees._tag === "Left") {
+  const worktrees = yield* Effect.result(listWorktreesEffect());
+  if (worktrees._tag === "Failure") {
     // Can't establish what's live — reclaiming on a guess would kill a
     // working dev server. Leave the fleet as it is.
     return [];
   }
-  live = new Set(worktrees.right.map((w) => w.slug));
+  live = new Set(worktrees.success.map((w) => w.slug));
   const orphans = slugs.filter((slug) => !live.has(slug));
   if (orphans.length === 0) return [];
   for (const slug of orphans) {

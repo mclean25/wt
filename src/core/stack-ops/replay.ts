@@ -1,4 +1,4 @@
-import { Data, Effect } from "effect";
+import { Data, Effect, Result } from "effect";
 
 import { config } from "../config.ts";
 import {
@@ -201,9 +201,9 @@ function replayStackLockedEffect(
 
   // Freshen origin before replaying. A failed fetch would silently
   // leave stale refs and replay every member onto an outdated base.
-  const fetched = yield* fetchOriginEffect().pipe(Effect.either);
-  if (fetched._tag === "Left") {
-    const err = fetched.left;
+  const fetched = yield* fetchOriginEffect().pipe(Effect.result);
+  if (Result.isFailure(fetched)) {
+    const err = fetched.failure;
     return rebaseResult({
       ok: false,
       conflict: false,

@@ -53,7 +53,7 @@ function spawnDetachedEffect(
   shell: string,
   command: string,
 ): Effect.Effect<void, EditorLaunchError> {
-  return Effect.async<void, EditorLaunchError>((resume) => {
+  return Effect.callback<void, EditorLaunchError>((resume) => {
     let child: ReturnType<typeof spawn>;
     let settled = false;
     try {

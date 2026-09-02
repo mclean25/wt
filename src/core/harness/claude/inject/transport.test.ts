@@ -8,7 +8,7 @@
  * the same message twice.
  */
 import { describe, expect, test } from "bun:test";
-import { Effect, Exit, Fiber } from "effect";
+import { Cause, Effect, Exit, Fiber } from "effect";
 
 import type { InspectorClient } from "./client.ts";
 import { createClaudeInjector } from "./transport.ts";
@@ -202,8 +202,9 @@ test("interrupting a hanging probe closes the inspector exactly once", async () 
       stub.injector.deliverClaudeMessageEffect("eng-1", "hi", { readyBudgetMs: 5_000 }),
     );
     while (stub.calls() < 2) yield* Effect.sleep(1);
-    return yield* Fiber.interrupt(fiber);
+    yield* Fiber.interrupt(fiber);
+    return yield* Fiber.await(fiber);
   })));
-  expect(Exit.isInterrupted(exit)).toBe(true);
+  expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
   expect(stub.closes()).toBe(1);
 });

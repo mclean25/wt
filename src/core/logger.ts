@@ -130,7 +130,7 @@ function ensureLoggerWorker(): Queue.Queue<LogCommand> {
     return Effect.tryPromise({
       try: () => appendFile(command.path, command.line, "utf8"),
       catch: (cause) => new LoggerWriteError({ path: command.path, cause }),
-    }).pipe(Effect.catchAll(() => Effect.void));
+    }).pipe(Effect.catch(() => Effect.void));
   })));
   Effect.runFork(run);
   return queue;

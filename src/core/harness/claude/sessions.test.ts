@@ -124,8 +124,8 @@ describe("Claude sessions", () => {
     });
 
     await Effect.runPromise(Effect.gen(function* () {
-      const first = yield* Effect.fork(sessions.ensureInfoEffect(target));
-      while (calls === 0) yield* Effect.yieldNow();
+      const first = yield* Effect.forkChild(sessions.ensureInfoEffect(target));
+      while (calls === 0) yield* Effect.yieldNow;
       yield* Fiber.interrupt(first);
       const second = yield* sessions.ensureInfoEffect(target);
       expect(second.session.sessionId).toBe(sessionId);

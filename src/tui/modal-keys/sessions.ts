@@ -128,7 +128,7 @@ export function handleClaudeSessionsPickerKey(
             removeClaudeName(slug, e.extras.managedName);
             Effect.runFork(
               modalPromise(() => refreshClaudeSummaries(slug)).pipe(
-                Effect.catchAll((error) =>
+                Effect.catch((error) =>
                   Effect.sync(() =>
                     reportActionError("refresh summaries", error.cause),
                   ),
@@ -160,7 +160,7 @@ export function handleClaudeSessionsPickerKey(
               ),
             );
           }).pipe(
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.sync(() => {
                 const msg =
                   error.cause instanceof Error
@@ -208,7 +208,7 @@ export function handleClaudeSessionsPickerKey(
               { concurrency: "unbounded", discard: true },
             ),
           ),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => reportActionError("close session", error.cause)),
           ),
         ),

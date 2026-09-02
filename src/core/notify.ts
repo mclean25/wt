@@ -54,7 +54,7 @@ export function notifyMacosEffect(
         }
       }),
     ),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() =>
         log.warn("osascript notification failed", { error: error.message }),
       ),

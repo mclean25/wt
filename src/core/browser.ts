@@ -151,7 +151,7 @@ function liveSessionsEffect(): Effect.Effect<BrowserSession[] | null> {
           pageUrl: typeof s.pageUrl === "string" ? s.pageUrl : null,
         }));
     }),
-    Effect.catchAll(() => Effect.succeed(null)),
+    Effect.catch(() => Effect.succeed(null)),
   );
 }
 
@@ -169,7 +169,7 @@ function deleteSessionsEffect(ids: readonly string[]): Effect.Effect<string[]> {
           });
           return null;
         }),
-        Effect.catchAll((error) => {
+        Effect.catch((error) => {
           log.debug("browser session delete failed", {
             id,
             stderr: error.message,
@@ -305,7 +305,7 @@ function runningChromiumAppsEffect(): Effect.Effect<string[]> {
       const running = new Set(res.stdout.split("\n").map((l) => l.trim()));
       return CHROMIUM_APPS.filter((app) => running.has(app));
     }),
-    Effect.catchAll(() => Effect.succeed([])),
+    Effect.catch(() => Effect.succeed([])),
   );
 }
 
@@ -369,7 +369,7 @@ end tell`;
       }
       return res.stdout.split("\n").filter((u) => u.length > 0);
     }),
-    Effect.catchAll((error) => {
+    Effect.catch((error) => {
       log.debug("browser tab list failed", { app, stderr: error.message });
       return Effect.succeed([]);
     }),
@@ -422,7 +422,7 @@ return closedCount`;
       }
       return Number.parseInt(res.stdout.trim(), 10) || 0;
     }),
-    Effect.catchAll((error) => {
+    Effect.catch((error) => {
       log.debug("browser tab close failed", { app, stderr: error.message });
       return Effect.succeed(0);
     }),

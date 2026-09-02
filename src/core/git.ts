@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
-import { Data, Effect } from "effect";
+import { Data, Effect, Semaphore } from "effect";
 
 import { config } from "./config.ts";
 import { runEffect, runOkEffect, runQuietEffect, type ProcError, type RunResult } from "./proc.ts";
@@ -34,9 +34,9 @@ export function gitRunEffect(args: readonly string[], cwd?: string) {
 export const git = (args: string[], cwd?: string): Promise<string> =>
   Effect.runPromise(gitEffect(args, cwd));
 export const gitQuiet = (args: string[], cwd?: string): Promise<boolean> =>
-  Effect.runPromise(gitQuietEffect(args, cwd).pipe(Effect.catchAll(() => Effect.succeed(false))));
+  Effect.runPromise(gitQuietEffect(args, cwd).pipe(Effect.catch(() => Effect.succeed(false))));
 export const gitRun = (args: string[], cwd?: string): Promise<RunResult> =>
-  Effect.runPromise(gitRunEffect(args, cwd).pipe(Effect.catchAll((e) => Effect.succeed({ stdout: "", stderr: e.message, exitCode: -1 }))));
+  Effect.runPromise(gitRunEffect(args, cwd).pipe(Effect.catch((e) => Effect.succeed({ stdout: "", stderr: e.message, exitCode: -1 }))));
 
 /**
  * Resolve the effective diff/sync base for a worktree, guarding against a
@@ -310,7 +310,7 @@ export const branchIsGone = (branch: string, wtPath?: string): Promise<boolean> 
   Effect.runPromise(branchIsGoneEffect(branch, wtPath));
 
 let _mainFirstParents: Set<string> | null = null;
-const mainFirstParentsSemaphore = Effect.unsafeMakeSemaphore(1);
+const mainFirstParentsSemaphore = Semaphore.makeUnsafe(1);
 
 /**
  * SHAs on origin/main's first-parent chain. A branch tip that lives
@@ -397,7 +397,7 @@ export function branchIsMergedEffect(wt: {
   const fps = yield* mainFirstParentShasEffect();
   if (fps.has(branchSha)) return false;
   return !(yield* forkBaseIsVacuousEffect(wt, branchSha));
-  }).pipe(Effect.catchAll(() => Effect.succeed(false)));
+  }).pipe(Effect.catch(() => Effect.succeed(false)));
 }
 export const branchIsMerged = (wt: { slug: string; branch: string; path?: string }): Promise<boolean> =>
   Effect.runPromise(branchIsMergedEffect(wt));

@@ -212,7 +212,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
               });
               Effect.runFork(
                 githubPromise("refresh GitHub", refreshGithub).pipe(
-                  Effect.catchAll((error) =>
+                  Effect.catch((error) =>
                     Effect.sync(() =>
                       log.event.err(
                         `GitHub refresh failed after arming #${prNumber}: ${String(error.cause)}`,
@@ -331,15 +331,15 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     const [readyRes, reviewerRes] = await Effect.runPromise(
       Effect.all(
         [
-          githubPromise("mark ready", () => markReadyP).pipe(Effect.either),
-          githubPromise("request reviewer", () => reviewerP).pipe(Effect.either),
+          githubPromise("mark ready", () => markReadyP).pipe(Effect.result),
+          githubPromise("request reviewer", () => reviewerP).pipe(Effect.result),
         ],
         { concurrency: 2 },
       ),
     );
 
-    if (readyRes._tag === "Left") {
-      const reason = readyRes.left.cause;
+    if (readyRes._tag === "Failure") {
+      const reason = readyRes.failure.cause;
       const msg =
         reason instanceof Error
           ? reason.message
@@ -351,8 +351,8 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     }
     if (wasDraft) log.event.ok(`marked #${prNumber} ready`);
 
-    if (reviewerRes._tag === "Left") {
-      const reason = reviewerRes.left.cause;
+    if (reviewerRes._tag === "Failure") {
+      const reason = reviewerRes.failure.cause;
       const msg =
         reason instanceof Error
           ? reason.message

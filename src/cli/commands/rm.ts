@@ -314,7 +314,7 @@ export function run(
           deleteBranch,
         }),
       );
-      const cleanup = yield* Effect.either(
+      const cleanup = yield* Effect.result(
         commandPromise("kill worktree sessions", () =>
           killAllSessionsFor(target.slug),
         ),
@@ -326,10 +326,10 @@ export function run(
       );
       console.log(dim(`  → log: ${logPath}`));
       console.log(dim(`  → tail with `) + bold(`wt logs ${target.slug}`));
-      if (cleanup._tag === "Left") {
+      if (cleanup._tag === "Failure") {
         console.error(
           red(
-            `Destroy dispatched, but session cleanup failed: ${causeMessage(cleanup.left.cause)}`,
+            `Destroy dispatched, but session cleanup failed: ${causeMessage(cleanup.failure.cause)}`,
           ),
         );
         return 1;
@@ -361,7 +361,7 @@ export function run(
     // Do not tear sessions down for a removal that was refused or failed.
     // Once removal succeeds, cleanup failure is a partial failure and must
     // remain visible in the exit code.
-    const cleanup = yield* Effect.either(
+    const cleanup = yield* Effect.result(
       commandPromise("kill removed worktree sessions", () =>
         killAllSessionsFor(target.slug),
       ),
@@ -371,10 +371,10 @@ export function run(
       console.log(green(`✓ destroyed stage ${target.stage}`));
     if (result.deletedBranch)
       console.log(green(`✓ deleted branch ${target.branch}`));
-    if (cleanup._tag === "Left") {
+    if (cleanup._tag === "Failure") {
       console.error(
         red(
-          `Worktree removed, but session cleanup failed: ${causeMessage(cleanup.left.cause)}`,
+          `Worktree removed, but session cleanup failed: ${causeMessage(cleanup.failure.cause)}`,
         ),
       );
       return 1;

@@ -184,7 +184,7 @@ type State = {
   pending: string;
   watcher: FSWatcher | null;
   dirWatcher: FSWatcher | null;
-  debounce: Fiber.RuntimeFiber<void, never> | null;
+  debounce: Fiber.Fiber<void, never> | null;
   /** Monotonic line id counter — restarts at 0 per slug. */
   nextId: number;
 };
@@ -193,7 +193,7 @@ export class ShellTailRegistry {
   private runs: ReadonlyMap<string, ShellRun> = new Map();
   private state = new Map<string, State>();
   private listeners = new Set<Listener>();
-  private poller: Fiber.RuntimeFiber<number, never> | null = null;
+  private poller: Fiber.Fiber<number, never> | null = null;
 
   /**
    * Idempotent. Spins up a tailer for `slug`'s pipe-pane log if not
@@ -234,7 +234,7 @@ export class ShellTailRegistry {
     if (!st) return;
     closeSilent(st.watcher);
     closeSilent(st.dirWatcher);
-    if (st.debounce) Effect.runSync(Fiber.interruptFork(st.debounce));
+    if (st.debounce) Effect.runSync(Fiber.interrupt(st.debounce));
     this.state.delete(slug);
     this.commit((m) => {
       m.delete(slug);
@@ -301,7 +301,7 @@ export class ShellTailRegistry {
 
   private stopPoller(): void {
     if (!this.poller) return;
-    Effect.runSync(Fiber.interruptFork(this.poller));
+    Effect.runSync(Fiber.interrupt(this.poller));
     this.poller = null;
   }
 

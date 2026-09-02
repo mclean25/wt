@@ -127,7 +127,7 @@ export function run(argv: string[]): Effect.Effect<number, NewCommandError> {
       return 2;
     }
 
-    const parsedBranch = yield* Effect.either(
+    const parsedBranch = yield* Effect.result(
       parseInputEffect(parsed.raw, {
         slugHint: parsed.slug,
         anyAuthor: parsed.any,
@@ -140,11 +140,11 @@ export function run(argv: string[]): Effect.Effect<number, NewCommandError> {
           : undefined,
       }),
     );
-    if (parsedBranch._tag === "Left") {
-      console.error(red(parsedBranch.left.message));
+    if (parsedBranch._tag === "Failure") {
+      console.error(red(parsedBranch.failure.message));
       return 1;
     }
-    const branch = parsedBranch.right;
+    const branch = parsedBranch.success;
 
     // Short-circuit if the branch already has a worktree.
     const existing = (yield* commandPromise(

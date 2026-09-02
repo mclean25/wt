@@ -210,7 +210,7 @@ export function useGithub(): UseQueryResult<GithubData, Error> {
         ),
         catch: (cause) => hookError("reap remote archive", cause),
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() =>
             createLogger("[github]").warn("remote archive reconciliation failed", {
               err: error.message,
@@ -346,7 +346,7 @@ export async function runOptimisticMutation<TData>(
     : "__nokey__";
   let snapshots: Array<readonly [readonly unknown[], TData | undefined]> = [];
   let unsubscribe: (() => void) | null = null;
-  let guardFiber: Fiber.RuntimeFiber<void, never> | null = null;
+  let guardFiber: Fiber.Fiber<void, never> | null = null;
   let failed = false;
   const stopGuard = (): void => {
     if (guardFiber !== null) {
@@ -520,7 +520,7 @@ export function useWtActions() {
               Effect.runFork(
                 Effect.sleep(Duration.millis(50)).pipe(
                   Effect.andThen(invalidate({ queryKey: ["wt"] })),
-                  Effect.catchAll(() => Effect.void),
+                  Effect.catch(() => Effect.void),
                 ),
               );
             }),
@@ -554,7 +554,7 @@ export function useWtActions() {
           // repopulated alongside the observed queries.
           Effect.runFork(
             queryClientEffect(() => qc.fetchQuery(fetchOriginQuery())).pipe(
-              Effect.catchAll(() => Effect.void),
+              Effect.catch(() => Effect.void),
             ),
           );
           // Belt-and-suspenders: `qc.clear()` removes cache entries, but
@@ -564,7 +564,7 @@ export function useWtActions() {
           // "R" deterministic for the AI chain.
           Effect.runFork(
             queryClientEffect(() => qc.refetchQueries({ type: "active" })).pipe(
-              Effect.catchAll(() => Effect.void),
+              Effect.catch(() => Effect.void),
             ),
           );
         }),
@@ -648,7 +648,7 @@ export function useWtActions() {
       if (isStale) {
         Effect.runFork(
           queryClientEffect(() => qc.prefetchQuery(opts)).pipe(
-            Effect.catchAll(() => Effect.void),
+            Effect.catch(() => Effect.void),
           ),
         );
       }

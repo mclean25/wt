@@ -38,7 +38,7 @@ export function openUrlCommand(
 
 /** Fire-and-forget `open <url>`. The macOS `open` binary returns immediately. */
 export function openUrl(url: string): void {
-  Effect.runFork(openUrlEffect(url).pipe(Effect.catchAll(() => Effect.void)));
+  Effect.runFork(openUrlEffect(url).pipe(Effect.catch(() => Effect.void)));
 }
 
 export function openUrlEffect(url: string): Effect.Effect<void, MacosCommandError> {
@@ -82,14 +82,14 @@ export function openUrlHidingTerminalEffect(
 
 export function openUrlHidingTerminal(url: string): Promise<void> {
   return Effect.runPromise(
-    openUrlHidingTerminalEffect(url).pipe(Effect.catchAll(() => Effect.void)),
+    openUrlHidingTerminalEffect(url).pipe(Effect.catch(() => Effect.void)),
   );
 }
 
 /** Write to the macOS clipboard via pbcopy. Fire-and-forget. */
 export function writeClipboard(text: string): void {
   Effect.runFork(
-    writeClipboardEffect(text).pipe(Effect.catchAll(() => Effect.void)),
+    writeClipboardEffect(text).pipe(Effect.catch(() => Effect.void)),
   );
 }
 

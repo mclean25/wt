@@ -225,7 +225,7 @@ function runStart(wt: Worktree, argv: readonly string[]) {
     if (outcome.health) console.log(`  ${dim("health:")} ${outcome.health.message}`);
     return 0;
   });
-  return yield* operation.pipe(Effect.catchAll((err) => {
+  return yield* operation.pipe(Effect.catch((err) => {
     if (err instanceof DevResetStopFailedError) {
       // The environment is still up and its state is intact — nothing
       // was discarded, which is the whole point of stopping here. wt

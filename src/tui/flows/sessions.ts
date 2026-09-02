@@ -101,8 +101,8 @@ export function withNamedClaudePersistenceEffect<T>(
     addClaudeName(slug, name);
     // Keep the refresh owned by this effect. It may run while the session
     // starts, but it is interrupted and joined before this helper completes.
-    const refreshFiber = yield* Effect.fork(
-      refreshClaudeSummaries.pipe(Effect.catchAll(() => Effect.void)),
+    const refreshFiber = yield* Effect.forkChild(
+      refreshClaudeSummaries.pipe(Effect.catch(() => Effect.void)),
     );
     const result = yield* spawn.pipe(Effect.ensuring(Fiber.interrupt(refreshFiber)));
     // Roll back the optimistic add IFF we created the entry — if `name`
@@ -146,7 +146,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
   ): void => {
     Effect.runFork(
       effect.pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => reportActionError(label, error.cause)),
         ),
       ),
@@ -251,14 +251,14 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
           const liveTmux = yield* sessionPromise(
             "list tmux sessions",
             listTmuxSessions,
-          ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+          ).pipe(Effect.catch(() => Effect.succeed(null)));
           const slotAlive = liveTmux?.all.has(tmuxName) ?? false;
           let sessions: readonly HarnessSession[] = [];
           if (!slotAlive) {
             sessions = yield* sessionPromise("discover harness sessions", () =>
               harness.discoverSessions({ slug: slot.slug, wtPath: slot.path })
             ).pipe(
-              Effect.catchAll((error) => {
+              Effect.catch((error) => {
                 const err = error.cause;
                 slotLog.event.warn(
                   `${harness.label} session discovery failed: ${
@@ -288,7 +288,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
           })
         );
         yield* sessionPromise("refresh tmux sessions", refreshTmuxSessions).pipe(
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         );
         if (result.kind === "spawn-failed") {
           slotLog.event.err(`${harness.label} failed to start: ${result.reason}`);
@@ -360,7 +360,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         if (result.stderr) sessionLog.event.err(result.stderr);
       }
       yield* sessionPromise("refresh tmux sessions", () => refreshTmuxSessions()).pipe(
-        Effect.catchAll((error) => Effect.sync(() => {
+        Effect.catch((error) => Effect.sync(() => {
           sessionLog.warn("tmux refresh after claude session failed", {
             err: error.cause instanceof Error ? error.cause.message : String(error.cause),
           });
@@ -405,7 +405,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         );
         await refreshTmuxSessions();
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           sessionPromise("reconcile tmux sessions", async () => {
         const err = error.cause;
         const msg = err instanceof Error ? err.message : String(err);
@@ -413,7 +413,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         // Refetch to reconcile against truth — the optimistic remove
         // is wrong if the kill genuinely failed.
         await refreshTmuxSessions();
-          }).pipe(Effect.catchAll(() => Effect.void)),
+          }).pipe(Effect.catch(() => Effect.void)),
         ),
       ),
     );

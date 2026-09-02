@@ -109,7 +109,7 @@ export function fetchReviewRequestsEffect(
     ["gh", "api", "graphql", "-f", `query=${REVIEW_REQUESTS_QUERY}`],
     { cwd: config.paths.mainClone, timeoutMs: 15_000, signal },
   ).pipe(
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       signal?.aborted
         ? Effect.succeed(null)
         : Effect.fail(new ReviewRequestsError({ cause })),

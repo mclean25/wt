@@ -362,7 +362,7 @@ export function unpushedCommitsEffect(wtPath: string) {
       { cwd: wtPath },
     );
     return parseInt(ahead, 10) || 0;
-  }).pipe(Effect.catchAll((err) => Effect.sync(() => {
+  }).pipe(Effect.catch((err) => Effect.sync(() => {
     log.error(err instanceof Error ? err : String(err), { wtPath });
     return null;
   })));
@@ -420,7 +420,7 @@ export function pushCountsEffect(wtPath: string) {
         }
       }
       return { unpushed: aheadOfBase, aheadOfBase, pushed: false };
-    }).pipe(Effect.catchAll((err) => Effect.sync(() => {
+    }).pipe(Effect.catch((err) => Effect.sync(() => {
       log.error(err instanceof Error ? err : String(err), { wtPath });
       return { unpushed: null, aheadOfBase, pushed: null };
     })));
@@ -467,7 +467,7 @@ function acquireFetchOriginLockEffect(): Effect.Effect<LockHandle, WorktreeError
     return handle
       ? Effect.succeed(handle)
       : Effect.fail(new WorktreeError({ operation: "fetch-origin", cause: new Error("another origin fetch is still running") }));
-  }).pipe(Effect.retry(Schedule.intersect(Schedule.spaced("250 millis"), Schedule.recurs(59))));
+  }).pipe(Effect.retry(Schedule.max([Schedule.spaced("250 millis"), Schedule.recurs(59)])));
 }
 
 function fetchOriginLockedEffect(opts: { onWarn?: (msg: string) => void } = {}) {
@@ -549,7 +549,7 @@ function freshenWorktreeTrunkRefsEffect(main: string) {
     if (!tip) return;
     const worktrees = yield* listWorktreesEffect().pipe(
       Effect.map((items) => items.filter((w) => !w.isMain)),
-      Effect.catchAll((err) => Effect.sync(() => {
+      Effect.catch((err) => Effect.sync(() => {
         log.debug(`could not list worktrees to freshen origin/${trunk}`, { err: err.message });
         return [];
       })),
@@ -590,7 +590,7 @@ function freshenTrunkRefEffect(
     }
     yield* gitRunEffect(["update-ref", ref, tip], wt.path);
     log.debug(`freshened ${ref}`, { slug: wt.slug, from: have ?? "(none)", to: tip });
-  }).pipe(Effect.catchAll((err) => Effect.sync(() => {
+  }).pipe(Effect.catch((err) => Effect.sync(() => {
     log.debug(`could not freshen ${ref}`, {
       slug: wt.slug,
       err: err instanceof Error ? err.message : String(err),

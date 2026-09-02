@@ -78,7 +78,7 @@ describe("runEffect interruption", () => {
             );
 
             const queuedMarker = join(dir, "queued-spawned");
-            const queued = yield* Effect.fork(
+            const queued = yield* Effect.forkChild(
               runEffect(["sh", "-c", 'echo spawned > "$WT_PROC_MARKER"'], {
                 cwd: "/",
                 env: { WT_PROC_MARKER: queuedMarker },
@@ -121,7 +121,7 @@ describe("runEffect interruption", () => {
             const interruptedPid = Number(readFileSync(markers[0]!, "utf8"));
 
             const probeMarker = join(dir, "permit-reused");
-            const probe = yield* Effect.fork(
+            const probe = yield* Effect.forkChild(
               runEffect(["sh", "-c", 'echo reused > "$WT_PROC_MARKER"'], {
                 cwd: "/",
                 env: { WT_PROC_MARKER: probeMarker },

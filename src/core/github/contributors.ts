@@ -35,7 +35,7 @@ function fetchActiveCommitAuthorsEffect(
         `repos/${slug}/commits?since=${since}&per_page=100&page=${page}`,
       ],
       { cwd: config.paths.mainClone, timeoutMs: 15_000, signal },
-    ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+    ).pipe(Effect.catch(() => Effect.succeed(null)));
     if (r === null) return empty;
     if (r.exitCode !== 0) {
       log.error("active authors fetch failed", {
@@ -47,7 +47,7 @@ function fetchActiveCommitAuthorsEffect(
     const arr = yield* Effect.try(
       () => JSON.parse(r.stdout) as Array<{ author: { login?: string } | null }>,
     ).pipe(
-      Effect.catchAll((err) => {
+      Effect.catch((err) => {
         log.error(err instanceof Error ? err : String(err), { page });
         return Effect.succeed(null);
       }),
@@ -92,7 +92,7 @@ export function fetchRepoContributorsEffect(
       cwd: config.paths.mainClone,
       timeoutMs: 15_000,
       signal,
-    }).pipe(Effect.catchAll(() => Effect.succeed(null))),
+    }).pipe(Effect.catch(() => Effect.succeed(null))),
     fetchActiveCommitAuthorsEffect(slug, now, signal),
   ], { concurrency: 2 });
   if (contribRes === null) return [];
@@ -108,7 +108,7 @@ export function fetchRepoContributorsEffect(
     type?: string;
     contributions?: number;
   }>).pipe(
-    Effect.catchAll((err) => {
+    Effect.catch((err) => {
       log.error(err instanceof Error ? err : String(err), {
         stdout: contribRes.stdout.slice(0, 200),
       });

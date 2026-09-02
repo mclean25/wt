@@ -50,6 +50,10 @@ class RemovalRefreshError extends Data.TaggedError("RemovalRefreshError")<{
   readonly cause: unknown;
 }> {}
 
+class CleanError extends Data.TaggedError("CleanError")<{
+  readonly cause: unknown;
+}> {}
+
 /**
  * Rich removed-history snapshot taken at destroy DISPATCH, while the
  * row's PR + AI title are still in hand — `removeWorktree` later
@@ -152,7 +156,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
             catch: (cause) => new RemovalRefreshError({ cause }),
           }),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => {
             appLog.warn("post-removal refresh failed", {
               err:
@@ -334,9 +338,15 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     await Effect.runPromise(
       Effect.all(
         [
-          Effect.tryPromise(() => doCleanRows(localCandidates)),
+          Effect.tryPromise({
+            try: () => doCleanRows(localCandidates),
+            catch: (cause) => new CleanError({ cause }),
+          }),
           ...safeRemoteCandidates.map((entry) =>
-            Effect.tryPromise(() => doRemoteRemove(entry.remote, entry.slug)),
+            Effect.tryPromise({
+              try: () => doRemoteRemove(entry.remote, entry.slug),
+              catch: (cause) => new CleanError({ cause }),
+            }),
           ),
         ],
         { concurrency: "unbounded", discard: true },
@@ -417,7 +427,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
         candidates,
         (row) =>
           Effect.tryPromise(() => killAllSessionsFor(row.wt.slug)).pipe(
-            Effect.catchAll(() => Effect.void),
+            Effect.catch(() => Effect.void),
           ),
         { concurrency: "unbounded", discard: true },
       ),

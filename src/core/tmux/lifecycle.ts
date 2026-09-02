@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { Data, Effect } from "effect";
+import { Data, Effect, Result } from "effect";
 
 import {
   getHarness,
@@ -60,12 +60,12 @@ export function startHarnessSessionDetachedEffect(
   const stderrPath = join(sessionsDir(), `${name}.err`);
   let resumeSessionId: string | null = null;
   if (harness.singleSlot) {
-    const discovered = yield* Effect.either(Effect.tryPromise({
+    const discovered = yield* Effect.result(Effect.tryPromise({
       try: () => harness.discoverSessions({ slug, wtPath: cwd }),
       catch: (cause) => new HarnessStartError({ operation: "discover", cause }),
     }));
-    if (discovered._tag === "Left") {
-      const cause = discovered.left.cause;
+    if (Result.isFailure(discovered)) {
+      const cause = discovered.failure.cause;
       const reason = cause instanceof Error ? cause.message : String(cause);
       log.error("detached harness resume discovery failed", {
         slug,
@@ -77,7 +77,7 @@ export function startHarnessSessionDetachedEffect(
         reason: `could not resolve ${harness.label} primary session: ${reason}`,
       };
     }
-    const sessions = discovered.right;
+    const sessions = discovered.success;
     resumeSessionId = primarySingleSlotSession(sessions)?.sessionId ?? null;
   }
   // buildInnerArgs also calls harness.ensureTrusted?.(cwd).
@@ -92,7 +92,7 @@ export function startHarnessSessionDetachedEffect(
   // Before the spawn, so a leftover socket from a dead session of the
   // same name can't cost this one its inspector (see the helper).
   yield* prepareInspectorSocketEffect(harnessId, name);
-  const outcome = yield* Effect.either(Effect.acquireUseRelease(
+  const outcome = yield* Effect.result(Effect.acquireUseRelease(
     Effect.try({
       try: () => Bun.spawn(
       [
@@ -150,13 +150,13 @@ export function startHarnessSessionDetachedEffect(
       await proc.exited.catch(() => -1);
     }),
   ));
-  if (outcome._tag === "Left") {
-    const cause = outcome.left.cause;
+  if (Result.isFailure(outcome)) {
+    const cause = outcome.failure.cause;
     const reason = cause instanceof Error ? cause.message : String(cause);
     log.error("detached harness start spawn failed", { slug, harnessId, reason });
     return { ok: false, reason };
   }
-  const { code, stderr } = outcome.right;
+  const { code, stderr } = outcome.success;
   if (code !== 0) {
     const nowExists = (yield* listAllSessionsRawEffect()).has(name);
     if (nowExists) {

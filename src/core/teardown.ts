@@ -91,7 +91,7 @@ export function runTeardownCommandEffect(opts: {
       }
       return true;
     }),
-    Effect.catchAll((err) => Effect.sync(() => {
+    Effect.catch((err) => Effect.sync(() => {
       onLog?.(
         `${label} errored: ${err instanceof Error ? err.message : String(err)} — continuing`,
       );

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Clock, Deferred, Duration, Effect, Exit, Scope, TestClock, TestContext } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Scope } from "effect";
+import { TestClock } from "effect/testing";
 
 import type { GithubEventsConfig } from "../config.ts";
 import {
@@ -132,7 +133,7 @@ function testDependencies(options: {
 }
 
 const runTest = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
-  Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(TestContext.TestContext)));
+  Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(TestClock.layer())));
 
 describe("Effect daemon lifecycle", () => {
   test("event counters include only parsed events relevant to this fleet", async () => {
@@ -146,13 +147,13 @@ describe("Effect daemon lifecycle", () => {
       const core = yield* makeDaemonCore(events, dependencies);
       yield* core.accept("check_suite", "not json");
       yield* core.accept("check_suite", JSON.stringify({ check_suite: { head_branch: "other" } }));
-      yield* Effect.yieldNow();
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
       expect((yield* core.state).eventCount).toBe(0);
 
       yield* core.accept("check_suite", JSON.stringify({ check_suite: { head_branch: "feature" } }));
-      yield* Effect.yieldNow();
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
       expect((yield* core.state).eventCount).toBe(1);
     }));
   });
@@ -176,14 +177,14 @@ describe("Effect daemon lifecycle", () => {
     await Effect.runPromise(Effect.gen(function* () {
       yield* TestClock.setTime(1_000_000);
       const scope = yield* Scope.make();
-      yield* makeDaemonCore(events, dependencies).pipe(Scope.extend(scope));
-      yield* Effect.yieldNow();
+      yield* makeDaemonCore(events, dependencies).pipe(Scope.provide(scope));
+      yield* Effect.yieldNow;
       expect(fetchStarts).toEqual([1_000_000]);
       yield* Scope.close(scope, Exit.void);
       yield* Deferred.succeed(gate, undefined);
       yield* TestClock.adjust(Duration.minutes(2));
-      yield* Effect.yieldNow();
-    }).pipe(Effect.provide(TestContext.TestContext)));
+      yield* Effect.yieldNow;
+    }).pipe(Effect.provide(TestClock.layer())));
 
     expect(snapshotWrites).toEqual([]);
     expect(markerWrites).toEqual([]);
@@ -199,14 +200,14 @@ describe("Effect daemon lifecycle", () => {
     await Effect.runPromise(Effect.gen(function* () {
       yield* TestClock.setTime(1_000_000);
       const scope = yield* Scope.make();
-      const core = yield* makeDaemonCore(events, dependencies).pipe(Scope.extend(scope));
-      yield* Effect.yieldNow();
+      const core = yield* makeDaemonCore(events, dependencies).pipe(Scope.provide(scope));
+      yield* Effect.yieldNow;
       yield* core.accept("pull_request", "{}");
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
       yield* Scope.close(scope, Exit.void);
       yield* TestClock.adjust(Duration.minutes(2));
-      yield* Effect.yieldNow();
-    }).pipe(Effect.provide(TestContext.TestContext)));
+      yield* Effect.yieldNow;
+    }).pipe(Effect.provide(TestClock.layer())));
 
     expect(fetchStarts).toEqual([1_000_000]);
     expect(snapshotWrites).toHaveLength(1);
@@ -220,13 +221,13 @@ describe("Effect daemon lifecycle", () => {
     await runTest(Effect.gen(function* () {
       yield* TestClock.setTime(1_000_000);
       const core = yield* makeDaemonCore(events, dependencies);
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
       for (let elapsed = 0; elapsed < FLOOR; elapsed += 1_400) {
         yield* core.accept("pull_request", "{}");
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* TestClock.adjust(1_400);
       }
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
       expect(fetchStarts.length).toBeGreaterThanOrEqual(2);
       expect(fetchStarts[1]).toBe(1_030_000);
     }));
@@ -239,14 +240,14 @@ describe("Effect daemon lifecycle", () => {
     await runTest(Effect.gen(function* () {
       yield* TestClock.setTime(1_000_000);
       const core = yield* makeDaemonCore(events, dependencies);
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
       yield* TestClock.adjust(2_000);
       yield* core.accept("pull_request", "{}");
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
       yield* TestClock.adjust(27_999);
       expect(fetchStarts).toEqual([1_000_000]);
       yield* TestClock.adjust(1);
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
       expect(fetchStarts).toEqual([1_000_000, 1_030_000]);
     }));
   });

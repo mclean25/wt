@@ -231,7 +231,7 @@ function lockedInject(opts: {
     `__inject__${sessionName(opts.slug, opts.harnessId, opts.managedName ?? null)}`,
     injectIntoSessionUnlockedEffect(opts),
   ).pipe(
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.succeed({
         ok: false as const,
         reason: cause instanceof Error ? cause.message : String(cause),
@@ -330,7 +330,7 @@ function confirmDeliveryEffect(opts: {
     budgetMs: DELIVERY_CONFIRM_MS,
     intervalMs: DELIVERY_POLL_MS,
   }).pipe(
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.sync(() => {
         // A check that THREW can't answer the question — that's unknown,
         // not "did not arrive", and the caller must report it as such.

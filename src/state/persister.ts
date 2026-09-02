@@ -55,7 +55,7 @@ export function clearPersistedCache(dbPath: string): void {
         ),
         (db) =>
           Effect.try(() => db.exec("DELETE FROM cache")).pipe(
-            Effect.catchAll((err) =>
+            Effect.catch((err) =>
               Effect.sync(() => {
                 // Schema drift between versions shouldn't crash the action.
                 log.error(err instanceof Error ? err : String(err), { dbPath });
@@ -115,7 +115,7 @@ export function createSqliteAsyncStorage(dbPath: string): AsyncStorageDb {
       function swallow<T>(op: string, fallback: T, fn: () => T): T {
         return Effect.runSync(
           Effect.try(fn).pipe(
-            Effect.catchAll((err) =>
+            Effect.catch((err) =>
               Effect.sync(() => {
                 log.warn(`cache ${op} failed`, {
                   err: err instanceof Error ? err.message : String(err),

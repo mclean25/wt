@@ -119,7 +119,7 @@ const runDestroyCommandEffect = (opts: {
       log.warn("destroy_command failed", { slug: opts.slug, exit });
       return false;
     }),
-    Effect.catchAll((error) => Effect.sync(() => {
+    Effect.catch((error) => Effect.sync(() => {
       opts.onLog?.(`destroy_command errored: ${error.message} — continuing`);
       return false;
     })),
@@ -614,7 +614,7 @@ export function createWorktreeEffect(
         (acquired) => Effect.sync(() => acquired.release()),
       );
       const result = yield* createWorktreeProgram(branch, opts, handle).pipe(
-        Effect.catchAllCause((cause) => {
+        Effect.catchCause((cause) => {
           const detail = causeMessage(cause);
           log.error(detail, { slug });
           return Effect.fail(new LifecycleError({ operation: "create", message: detail, cause }));
@@ -899,7 +899,7 @@ function removeWorktreeProgram(
           message: cause instanceof Error ? cause.message : String(cause),
           cause,
         }),
-      }).pipe(Effect.catchAll((err) => Effect.sync(() => opts.onLog?.(
+      }).pipe(Effect.catch((err) => Effect.sync(() => opts.onLog?.(
         `could not record removed-worktree entry: ${err instanceof Error ? err.message : String(err)}`,
       )))));
     }
@@ -915,7 +915,7 @@ function removeWorktreeProgram(
 
 const removeLockSchedule = Schedule.spaced(150).pipe(
   Schedule.jittered,
-  Schedule.upTo(LOCK_ACQUIRE_WAIT_MS),
+  Schedule.upTo({ duration: LOCK_ACQUIRE_WAIT_MS }),
 );
 
 export function removeWorktreeEffect(
@@ -955,7 +955,7 @@ export function removeWorktreeEffect(
         Effect.sync(() => acquired.release()),
       );
       const result = yield* removeWorktreeProgram(wt, opts, handle).pipe(
-        Effect.catchAllCause((cause) => Effect.fail(new LifecycleError({
+        Effect.catchCause((cause) => Effect.fail(new LifecycleError({
           operation: "remove",
           message: causeMessage(cause),
           cause,
@@ -1007,15 +1007,14 @@ export function removeWorktree(
  * one that silently stranded work. This mirrors why actions run under tmux
  * (`core/tmux/action-sessions.ts`): destroy work must outlive the TUI.
  */
-export function spawnBackgroundRemove(
+export function spawnBackgroundRemoveEffect(
   slug: string,
   opts: {
     force: boolean;
     destroyStage: boolean;
     deleteBranch: boolean;
   },
-): string {
-  mkdirSync(config.paths.logDir, { recursive: true });
+): Effect.Effect<string, LifecycleError> {
   const logPath = join(
     config.paths.logDir,
     `${slug}-${new Date().toISOString().replace(/[:.]/g, "-")}.log`,
@@ -1025,34 +1024,60 @@ export function spawnBackgroundRemove(
   // stdout+stderr. This captures not only the _destroy process's own
   // writes but also every grandchild (pnpm sst remove, git, etc.)
   // without leaking into the TUI's terminal.
-  const fd = openSync(logPath, "a");
-  try {
-    const child = Bun.spawn(
-      [
-        exe,
-        "_destroy",
-        slug,
-        "--force",
-        String(opts.force),
-        "--destroy-stage",
-        String(opts.destroyStage),
-        "--delete-branch",
-        String(opts.deleteBranch),
-      ],
-      {
-        stdin: "ignore",
-        stdout: fd,
-        stderr: fd,
-        // Own session (setsid) so a terminal hangup can't SIGHUP the
-        // in-flight `sst remove`. See the docstring above.
-        detached: true,
-      },
+  const fail = (cause: unknown) => new LifecycleError({
+    operation: "remove",
+    message: cause instanceof Error ? cause.message : String(cause),
+    cause,
+  });
+  return Effect.gen(function* () {
+    yield* Effect.try({
+      try: () => mkdirSync(config.paths.logDir, { recursive: true }),
+      catch: fail,
+    });
+    return yield* Effect.acquireUseRelease(
+      Effect.try({ try: () => openSync(logPath, "a"), catch: fail }),
+      (fd) => Effect.try({
+        try: () => {
+          const child = Bun.spawn(
+            [
+              exe,
+              "_destroy",
+              slug,
+              "--force",
+              String(opts.force),
+              "--destroy-stage",
+              String(opts.destroyStage),
+              "--delete-branch",
+              String(opts.deleteBranch),
+            ],
+            {
+              stdin: "ignore",
+              stdout: fd,
+              stderr: fd,
+              // Own session (setsid) so a terminal hangup can't SIGHUP the
+              // in-flight `sst remove`. See the docstring above.
+              detached: true,
+            },
+          );
+          // Fire-and-forget: don't let the child hold wt's event loop open.
+          child.unref();
+          return logPath;
+        },
+        catch: fail,
+      }),
+      // Parent doesn't need the fd; the child has its own dup.
+      (fd) => Effect.sync(() => closeSync(fd)),
     );
-    // Fire-and-forget: don't let the child hold wt's event loop open.
-    child.unref();
-  } finally {
-    // Parent doesn't need the fd — the child has its own dup.
-    closeSync(fd);
-  }
-  return logPath;
+  });
+}
+
+export function spawnBackgroundRemove(
+  slug: string,
+  opts: {
+    force: boolean;
+    destroyStage: boolean;
+    deleteBranch: boolean;
+  },
+): string {
+  return Effect.runSync(spawnBackgroundRemoveEffect(slug, opts));
 }

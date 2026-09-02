@@ -75,9 +75,9 @@ const TRIGGER_DEBOUNCE_MS = 3_000;
 const SLUG_CHANGE_DEBOUNCE_MS = 500;
 
 let triggerSink: ((target: RefreshTarget) => void) | null = null;
-const triggerFibers = new Map<RefreshTarget, Fiber.RuntimeFiber<void, never>>();
+const triggerFibers = new Map<RefreshTarget, Fiber.Fiber<void, never>>();
 let slugChangeSink: ((slug: string) => void) | null = null;
-const slugChangeFibers = new Map<string, Fiber.RuntimeFiber<void, never>>();
+const slugChangeFibers = new Map<string, Fiber.Fiber<void, never>>();
 
 /**
  * Register the refresh-trigger sink. The TUI runtime wires this to the

@@ -261,7 +261,7 @@ function withClientEffect<T>(
     acquire,
     body,
     (client) => Effect.sync(() => client.close()),
-  ).pipe(Effect.catchAll((err) => Effect.succeed((err.phase === "connect" ? {
+  ).pipe(Effect.catch((err) => Effect.succeed((err.phase === "connect" ? {
     // The file exists but nothing usable is accepting: the session
     // restarted and the live process holds a now-unlinked inode. Only
     // that process can rebind the path, so this never heals on retry.
@@ -312,7 +312,7 @@ function runRoutineEffect(
       return out;
   });
   return once.pipe(
-    Effect.retry(Schedule.intersect(Schedule.recurs(LOCATE_RETRIES - 1), Schedule.spaced(deps.locateRetryMs))),
+    Effect.retry(Schedule.max([Schedule.recurs(LOCATE_RETRIES - 1), Schedule.spaced(deps.locateRetryMs)])),
     Effect.catchTag("LocateRetryError", (err) => Effect.succeed(err.result)),
   );
 }

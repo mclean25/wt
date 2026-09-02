@@ -177,7 +177,7 @@ function fetchFleetPrs(
     const github = yield* fetchGithubEffect(branches);
     return { prs: github.prs, note: null };
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.succeed({
         prs: new Map<string, PullRequest>(),
         note:

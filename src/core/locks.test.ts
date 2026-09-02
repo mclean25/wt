@@ -30,8 +30,9 @@ test("interrupting a lock holder releases the flock before the fiber exits", asy
   );
 
   await Effect.runPromise(Deferred.await(acquired));
-  const interrupted = await Effect.runPromise(Fiber.interrupt(holder));
-  expect(Exit.isInterrupted(interrupted)).toBe(true);
+  await Effect.runPromise(Fiber.interrupt(holder));
+  const interrupted = await Effect.runPromise(Fiber.await(holder));
+  expect(Exit.hasInterrupts(interrupted)).toBe(true);
 
   const value = await Effect.runPromise(
     withAsyncFileLockEffect(name, Effect.succeed("reacquired"), {

@@ -177,7 +177,7 @@ function readLinesEffect(
       }
       return stdout.split("\n");
     }),
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.sync(() => {
         log.debug("perf helper failed", { cmd: cmd[0], cause: String(cause) });
         return null;
@@ -364,7 +364,7 @@ function launchdOwnedWtPidsEffect(
     }),
     // launchctl missing (non-macOS) or an externally aborted compatibility
     // call fails toward reporting possible orphans, never hiding them.
-    Effect.catchAll(() => Effect.succeed(new Set<number>())),
+    Effect.catch(() => Effect.succeed(new Set<number>())),
   );
 }
 

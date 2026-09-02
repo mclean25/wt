@@ -68,7 +68,7 @@ const POLL_INTERVAL_MS = 3_000;
 const DONE_POLL_INTERVAL_MS = 500;
 
 const activeStreams = new Set<StreamState>();
-let pollFiber: Fiber.RuntimeFiber<number, never> | null = null;
+let pollFiber: Fiber.Fiber<number, never> | null = null;
 
 function ensurePoller(): void {
   if (pollFiber) return;
@@ -85,7 +85,7 @@ function ensurePoller(): void {
 
 function stopPollerIfIdle(): void {
   if (activeStreams.size > 0 || pollFiber == null) return;
-  Effect.runSync(Fiber.interruptFork(pollFiber));
+  pollFiber.interruptUnsafe();
   pollFiber = null;
 }
 
@@ -109,7 +109,7 @@ type StreamState = {
   pending: string;
   watcher: FSWatcher | null;
   dirWatcher: FSWatcher | null;
-  debounce: Fiber.RuntimeFiber<void, never> | null;
+  debounce: Fiber.Fiber<void, never> | null;
   source: LineSource;
   /** Stored on the state so `closeStream` can do a final flush-read
    *  before releasing watchers — without this we'd drop lines that
@@ -215,14 +215,14 @@ export function watchDoneSentinel(opts: {
   const { runDir, onDone } = opts;
   const path = join(runDir, "done.json");
   let dirWatcher: FSWatcher | null = null;
-  let pollFiber: Fiber.RuntimeFiber<void, never> | null = null;
+  let pollFiber: Fiber.Fiber<void, never> | null = null;
   let fired = false;
 
   const stopAll = (): void => {
     closeSilent(dirWatcher);
     dirWatcher = null;
     if (pollFiber) {
-      Effect.runSync(Fiber.interruptFork(pollFiber));
+      pollFiber.interruptUnsafe();
       pollFiber = null;
     }
   };
@@ -458,7 +458,7 @@ function closeStream(st: StreamState): void {
   closeSilent(st.dirWatcher);
   st.watcher = null;
   st.dirWatcher = null;
-  if (st.debounce) Effect.runSync(Fiber.interruptFork(st.debounce));
+  if (st.debounce) st.debounce.interruptUnsafe();
   st.debounce = null;
   // Final flush: pull any bytes the wrapper wrote between the last
   // debounced read and the done.json sentinel that triggered close.

@@ -65,7 +65,7 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
       reviewerPromise(fetchContributors),
       reviewerPromise(fetchMe),
     ], { concurrency: "unbounded" }).pipe(
-      Effect.catchAll((error) => Effect.sync(() => {
+      Effect.catch((error) => Effect.sync(() => {
         const message = error.cause instanceof Error ? error.cause.message : String(error.cause);
         toast(`reviewers unavailable: ${message}`, theme.err, 3000);
         return null;

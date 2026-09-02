@@ -107,7 +107,7 @@ export function makeBaseFlows(ctx: BaseFlowsCtx) {
             ),
           ),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => reportActionError("set base", error.cause)),
         ),
       ),

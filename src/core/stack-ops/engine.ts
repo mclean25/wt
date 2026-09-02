@@ -112,7 +112,7 @@ function looksLikeLockError(detail: string): boolean {
  */
 function safeGitRunEffect(args: readonly string[], cwd: string): Effect.Effect<RunResult> {
   return gitRunEffect(args, cwd).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.succeed({ stdout: "", stderr: error.message, exitCode: -1 }),
     ),
   );
@@ -120,12 +120,12 @@ function safeGitRunEffect(args: readonly string[], cwd: string): Effect.Effect<R
 
 function safeRebaseInProgressEffect(cwd: string): Effect.Effect<boolean> {
   return rebaseInProgressEffect(cwd).pipe(
-    Effect.catchAll(() => Effect.succeed(false)),
+    Effect.catch(() => Effect.succeed(false)),
   );
 }
 
 function safeRevParseEffect(ref: string, cwd: string): Effect.Effect<string | null> {
-  return revParseEffect(ref, cwd).pipe(Effect.catchAll(() => Effect.succeed(null)));
+  return revParseEffect(ref, cwd).pipe(Effect.catch(() => Effect.succeed(null)));
 }
 
 function abortRebaseWithRetryEffect(

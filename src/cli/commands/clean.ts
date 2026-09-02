@@ -133,12 +133,12 @@ export function runWithDeps(
     }
 
     console.log(dim("Fetching origin..."));
-    const fetched = yield* Effect.either(
+    const fetched = yield* Effect.result(
       commandPromise("fetch origin", deps.fetchOrigin),
     );
-    if (fetched._tag === "Left") {
+    if (fetched._tag === "Failure") {
       console.error(
-        red(`Failed to fetch origin: ${causeMessage(fetched.left.cause)}`),
+        red(`Failed to fetch origin: ${causeMessage(fetched.failure.cause)}`),
       );
       return 1;
     }
@@ -167,7 +167,7 @@ export function runWithDeps(
     // data as proof that the work landed.
     const risky: Worktree[] = [];
     if (gone.length > 0) {
-      const github = yield* Effect.either(
+      const github = yield* Effect.result(
         deps
           .fetchGithub(gone.map(([w]) => w.branch))
           .pipe(
@@ -180,16 +180,16 @@ export function runWithDeps(
             ),
           ),
       );
-      if (github._tag === "Left") {
+      if (github._tag === "Failure") {
         console.error(
           red(
-            `Failed to verify gone branches: ${causeMessage(github.left.cause)}`,
+            `Failed to verify gone branches: ${causeMessage(github.failure.cause)}`,
           ),
         );
         risky.push(...gone.map(([w]) => w));
       } else {
         for (const [w, st] of gone) {
-          if (github.right.prs.get(w.branch)?.state === "MERGED") {
+          if (github.success.prs.get(w.branch)?.state === "MERGED") {
             candidates.push([w, st]);
           } else {
             risky.push(w);
@@ -316,7 +316,7 @@ export function runWithDeps(
             );
 
       if (parsed.background) {
-        const launched = yield* Effect.either(
+        const launched = yield* Effect.result(
           commandIo(`launch ${w.slug} removal`, () =>
             deps.spawnBackgroundRemove(w.slug, {
               force: false,
@@ -325,16 +325,16 @@ export function runWithDeps(
             }),
           ),
         );
-        if (launched._tag === "Right") {
+        if (launched._tag === "Success") {
           console.log(
-            green(`✓ dispatched ${w.slug}`) + dim(` → ${launched.right}`),
+            green(`✓ dispatched ${w.slug}`) + dim(` → ${launched.success}`),
           );
         } else {
           failed = true;
-          console.log(red(`✗ ${w.slug}: ${causeMessage(launched.left.cause)}`));
+          console.log(red(`✗ ${w.slug}: ${causeMessage(launched.failure.cause)}`));
         }
       } else {
-        const removed = yield* Effect.either(
+        const removed = yield* Effect.result(
           commandPromise(`remove ${w.slug}`, () =>
             deps.removeWorktree(w, {
               force: false,
@@ -345,24 +345,24 @@ export function runWithDeps(
             }),
           ),
         );
-        if (removed._tag === "Left") {
+        if (removed._tag === "Failure") {
           failed = true;
-          console.log(red(`✗ ${w.slug}: ${causeMessage(removed.left.cause)}`));
-        } else if (!removed.right.ok) {
+          console.log(red(`✗ ${w.slug}: ${causeMessage(removed.failure.cause)}`));
+        } else if (!removed.success.ok) {
           failed = true;
-          console.log(red(`✗ ${w.slug}: ${removed.right.message}`));
+          console.log(red(`✗ ${w.slug}: ${removed.success.message}`));
         } else {
-          console.log(green(`✓ ${removed.right.message}`));
-          const cleanup = yield* Effect.either(
+          console.log(green(`✓ ${removed.success.message}`));
+          const cleanup = yield* Effect.result(
             commandPromise(`kill ${w.slug} sessions`, () =>
               deps.killAllSessionsFor(w.slug),
             ),
           );
-          if (cleanup._tag === "Left") {
+          if (cleanup._tag === "Failure") {
             failed = true;
             console.log(
               red(
-                `✗ ${w.slug}: removed, but session cleanup failed: ${causeMessage(cleanup.left.cause)}`,
+                `✗ ${w.slug}: removed, but session cleanup failed: ${causeMessage(cleanup.failure.cause)}`,
               ),
             );
           }

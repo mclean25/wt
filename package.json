@@ -26,7 +26,7 @@
     "@opentui/react": "0.5.1",
     "@tanstack/query-persist-client-core": "^5.99.2",
     "@tanstack/react-query": "^5.99.2",
-    "effect": "3.22.1",
+    "effect": "4.0.0-rc.112",
     "react": "^19.2.5",
     "unique-names-generator": "^4.7.1"
   }

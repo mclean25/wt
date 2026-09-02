@@ -282,7 +282,12 @@ export function waitForRestartedDaemonEffect(
     return ready() ? Effect.succeed(true) : Effect.fail(new DaemonNotReady());
   });
   return probe.pipe(
-    Effect.retry(Schedule.spaced(Duration.millis(100)).pipe(Schedule.intersect(Schedule.recurs(99)))),
+    Effect.retry(
+      Schedule.max([
+        Schedule.spaced(Duration.millis(100)),
+        Schedule.recurs(99),
+      ]),
+    ),
     Effect.orElseSucceed(() => false),
   );
 }

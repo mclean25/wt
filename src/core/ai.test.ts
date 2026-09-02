@@ -46,10 +46,11 @@ test("a queued naming request cancelled before its permit never runs", async () 
     ));
     yield* Deferred.await(acquired);
     const queued = yield* Effect.forkScoped(withNamingPermitEffect(Ref.update(count, (n) => n + 1)));
-    const queuedExit = yield* Fiber.interrupt(queued);
+    yield* Fiber.interrupt(queued);
+    const queuedExit = yield* Fiber.await(queued);
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(holder);
-    return { count: yield* Ref.get(count), interrupted: Exit.isInterrupted(queuedExit) };
+    return { count: yield* Ref.get(count), interrupted: Exit.hasInterrupts(queuedExit) };
   })));
   expect(ran).toEqual({ count: 0, interrupted: true });
 });

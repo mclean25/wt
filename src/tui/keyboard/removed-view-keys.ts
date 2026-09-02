@@ -112,7 +112,7 @@ export function handleRemovedViewKey(
             );
           }),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() =>
             removedLog.event.err(
               `automations toggle failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
@@ -145,7 +145,7 @@ export function handleRemovedViewKey(
         try: () => openUrlHidingTerminal(url),
         catch: (cause) => new RemovedViewError({ cause }),
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() =>
             removedLog.event.err(
               `open issue failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,

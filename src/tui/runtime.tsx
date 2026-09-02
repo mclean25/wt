@@ -93,7 +93,7 @@ export function acquireRuntimeResource<A, E, R>(
       },
       catch: (cause) => new RuntimeCleanupError({ kind: "resource", cause }),
     }).pipe(
-      Effect.catchAll((cause) =>
+      Effect.catch((cause) =>
         Effect.sync(() => {
           startupLog.warn("runtime resource cleanup failed", {
             err:
@@ -124,7 +124,7 @@ function addRuntimeFinalizer(
       },
       catch: (cause) => new RuntimeCleanupError({ kind: "finalizer", cause }),
     }).pipe(
-      Effect.catchAll((cause) =>
+      Effect.catch((cause) =>
         Effect.sync(() => {
           startupLog.warn("runtime finalizer failed", {
             err:
@@ -170,7 +170,7 @@ const forkBestEffort = (run: () => Promise<unknown>): void => {
 
 class InvalidationScheduler {
   private readonly jobs = new Map<string, InvalidationJob>();
-  private timer: Fiber.RuntimeFiber<void, never> | null = null;
+  private timer: Fiber.Fiber<void, never> | null = null;
   private disposed = false;
 
   constructor(private readonly client: QueryClient) {}
@@ -201,7 +201,7 @@ class InvalidationScheduler {
     if (this.disposed) return;
     this.jobs.set(id, job);
     if (this.timer !== null) return;
-    let timer: Fiber.RuntimeFiber<void, never>;
+    let timer: Fiber.Fiber<void, never>;
     timer = Effect.runFork(
       Effect.sleep(`${INVALIDATION_FLUSH_MS} millis`).pipe(
         Effect.andThen(
@@ -290,7 +290,7 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
     // attaches it), so kill it here. New code never creates it.
     ensureManagerClaudeName();
     const tmuxLive = yield* startupReapPromise("list tmux sessions", listAllSessionsRaw).pipe(
-      Effect.catchAll(() => Effect.succeed(new Set<string>())),
+      Effect.catch(() => Effect.succeed(new Set<string>())),
     );
     if (tmuxLive.has(MANAGER_SLUG)) {
       startupLog.warn(
@@ -298,7 +298,7 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
       );
       yield* startupReapPromise("kill legacy manager session", () =>
         killHarnessSession(MANAGER_SLUG, "claude", null)).pipe(
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         );
     }
     // Drop terminal action run dirs whose slug is gone OR that fall
@@ -315,7 +315,7 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
   // Reaping is maintenance and must not prevent first paint. Keep the
   // failure policy from the legacy helper, but represent every async leg as
   // a typed Effect operation before applying that policy once at the edge.
-  Effect.catchAllCause((cause) => Effect.sync(() => {
+  Effect.catchCause((cause) => Effect.sync(() => {
     startupLog.warn("reap failed", {
       err: Cause.pretty(cause),
     });
@@ -813,7 +813,7 @@ export const runTuiEffect = Effect.gen(function* () {
   // handler exists to prevent).
   const exit = yield* Deferred.make<TuiExit>();
   const resolve = (value: TuiExit): void => {
-    Deferred.unsafeDone(exit, Effect.succeed(value));
+    Deferred.doneUnsafe(exit, Effect.succeed(value));
   };
   yield* acquireSyncResource(
     () => {

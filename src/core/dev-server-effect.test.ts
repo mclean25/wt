@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { Duration, Effect, Fiber, TestClock, TestContext } from "effect";
+import { Duration, Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 
 import {
   DEV_SERVER_STOPPED,
@@ -12,7 +13,7 @@ test("waitForDevReadyEffect retries an unhealthy environment on TestClock", asyn
   let healthChecks = 0;
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const fiber = yield* Effect.fork(
+      const fiber = yield* Effect.forkChild(
         waitForDevReadyEffect(
           { slug: "demo", path: "/tmp/demo" },
           { timeoutMs: 10_000 },
@@ -34,7 +35,7 @@ test("waitForDevReadyEffect retries an unhealthy environment on TestClock", asyn
       );
       yield* TestClock.adjust(Duration.seconds(4));
       return yield* Fiber.join(fiber);
-    }).pipe(Effect.provide(TestContext.TestContext)),
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 
   expect(result).toEqual({ ready: true, health: { ok: true, message: "ready" } });
@@ -45,7 +46,7 @@ test("interrupting waitForDevSlotEffect always leaves the queue", async () => {
   const events: string[] = [];
   await Effect.runPromise(
     Effect.gen(function* () {
-      const fiber = yield* Effect.fork(
+      const fiber = yield* Effect.forkChild(
         waitForDevSlotEffect(
           "demo",
           { timeoutMs: 60_000 },
@@ -57,9 +58,9 @@ test("interrupting waitForDevSlotEffect always leaves the queue", async () => {
           },
         ),
       );
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
       yield* Fiber.interrupt(fiber);
-    }).pipe(Effect.provide(TestContext.TestContext)),
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 
   expect(events).toEqual(["join", "leave"]);
@@ -70,7 +71,7 @@ test("waitForDevSlotEffect counts a slow slot check against its deadline", async
   let waits = 0;
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const fiber = yield* Effect.fork(
+      const fiber = yield* Effect.forkChild(
         waitForDevSlotEffect(
           "demo",
           { timeoutMs: 1_000, onWait: () => { waits += 1; } },
@@ -88,7 +89,7 @@ test("waitForDevSlotEffect counts a slow slot check against its deadline", async
       );
       yield* TestClock.adjust(Duration.seconds(2));
       return yield* Fiber.join(fiber);
-    }).pipe(Effect.provide(TestContext.TestContext)),
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 
   expect(result).toBe(false);
@@ -105,8 +106,8 @@ test("interrupting probePortEffect closes its socket resource", async () => {
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(probePortEffect(server.port, 10_000));
-        yield* Effect.yieldNow();
+        const fiber = yield* Effect.forkChild(probePortEffect(server.port, 10_000));
+        yield* Effect.yieldNow;
         yield* Fiber.interrupt(fiber);
       }),
     );

@@ -92,9 +92,10 @@ test("interrupting an Effect git command kills it and releases its process permi
       gitRunEffect(["-c", "alias.wait=!sleep 30", "wait"], dir),
     );
     yield* Effect.sleep(50);
-    return yield* Fiber.interrupt(fiber);
+    yield* Fiber.interrupt(fiber);
+    return yield* Fiber.await(fiber);
   })));
-  expect(Exit.isInterrupted(exit)).toBe(true);
+  expect(Exit.hasInterrupts(exit)).toBe(true);
 
   const tips = await Effect.runPromise(
     Effect.all(

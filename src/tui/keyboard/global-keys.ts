@@ -104,7 +104,7 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
     toast("refreshing", theme.fgDim, 800);
     Effect.runFork(
       keyPromise(refreshAll).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => reportActionError("refresh", error.cause)),
         ),
       ),
@@ -178,7 +178,7 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
             );
           }),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() =>
             reportActionError("automations toggle", error.cause),
           ),
@@ -206,7 +206,7 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
             appLog.event.info(`primary harness → ${getHarness(next).label}`),
           ),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => reportActionError("cycle harness", error.cause)),
         ),
       ),
@@ -271,7 +271,7 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
             slotLog.event.info(`opened ${MAIN_CLONE_SLOT.path}`),
           ),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() =>
             slotLog.event.err(
               `editor open failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,

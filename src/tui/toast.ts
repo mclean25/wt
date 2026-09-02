@@ -29,14 +29,14 @@ type Listener = () => void;
 
 class ToastStore {
   private current: Toast | null = null;
-  private expiryFiber: Fiber.RuntimeFiber<void, never> | null = null;
+  private expiryFiber: Fiber.Fiber<void, never> | null = null;
   private listeners = new Set<Listener>();
   private nextId = 1;
   private accepting = true;
 
   show(text: string, color: string, ms: number): void {
     if (!this.accepting) return;
-    if (this.expiryFiber !== null) Effect.runSync(Fiber.interruptFork(this.expiryFiber));
+    if (this.expiryFiber !== null) Effect.runSync(Fiber.interrupt(this.expiryFiber));
     const toast = { id: this.nextId++, text, color };
     this.current = toast;
     this.expiryFiber = Effect.runFork(
@@ -53,7 +53,7 @@ class ToastStore {
   }
 
   clear(): void {
-    if (this.expiryFiber !== null) Effect.runSync(Fiber.interruptFork(this.expiryFiber));
+    if (this.expiryFiber !== null) Effect.runSync(Fiber.interrupt(this.expiryFiber));
     this.expiryFiber = null;
     this.current = null;
     this.notify();

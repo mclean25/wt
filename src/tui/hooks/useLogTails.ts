@@ -8,7 +8,7 @@ import { StatusKind } from "../../core/types.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
 
 type Tail = {
-  fiber: Fiber.RuntimeFiber<void, never> | null;
+  fiber: Fiber.Fiber<void, never> | null;
   token: object;
 };
 
@@ -84,7 +84,7 @@ export function useLogTails(rows: WorktreeRow[]): Set<string> {
         Effect.tap(() =>
           Effect.sync(() => log.event.dim("tail exited; will restart if still busy")),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => {
             const cause =
               "cause" in error ? error.cause : error;

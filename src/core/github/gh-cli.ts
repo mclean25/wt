@@ -19,7 +19,7 @@ export function hasGhEffect(): Effect.Effect<boolean> {
       if (found) _hasGh = true;
       return found;
     }),
-    Effect.catchAll(() => Effect.succeed(false)),
+    Effect.catch(() => Effect.succeed(false)),
   );
 }
 
@@ -50,7 +50,7 @@ export function repoSlugEffect(): Effect.Effect<string | null> {
         return null;
       }
     }),
-    Effect.catchAll(() => Effect.succeed(null)),
+    Effect.catch(() => Effect.succeed(null)),
   );
 }
 
@@ -74,7 +74,7 @@ export function fetchAuthenticatedLoginEffect(): Effect.Effect<string | null> {
     const r = yield* runEffect(["gh", "api", "user", "--jq", ".login"], {
       cwd: config.paths.mainClone,
       timeoutMs: 5_000,
-    }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+    }).pipe(Effect.catch(() => Effect.succeed(null)));
     if (r === null || r.exitCode !== 0) {
       if (r) {
         log.error("auth user fetch failed", { stderr: r.stderr.slice(0, 200) });

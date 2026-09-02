@@ -197,7 +197,7 @@ export function maybeOfferCrashRollbackEffect(): Effect.Effect<void> {
       return;
     }
     if ((yield* rollBackTo(ctx.target)) === 0) return yield* reexecTuiEffect;
-  }).pipe(Effect.catchAllCause(() => Effect.void));
+  }).pipe(Effect.catchCause(() => Effect.void));
 }
 
 /**
@@ -222,5 +222,5 @@ export function maybeOfferStaleBootRollbackEffect(): Effect.Effect<void> {
       false,
     );
     if (yes && (yield* rollBackTo(ctx.target)) === 0) return yield* reexecTuiEffect;
-  }).pipe(Effect.catchAllCause(() => Effect.void));
+  }).pipe(Effect.catchCause(() => Effect.void));
 }

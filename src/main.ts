@@ -151,7 +151,7 @@ function mainEffect() {
     }
     const { setWezTermTabTitleEffect } = yield* step("load WezTerm integration", () => import("./core/wezterm.ts"));
     yield* setWezTermTabTitleEffect("wt", config.paths.weztermCli).pipe(
-      Effect.catchAll(() => Effect.void),
+      Effect.catch(() => Effect.void),
     );
     const { runTuiEffect } = yield* step("load TUI", () => import("./tui/runtime.tsx"));
     yield* runTuiEffect.pipe(
@@ -167,7 +167,7 @@ function mainEffect() {
 
 const program = mainEffect().pipe(
   Effect.scoped,
-  Effect.catchAllCause((cause) =>
+  Effect.catchCause((cause) =>
     Effect.gen(function* () {
       const error = reportedCause(Cause.squash(cause));
       yield* Effect.sync(() => {
@@ -198,7 +198,7 @@ const program = mainEffect().pipe(
   Effect.ensuring(
     step("load logger", () => import("./core/logger.ts")).pipe(
       Effect.flatMap(({ flushLoggerEffect }) => flushLoggerEffect),
-      Effect.catchAll(() => Effect.void),
+      Effect.catch(() => Effect.void),
     ),
   ),
 );

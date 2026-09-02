@@ -41,7 +41,7 @@ export function hideFrontmostTerminalEffect(): Effect.Effect<void> {
       "-e", "end ignoring",
       "-e", "end tell",
     ]).pipe(
-      Effect.catchAll(() => Effect.void),
+      Effect.catch(() => Effect.void),
       Effect.asVoid,
     );
 }

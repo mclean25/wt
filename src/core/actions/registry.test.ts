@@ -16,7 +16,7 @@ test("synchronous metadata updates do not leave completed fibers tracked", async
       { status: "failed" },
     );
   }
-  await Effect.runPromise(Effect.yieldNow());
+  await Effect.runPromise(Effect.yieldNow);
 
   expect(registry.pendingMetaWrites.size).toBe(baseline);
 });

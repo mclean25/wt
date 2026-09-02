@@ -9,7 +9,7 @@
  * format that's robust to small-model formatting drift. Co-generation
  * shares one round trip and one diff-context build per cache key.
  */
-import { Data, Effect, Schedule } from "effect";
+import { Data, Effect, Schedule, Semaphore } from "effect";
 import { config } from "./config.ts";
 import { runHarnessCompletionEffect, type HarnessCompletionError } from "./harness/completion.ts";
 
@@ -165,7 +165,7 @@ export function isStackTitleMetaOnly(title: string): boolean {
  * boring. Tasks run on settled predecessors, so one failure doesn't poison
  * the queue.
  */
-const namingSemaphore = Effect.unsafeMakeSemaphore(1);
+const namingSemaphore = Semaphore.makeUnsafe(1);
 
 /** Test seam for the cancellation semantics of the shared naming queue. */
 export const withNamingPermitEffect = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -196,7 +196,7 @@ function callNamingHarnessEffect(
           config.paths.mainClone,
         ).pipe(
           Effect.mapError((cause: HarnessCompletionError) => new AiNamingError({ kind: "completion", detail: cause.message, cause })),
-          Effect.retry(Schedule.intersect(Schedule.recurs(1), Schedule.spaced("500 millis"))),
+          Effect.retry(Schedule.max([Schedule.recurs(1), Schedule.spaced("500 millis")])),
         );
   // Semaphore acquisition is interruptible. A query cancelled while queued
   // is removed from the waiter set and never invokes the harness.

@@ -18,13 +18,13 @@ describe("withLockHandlesEffect", () => {
     let releases = 0;
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           withLockHandlesEffect(
             [handle(() => releases++), handle(() => releases++)],
             Effect.never,
           ),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* Fiber.interrupt(fiber);
       }),
     );

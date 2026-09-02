@@ -66,11 +66,11 @@ export function run(
       console.error(red(`No worktree matching: ${query}`));
       return 1;
     }
-    const opened = yield* Effect.either(
+    const opened = yield* Effect.result(
       commandPromise("open editor", () => openInEditor(target.path)),
     );
-    if (opened._tag === "Left") {
-      console.error(red(causeMessage(opened.left.cause)));
+    if (opened._tag === "Failure") {
+      console.error(red(causeMessage(opened.failure.cause)));
       return 1;
     }
     return 0;

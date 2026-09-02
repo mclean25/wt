@@ -229,7 +229,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
   ): void => {
     Effect.runFork(
       keyPromise(label, evaluate).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => reportActionError(error.label, error.cause)),
         ),
       ),
@@ -467,7 +467,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
             2000,
           );
         }).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => reportActionError(error.label, error.cause)),
           ),
         ),
@@ -940,7 +940,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
               2000,
             );
           }).pipe(
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.sync(() => reportActionError(error.label, error.cause)),
             ),
           ),
@@ -1027,7 +1027,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       Effect.runFork(
         keyPromise("editor open", () => openInEditor(current.wt.path)).pipe(
           Effect.tap(() => Effect.sync(() => rowLog.event.info("opened in the editor"))),
-          Effect.catchAll((error) => Effect.sync(() => {
+          Effect.catch((error) => Effect.sync(() => {
             const cause = error.cause;
             rowLog.event.err(
               `editor open failed: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -1228,7 +1228,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
             if (ok) rowLog.event.dim("regenerating worktree summary");
             else toast("no diff context yet", theme.warn, 2000);
           })),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => reportActionError(error.label, error.cause)),
           ),
         ),

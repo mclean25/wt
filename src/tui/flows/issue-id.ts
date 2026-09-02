@@ -103,7 +103,7 @@ export function useIssueIdFlow(ctx: IssueIdFlowCtx) {
               );
             }),
           ),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => {
               const message =
                 error.cause instanceof Error
@@ -135,7 +135,7 @@ export function useIssueIdFlow(ctx: IssueIdFlowCtx) {
         Effect.tap(() =>
           Effect.sync(() => toast(`${slug} → ${id}`, theme.info, 2000)),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => {
             const message =
               error.cause instanceof Error

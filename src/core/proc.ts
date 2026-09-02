@@ -1,4 +1,4 @@
-import { Data, Effect, Exit, Ref } from "effect";
+import { Data, Effect, Exit, Ref, Semaphore } from "effect";
 
 import { config } from "./config.ts";
 
@@ -107,7 +107,7 @@ export type ProcError =
 
 const RUN_CONCURRENCY = 8;
 const TERMINATION_GRACE_MS = 1_000;
-const runSemaphore = Effect.unsafeMakeSemaphore(RUN_CONCURRENCY);
+const runSemaphore = Semaphore.makeUnsafe(RUN_CONCURRENCY);
 
 type CapturedProcess = {
   readonly proc: Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
@@ -238,7 +238,7 @@ function joinCaptured(
   argv: readonly string[],
   running: RunningProcess,
 ): Effect.Effect<CapturedProcess, ProcReadError> {
-  return Effect.async<CapturedProcess, ProcReadError>((resume, signal) => {
+  return Effect.callback<CapturedProcess, ProcReadError>((resume, signal) => {
     const onAbort = () => killProcessGroup(running.proc, "SIGTERM");
     signal.addEventListener("abort", onAbort, { once: true });
     void running.settled.then((captured) => {
@@ -294,7 +294,7 @@ function externalInterruption(
   argv: readonly string[],
   signal: AbortSignal,
 ): Effect.Effect<never, ProcInterruptedError> {
-  return Effect.async<never, ProcInterruptedError>((resume) => {
+  return Effect.callback<never, ProcInterruptedError>((resume) => {
     const abort = () => resume(Effect.fail(new ProcInterruptedError({ argv })));
     if (signal.aborted) {
       abort();
@@ -330,7 +330,7 @@ function capturedRunEffect(
         // scoped finalizer kills and joins the child before interruption ends.
         yield* Effect.forkScoped(
           externalInterruption(argv, opts.signal).pipe(
-            Effect.catchAll(() => terminateCaptured(running)),
+            Effect.catch(() => terminateCaptured(running)),
           ),
         );
       }
@@ -439,7 +439,7 @@ function failedRunResult(
 export function run(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
   return Effect.runPromise(
     runEffect(argv, opts).pipe(
-      Effect.catchAll((error) => Effect.succeed(failedRunResult(error))),
+      Effect.catch((error) => Effect.succeed(failedRunResult(error))),
     ),
   );
 }
@@ -456,7 +456,7 @@ export function runQuiet(
 ): Promise<boolean> {
   return Effect.runPromise(
     runQuietEffect(argv, opts).pipe(
-      Effect.catchAll(() => Effect.succeed(false)),
+      Effect.catch(() => Effect.succeed(false)),
     ),
   );
 }

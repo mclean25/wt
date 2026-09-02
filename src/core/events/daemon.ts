@@ -15,7 +15,7 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Clock, Data, Duration, Effect, Exit, Queue, Ref, Runtime, Scope } from "effect";
+import { Clock, Data, Duration, Effect, Exit, Queue, Ref, Scope, Semaphore } from "effect";
 
 import { buildSha, currentSourceSha } from "../build-id.ts";
 import { config, type GithubEventsConfig } from "../config.ts";
@@ -298,7 +298,7 @@ export const makeDaemonCore = (
   yield* trySync("write daemon state", () => dependencies.writeState(initialState));
 
   const state = yield* Ref.make(initialState);
-  const stateLock = yield* Effect.makeSemaphore(1);
+  const stateLock = yield* Semaphore.make(1);
   const updateState = (update: (current: EventsState) => EventsState) => stateLock.withPermits(1)(
     Effect.gen(function* () {
       const next = yield* Ref.modify(state, (current) => {
@@ -332,7 +332,7 @@ export const makeDaemonCore = (
     if (branches) {
       const relevant = yield* getLocalBranches.pipe(
         Effect.map((local) => branches.some((branch) => local.has(branch))),
-        Effect.catchAll((error) => {
+        Effect.catch((error) => {
           log.warn("local-branch check failed; refetching anyway", { err: errorMessage(error) });
           return Effect.succeed(true);
         }),
@@ -384,7 +384,7 @@ export const makeDaemonCore = (
     const startedAt = yield* Clock.currentTimeMillis;
     const previousStartedAt = yield* Ref.getAndSet(lastFetchStartedAt, startedAt);
     const sinceLast = previousStartedAt === 0 ? null : startedAt - previousStartedAt;
-    yield* dependencies.fetchOrigin.pipe(Effect.catchAll((error) => Effect.sync(() => {
+    yield* dependencies.fetchOrigin.pipe(Effect.catch((error) => Effect.sync(() => {
       log.warn("origin refresh after webhook failed", { err: errorMessage(error) });
     })));
     const branches = yield* dependencies.currentBranches();
@@ -403,9 +403,9 @@ export const makeDaemonCore = (
       yield* updateState((current) => ({ ...current, lastFetchAt: committedAt, lastError: null }));
     }));
     log.info("refetched after webhook", { branches: branches.length, prs: prs.size, sinceLastMs: sinceLast });
-  }).pipe(Effect.catchAll((error) => Effect.gen(function* () {
+  }).pipe(Effect.catch((error) => Effect.gen(function* () {
     const message = errorMessage(error);
-    yield* updateState((current) => ({ ...current, lastError: message })).pipe(Effect.catchAll(() => Effect.void));
+    yield* updateState((current) => ({ ...current, lastError: message })).pipe(Effect.catch(() => Effect.void));
     log.error("webhook refetch failed", { err: message });
   })));
 
@@ -418,7 +418,7 @@ export const makeDaemonCore = (
     accept: (event, body) => Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const payload = yield* trySync("parse webhook body", () => JSON.parse(body)).pipe(
-        Effect.catchAll(() => {
+        Effect.catch(() => {
           log.warn("webhook body not JSON", { event });
           return Effect.succeed(null);
         }),
@@ -443,7 +443,7 @@ const acquireServer = (
   secret: string,
   core: DaemonCore,
 ): Effect.Effect<{ stop(force?: boolean): void }, DaemonOperationError, Scope.Scope> => Effect.gen(function* () {
-  const runtime = yield* Effect.runtime<never>();
+  const context = yield* Effect.context<never>();
   return yield* Effect.acquireRelease(
     trySync("start webhook server", () => Bun.serve({
       port: events.port,
@@ -452,7 +452,7 @@ const acquireServer = (
       async fetch(req): Promise<Response> {
         const url = new URL(req.url);
         if (req.method === "GET" && url.pathname === "/health") {
-          const current = await Runtime.runPromise(runtime)(core.state);
+          const current = await Effect.runPromiseWith(context)(core.state);
           return Response.json({ ok: true, port: events.port, eventCount: current.eventCount });
         }
         if (req.method !== "POST" || url.pathname !== "/webhook") return new Response("not found", { status: 404 });
@@ -467,7 +467,7 @@ const acquireServer = (
         if (event === "ping") return Response.json({ ok: true });
         if (RELEVANT_EVENTS.has(event)) {
           try {
-            await Runtime.runPromise(runtime)(core.accept(event, body));
+            await Effect.runPromiseWith(context)(core.accept(event, body));
           } catch (error) {
             log.error("failed to persist webhook delivery", { err: errorMessage(error) });
             return new Response("failed to accept delivery", { status: 503 });
@@ -487,7 +487,7 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
     Effect.runSync(Effect.gen(function* () {
       const core = yield* makeDaemonCore(events, productionDependencies());
       yield* acquireServer(events, secret, core);
-    }).pipe(Scope.extend(scope)));
+    }).pipe(Scope.provide(scope)));
   } catch (error) {
     Effect.runSync(Scope.close(scope, Exit.void));
     throw error;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Effect, Exit, Fiber } from "effect";
+import { Cause, Effect, Exit, Fiber } from "effect";
 
 import {
   createSessionMessenger,
@@ -447,9 +447,10 @@ describe("the claude transport ladder", () => {
     const exit = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const fiber = yield* Effect.forkScoped(send(target));
       while (!entered) yield* Effect.sleep(1);
-      return yield* Fiber.interrupt(fiber);
+      yield* Fiber.interrupt(fiber);
+      return yield* Fiber.await(fiber);
     })));
-    expect(Exit.isInterrupted(exit)).toBe(true);
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
     expect(fake.calls.terminal).toBe(0);
   });
 
@@ -471,11 +472,12 @@ describe("the claude transport ladder", () => {
         Effect.gen(function* () {
           const fiber = yield* Effect.forkScoped(send(target));
           while (!sleeping) yield* Effect.sleep(1);
-          return yield* Fiber.interrupt(fiber);
+          yield* Fiber.interrupt(fiber);
+          return yield* Fiber.await(fiber);
         }),
       ),
     );
-    expect(Exit.isInterrupted(exit)).toBe(true);
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
     expect(fake.calls.terminal).toBe(0);
   });
 });

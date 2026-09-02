@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Fiber, TestClock, TestContext } from "effect";
+import { Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 
 import type { GhActionResult } from "../../core/github/types.ts";
 import {
@@ -24,7 +25,7 @@ describe("startAutoMergeRetry", () => {
     let armed = 0;
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           autoMergeRetryEffect(
             async () => (++calls < 3 ? gap : { ok: true }),
             {
@@ -37,10 +38,10 @@ describe("startAutoMergeRetry", () => {
         );
         for (let attempt = 0; attempt < 3; attempt++) {
           yield* TestClock.adjust(100);
-          yield* Effect.yieldNow();
+          yield* Effect.yieldNow;
         }
         yield* Fiber.join(fiber);
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
     expect(calls).toBe(3);
     expect(armed).toBe(1);
@@ -53,7 +54,7 @@ describe("startAutoMergeRetry", () => {
     const errors: string[] = [];
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           autoMergeRetryEffect(
             async () => {
               calls++;
@@ -69,7 +70,7 @@ describe("startAutoMergeRetry", () => {
         );
         yield* TestClock.adjust(100);
         yield* Fiber.join(fiber);
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
     expect(calls).toBe(1);
     expect(errors).toEqual(["head oid does not match"]);
@@ -80,7 +81,7 @@ describe("startAutoMergeRetry", () => {
     let nowCalls = 0;
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           autoMergeRetryEffect(
             async () => gap,
             {
@@ -94,11 +95,11 @@ describe("startAutoMergeRetry", () => {
             },
           ),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* TestClock.adjust(100);
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* Fiber.join(fiber);
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
     expect(gaveUp).toBe(1);
   });

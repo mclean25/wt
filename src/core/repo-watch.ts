@@ -45,7 +45,7 @@
  */
 import { mkdirSync, watch, type FSWatcher } from "node:fs";
 import { basename, join } from "node:path";
-import { Effect, Exit, Fiber, Ref, Runtime, Scope } from "effect";
+import { Effect, Exit, Fiber, Ref, Scope } from "effect";
 
 import { createLogger } from "./logger.ts";
 import { closeSilent } from "./tail-util.ts";
@@ -79,38 +79,38 @@ export const makeDebouncedEffect = (
   onChange: () => void,
   ms: number,
 ): Effect.Effect<Debounced, never, Scope.Scope> => Effect.gen(function* () {
-  const runtime = yield* Effect.runtime<never>();
+  const context = yield* Effect.context<never>();
   const scope = yield* Effect.scope;
   const disposed = yield* Ref.make(false);
-  const current = yield* Ref.make<Fiber.RuntimeFiber<void, never> | null>(null);
+  const current = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
 
   const cancelCurrent = Effect.gen(function* () {
     const fiber = yield* Ref.getAndSet(current, null);
     if (fiber) yield* Fiber.interrupt(fiber);
   });
   const cancelCurrentFromCallback = (): void => {
-    const fiber = Runtime.runSync(runtime)(Ref.getAndSet(current, null));
-    if (fiber) Runtime.runSync(runtime)(Fiber.interruptFork(fiber));
+    const fiber = Effect.runSyncWith(context)(Ref.getAndSet(current, null));
+    if (fiber) fiber.interruptUnsafe();
   };
   const cancelEffect = Ref.set(disposed, true).pipe(Effect.andThen(cancelCurrent));
   yield* Effect.addFinalizer(() => cancelEffect);
 
   return {
     trigger: () => {
-      if (Runtime.runSync(runtime)(Ref.get(disposed))) return;
+      if (Effect.runSyncWith(context)(Ref.get(disposed))) return;
       cancelCurrentFromCallback();
-      const fiber = Runtime.runSync(runtime)(
+      const fiber = Effect.runSyncWith(context)(
         Effect.sleep(ms).pipe(
           Effect.andThen(Effect.sync(() => {
-            if (!Runtime.runSync(runtime)(Ref.get(disposed))) onChange();
+            if (!Effect.runSyncWith(context)(Ref.get(disposed))) onChange();
           })),
           Effect.forkIn(scope),
         ),
       );
-      Runtime.runSync(runtime)(Ref.set(current, fiber));
+      Effect.runSyncWith(context)(Ref.set(current, fiber));
     },
     cancel: () => {
-      Runtime.runSync(runtime)(Ref.set(disposed, true));
+      Effect.runSyncWith(context)(Ref.set(disposed, true));
       cancelCurrentFromCallback();
     },
     cancelEffect,
@@ -119,7 +119,7 @@ export const makeDebouncedEffect = (
 
 export function makeDebounced(onChange: () => void, ms: number): Debounced {
   const scope = Effect.runSync(Scope.make());
-  const debounced = Effect.runSync(makeDebouncedEffect(onChange, ms).pipe(Scope.extend(scope)));
+  const debounced = Effect.runSync(makeDebouncedEffect(onChange, ms).pipe(Scope.provide(scope)));
   let cancelled = false;
   return {
     trigger: debounced.trigger,

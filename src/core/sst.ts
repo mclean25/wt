@@ -73,7 +73,7 @@ function stageHasResourcesEffect(name: string) {
         return Array.isArray(resources) && resources.length > 0;
       },
       catch: (cause) => new SstStateParseError({ stage: name, cause }),
-    }).pipe(Effect.catchAll((err) => Effect.sync(() => {
+    }).pipe(Effect.catch((err) => Effect.sync(() => {
       log.error(err, { stage: name });
       return true;
     })));

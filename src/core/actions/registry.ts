@@ -45,7 +45,7 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Deferred, Effect, Fiber } from "effect";
+import { Deferred, Effect, Fiber, Semaphore } from "effect";
 
 import {
   type ActionLine,
@@ -130,7 +130,7 @@ class ActionRegistry {
   /** Per slug: tail + done watcher + parser state for the in-flight run. */
   private liveHandles = new Map<string, LiveHandles>();
   private listeners = new Set<Listener>();
-  private cleanupFiber: Fiber.RuntimeFiber<void, never> | null = null;
+  private cleanupFiber: Fiber.Fiber<void, never> | null = null;
   /**
    * Registry-global monotonic line id. Every ActionLine emitted by this
    * registry — across all runs, all slugs — pulls from this counter.
@@ -144,8 +144,8 @@ class ActionRegistry {
   /** Per runDir: serialized meta.json writes. Concurrent updates
    *  (status flip + result-event metadata) would otherwise race and
    *  one would lose. */
-  private metaLocks = new Map<string, Effect.Semaphore>();
-  private pendingMetaWrites = new Set<Fiber.RuntimeFiber<void, never>>();
+  private metaLocks = new Map<string, Semaphore.Semaphore>();
+  private pendingMetaWrites = new Set<Fiber.Fiber<void, never>>();
   /** Slugs with a `start()` in flight but not yet committed to `runs`.
    *  `start()` awaits `startActionSession` now, so the "one running per
    *  slug" guard can no longer rely on check-then-commit being atomic —
@@ -329,7 +329,7 @@ class ActionRegistry {
     harnessId: HarnessId,
     opts: StartOpts,
   ): Effect.Effect<ActionStartResult> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
     // `kill()` synchronously closes the prior run's tail + done
     // watcher and tmux-kills the session, so by the time we reach
     // here `liveHandles[slug]` should be empty. Defense-in-depth:
@@ -616,7 +616,7 @@ class ActionRegistry {
    * backstop, not dead code.
    */
   killEffect(slug: string): Effect.Effect<boolean> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
     const run = this.runs.get(slug);
     if (!run || run.status !== "running") return false;
 
@@ -697,7 +697,7 @@ class ActionRegistry {
    * stay on disk).
    */
   bootEffect(liveSlugs: ReadonlySet<string>): Effect.Effect<void> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
     const dir = actionsDir();
     if (!existsSync(dir)) return;
     let names: string[];
@@ -958,7 +958,7 @@ class ActionRegistry {
    * invocation rehydrates them via `boot`.
    */
   shutdownEffect(): Effect.Effect<void> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       for (const handles of this.liveHandles.values()) {
         yield* Effect.sync(() => {
           try { handles.tail.close(); } catch { /* best-effort */ }
@@ -1232,7 +1232,7 @@ class ActionRegistry {
   ): Effect.Effect<void> {
     let lock = this.metaLocks.get(runDir);
     if (!lock) {
-      lock = Effect.unsafeMakeSemaphore(1);
+      lock = Semaphore.makeUnsafe(1);
       this.metaLocks.set(runDir, lock);
     }
     return lock.withPermits(1)(
@@ -1254,7 +1254,7 @@ class ActionRegistry {
 
   private persistMetaUpdate(runDir: string, patch: Partial<ActionMeta>): void {
     const tracked = Effect.runSync(Deferred.make<void>());
-    let fiber: Fiber.RuntimeFiber<void, never>;
+    let fiber: Fiber.Fiber<void, never>;
     fiber = Effect.runFork(
       Deferred.await(tracked).pipe(
         Effect.andThen(this.persistMetaUpdateEffect(runDir, patch)),

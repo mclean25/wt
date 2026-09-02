@@ -49,7 +49,7 @@ const RETRY_EVERY_MS = 30_000;
 export const RETRY_LIMIT_MS = 20 * 60_000;
 
 type Pending = {
-  fiber: Fiber.RuntimeFiber<void, never> | null;
+  fiber: Fiber.Fiber<void, never> | null;
   token: object;
 };
 
@@ -109,21 +109,21 @@ export function autoMergeRetryEffect(
       const result = yield* Effect.tryPromise({
         try: attempt,
         catch: (cause) => new AutoMergeAttemptError({ cause }),
-      }).pipe(Effect.either);
-      if (result._tag === "Left") {
+      }).pipe(Effect.result);
+      if (result._tag === "Failure") {
         cb.onFailed(
-          result.left.cause instanceof Error
-            ? result.left.cause.message
-            : String(result.left.cause),
+          result.failure.cause instanceof Error
+            ? result.failure.cause.message
+            : String(result.failure.cause),
         );
         return;
       }
-      if (result.right.ok) {
+      if (result.success.ok) {
         cb.onArmed();
         return;
       }
-      if (!result.right.retryable) {
-        cb.onFailed(result.right.error);
+      if (!result.success.retryable) {
+        cb.onFailed(result.success.error);
         return;
       }
       if ((yield* currentTime) - startedAt >= RETRY_LIMIT_MS) {

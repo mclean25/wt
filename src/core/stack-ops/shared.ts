@@ -203,7 +203,7 @@ export function retargetIfNeededEffect(
     const baseStillExists = yield* gitQuietEffect(
       ["rev-parse", "--verify", "--quiet", `origin/${live.baseRefName}`],
       config.paths.mainClone,
-    ).pipe(Effect.catchAll(() => Effect.succeed(false)));
+    ).pipe(Effect.catch(() => Effect.succeed(false)));
     if (baseStillExists) return;
     warnedClosedPrs.add(live.number);
     log.attention.warn(

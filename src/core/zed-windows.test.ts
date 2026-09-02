@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Fiber, Ref, TestClock, TestContext } from "effect";
+import { Effect, Fiber, Ref } from "effect";
+import { TestClock } from "effect/testing";
 
 import { waitForNewZedWindowEffect } from "./zed-windows.ts";
 
@@ -7,7 +8,7 @@ describe("waitForNewZedWindowEffect", () => {
   test("finds a window after the polling interval", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           waitForNewZedWindowEffect(
             new Set([1]),
             () => Effect.succeed(new Set([1, 2])),
@@ -16,7 +17,7 @@ describe("waitForNewZedWindowEffect", () => {
         );
         yield* TestClock.adjust(150);
         return yield* Fiber.join(fiber);
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
 
     expect(result).toBe(2);
@@ -25,7 +26,7 @@ describe("waitForNewZedWindowEffect", () => {
   test("stops at its deadline when no window appears", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           waitForNewZedWindowEffect(
             new Set([1]),
             () => Effect.succeed(new Set([1])),
@@ -34,7 +35,7 @@ describe("waitForNewZedWindowEffect", () => {
         );
         yield* TestClock.adjust(3000);
         return yield* Fiber.join(fiber);
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
 
     expect(result).toBeNull();
@@ -44,7 +45,7 @@ describe("waitForNewZedWindowEffect", () => {
     const polls = await Effect.runPromise(
       Effect.gen(function* () {
         const count = yield* Ref.make(0);
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           waitForNewZedWindowEffect(
             new Set([1]),
             () => Ref.update(count, (value) => value + 1).pipe(Effect.as(new Set([1]))),
@@ -53,7 +54,7 @@ describe("waitForNewZedWindowEffect", () => {
         yield* Fiber.interrupt(fiber);
         yield* TestClock.adjust(3000);
         return yield* Ref.get(count);
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
 
     expect(polls).toBe(0);
