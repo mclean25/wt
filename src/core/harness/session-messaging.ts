@@ -292,8 +292,9 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     );
   }
 
-  function sendToClaudeEffect(target: SessionMessageTarget): Effect.Effect<SessionMessageResult> {
-    return Effect.gen(function* () {
+  const sendToClaudeEffect = Effect.fnUntraced(function* (
+    target: SessionMessageTarget,
+  ): Effect.fn.Return<SessionMessageResult> {
       const { slug, cwd, text } = target;
       const managedName = target.managedName ?? null;
       const tmuxName = claudeTmuxName(slug, managedName);
@@ -358,8 +359,7 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
       const cause: FallbackCause = { kind: delivery.kind, reason: delivery.reason };
       warnFallback(slug, tmuxName, cause);
       return yield* typeIt(cause);
-    });
-  }
+  });
 
   /**
    * Deliver a prompt to a live harness conversation, cold-starting its
@@ -402,13 +402,5 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
 }
 
 export const sendSessionMessage = createSessionMessenger();
-
-export function createSessionMessengerPromise(overrides: Partial<Dependencies> = {}) {
-  const send = createSessionMessenger(overrides);
-  return (target: SessionMessageTarget, signal?: AbortSignal): Promise<SessionMessageResult> =>
-    Effect.runPromise(send(target), signal ? { signal } : undefined);
-}
-
-export const sendSessionMessagePromise = createSessionMessengerPromise();
 
 export type { InjectResult };

@@ -56,22 +56,20 @@ type StageProcess = {
   kill(): void;
 };
 
-function cleanupProcess(process: StageProcess): Effect.Effect<void, never> {
-  return Effect.gen(function* () {
-    yield* Effect.sync(() => {
-      if (process.exitCode !== null) return;
-      try {
-        process.kill();
-      } catch {
-        // Awaiting `exited` below still reaps an already-dead process.
-      }
-    });
-    yield* Effect.promise(() => process.exited.then(
-      () => undefined,
-      () => undefined,
-    ));
+const cleanupProcess = Effect.fnUntraced(function* (process: StageProcess) {
+  yield* Effect.sync(() => {
+    if (process.exitCode !== null) return;
+    try {
+      process.kill();
+    } catch {
+      // Awaiting `exited` below still reaps an already-dead process.
+    }
   });
-}
+  yield* Effect.promise(() => process.exited.then(
+    () => undefined,
+    () => undefined,
+  ));
+});
 
 const removeStage = Effect.fnUntraced(function* (name: string) {
   return yield* Effect.scoped(

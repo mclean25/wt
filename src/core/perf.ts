@@ -27,8 +27,9 @@ export {
   classifyProcess,
   formatPerfReport,
   PERF_CATEGORIES,
-  samplePerfPromise,
-  shortCommand,
+  samplePerf,
+  PerfSampleError,
+    shortCommand,
 } from "./perf/sample.ts";
 export type {
   PerfBucket,

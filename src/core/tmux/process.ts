@@ -28,8 +28,6 @@ export function killByName(name: string): Effect.Effect<void> {
   );
 }
 
-export const killByNamePromise = (name: string): Promise<void> => Effect.runPromise(killByName(name));
-
 /**
  * Every session name on our private tmux server, including the
  * `<slug>-diff` ones. Used by the reaper and by `attachOrCreate`'s
@@ -38,8 +36,6 @@ export const killByNamePromise = (name: string): Promise<void> => Effect.runProm
  */
 export const listAllSessionsRaw = (): Effect.Effect<Set<string>> =>
   probeSessionNames().pipe(Effect.map((names) => names ?? new Set()));
-
-export const listAllSessionsRawPromise = (): Promise<Set<string>> => Effect.runPromise(listAllSessionsRaw());
 
 /**
  * The three-valued form of `listAllSessionsRaw`: `null` means the query
@@ -87,8 +83,6 @@ export function probeSessionNames(): Effect.Effect<Set<string> | null> {
   );
 }
 
-export const probeSessionNamesPromise = (): Promise<Set<string> | null> => Effect.runPromise(probeSessionNames());
-
 /**
  * Exact-match target for the *pane* commands below (capture-pane,
  * paste-buffer, send-keys). Their `-t` is a target-pane, where the bare
@@ -121,9 +115,6 @@ export function runTmux(
   );
 }
 
-export const runTmuxPromise = (args: readonly string[]): Promise<{ code: number; stderr: string }> =>
-  Effect.runPromise(runTmux(args));
-
 /** Snapshot a session's active pane as plain text, or null on failure. */
 export function capturePane(name: string): Effect.Effect<string | null> {
   return run([
@@ -139,5 +130,3 @@ export function capturePane(name: string): Effect.Effect<string | null> {
     Effect.orElseSucceed(() => null),
   );
 }
-
-export const capturePanePromise = (name: string): Promise<string | null> => Effect.runPromise(capturePane(name));

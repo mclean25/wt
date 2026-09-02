@@ -128,16 +128,8 @@ export const findZedWindowForPath = Effect.fn("findZedWindowForPath")(function* 
   return null;
 });
 
-export function findZedWindowForPathPromise(path: string): Promise<number | null> {
-  return Effect.runPromise(findZedWindowForPath(path));
-}
-
 export function focusYabaiWindow(id: number): Effect.Effect<boolean> {
   return yabaiFocus(id);
-}
-
-export function focusYabaiWindowPromise(id: number): Promise<boolean> {
-  return Effect.runPromise(focusYabaiWindow(id));
 }
 
 export const waitForNewZedWindow = Effect.fn("waitForNewZedWindow")(function* (
@@ -212,7 +204,3 @@ export const spawnZedAndTrack = Effect.fn("spawnZedAndTrack")(function* (
     catch: (cause) => new ZedWindowError({ operation: "write cache", cause }),
   });
 });
-
-export function spawnZedAndTrackPromise(path: string): Promise<void> {
-  return Effect.runPromise(spawnZedAndTrack(path));
-}

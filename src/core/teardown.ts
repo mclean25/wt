@@ -99,6 +99,3 @@ export function runTeardownCommand(opts: {
     })),
   );
 }
-
-export const runTeardownCommandPromise = (opts: Parameters<typeof runTeardownCommand>[0]): Promise<boolean> =>
-  Effect.runPromise(runTeardownCommand(opts));

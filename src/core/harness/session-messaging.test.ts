@@ -3,7 +3,6 @@ import { Cause, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
 import {
-  createSessionMessengerPromise,
   createSessionMessenger,
   fallbackAdvice,
   senderTag,
@@ -28,6 +27,9 @@ const withVirtualTime = <A, E>(effect: Effect.Effect<A, E>, advanceMs = 10_000):
       return yield* Fiber.join(fiber);
     }).pipe(Effect.provide(TestClock.layer())),
   );
+
+/** Run a send() Effect to completion — every fake here resolves synchronously. */
+const run = <A, E>(effect: Effect.Effect<A, E>): Promise<A> => Effect.runPromise(effect);
 
 const original = process.env.WT_AGENT;
 
@@ -180,9 +182,9 @@ describe("the claude transport ladder", () => {
 
   test("an injectable session is submitted into, never typed at", async () => {
     const fake = fakes();
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({ ok: true, transport: "inspector" });
+    expect(await run(send(target))).toMatchObject({ ok: true, transport: "inspector" });
     expect(fake.calls.deliver).toBe(1);
     expect(fake.calls.terminal).toBe(0);
     expect(fake.warnings).toEqual([]);
@@ -193,9 +195,9 @@ describe("the claude transport ladder", () => {
     // injections each restore their own captured draft on a timer, and
     // the later timer wins.
     const fake = fakes();
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    await send(target);
+    await run(send(target));
 
     expect(fake.locks).toEqual(["__claude_send__eng-1"]);
   });
@@ -203,9 +205,9 @@ describe("the claude transport ladder", () => {
   test("no socket at all falls back to typing, and says why", async () => {
     // The session predates this wt, or a human started it by hand.
     const fake = fakes({ deliverFails: "absent" });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({
+    expect(await run(send(target))).toMatchObject({
       ok: true,
       transport: "terminal",
       fallback: { kind: "absent" },
@@ -216,9 +218,9 @@ describe("the claude transport ladder", () => {
 
   test("a stale socket falls back to typing, with restart advice", async () => {
     const fake = fakes({ deliverFails: "stale" });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({
+    expect(await run(send(target))).toMatchObject({
       ok: true,
       transport: "terminal",
       fallback: { kind: "stale" },
@@ -228,9 +230,9 @@ describe("the claude transport ladder", () => {
 
   test("a prompt UI that never mounts is typed at, blaming the anchors", async () => {
     const fake = fakes({ deliverFails: "not-ready" });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({
+    expect(await run(send(target))).toMatchObject({
       ok: true,
       transport: "terminal",
       fallback: { kind: "not-ready" },
@@ -264,9 +266,9 @@ describe("the claude transport ladder", () => {
     // WT_INSPECT=off degrades every send here by choice. Nothing about
     // the TARGET is wrong, and nothing about it needs fixing.
     const fake = fakes();
-    const send = createSessionMessengerPromise({ ...fake.deps, inspectorEnabled: () => false });
+    const send = createSessionMessenger({ ...fake.deps, inspectorEnabled: () => false });
 
-    const res = await send(target);
+    const res = await run(send(target));
     expect(res).toMatchObject({
       ok: true,
       transport: "terminal",
@@ -281,9 +283,9 @@ describe("the claude transport ladder", () => {
     // The submit key would answer whatever dialog is up — deciding a
     // permission on the human's behalf.
     const fake = fakes({ status: "waiting", waitingFor: "permission prompt" });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    const res = await send(target);
+    const res = await run(send(target));
     expect(res).toMatchObject({ ok: false });
     expect(res.ok === false && res.reason).toContain("permission prompt");
     expect(fake.calls.terminal).toBe(0);
@@ -299,9 +301,9 @@ describe("the claude transport ladder", () => {
       status: "idle",
       becomes: { status: "waiting", waitingFor: "permission prompt" },
     });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    const res = await send(target);
+    const res = await run(send(target));
     expect(res).toMatchObject({ ok: false });
     expect(res.ok === false && res.reason).toContain("permission prompt");
     expect(fake.calls.terminal).toBe(0);
@@ -311,9 +313,9 @@ describe("the claude transport ladder", () => {
     // The call carrying onSubmit is already on the wire; closing our end
     // doesn't cancel it, so typing the same text would double-submit.
     const fake = fakes({ deliverFails: "submitted-unknown", landed: true });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({ ok: true, transport: "inspector", delivered: true });
+    expect(await run(send(target))).toMatchObject({ ok: true, transport: "inspector", delivered: true });
     expect(fake.calls.terminal).toBe(0);
   });
 
@@ -329,9 +331,9 @@ describe("the claude transport ladder", () => {
 
   test("WT_INSPECT=off forces typing without probing anything", async () => {
     const fake = fakes();
-    const send = createSessionMessengerPromise({ ...fake.deps, inspectorEnabled: () => false });
+    const send = createSessionMessenger({ ...fake.deps, inspectorEnabled: () => false });
 
-    expect(await send(target)).toMatchObject({ ok: true, transport: "terminal" });
+    expect(await run(send(target))).toMatchObject({ ok: true, transport: "terminal" });
     expect(fake.calls.deliver).toBe(0);
     expect(fake.calls.ensure).toBe(0);
   });
@@ -340,37 +342,37 @@ describe("the claude transport ladder", () => {
     // A fleet-wide nudge across a degraded session must not produce a
     // wall of identical attention lines.
     const fake = fakes({ deliverFails: "absent" });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    await send(target);
-    await send(target);
-    await send(target);
+    await run(send(target));
+    await run(send(target));
+    await run(send(target));
 
     expect(fake.warnings).toHaveLength(1);
   });
 
   test("a cold start gets the longer readiness budget, and says it cold-started", async () => {
     const fake = fakes({ coldStarted: true });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({ ok: true, coldStarted: true });
+    expect(await run(send(target))).toMatchObject({ ok: true, coldStarted: true });
     expect(fake.readyBudget()).toBe(20_000);
   });
 
   test("a warm session gets the short budget", async () => {
     const fake = fakes();
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    await send(target);
+    await run(send(target));
 
     expect(fake.readyBudget()).toBe(4_000);
   });
 
   test("when the pane is gone too, the failure is reported, not papered over", async () => {
     const fake = fakes({ deliverFails: "absent", terminalFails: true });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    const res = await send(target);
+    const res = await run(send(target));
     expect(res).toMatchObject({ ok: false });
     expect(res.ok === false && res.reason).toBe("no pane either");
   });
@@ -413,9 +415,9 @@ describe("the claude transport ladder", () => {
     // submitted text, so the transcript can never witness it. Reporting
     // it as a failure made a working `/context` look broken.
     const fake = fakes({ landed: false });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send({ ...target, text: "/context" })).toMatchObject({
+    expect(await run(send({ ...target, text: "/context" }))).toMatchObject({
       ok: true,
       transport: "inspector",
       delivered: null,
@@ -425,27 +427,27 @@ describe("the claude transport ladder", () => {
   test("a dollar-prefixed harness command is also left executable", async () => {
     process.env.WT_AGENT = "wt";
     const fake = fakes();
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    await send({ ...target, harnessId: "codex", text: "$start" });
+    await run(send({ ...target, harnessId: "codex", text: "$start" }));
 
     expect(fake.calls.terminal).toBe(1);
   });
 
   test("an empty message is refused before any transport is touched", async () => {
     const fake = fakes();
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send({ ...target, text: "   " })).toMatchObject({ ok: false });
+    expect(await run(send({ ...target, text: "   " }))).toMatchObject({ ok: false });
     expect(fake.calls.deliver).toBe(0);
     expect(fake.calls.terminal).toBe(0);
   });
 
   test("other harnesses go straight to their pane", async () => {
     const fake = fakes();
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send({ ...target, harnessId: "codex" })).toMatchObject({
+    expect(await run(send({ ...target, harnessId: "codex" }))).toMatchObject({
       ok: true,
       transport: "terminal",
       // Not a fallback from a broken injector — codex never had one.

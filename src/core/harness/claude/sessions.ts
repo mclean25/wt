@@ -362,14 +362,6 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     );
   }
 
-  const startPromise = (target: ClaudeSessionTarget): Promise<ClaudeSession> =>
-    Effect.runPromise(start(target));
-  const ensureInfoPromise = (target: ClaudeSessionTarget) =>
-    Effect.runPromise(ensureInfo(target));
-  const ensurePromise = (target: ClaudeSessionTarget): Promise<ClaudeSession> =>
-    Effect.runPromise(ensure(target));
-  const stopPromise = (target: ClaudeSessionTarget): Promise<void> =>
-    Effect.runPromise(stop(target));
 
   function handle(target: ClaudeSessionTarget, info: ClaudeSessionInfo): ClaudeSession {
     const identity = targetIdentity(target);
@@ -388,15 +380,11 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
   }
 
   return {
-    ensurePromise,
     ensure,
-    ensureInfoPromise,
     ensureInfo,
     find,
     list,
-    startPromise,
     start,
-    stopPromise,
     stop,
     tmuxNameFor: (target: ClaudeSessionTarget) => targetIdentity(target).tmuxName,
   };

@@ -79,8 +79,6 @@ export class AiNamingError extends Data.TaggedError("AiNamingError")<{
  */
 export const summarizeDiff = (prompt: string) =>
   callNamingHarness(SYSTEM_PROMPT, prompt).pipe(Effect.map(parseTitleDescription));
-export const summarizeDiffPromise = (prompt: string, external?: AbortSignal): Promise<AiSummary> =>
-  Effect.runPromise(summarizeDiff(prompt), { signal: external });
 
 /**
  * Stack-naming round trip. Same client as `summarizeDiff` but a
@@ -124,9 +122,6 @@ export const summarizeStack = Effect.fn("summarizeStack")(function* (
   return yield* new AiNamingError({ kind: "invalid-title", detail:
     `stack title: model only echoed meta-vocabulary ("${lastRejected}")` });
 });
-export const summarizeStackPromise = (
-  members: ReadonlyArray<{ branch: string; brief: string }>, external?: AbortSignal,
-): Promise<string> => Effect.runPromise(summarizeStack(members), { signal: external });
 
 /**
  * Words the stack-naming prompt uses to describe *itself* (the tool, the

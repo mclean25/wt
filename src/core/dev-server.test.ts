@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { Effect } from "effect";
 import { once } from "node:events";
 import net from "node:net";
 
-import { runPromise } from "./proc.ts";
+import { run } from "./proc.ts";
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +13,7 @@ import {
   decideDevSlot,
   DEV_SERVER_STOPPED,
   devServerCrashSummary,
-  probePortPromise,
+  probePort,
   readDevWaiters,
   supervisorScript,
   type DevSlotHolder,
@@ -52,12 +53,12 @@ async function closedPort(): Promise<number> {
 describe("probePort", () => {
   test("reports a listening port", async () => {
     await withListener(async (port) => {
-      expect(await probePortPromise(port)).toBe("listening");
+      expect(await Effect.runPromise(probePort(port))).toBe("listening");
     });
   });
 
   test("reports a closed port free (refused, not timed out)", async () => {
-    expect(await probePortPromise(await closedPort())).toBe("free");
+    expect(await Effect.runPromise(probePort(await closedPort()))).toBe("free");
   });
 
   // The bug this whole three-state probe exists for: libuv runs timers
@@ -67,7 +68,7 @@ describe("probePort", () => {
   // dead and the bolt vanished from the row.
   test("never reports a listening port free when the loop stalls past the deadline", async () => {
     await withListener(async (port) => {
-      const probe = probePortPromise(port, 100);
+      const probe = Effect.runPromise(probePort(port, 100));
       blockLoop(300);
       expect(await probe).not.toBe("free");
     });
@@ -75,7 +76,7 @@ describe("probePort", () => {
 
   test("retry resolves a stall-induced inconclusive probe", async () => {
     await withListener(async (port) => {
-      const probe = probePortPromise(port, 100);
+      const probe = Effect.runPromise(probePort(port, 100));
       blockLoop(300);
       // First attempt times out mid-stall; the second runs on a loop
       // that is moving again and gets the real answer.
@@ -293,7 +294,7 @@ describe("supervisorScript", () => {
       // Bun.spawn fails on the cwd before `sh` ever runs. Passing 0
       // locally and failing in CI is exactly the shape that invariant
       // exists to prevent.
-      const r = await runPromise(["sh", "-n", f], { cwd: tmpdir() });
+      const r = await Effect.runPromise(run(["sh", "-n", f], { cwd: tmpdir() }));
       expect(`${r.exitCode} ${r.stderr}`.trim()).toBe("0");
     } finally {
       rmSync(f, { force: true });

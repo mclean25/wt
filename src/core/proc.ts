@@ -417,37 +417,6 @@ export function runQuiet(
   );
 }
 
-function failedRunResult(
-  error: ProcSpawnError | ProcReadError | ProcInterruptedError,
-): RunResult {
-  return { stdout: "", stderr: error.message, exitCode: -1 };
-}
-
-/** Compatibility boundary. Captures every expected failure as a RunResult. */
-export function runPromise(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
-  return Effect.runPromise(
-    run(argv, opts).pipe(
-      Effect.catch((error) => Effect.succeed(failedRunResult(error))),
-    ),
-  );
-}
-
-/** Compatibility boundary for callers not yet migrated to Effect. */
-export function runOkPromise(argv: string[], opts: RunOptions = {}): Promise<string> {
-  return Effect.runPromise(runOk(argv, opts));
-}
-
-/** Compatibility boundary for callers not yet migrated to Effect. */
-export function runQuietPromise(
-  argv: string[],
-  opts: RunOptions = {},
-): Promise<boolean> {
-  return Effect.runPromise(
-    runQuiet(argv, opts).pipe(
-      Effect.catch(() => Effect.succeed(false)),
-    ),
-  );
-}
 
 // eslint-disable-next-line no-control-regex
 const ANSI_RE =
@@ -517,14 +486,6 @@ export function streamLines(
         }
       }),
   );
-}
-
-/** Compatibility boundary for non-Effect stream consumers. */
-export function streamLinesPromise(
-  stream: ReadableStream<Uint8Array>,
-  onLine: (line: string) => void,
-): Promise<void> {
-  return Effect.runPromise(streamLines(stream, onLine));
 }
 
 type StreamingProcess = Bun.Subprocess<"ignore", "pipe", "pipe">;

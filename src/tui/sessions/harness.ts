@@ -10,7 +10,6 @@
  * and the result types the keyboard handler needs.
  */
 import type { CliRenderer } from "@opentui/core";
-import { Effect } from "effect";
 
 import type { HarnessId } from "../../core/harness/index.ts";
 import {
@@ -91,6 +90,3 @@ export function enterHarnessSession(opts: EnterHarnessSessionOptions) {
     },
   });
 }
-
-export const enterHarnessSessionPromise = (opts: EnterHarnessSessionOptions): Promise<EnterResult> =>
-  Effect.runPromise(enterHarnessSession(opts));

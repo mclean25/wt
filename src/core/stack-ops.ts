@@ -7,27 +7,21 @@ export { STACK_BUSY } from "./stack-ops/shared.ts";
 
 export {
   resolveChain,
-  resolveChainPromise,
-} from "./stack-ops/chain.ts";
+  } from "./stack-ops/chain.ts";
 export type { ChainStep, RestackChain } from "./stack-ops/chain.ts";
 
 export {
   rebaseStack,
-  rebaseStackPromise,
-  replayStack,
-  replayStackPromise,
-  resolveAnchor,
-  resolveAnchorPromise,
-} from "./stack-ops/replay.ts";
+    replayStack,
+    resolveAnchor,
+  } from "./stack-ops/replay.ts";
 export type { RebaseOptions, RebaseResult } from "./stack-ops/replay.ts";
 
 export {
   reconcileStack,
-  reconcileStackPromise,
-} from "./stack-ops/reconcile.ts";
+  } from "./stack-ops/reconcile.ts";
 
 export {
   pruneStackBackups,
-  pruneStackBackupsPromise,
-} from "./stack-ops/prune-backups.ts";
+  } from "./stack-ops/prune-backups.ts";
 export type { PruneBackupsResult } from "./stack-ops/prune-backups.ts";

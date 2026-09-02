@@ -4,9 +4,16 @@
  * called per render inside `App` with the current rows + action
  * helpers, so the returned closures always see fresh state (same
  * semantics as when these lived inline).
+ *
+ * Each keystroke entrypoint (`doRemove`, `doClean`, `doReplayStack`, …)
+ * is a thin `Effect.runPromise` wrapper — kept Promise-returning
+ * because the keyboard/modal-key consumers still fire them through
+ * `operationErrors(...).promise(...)` + `forkReported`. The real logic
+ * lives in the exported Effect it runs (`removeWorktree`, `cleanRows`,
+ * …), composed once per flow rather than threaded through async/await.
  */
 import { existsSync } from "node:fs";
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 
 import { actionRegistry } from "../../core/actions.ts";
 import type { RemoteConfig } from "../../core/config.ts";
@@ -20,13 +27,13 @@ import {
 import type { PullRequest } from "../../core/types.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
-import { spawnBackgroundRemovePromise } from "../../core/lifecycle.ts";
+import { spawnBackgroundRemove, type LifecycleError } from "../../core/lifecycle.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
-import { runRemoteWtPromise } from "../../core/remote.ts";
+import { runRemoteWt } from "../../core/remote.ts";
 import { removeShellLog } from "../../core/shell-tail.ts";
-import { rebaseStackPromise, STACK_BUSY } from "../../core/stack-ops.ts";
-import { killAllSessionsForPromise } from "../../core/tmux.ts";
+import { rebaseStack, STACK_BUSY } from "../../core/stack-ops.ts";
+import { killAllSessionsFor } from "../../core/tmux.ts";
 import {
   recordRemovedWorktrees,
   type RemovedWorktree,
@@ -49,6 +56,16 @@ import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 const appLog = createLogger("[app]");
 
 const io = operationErrors("destroy flows");
+
+/** A remote `wt rm` exiting non-zero — kept tagged (rather than a bare
+ *  `Error`) so it doesn't merge into an untyped failure channel. */
+class RemoteRemoveExitError extends Data.TaggedError("RemoteRemoveExitError")<{
+  readonly code: number;
+}> {
+  override get message(): string {
+    return `remove failed (exit ${this.code})`;
+  }
+}
 
 /**
  * Rich removed-history snapshot taken at destroy DISPATCH, while the
@@ -110,7 +127,7 @@ export type DestroyFlowsCtx = {
   optimisticRemoveRemoteWorktree: (
     remote: RemoteConfig,
     slug: string,
-    run: () => Promise<void>,
+    run: (() => Promise<void>) | Effect.Effect<void, unknown>,
   ) => Promise<void>;
   /**
    * Re-entry guard for `R`: the set of chains (stack id or standalone
@@ -159,13 +176,17 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     ),
   );
 
-  async function doRemoteRemove(
+  /**
+   * Effect body of `doRemoteRemove`. Never fails — a remote-remove
+   * failure is reported (log + toast) and swallowed, same as the
+   * original try/catch.
+   */
+  const remoteRemoveWorktree = Effect.fn("remoteRemoveWorktree")(function* (
     remote: RemoteConfig,
     slug: string,
     opts: { force?: boolean } = {},
-  ): Promise<void> {
+  ): Effect.fn.Return<void> {
     const log = createLogger(`[remote:${remote.label}]`);
-
     const force = opts.force ?? false;
     const args = [
       "rm",
@@ -176,27 +197,50 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       ...(force ? ["--force"] : []),
     ];
     log.event.info(`removing ${slug}${force ? " (force)" : ""}`);
-    try {
-      Effect.runFork(actionRegistry.kill(remoteWorktreeActionKey(remote.host, slug)));
-      await optimisticRemoveRemoteWorktree(remote, slug, async () => {
-        const code = await runRemoteWtPromise(remote, args, {
-          onLine: (line) => log.event.dim(line),
-        });
-        if (code !== 0) throw new Error(`remove failed (exit ${code})`);
-      });
-      log.event.ok(`removed ${slug} from ${remote.label}`);
-      toast(`removed ${slug} from ${remote.label}`, theme.ok, 2200);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.event.err(message);
-      toast(`remote remove failed: ${message}`, theme.err, 3500);
-    }
-  }
+    yield* Effect.forkDetach(actionRegistry.kill(remoteWorktreeActionKey(remote.host, slug)));
+    yield* io.promise("optimistic remote remove", () =>
+      optimisticRemoveRemoteWorktree(
+        remote,
+        slug,
+        runRemoteWt(remote, args, { onLine: (line) => log.event.dim(line) }).pipe(
+          Effect.flatMap((code) =>
+            code === 0
+              ? Effect.void
+              : Effect.fail(new RemoteRemoveExitError({ code })),
+          ),
+        ),
+      ),
+    ).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          log.event.ok(`removed ${slug} from ${remote.label}`);
+          toast(`removed ${slug} from ${remote.label}`, theme.ok, 2200);
+        }),
+      ),
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          const message = causeMessage(error.cause);
+          log.event.err(message);
+          toast(`remote remove failed: ${message}`, theme.err, 3500);
+        }),
+      ),
+    );
+  });
 
-  async function doRemove(
+  function doRemoteRemove(
+    remote: RemoteConfig,
     slug: string,
     opts: { force?: boolean } = {},
   ): Promise<void> {
+    return Effect.runPromise(remoteRemoveWorktree(remote, slug, opts));
+  }
+
+  /** Effect body of `doRemove`. May fail with `LifecycleError` from the
+   *  background-spawn step, same as the original's uncaught throw. */
+  const removeWorktree = Effect.fn("removeWorktree")(function* (
+    slug: string,
+    opts: { force?: boolean } = {},
+  ): Effect.fn.Return<void, LifecycleError> {
     const log = createLogger(slug);
     const row = rows.find((r) => r.wt.slug === slug);
     if (!row) return;
@@ -255,28 +299,21 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // kill() commits the "killed" status synchronously before its async
     // tmux teardown, so the status flip lands before killAllSessionsFor
     // below even though we don't await here.
-    Effect.runFork(actionRegistry.kill(slug));
+    yield* Effect.forkDetach(actionRegistry.kill(slug));
     // Tear down any interactive sessions (claude, diff, shell) BEFORE
     // the worktree removal starts. Their cwds are inside the worktree;
     // letting the remove race against a live tmux child can leave it
     // writing into a half-deleted directory. killAllSessionsFor is
-    // idempotent and fast (just SIGHUPs the tmux session daemons).
-    // Awaited so spawnBackgroundRemove only starts once they're gone.
-    try {
-      await killAllSessionsForPromise(slug);
-      void refreshTmuxSessions();
-    } catch (err) {
-      log.warn("kill session before remove failed", {
-        err: err instanceof Error ? err.message : String(err),
-      });
-      // Don't block the destroy on a kill failure — worst case the
-      // session is already dead, or it'll get reaped on next startup.
-    }
+    // idempotent and fast (just SIGHUPs the tmux session daemons), and
+    // never fails (best-effort by construction) — awaited so
+    // spawnBackgroundRemove only starts once they're gone.
+    yield* killAllSessionsFor(slug);
+    void refreshTmuxSessions();
     // Drop the shell-tail log now that the session is gone — the
     // startup reap would catch it eventually, but cleaning up at the
     // source keeps the cache dir tidy without waiting for a restart.
     removeShellLog(slug);
-    spawnBackgroundRemovePromise(slug, {
+    yield* spawnBackgroundRemove(slug, {
       force,
       destroyStage: row.fields.deploy.data ?? false,
       deleteBranch: true,
@@ -287,21 +324,37 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // deleted out from under them, so re-running ten git probes in a
     // vanishing directory buys errors, not freshness. The busy glyph
     // comes from the lock watcher either way.
-    await Effect.runPromise(removalRefresh);
+    yield* removalRefresh;
+  });
+
+  function doRemove(
+    slug: string,
+    opts: { force?: boolean } = {},
+  ): Promise<void> {
+    return Effect.runPromise(removeWorktree(slug, opts));
   }
 
-  /** One removal entrypoint; location is resolved only at execution. */
-  async function doRemoveWorktree(
+  /** Effect body of `doRemoveWorktree` — one removal entrypoint;
+   *  location is resolved only at execution. */
+  const removeWorktreeTarget = Effect.fn("removeWorktreeTarget")(function* (
+    target: WorktreeTarget,
+    opts: { force?: boolean } = {},
+  ): Effect.fn.Return<void, LifecycleError> {
+    if (isRemoteWorktreeTarget(target)) {
+      return yield* remoteRemoveWorktree(target.location.endpoint, target.slug, opts);
+    }
+    return yield* removeWorktree(target.slug, opts);
+  });
+
+  function doRemoveWorktree(
     target: WorktreeTarget,
     opts: { force?: boolean } = {},
   ): Promise<void> {
-    if (isRemoteWorktreeTarget(target)) {
-      return doRemoteRemove(target.location.endpoint, target.slug, opts);
-    }
-    return doRemove(target.slug, opts);
+    return Effect.runPromise(removeWorktreeTarget(target, opts));
   }
 
-  async function doClean(): Promise<void> {
+  /** Effect body of `doClean`. */
+  const cleanAll = Effect.fn("cleanAll")(function* (): Effect.fn.Return<void, LifecycleError> {
     const localCandidates = rows.filter((r) => isCleanCandidate(r));
     const remoteCandidates = remoteWorktrees.filter((entry) =>
       isRemoteCleanCandidate(
@@ -323,38 +376,50 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       );
       return false;
     });
-    // Keep the independent local/remote removals concurrent, but let Effect
-    // own the fan-out so interruption and failure semantics stay explicit.
-    await Effect.runPromise(
-      Effect.all(
-        [
-          io.promise("clean local candidates", () => doCleanRows(localCandidates)),
-          ...safeRemoteCandidates.map((entry) =>
-            io.promise("clean remote candidate", () =>
-              doRemoteRemove(entry.remote, entry.slug)),
-          ),
-        ],
-        { concurrency: "unbounded", discard: true },
-      ),
+    // Keep the independent local/remote removals concurrent; a
+    // dispatch-time failure in one interrupts the others, same as the
+    // Promise.all-style fan-out this replaces.
+    yield* Effect.all(
+      [
+        cleanRows(localCandidates),
+        ...safeRemoteCandidates.map((entry) =>
+          remoteRemoveWorktree(entry.remote, entry.slug),
+        ),
+      ],
+      { concurrency: "unbounded", discard: true },
     );
+  });
+
+  function doClean(): Promise<void> {
+    return Effect.runPromise(cleanAll());
   }
 
   /**
-   * Scoped clean for the automations engine: destroy just the listed
-   * slugs, re-filtered through `isCleanCandidate` against CURRENT rows
-   * so a fire computed a render ago can't destroy something that
-   * un-merged in between. Silently no-ops on an empty survivor set.
+   * Effect body of `doCleanSlugs` — scoped clean for the automations
+   * engine: destroy just the listed slugs, re-filtered through
+   * `isCleanCandidate` against CURRENT rows so a fire computed a
+   * render ago can't destroy something that un-merged in between.
+   * Silently no-ops on an empty survivor set.
    */
-  async function doCleanSlugs(slugs: readonly string[]): Promise<void> {
+  const cleanSlugs = Effect.fn("cleanSlugs")(function* (
+    slugs: readonly string[],
+  ): Effect.fn.Return<void, LifecycleError> {
     const want = new Set(slugs);
     const candidates = rows.filter(
       (r) => want.has(r.wt.slug) && isCleanCandidate(r),
     );
     if (candidates.length === 0) return;
-    await doCleanRows(candidates);
+    yield* cleanRows(candidates);
+  });
+
+  function doCleanSlugs(slugs: readonly string[]): Promise<void> {
+    return Effect.runPromise(cleanSlugs(slugs));
   }
 
-  async function doCleanRows(input: readonly WorktreeRow[]): Promise<void> {
+  /** Effect body of `doCleanRows`, shared by `cleanAll`/`cleanSlugs`. */
+  const cleanRows = Effect.fn("cleanRows")(function* (
+    input: readonly WorktreeRow[],
+  ): Effect.fn.Return<void, LifecycleError> {
     // Drop any row whose on-disk flock is already held — a prior `d`/`c`
     // or an automation's clean already has a detached remove in flight on
     // it. `doRemove` makes this authoritative check per-row; `doClean`
@@ -403,25 +468,20 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // cursor can't land on the next row this sweep is about to destroy.
     advanceCursorPast(candidates.map((r) => r.wt.slug));
     recordRemovedSnapshots(candidates);
-    for (const row of candidates) Effect.runFork(actionRegistry.kill(row.wt.slug));
-    // This is intentionally all-settled: one already-dead or inaccessible
-    // tmux session must not prevent the remaining candidates from entering
-    // the destroy queue. Effect makes that best-effort policy explicit.
-    await Effect.runPromise(
-      Effect.forEach(
-        candidates,
-        (row) =>
-          Effect.tryPromise(() => killAllSessionsForPromise(row.wt.slug)).pipe(
-            Effect.catch(() => Effect.void),
-          ),
-        { concurrency: "unbounded", discard: true },
-      ),
+    for (const row of candidates) yield* Effect.forkDetach(actionRegistry.kill(row.wt.slug));
+    // Best-effort by construction (killAllSessionsFor never fails): one
+    // already-dead or inaccessible tmux session must not prevent the
+    // remaining candidates from entering the destroy queue.
+    yield* Effect.forEach(
+      candidates,
+      (row) => killAllSessionsFor(row.wt.slug),
+      { concurrency: "unbounded", discard: true },
     );
     void refreshTmuxSessions();
     for (const row of candidates) {
       archive(row.wt.slug);
       removeShellLog(row.wt.slug);
-      spawnBackgroundRemovePromise(row.wt.slug, {
+      yield* spawnBackgroundRemove(row.wt.slug, {
         force: false,
         destroyStage: row.fields.deploy.data ?? false,
         deleteBranch: true,
@@ -436,8 +496,8 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // triggers `reparentBaseReferences`, anchors preserved), so no
     // TUI-side bookkeeping is needed here. The actual replay (rebasing
     // commits off the squashed parent) stays an explicit `R`/`/restack`.
-    await Effect.runPromise(removalRefresh);
-  }
+    yield* removalRefresh;
+  });
 
   /**
    * `R` — the algorithmic fast path for getting the selected worktree
@@ -453,7 +513,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
    * worktree to the LLM automatically (the restack skill, injected into
    * its session), which owns the judgment the engine can't do.
    */
-  async function doReplayStack(): Promise<void> {
+  const replaySelectedStack = Effect.fn("replaySelectedStack")(function* (): Effect.fn.Return<void> {
     const { current } = ctx;
     if (!current?.wt.branch) {
       toast("select a worktree first", theme.warn, 2000);
@@ -488,7 +548,11 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       toast("branch already landed — clean it (c) instead of rebasing", theme.warn, 3000);
       return;
     }
-    await doRestackStack(current.wt.branch);
+    yield* restackChain(current.wt.branch);
+  });
+
+  function doReplayStack(): Promise<void> {
+    return Effect.runPromise(replaySelectedStack());
   }
 
   /**
@@ -593,79 +657,92 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
   }
 
   /**
-   * The branch-resolved half of `doReplayStack`, shared with the
-   * automations engine (`builtin:restack` dispatches here after
-   * pre-cleaning the merged members via `doCleanSlugs`). `stackId` is
-   * any branch in the target stack (the engine resolves the whole
-   * chain from it). "busy" means NOTHING ran — this chain already has a
-   * restack in flight (a manual `R` or another auto-restack), or the
-   * engine found a member's per-slug lock held (a destroy, another
-   * process's restack) — and the automations engine un-consumes the
-   * fire on that outcome instead of recording a restack that never
-   * happened. Other chains restack concurrently. "clean" / "failed"
-   * report the replay itself; a conflict bail reports "failed" AND
-   * hands the failing worktree off to the restack skill in its session
-   * (see `handOffConflictToSession`), for the manual and automation
-   * paths alike.
+   * Effect body of `doRestackStack`, shared with the automations engine
+   * (`builtin:restack` dispatches here after pre-cleaning the merged
+   * members via `doCleanSlugs`). `stackId` is any branch in the target
+   * stack (the engine resolves the whole chain from it). "busy" means
+   * NOTHING ran — this chain already has a restack in flight (a manual
+   * `R` or another auto-restack), or the engine found a member's
+   * per-slug lock held (a destroy, another process's restack) — and the
+   * automations engine un-consumes the fire on that outcome instead of
+   * recording a restack that never happened. Other chains restack
+   * concurrently. "clean" / "failed" report the replay itself; a
+   * conflict bail reports "failed" AND hands the failing worktree off
+   * to the restack skill in its session (see `handOffConflictToSession`),
+   * for the manual and automation paths alike. Never fails: a crash out
+   * of `rebaseStack` itself is reported the same as a replay failure.
    */
-  async function doRestackStack(
+  const restackChain = Effect.fn("restackChain")(function* (
     stackId: string,
-  ): Promise<"clean" | "failed" | "busy"> {
+  ): Effect.fn.Return<"clean" | "failed" | "busy"> {
     const key = restackKeyFor(stackId);
     if (restackBusyRef.current.has(key)) {
       toast("restack already running for this stack", theme.warn, 2000);
       return "busy";
     }
     restackBusyRef.current.add(key);
-    let outcome: "clean" | "failed" | "busy" = "failed";
     appLog.event.info(`restack ${stackId}: fetch + reconcile + replay`);
-    try {
-      const res = await rebaseStackPromise(stackId, {}, (line) =>
-        appLog.event.dim(`restack ${stackId}: ${line}`),
-      );
-      if (res.ok) {
-        outcome = "clean";
-        appLog.event.ok(`restacked ${stackId}: ${res.output}`);
-        toast(`restacked ${stackId}`, theme.ok, 2500);
-      } else if (!res.conflict && res.error === STACK_BUSY) {
-        // A member's per-slug lock was held the whole acquire window —
-        // nothing ran. Report busy so automations un-consume the fire.
-        outcome = "busy";
-        appLog.event.warn(`restack ${stackId}: ${res.error}`);
-        toast(`restack: ${res.error}`, theme.warn, 4000);
-      } else if (res.conflict) {
-        const where = res.failedBranch ? ` on ${res.failedBranch}` : "";
-        const backup = res.backupBranch ? ` (backup ${res.backupBranch})` : "";
-        appLog.event.warn(`restack ${stackId}: conflict${where}${backup}`);
-        // Hand the judgment call to the LLM: inject the restack skill
-        // into the failing worktree's session. Falls back to the manual
-        // hint only when the branch has no live row to inject into.
-        const handedOff = res.failedBranch
-          ? handOffConflictToSession(res.failedBranch, res.error, res.backupBranch)
-          : false;
-        toast(
-          handedOff
-            ? `conflict${where} — handing off to /restack in its session`
-            : `conflict${where} — run /restack`,
-          theme.warn,
-          6000,
-        );
-      } else {
+    const outcome = yield* rebaseStack(stackId, {}, (line) =>
+      appLog.event.dim(`restack ${stackId}: ${line}`),
+    ).pipe(
+      Effect.map((res): "clean" | "failed" | "busy" => {
+        if (res.ok) {
+          appLog.event.ok(`restacked ${stackId}: ${res.output}`);
+          toast(`restacked ${stackId}`, theme.ok, 2500);
+          return "clean";
+        }
+        if (!res.conflict && res.error === STACK_BUSY) {
+          // A member's per-slug lock was held the whole acquire window —
+          // nothing ran. Report busy so automations un-consume the fire.
+          appLog.event.warn(`restack ${stackId}: ${res.error}`);
+          toast(`restack: ${res.error}`, theme.warn, 4000);
+          return "busy";
+        }
+        if (res.conflict) {
+          const where = res.failedBranch ? ` on ${res.failedBranch}` : "";
+          const backup = res.backupBranch ? ` (backup ${res.backupBranch})` : "";
+          appLog.event.warn(`restack ${stackId}: conflict${where}${backup}`);
+          // Hand the judgment call to the LLM: inject the restack skill
+          // into the failing worktree's session. Falls back to the manual
+          // hint only when the branch has no live row to inject into.
+          const handedOff = res.failedBranch
+            ? handOffConflictToSession(res.failedBranch, res.error, res.backupBranch)
+            : false;
+          toast(
+            handedOff
+              ? `conflict${where} — handing off to /restack in its session`
+              : `conflict${where} — run /restack`,
+            theme.warn,
+            6000,
+          );
+          return "failed";
+        }
         appLog.event.err(`restack ${stackId} failed: ${res.error}`);
         toast(`restack failed: ${res.error}`, theme.err, 6000);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      appLog.event.err(`restack ${stackId} crashed: ${msg}`);
-      toast(`restack crashed: ${msg}`, theme.err, 6000);
-    } finally {
-      restackBusyRef.current.delete(key);
-    }
+        return "failed";
+      }),
+      Effect.catch((error) =>
+        Effect.sync((): "clean" | "failed" | "busy" => {
+          appLog.event.err(`restack ${stackId} crashed: ${error.message}`);
+          toast(`restack crashed: ${error.message}`, theme.err, 6000);
+          return "failed";
+        }),
+      ),
+      Effect.ensuring(Effect.sync(() => {
+        restackBusyRef.current.delete(key);
+      })),
+    );
     // PR bases shift when slices move, so refresh the github query (keyed by
     // branch list, not slug) alongside the worktree state.
     void refreshGithub();
     void refreshAll();
     return outcome;
+  });
+
+  function doRestackStack(
+    stackId: string,
+  ): Promise<"clean" | "failed" | "busy"> {
+    return Effect.runPromise(restackChain(stackId));
   }
 
   /**
@@ -690,5 +767,13 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     doReplayStack,
     doRestackStack,
     isRestackBusy,
+    removeWorktree,
+    remoteRemoveWorktree,
+    removeWorktreeTarget,
+    cleanAll,
+    cleanRows,
+    cleanSlugs,
+    replaySelectedStack,
+    restackChain,
   };
 }

@@ -197,9 +197,3 @@ export const fetchReviewRequests = Effect.fn("fetchReviewRequests")(function* (
   }
   return out;
 });
-
-export function fetchReviewRequestsPromise(
-  signal?: AbortSignal,
-): Promise<ReviewRequestPr[]> {
-  return Effect.runPromise(fetchReviewRequests(signal));
-}

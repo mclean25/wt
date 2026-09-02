@@ -148,6 +148,7 @@ function dispatchDiffContext(
   ensurePool();
   const id = nextId++;
   const worker = workers[nextWorkerIndex++ % workers.length]!;
+  // @effect-diagnostics-next-line effect/newPromise:off -- worker-message boundary: TanStack's cancellation contract needs the exact AbortError rejection shape
   return new Promise<DiffContext | null>((resolve, reject) => {
     pending.set(id, { resolve, reject, cleanup: () => {}, worker });
     if (signal) {
@@ -193,16 +194,7 @@ export function buildDiffContextViaPool(
   });
 }
 
-/** TanStack adapter preserving its AbortSignal / AbortError contract. */
-export function buildDiffContextViaPoolPromise(
-  wtPath: string,
-  base: string,
-  signal?: AbortSignal,
-): Promise<DiffContext | null> {
-  return dispatchDiffContext(wtPath, base, signal);
-}
-
-export function disposeDiffPoolPromise(): void {
+export function disposeDiffPoolUnsafe(): void {
   disposed = true;
   for (const worker of workers) {
     try {
@@ -224,4 +216,4 @@ export function disposeDiffPoolPromise(): void {
 }
 
 export const disposeDiffPool = (): Effect.Effect<void> =>
-  Effect.sync(disposeDiffPoolPromise);
+  Effect.sync(disposeDiffPoolUnsafe);

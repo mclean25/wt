@@ -97,10 +97,13 @@ exec sleep 3
   ).href;
   const script = `
     const { Effect } = await import(${JSON.stringify(effectModule)});
-    const { createWorktreePromise, createWorktree } = await import(${JSON.stringify(lifecycleModule)});
+    const { createWorktree } = await import(${JSON.stringify(lifecycleModule)});
+    const createOrFail = (branch, opts) => Effect.runPromise(createWorktree(branch, opts).pipe(
+      Effect.catchTag("LifecycleError", (e) => Effect.succeed({ ok: false, reason: e.message })),
+    ));
     const { lockStatus } = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "locks.ts")).href)});
-    const result = await createWorktreePromise("test/copy-agents", { runInstall: false });
-    const failed = await createWorktreePromise("test/bad-base", {
+    const result = await createOrFail("test/copy-agents", { runInstall: false });
+    const failed = await createOrFail("test/bad-base", {
       runInstall: false,
       base: "missing-ref-that-does-not-exist",
     });
@@ -143,7 +146,7 @@ exec sleep 3
       ),
       { signal: removeController.signal },
     );
-    const sstCreated = await createWorktreePromise("test/sst-interrupted", { runInstall: false });
+    const sstCreated = await createOrFail("test/sst-interrupted", { runInstall: false });
     (await import("node:fs")).mkdirSync(${JSON.stringify(join(worktrees, "sst-interrupted", ".sst"))}, { recursive: true });
     await Bun.write(${JSON.stringify(join(worktrees, "sst-interrupted", ".sst", "stage"))}, ${JSON.stringify("test-owned\n")});
     const sstController = new AbortController();

@@ -638,12 +638,6 @@ export function samplePerf(
   );
 }
 
-/** Promise adapter for TanStack queries and the CLI. */
-export const samplePerfPromise = (
-  signal?: AbortSignal,
-  opts?: SamplePerfOpts,
-): Promise<PerfSnapshot> => Effect.runPromise(samplePerf(signal, opts));
-
 // ── Report ─────────────────────────────────────────────────────────────
 
 function pct(n: number): string {

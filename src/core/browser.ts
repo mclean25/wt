@@ -213,13 +213,6 @@ export function closeWorktreeBrowserSessions(
   );
 }
 
-export function closeWorktreeBrowserSessionsPromise(
-  slug: string,
-  devPort?: number | null,
-): Promise<BrowserCleanup> {
-  return Effect.runPromise(closeWorktreeBrowserSessions(slug, devPort));
-}
-
 /**
  * Close the tabs a worktree's dev server was serving, by dev port only.
  * Stopping the server strands them on a refused port, so they're dead
@@ -232,13 +225,6 @@ export function closeDevServerBrowserSessions(
   devPort: number,
 ): Effect.Effect<BrowserCleanup> {
   return closeBrowserTabs(slug, devPort, (s) => urlOnDevPort(s.pageUrl, devPort));
-}
-
-export function closeDevServerBrowserSessionsPromise(
-  slug: string,
-  devPort: number,
-): Promise<BrowserCleanup> {
-  return Effect.runPromise(closeDevServerBrowserSessions(slug, devPort));
 }
 
 /**

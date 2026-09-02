@@ -106,8 +106,3 @@ export function openInEditor(
     Effect.andThen(spawnDetached(shell, rendered)),
   );
 }
-
-/** Promise adapter for CLI and React event boundaries. */
-export function openInEditorPromise(path: string): Promise<void> {
-  return Effect.runPromise(openInEditor(path));
-}

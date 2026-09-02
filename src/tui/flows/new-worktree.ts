@@ -3,13 +3,23 @@
  * (`w` on a review-request row), and removed-history restore (Enter in
  * the `h` view). Extracted from `app.tsx`; rebuilt per render so the
  * closures see fresh setters.
+ *
+ * Each keystroke entrypoint stays a thin `Effect.runPromise` wrapper —
+ * kept Promise-returning for the footer-input / removed-view consumers
+ * — running the exported Effect (`createNewWorktree`, …) that holds the
+ * actual logic.
  */
 import { config } from "../../core/config.ts";
-import { Effect, Fiber } from "effect";
-import { createWorktreePromise, parseInputPromise } from "../../core/lifecycle.ts";
-import { operationErrors } from "../../core/errors.ts";
+import { Effect } from "effect";
+import {
+  createWorktree,
+  parseInput,
+  type CreateOptions,
+  type CreateResult,
+} from "../../core/lifecycle.ts";
+import { operationErrors, type OperationError } from "../../core/errors.ts";
 import { createLogger } from "../../core/logger.ts";
-import { runRemoteWtPromise } from "../../core/remote.ts";
+import { runRemoteWt } from "../../core/remote.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import { setSlugGithubIssue, type RemovedWorktree } from "../../core/wtstate.ts";
 import { parseNewInput } from "../app-helpers.ts";
@@ -53,11 +63,31 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     toast,
   } = ctx;
 
-  // Returns whether the create succeeded. The footer-input handler awaits
-  // this to decide between the optimistic legend reset (success) and
-  // restoring the typed line for editing in place (failure) — see
-  // `handleFooterInputKey`'s new/new-remote submit path.
-  async function doNew(raw: string, defaultBase?: string): Promise<boolean> {
+  /**
+   * `createWorktree` fails typed with `LifecycleError`; every caller
+   * here wants the `CreateResult` union instead (same fold
+   * `createWorktreePromise` used to do at the core boundary), so the
+   * ok/failed branching below is unchanged.
+   */
+  const createWorktreeResult = (
+    branch: string,
+    opts: CreateOptions,
+  ): Effect.Effect<CreateResult> =>
+    createWorktree(branch, opts).pipe(
+      Effect.catchTag("LifecycleError", (error) =>
+        Effect.succeed({ ok: false as const, reason: error.message }),
+      ),
+    );
+
+  // Effect body of `doNew`. Returns whether the create succeeded — the
+  // footer-input handler awaits this to decide between the optimistic
+  // legend reset (success) and restoring the typed line for editing in
+  // place (failure). Never fails: every error path is reported (log +
+  // toast) and folded into `false`.
+  const createNewWorktree = Effect.fn("createNewWorktree")(function* (
+    raw: string,
+    defaultBase?: string,
+  ): Effect.fn.Return<boolean> {
     const parsed = parseNewInput(raw, defaultBase);
     if ("error" in parsed) {
       newLog.event.err(parsed.error);
@@ -68,34 +98,35 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     if (parsed.anyAuthor) newLog.event.info("searching all authors (--any)");
     if (parsed.attach) newLog.event.info("attaching to an existing branch (--attach)");
     if (parsed.base) newLog.event.info(`base: ${parsed.base}`);
-    let branch: string;
-    try {
-      branch = await parseInputPromise(parsed.input, {
-        anyAuthor: parsed.anyAuthor,
-        attach: parsed.attach,
-        // `parseInput` accepts either a Promise or an Effect here —
-        // `Effect.callback` wraps the modal's choice-resolution
-        // callback without a bare `new Promise`.
-        promptForChoice: (id, branches) =>
-          Effect.callback<string | null>((resume) => {
-            setModal({
-              kind: "branchPicker",
-              title: `multiple branches for ${id}`,
-              items: branches,
-              index: 0,
-              resolve: (choice) => resume(Effect.succeed(choice)),
-            });
-          }),
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      newLog.event.err(message);
-      newLog.error(err instanceof Error ? err : String(err));
-      toast(message, theme.err, 3000);
-      return false;
-    }
+    const branch = yield* parseInput(parsed.input, {
+      anyAuthor: parsed.anyAuthor,
+      attach: parsed.attach,
+      // `parseInput` accepts either a Promise or an Effect here —
+      // `Effect.callback` wraps the modal's choice-resolution
+      // callback without a bare `new Promise`.
+      promptForChoice: (id, branches) =>
+        Effect.callback<string | null>((resume) => {
+          setModal({
+            kind: "branchPicker",
+            title: `multiple branches for ${id}`,
+            items: branches,
+            index: 0,
+            resolve: (choice) => resume(Effect.succeed(choice)),
+          });
+        }),
+    }).pipe(
+      Effect.catchTag("ParseInputError", (error) =>
+        Effect.sync(() => {
+          newLog.event.err(error.message);
+          newLog.error(error.message, { cause: error.cause });
+          toast(error.message, theme.err, 3000);
+          return null;
+        }),
+      ),
+    );
+    if (branch === null) return false;
     newLog.event.info(`branch = ${branch}`);
-    const result = await createWorktreePromise(branch, {
+    const result = yield* createWorktreeResult(branch, {
       onPhase: (p) => newLog.event.info(`phase: ${p}`),
       onLog: (line) => newLog.event.dim(line),
       runInstall: true,
@@ -118,14 +149,29 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     setSel(result.slug);
     void refreshAll();
     return true;
+  });
+
+  function doNew(raw: string, defaultBase?: string): Promise<boolean> {
+    return Effect.runPromise(createNewWorktree(raw, defaultBase));
   }
 
   /**
-   * Create on the remote host, then refresh its rows in this TUI. Returns
-   * whether it succeeded — same contract as `doNew`, so the footer-input
-   * handler can restore the typed line on failure.
+   * Effect body of `doRemoteNew` — create on the remote host, then
+   * refresh its rows in this TUI. Returns whether it succeeded — same
+   * contract as `createNewWorktree`. Never fails.
+   *
+   * The eager remote-inventory poll is a scoped fiber: `Effect.scoped`
+   * + `Effect.forkScoped` tie its lifetime to this block, so it is
+   * interrupted (and joined, same as the original's
+   * `Fiber.interrupt`-then-await) the moment the scope closes — whether
+   * that's the remote create finishing or failing. The optimistic row
+   * is cleared only once that poll has stopped, so a detached refresh
+   * can't outlive the flow and write stale remote-creation state into
+   * the next render.
    */
-  async function doRemoteNew(raw: string): Promise<boolean> {
+  const createRemoteWorktree = Effect.fn("createRemoteWorktree")(function* (
+    raw: string,
+  ): Effect.fn.Return<boolean, OperationError> {
     const remote = config.remote;
     if (!remote) {
       toast("[remote] is not configured", theme.warn, 2200);
@@ -155,58 +201,69 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     setRemoteCreation(creation);
     setSel(`remote:${remoteEntryKey(creation)}`);
     remoteLog.event.info(`creating ${parsed.input}`);
-    // The normal remote inventory interval is 15s while no busy row is known.
-    // Probe eagerly during creation so the authoritative row replaces the
-    // placeholder as soon as the checkout exists; F10/F11/F12 can then enter
-    // it while the remaining init phases continue in the background.
-    const refreshFiber = Effect.runFork(
-      Effect.forever(
-        io.promise("refresh remote worktrees", refreshRemoteWorktrees).pipe(
-          Effect.catch((error) =>
+
+    const ok = yield* Effect.scoped(
+      Effect.gen(function* () {
+        // The normal remote inventory interval is 15s while no busy row
+        // is known. Probe eagerly during creation so the authoritative
+        // row replaces the placeholder as soon as the checkout exists;
+        // F10/F11/F12 can then enter it while the remaining init phases
+        // continue in the background.
+        yield* Effect.forever(
+          io.promise("refresh remote worktrees", refreshRemoteWorktrees).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => {
+                remoteLog.debug("remote inventory poll failed", { err: error.message });
+              }),
+            ),
+            Effect.andThen(Effect.sleep("1500 millis")),
+          ),
+        ).pipe(Effect.forkScoped);
+
+        const code = yield* runRemoteWt(remote, args, {
+          onLine: (line) => remoteLog.event.dim(line),
+        }).pipe(
+          Effect.catchTag("RemoteRunError", (error) =>
             Effect.sync(() => {
-              remoteLog.debug("remote inventory poll failed", { err: error.message });
+              remoteLog.event.err(error.message);
+              toast(`remote create failed: ${error.message}`, theme.err, 3500);
+              return null;
             }),
           ),
-          Effect.andThen(Effect.sleep("1500 millis")),
-        ),
-      ),
+        );
+        if (code === null) return false;
+        if (code !== 0) {
+          remoteLog.event.err(`create failed (exit ${code})`);
+          toast(`remote create failed (exit ${code})`, theme.err, 3000);
+          return false;
+        }
+        return true;
+      }),
     );
-    let code: number;
-    try {
-      code = await runRemoteWtPromise(remote, args, {
-        onLine: (line) => remoteLog.event.dim(line),
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      remoteLog.event.err(message);
-      toast(`remote create failed: ${message}`, theme.err, 3500);
-      setRemoteCreation(null);
-      return false;
-    } finally {
-      // Join the polling fiber before the optimistic row is cleared. A
-      // detached refresh that outlives this flow can otherwise refetch after
-      // teardown and write stale remote-creation state into the next render.
-      await Effect.runPromise(Fiber.interrupt(refreshFiber));
-    }
-    if (code !== 0) {
-      remoteLog.event.err(`create failed (exit ${code})`);
-      toast(`remote create failed (exit ${code})`, theme.err, 3000);
+    if (!ok) {
       setRemoteCreation(null);
       return false;
     }
     remoteLog.event.ok(`ready on ${remote.label}`);
-    try {
-      const refreshed = await refreshRemoteWorktrees();
-      // The CLI input may be an issue id or title rather than the final slug,
-      // so transfer focus from the optimistic placeholder to the newly
-      // discovered authoritative row by fleet identity, not input spelling.
-      const created = discoveredRemoteCreation(creation, refreshed);
-      if (created) setSel(`remote:${remoteEntryKey(created)}`);
-      toast(`ready on ${remote.label}`, theme.ok, 1800);
-    } finally {
-      setRemoteCreation(null);
-    }
+    yield* io.promise("refresh remote worktrees", refreshRemoteWorktrees).pipe(
+      Effect.tap((refreshed) =>
+        Effect.sync(() => {
+          // The CLI input may be an issue id or title rather than the
+          // final slug, so transfer focus from the optimistic
+          // placeholder to the newly discovered authoritative row by
+          // fleet identity, not input spelling.
+          const created = discoveredRemoteCreation(creation, refreshed);
+          if (created) setSel(`remote:${remoteEntryKey(created)}`);
+          toast(`ready on ${remote.label}`, theme.ok, 1800);
+        }),
+      ),
+      Effect.ensuring(Effect.sync(() => setRemoteCreation(null))),
+    );
     return true;
+  });
+
+  function doRemoteNew(raw: string): Promise<boolean> {
+    return Effect.runPromise(createRemoteWorktree(raw));
   }
 
   // Check out a review-requested PR's branch as a worktree and drop it
@@ -215,10 +272,12 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
   // installs packages); `setSection` materializes the section by simply
   // assigning the new slug to it. Leaves the review-request row in place
   // — this spawns a worktree, it doesn't consume the PR.
-  async function doCheckoutReview(branch: string): Promise<void> {
+  const checkoutReviewWorktree = Effect.fn("checkoutReviewWorktree")(function* (
+    branch: string,
+  ): Effect.fn.Return<void, OperationError> {
     const log = createLogger("[review]");
     log.event.info(`creating review worktree for ${branch}`);
-    const result = await createWorktreePromise(branch, {
+    const result = yield* createWorktreeResult(branch, {
       onPhase: (p) => log.event.info(`phase: ${p}`),
       onLog: (line) => log.event.dim(line),
       runInstall: true,
@@ -228,11 +287,15 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       log.attention.err(`worktree failed: ${result.reason}`);
       return;
     }
-    await setSection(result.slug, REVIEW_SECTION);
+    yield* io.promise("set section", () => setSection(result.slug, REVIEW_SECTION));
     log.event.ok(`ready at ${result.path} → ${REVIEW_SECTION}`);
     toast(`created ${result.slug} in ${REVIEW_SECTION}`, theme.info, 2200);
     setSel(result.slug);
     void refreshAll();
+  });
+
+  function doCheckoutReview(branch: string): Promise<void> {
+    return Effect.runPromise(checkoutReviewWorktree(branch));
   }
 
   // Restore a removed worktree: a real `createWorktree` for the recorded
@@ -240,10 +303,12 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
   // it out; if it's fully gone (merged + deleted) it starts a fresh branch
   // of the same name off trunk. `createWorktree` clears the removed-history
   // entry itself, so success just needs to land the cursor on the new row.
-  async function doRestoreRemoved(entry: RemovedWorktree): Promise<void> {
+  const restoreRemovedWorktree = Effect.fn("restoreRemovedWorktree")(function* (
+    entry: RemovedWorktree,
+  ): Effect.fn.Return<void> {
     const log = createLogger("[restore]");
     log.event.info(`restoring ${entry.slug} (${entry.branch})`);
-    const result = await createWorktreePromise(entry.branch, {
+    const result = yield* createWorktreeResult(entry.branch, {
       onPhase: (p) => log.event.info(`phase: ${p}`),
       onLog: (line) => log.event.dim(line),
       runInstall: true,
@@ -258,7 +323,20 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     setRemovedView(false);
     setSel(result.slug);
     void refreshAll();
+  });
+
+  function doRestoreRemoved(entry: RemovedWorktree): Promise<void> {
+    return Effect.runPromise(restoreRemovedWorktree(entry));
   }
 
-  return { doNew, doRemoteNew, doCheckoutReview, doRestoreRemoved };
+  return {
+    doNew,
+    doRemoteNew,
+    doCheckoutReview,
+    doRestoreRemoved,
+    createNewWorktree,
+    createRemoteWorktree,
+    checkoutReviewWorktree,
+    restoreRemovedWorktree,
+  };
 }

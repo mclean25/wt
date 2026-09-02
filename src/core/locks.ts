@@ -265,45 +265,6 @@ export function withAsyncFileLock<A, E, R>(
   );
 }
 
-/**
- * Async sibling of `withFileLock` for critical sections that AWAIT
- * (tmux round-trips, subprocess waits) and run inside an event loop
- * that must not freeze: acquires the flock non-blockingly and polls
- * instead of letting the kernel park the thread. Same crash-safety
- * story (fd close releases). `timeoutMs` bounds a wedged holder;
- * generous by default since holders are short (seconds).
- */
-export async function withAsyncFileLockPromise<T>(
-  name: string,
-  fn: () => Promise<T>,
-  opts: { pollMs?: number; timeoutMs?: number } = {},
-): Promise<T> {
-  try {
-    return await Effect.runPromise(
-      withAsyncFileLock(
-        name,
-        Effect.tryPromise({
-          try: fn,
-          catch: (cause) =>
-            new AsyncLockError({
-              name,
-              operation: "run",
-              message:
-                cause instanceof Error ? cause.message : String(cause),
-              cause,
-            }),
-        }),
-        opts,
-      ),
-    );
-  } catch (error) {
-    if (error instanceof AsyncLockError && error.operation === "run") {
-      throw error.cause;
-    }
-    throw error;
-  }
-}
-
 export function humanAge(seconds: number): string {
   if (seconds < 60) return `${Math.floor(seconds)}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;

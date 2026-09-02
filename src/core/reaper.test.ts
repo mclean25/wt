@@ -6,6 +6,7 @@
  * against a real listener.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { Effect } from "effect";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +16,7 @@ import {
   parseCwdMap,
   parseListeners,
   type ReapedProcess,
-  reapWorktreeListenersPromise,
+  reapWorktreeListeners,
 } from "./reaper.ts";
 
 describe("parseListeners", () => {
@@ -137,7 +138,7 @@ describe.skipIf(!Bun.which("lsof"))("reapWorktreeListeners (live)", () => {
       // fails below.
       let reaped: ReapedProcess[] = [];
       for (let attempt = 1; attempt <= 3 && reaped.length === 0; attempt++) {
-        reaped = await reapWorktreeListenersPromise(wtDir);
+        reaped = await Effect.runPromise(reapWorktreeListeners(wtDir));
       }
       expect(reaped.map((p) => p.pid)).toContain(target.proc.pid);
       expect(reaped.map((p) => p.pid)).not.toContain(bystander.proc.pid);

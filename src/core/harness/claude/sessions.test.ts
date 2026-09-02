@@ -113,7 +113,10 @@ describe("Claude sessions", () => {
     const fake = fakes();
     const sessions = createClaudeSessions(fake.deps);
 
-    await Promise.all([sessions.ensurePromise(target), sessions.ensurePromise(target)]);
+    await Promise.all([
+      Effect.runPromise(sessions.ensure(target)),
+      Effect.runPromise(sessions.ensure(target)),
+    ]);
 
     expect(fake.starts()).toBe(1);
   });
@@ -125,7 +128,7 @@ describe("Claude sessions", () => {
       readNative: () => entries,
       startDetached: async () => {
         calls += 1;
-        if (calls === 1) return await new Promise(() => {});
+        if (calls === 1) return await Effect.runPromise(Effect.never);
         entries = [native()];
         return { ok: true as const };
       },

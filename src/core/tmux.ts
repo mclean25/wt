@@ -35,53 +35,37 @@ export { buildConfig, writeConfig } from "./tmux/config.ts";
 
 export {
   closeHarnessSessionGracefully,
-  closeHarnessSessionGracefullyPromise,
-  diffCommandUsesBase,
+    diffCommandUsesBase,
   killAllSessionsFor,
-  killAllSessionsForPromise,
-  killClaudeNamedSession,
-  killClaudeNamedSessionPromise,
-  killDiffSession,
-  killDiffSessionPromise,
-  killHarnessSession,
-  killHarnessSessionPromise,
-  killServer,
-  killServerPromise,
-  killSession,
-  killSessionPromise,
-  killShellSession,
-  killShellSessionPromise,
-  listSessions,
-  listSessionsPromise,
-  reapOrphanedSessions,
-  reapOrphanedSessionsPromise,
-} from "./tmux/admin.ts";
+    killClaudeNamedSession,
+    killDiffSession,
+    killHarnessSession,
+    killServer,
+    killSession,
+    killShellSession,
+    listSessions,
+    reapOrphanedSessions,
+  } from "./tmux/admin.ts";
 export type { ClaudeSessionEntry } from "./tmux/admin.ts";
 
 export {
   killActionSession,
-  killActionSessionPromise,
-  startActionSession,
-  startActionSessionPromise,
-} from "./tmux/action-sessions.ts";
+    startActionSession,
+  } from "./tmux/action-sessions.ts";
 
 export {
   capturePane,
-  capturePanePromise,
-  listAllSessionsRaw,
-  listAllSessionsRawPromise,
-} from "./tmux/process.ts";
+    listAllSessionsRaw,
+  } from "./tmux/process.ts";
 
-export { attachOrCreate, attachOrCreatePromise, AttachOperationError } from "./tmux/attach.ts";
+export { attachOrCreate,  AttachOperationError } from "./tmux/attach.ts";
 export type { AttachResult } from "./tmux/attach.ts";
 
 export {
   startHarnessSessionDetached,
-  startHarnessSessionDetachedPromise,
-} from "./tmux/lifecycle.ts";
+  } from "./tmux/lifecycle.ts";
 export type { StartHarnessSessionResult } from "./tmux/lifecycle.ts";
 
 export {
   injectIntoSession,
-  injectIntoSessionPromise,
-} from "./tmux/inject.ts";
+  } from "./tmux/inject.ts";

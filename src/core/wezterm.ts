@@ -42,15 +42,3 @@ export function setWezTermTabTitle(
     Effect.asVoid,
   );
 }
-
-/** Compatibility boundary. Tab naming remains cosmetic and non-fatal. */
-export function setWezTermTabTitlePromise(
-  title: string,
-  configuredCliPath: string | null,
-): Promise<void> {
-  return Effect.runPromise(
-    setWezTermTabTitle(title, configuredCliPath).pipe(
-      Effect.catch(() => Effect.void),
-    ),
-  );
-}

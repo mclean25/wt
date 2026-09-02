@@ -27,7 +27,6 @@ export function awsS3(args: readonly string[]) {
     Effect.map((r) => ({ stdout: r.stdout, ok: r.exitCode === 0 })),
   );
 }
-export const awsS3Promise = (args: string[]) => Effect.runPromise(awsS3(args));
 
 /** List stages from the SST state bucket. Returns null on failure. */
 export const listSstStages = Effect.fn("listSstStages")(function* () {
@@ -53,7 +52,6 @@ export const listSstStages = Effect.fn("listSstStages")(function* () {
   }
   return stages;
 });
-export const listSstStagesPromise = (): Promise<SstStage[] | null> => Effect.runPromise(listSstStages());
 
 /**
  * True if the stage's state file lists any resources. `sst remove`
@@ -109,8 +107,6 @@ export const categorizeStages = Effect.fn("categorizeStages")(function* (
   live.sort((a, b) => a.name.localeCompare(b.name));
   return { live, orphaned };
 });
-export const categorizeStagesPromise = (stages: SstStage[], worktreeStages: Set<string>) =>
-  Effect.runPromise(categorizeStages(stages, worktreeStages));
 
 export function humanSize(n: number): string {
   if (n < 1024) return `${n} B`;

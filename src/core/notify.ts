@@ -62,8 +62,3 @@ export function notifyMacos(
     Effect.asVoid,
   );
 }
-
-/** Compatibility adapter for automation dispatch. */
-export function notifyMacosPromise(title: string, message: string): Promise<void> {
-  return Effect.runPromise(notifyMacos(title, message));
-}

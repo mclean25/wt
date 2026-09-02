@@ -103,8 +103,6 @@ export function resolveWorktreeHarness(
     Effect.map((names) => chooseHarness(slug, names, knownSlugs, readPrimaryHarness())),
   );
 }
-export const resolveWorktreeHarnessPromise = (slug: string, knownSlugs: ReadonlySet<string>) =>
-  Effect.runPromise(resolveWorktreeHarness(slug, knownSlugs));
 
 /** The rule itself, with the tmux probe already done — the tested half. */
 export function chooseHarness(

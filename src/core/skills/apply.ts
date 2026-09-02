@@ -38,11 +38,6 @@ function dispatchApply(report: UnitReport): void {
   }
 }
 
-/** Write one unit at its report's target. Throws on failure. */
-export function applyReportPromise(report: UnitReport): void {
-  dispatchApply(report);
-}
-
 /** Effect-native write path for scoped command composition. */
 export const applyReport = Effect.fn("applyReport")(function* (report: UnitReport) {
   yield* io.sync(`apply ${report.unit.name}`, () => dispatchApply(report));
@@ -136,7 +131,3 @@ export function regenRulesync(roots: RulesyncInfo[]): Effect.Effect<RegenResult[
     { concurrency: 1 },
   );
 }
-
-/** Promise adapter for the existing CLI command boundary. */
-export const regenRulesyncPromise = (roots: RulesyncInfo[]): Promise<RegenResult[]> =>
-  Effect.runPromise(regenRulesync(roots));

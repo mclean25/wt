@@ -548,14 +548,6 @@ export const fetchGithub = Effect.fn("fetchGithub")(function* (
   );
 });
 
-/** TanStack/CLI compatibility boundary. Cancellation rejects as interruption. */
-export function fetchGithubPromise(
-  branches: string[],
-  signal?: AbortSignal,
-): Promise<GithubData> {
-  return Effect.runPromise(fetchGithub(branches), { signal });
-}
-
 /**
  * Thin wrapper kept for CLI callers (doctor, ls) that don't have a
  * prebuilt branch list. Resolves branches from `git worktree list`
@@ -583,7 +575,3 @@ export const fetchPrs = Effect.fn("fetchPrs")(
     }),
   ),
 );
-
-export function fetchPrsPromise(): Promise<Map<string, PullRequest>> {
-  return Effect.runPromise(fetchPrs());
-}

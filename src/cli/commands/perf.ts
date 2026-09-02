@@ -1,7 +1,6 @@
 import { Effect } from "effect";
 
-import { operationErrors } from "../../core/errors.ts";
-import { formatPerfReport, samplePerfPromise } from "../../core/perf.ts";
+import { formatPerfReport, samplePerf } from "../../core/perf.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { red } from "../colors.ts";
 
@@ -22,7 +21,6 @@ pressure, not an instantaneous profile.`;
 
 const KNOWN = new Set(["--json"]);
 
-const io = operationErrors("wt perf");
 
 export const run = Effect.fn("wt perf")(function* (argv: string[]) {
   if (hasHelpFlag(argv)) {
@@ -42,7 +40,7 @@ export const run = Effect.fn("wt perf")(function* (argv: string[]) {
   // `samplePerf`/`PerfSampleError` from perf/sample.ts, only the Promise
   // adapter — so this stays a genuine `io.promise` boundary until that
   // barrel gains the export.
-  const snap = yield* io.promise("sample perf", () => samplePerfPromise(undefined, { rootAtWtInstances: true }));
+  const snap = yield* samplePerf(undefined, { rootAtWtInstances: true });
   console.log(argv.includes("--json") ? JSON.stringify(snap, null, 2) : formatPerfReport(snap));
   return 0;
 });

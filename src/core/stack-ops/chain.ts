@@ -112,7 +112,3 @@ export const resolveChain = Effect.fn("resolveChain")(function* (
       : rec.baseBranch;
   return { root: branch, steps: [toStep(self, parentBranch)] };
 });
-
-export function resolveChainPromise(branch: string): Promise<RestackChain | null> {
-  return Effect.runPromise(resolveChain(branch));
-}

@@ -77,14 +77,3 @@ export function handoffTerminal<A, E, R>(
     }),
   );
 }
-
-/** Compatibility adapter for callback-shaped renderer consumers. */
-export const handoffTerminalPromise = <T>(
-  renderer: CliRenderer,
-  cwd: string,
-  fn: () => Promise<T>,
-): Promise<T> => Effect.runPromise(handoffTerminal(
-  renderer,
-  cwd,
-  Effect.tryPromise(fn),
-));

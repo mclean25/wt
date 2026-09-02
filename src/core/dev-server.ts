@@ -223,8 +223,6 @@ export function devServerLogs(slug: string, lines = 200) {
     `-${lines}`,
   ]).pipe(Effect.map((r) => r.exitCode === 0 ? r.stdout.trimEnd() : null));
 }
-export const devServerLogsPromise = (slug: string, lines = 200): Promise<string | null> =>
-  Effect.runPromise(devServerLogs(slug, lines));
 
 function requireDevServer(): DevServerConfig {
   if (!config.devServer) {
@@ -335,10 +333,6 @@ export function probePort(port: number, timeoutMs = 400): Effect.Effect<PortProb
     first === "unknown" ? probePortOnceEffect(port, timeoutMs) : Effect.succeed(first));
 }
 
-export function probePortPromise(port: number, timeoutMs = 400): Promise<PortProbe> {
-  return Effect.runPromise(probePort(port, timeoutMs));
-}
-
 /**
  * Port-allocation view of the probe: anything but a definitive `free`
  * counts as taken. Handing out a port we merely failed to read would
@@ -402,10 +396,6 @@ export const allocateDevPort = Effect.fn("allocateDevPort")(function* (slug: str
   }
   return port;
 });
-
-export function allocateDevPortPromise(slug: string): Promise<number> {
-  return Effect.runPromise(allocateDevPort(slug));
-}
 
 
 // ---------------------------------------------------------------------------
@@ -640,7 +630,6 @@ export const devSlotHolders = Effect.fn("devSlotHolders")(function* (): Effect.f
     }))
     .sort((a, b) => a.slug.localeCompare(b.slug));
 });
-export const devSlotHoldersPromise = (): Promise<DevSlotHolder[] | null> => Effect.runPromise(devSlotHolders());
 
 /** Slots, holders and queue in one shot — the `wt dev status --all` view. */
 export const devSlotReport = Effect.fn("devSlotReport")(function* (): Effect.fn.Return<DevSlotReport> {
@@ -653,7 +642,6 @@ export const devSlotReport = Effect.fn("devSlotReport")(function* (): Effect.fn.
     free: limit === null || holders === null ? null : Math.max(0, limit - holders.length),
   };
 });
-export const devSlotReportPromise = (): Promise<DevSlotReport> => Effect.runPromise(devSlotReport());
 
 /**
  * Run the project's `stop_command` for a slug whose dev server has just
@@ -724,7 +712,6 @@ export const reclaimDevSlots = Effect.fn("reclaimDevSlots")(function* (): Effect
   }
   return orphans;
 });
-export const reclaimDevSlotsPromise = (): Promise<string[]> => Effect.runPromise(reclaimDevSlots());
 
 /**
  * Thrown by `resetDevServer` when `stop_command` failed, so the
@@ -852,10 +839,6 @@ export const checkDevSlot = Effect.fn("checkDevSlot")(function* (
   return decision;
 });
 
-export function checkDevSlotPromise(slug: string, opts: { reclaim?: boolean; respectPriority?: boolean } = {}): Promise<DevSlotDecision> {
-  return Effect.runPromise(checkDevSlot(slug, opts));
-}
-
 /**
  * The cap arithmetic, split from the tmux read so the rule is testable.
  *
@@ -960,11 +943,6 @@ export const waitForDevSlot = Effect.fn("waitForDevSlot")(function* (
   );
 });
 
-export const waitForDevSlotPromise = (
-  slug: string,
-  opts: WaitForDevSlotOptions = {},
-): Promise<boolean> => Effect.runPromise(waitForDevSlot(slug, opts));
-
 /**
  * Save a parked supervisor's scrollback next to its marker before
  * anything kills the pane. `remain-on-exit` keeps the crash report
@@ -1048,8 +1026,6 @@ export const handleDevGiveUp = Effect.fn("handleDevGiveUp")(function* (slug: str
     "tmux", "-L", TMUX_SOCKET, "kill-session", "-t", `=${sessionName(slug, "dev")}`,
   ]);
 });
-
-export const handleDevGiveUpPromise = (slug: string): Promise<void> => Effect.runPromise(handleDevGiveUp(slug));
 
 export function supervisorScript(slug: string, command: string, port: number): string {
   const session = sessionName(slug, "dev");
@@ -1265,9 +1241,6 @@ export const startDevServer = Effect.fn("startDevServer")(function* (wt: {
   return { port, url: devUrl(port) };
 });
 
-export const startDevServerPromise = (wt: { slug: string; path: string }): Promise<{ port: number; url: string; adopted?: boolean }> =>
-  Effect.runPromise(startDevServer(wt));
-
 /**
  * Remove the slug's on-disk supervisor artifacts (marker + script).
  * Called from `createWorktree`'s stale-state reset so a re-created slug
@@ -1371,9 +1344,6 @@ export const stopDevServer = Effect.fn("stopDevServer")(function* (
   return stopped;
 });
 
-export const stopDevServerPromise = (wt: { slug: string; path: string }): Promise<boolean> =>
-  Effect.runPromise(stopDevServer(wt));
-
 
 // ---------------------------------------------------------------------------
 // Readiness
@@ -1443,9 +1413,6 @@ export const devHealth = Effect.fn("devHealth")(function* (wt: {
       `health_command exited ${r.exitCode}`,
   };
 });
-
-export const devHealthPromise = (wt: { slug: string; path: string }): Promise<DevHealth | null> =>
-  Effect.runPromise(devHealth(wt));
 
 export type DevReadyOutcome =
   | { ready: true; health: DevHealth | null }
@@ -1538,11 +1505,6 @@ export const waitForDevReady = Effect.fn("waitForDevReady")(function* (
   return yield* poll();
 });
 
-export const waitForDevReadyPromise = (
-  wt: { slug: string; path: string },
-  opts: WaitForDevReadyOptions = {},
-): Promise<DevReadyOutcome> => Effect.runPromise(waitForDevReady(wt, opts));
-
 /**
  * Stop the server, run the project's destructive teardown, start it
  * again. The recovery for an environment whose cached state no longer
@@ -1594,9 +1556,6 @@ export const resetDevServer = Effect.fn("resetDevServer")(function* (
   }
   return yield* startDevServer(wt);
 });
-
-export const resetDevServerPromise = (wt: { slug: string; path: string }, onLog?: (line: string) => void): Promise<{ port: number; url: string; adopted?: boolean }> =>
-  Effect.runPromise(resetDevServer(wt, onLog));
 
 /**
  * Level-derived state: session existence (tmux) + recorded-port
@@ -1675,6 +1634,3 @@ export const devServerStatus = Effect.fn("devServerStatus")(function* (
     ...base,
   };
 });
-
-export const devServerStatusPromise = (slug: string, opts: { sessionExists?: boolean; path?: string } = {}): Promise<DevServerStatus> =>
-  Effect.runPromise(devServerStatus(slug, opts));

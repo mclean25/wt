@@ -5,27 +5,21 @@
  * the whole App tree.
  */
 import { useState } from "react";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
 import type { WorktreeTarget } from "../../core/worktree-target.ts";
-import { readWorktreeDevLogsPromise } from "../../core/worktree-executor.ts";
+import { readWorktreeDevLogs } from "../../core/worktree-executor.ts";
 import { useEffectFiber } from "./useEffectFiber.ts";
 
 const POLL_MS = 1_000;
 
-class DevLogReadError extends Data.TaggedError("DevLogReadError")<{
-  readonly cause: unknown;
-}> {}
 
-export function devServerLogPoll(
-  read: () => Promise<string | null>,
+export function devServerLogPoll<E>(
+  read: Effect.Effect<string | null, E>,
   onOutput: (output: string | null) => void,
   intervalMs = POLL_MS,
 ): Effect.Effect<never> {
-  const poll = Effect.tryPromise({
-    try: read,
-    catch: (cause) => new DevLogReadError({ cause }),
-  }).pipe(
+  const poll = read.pipe(
     Effect.tap((next) => Effect.sync(() => onOutput(next))),
     Effect.catch(() => Effect.void),
   );
@@ -42,8 +36,7 @@ export function useDevServerLog(
 
   useEffectFiber(() => {
     setOutput(null);
-    const read = () =>
-      target ? readWorktreeDevLogsPromise(target) : Promise.resolve(null);
+    const read = target ? readWorktreeDevLogs(target) : Effect.succeed(null);
     return devServerLogPoll(read, (next) =>
       setOutput((previous) => (previous === next ? previous : next)),
     );

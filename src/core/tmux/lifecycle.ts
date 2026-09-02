@@ -45,13 +45,12 @@ class HarnessStartError extends Data.TaggedError("HarnessStartError")<{
  * start as successful rather than surfacing tmux's duplicate-session
  * error.
  */
-export function startHarnessSessionDetached(
+export const startHarnessSessionDetached = Effect.fn("startHarnessSessionDetached")(function* (
   slug: string,
   cwd: string,
   harnessId: HarnessId,
   managedName: string | null = null,
-): Effect.Effect<StartHarnessSessionResult> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<StartHarnessSessionResult> {
   const harness = getHarness(harnessId);
   const name = sessionName(slug, harnessId, managedName);
   // ensureConfig, NOT writeConfig: this can run from inside the wt tmux
@@ -172,13 +171,4 @@ export function startHarnessSessionDetached(
     return { ok: false, reason };
   }
   return { ok: true };
-  });
-}
-
-export const startHarnessSessionDetachedPromise = (
-  slug: string,
-  cwd: string,
-  harnessId: HarnessId,
-  managedName: string | null = null,
-): Promise<StartHarnessSessionResult> =>
-  Effect.runPromise(startHarnessSessionDetached(slug, cwd, harnessId, managedName));
+});

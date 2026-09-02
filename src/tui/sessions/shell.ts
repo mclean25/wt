@@ -9,7 +9,6 @@
  * place. Quitting the shell (`exit` / Ctrl+D) ends the session.
  */
 import type { CliRenderer } from "@opentui/core";
-import { Effect } from "effect";
 
 import {
   enterWorktreeSession,
@@ -29,6 +28,3 @@ export type EnterShellSessionOptions = {
 
 export const enterShellSession = (opts: EnterShellSessionOptions) =>
   enterWorktreeSession({ ...opts, initial: "shell" });
-
-export const enterShellSessionPromise = (opts: EnterShellSessionOptions): Promise<ShellResult> =>
-  Effect.runPromise(enterShellSession(opts));

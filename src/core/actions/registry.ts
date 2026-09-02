@@ -184,18 +184,6 @@ class ActionRegistry {
     );
   }
 
-  startPromise(
-    def: ActionDef,
-    slug: string,
-    cwd: string,
-    extras: string,
-    vars: ActionVars = {},
-    harnessId: HarnessId = "claude",
-    opts: StartOpts = {},
-  ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.start(def, slug, cwd, extras, vars, harnessId, opts));
-  }
-
   /** Location-neutral entrypoint used by the TUI action dispatcher. */
   startForWorktree(
     def: ActionDef,
@@ -229,20 +217,6 @@ class ActionRegistry {
       harnessId,
       opts,
     );
-  }
-
-  startForWorktreePromise(
-    def: ActionDef,
-    target: WorktreeTarget,
-    supervisorCwd: string,
-    extras: string,
-    vars: ActionVars = {},
-    harnessId: HarnessId = "claude",
-    opts: { autoFireKeys?: readonly string[] } = {},
-  ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startForWorktree(
-      def, target, supervisorCwd, extras, vars, harnessId, opts,
-    ));
   }
 
   /**
@@ -302,24 +276,6 @@ class ActionRegistry {
         if (reserved) this.starting.delete(actionKey);
       }),
     );
-  }
-
-  startRemotePromise(
-    def: ActionDef,
-    actionKey: string,
-    supervisorCwd: string,
-    remoteCwd: string,
-    remote: RemoteConfig,
-    worktreeRef: Extract<WorktreeRef, { kind: "remote" }>,
-    extras: string,
-    vars: ActionVars = {},
-    harnessId: HarnessId = "claude",
-    opts: { autoFireKeys?: readonly string[] } = {},
-  ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startRemote(
-      def, actionKey, supervisorCwd, remoteCwd, remote, worktreeRef,
-      extras, vars, harnessId, opts,
-    ));
   }
 
   private startInner = Effect.fnUntraced(function* (
@@ -439,7 +395,7 @@ class ActionRegistry {
       // "running" run with no tmux session.
       writeDoneSentinelBestEffort(runDir, -1);
       const endedAt = yield* Clock.currentTimeMillis;
-      void this.persistMetaUpdatePromise(runDir, {
+      void this.persistMetaUpdateUnsafe(runDir, {
         status: "failed",
         endedAt,
       });
@@ -506,16 +462,6 @@ class ActionRegistry {
     );
   }
 
-  startCustomPromise(
-    slug: string,
-    cwd: string,
-    prompt: string,
-    vars: ActionVars = {},
-    harnessId: HarnessId = "claude",
-  ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startCustom(slug, cwd, prompt, vars, harnessId));
-  }
-
   startCustomRemote(
     actionKey: string,
     supervisorCwd: string,
@@ -549,21 +495,6 @@ class ActionRegistry {
     );
   }
 
-  startCustomRemotePromise(
-    actionKey: string,
-    supervisorCwd: string,
-    remoteCwd: string,
-    remote: RemoteConfig,
-    worktreeRef: Extract<WorktreeRef, { kind: "remote" }>,
-    prompt: string,
-    vars: ActionVars = {},
-    harnessId: HarnessId = "claude",
-  ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startCustomRemote(
-      actionKey, supervisorCwd, remoteCwd, remote, worktreeRef, prompt, vars, harnessId,
-    ));
-  }
-
   startCustomForWorktree(
     target: WorktreeTarget,
     supervisorCwd: string,
@@ -590,18 +521,6 @@ class ActionRegistry {
       vars,
       harnessId,
     );
-  }
-
-  startCustomForWorktreePromise(
-    target: WorktreeTarget,
-    supervisorCwd: string,
-    prompt: string,
-    vars: ActionVars = {},
-    harnessId: HarnessId = "claude",
-  ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startCustomForWorktree(
-      target, supervisorCwd, prompt, vars, harnessId,
-    ));
   }
 
   /**
@@ -690,10 +609,6 @@ class ActionRegistry {
     return true;
   });
 
-  killPromise(slug: string): Promise<boolean> {
-    return Effect.runPromise(this.kill(slug));
-  }
-
   /**
    * Hydrate `runs` from `<logDir>/actions/` and the live tmux session
    * list, then attach live tails for runs still running. Idempotent —
@@ -773,7 +688,7 @@ class ActionRegistry {
             endedAt: done.endedAt,
             exitCode: done.exitCode,
           };
-          void this.persistMetaUpdatePromise(runDir, {
+          void this.persistMetaUpdateUnsafe(runDir, {
             status,
             endedAt: done.endedAt,
             exitCode: done.exitCode,
@@ -786,7 +701,7 @@ class ActionRegistry {
           // file shape as a normally-terminated run; -1 marks "exit
           // code unknown / wrapper bypassed its EXIT trap".
           writeDoneSentinelBestEffort(runDir, -1);
-          void this.persistMetaUpdatePromise(runDir, { status: "failed", endedAt });
+          void this.persistMetaUpdateUnsafe(runDir, { status: "failed", endedAt });
         }
       }
 
@@ -831,10 +746,6 @@ class ActionRegistry {
     }
     this.scheduleCleanup();
   });
-
-  bootPromise(liveSlugs: ReadonlySet<string>): Promise<void> {
-    return Effect.runPromise(this.boot(liveSlugs));
-  }
 
   /**
    * Drop on-disk run dirs that won't be rehydrated and whose slug is
@@ -974,10 +885,6 @@ class ActionRegistry {
       { concurrency: "unbounded", discard: true },
     );
   });
-
-  shutdownPromise(): Promise<void> {
-    return Effect.runPromise(this.shutdown());
-  }
 
   // ---------- internals ----------
 
@@ -1195,7 +1102,7 @@ class ActionRegistry {
       this.commit((m) => m.set(slug, { ...cur, endedAt, status, lines }));
     }
 
-    void this.persistMetaUpdatePromise(cur.runDir, {
+    void this.persistMetaUpdateUnsafe(cur.runDir, {
       status,
       endedAt,
       exitCode: done.exitCode,
@@ -1251,7 +1158,7 @@ class ActionRegistry {
     );
   }
 
-  private persistMetaUpdatePromise(runDir: string, patch: Partial<ActionMeta>): void {
+  private persistMetaUpdateUnsafe(runDir: string, patch: Partial<ActionMeta>): void {
     const tracked = Deferred.makeUnsafe<void>();
     let fiber: Fiber.Fiber<void, never>;
     fiber = Effect.runFork(

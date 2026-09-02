@@ -133,5 +133,3 @@ export function gitActivity(
     })),
   );
 }
-export const gitActivityPromise = (wt: { path: string; branch: string }, effectiveBase?: string | null) =>
-  Effect.runPromise(gitActivity(wt, effectiveBase));

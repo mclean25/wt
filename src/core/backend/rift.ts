@@ -8,7 +8,6 @@ import { run } from "../proc.ts";
 import type {
   BackendCreateInput,
   BackendRemoveInput,
-  BackendRemoveResult,
   WorktreeBackend,
 } from "./types.ts";
 
@@ -153,13 +152,13 @@ function ensureRiftInitEffect(
  *    With no owning worktree (trunk/origin base), the ref must resolve in
  *    the clone directly.
  */
-function materializeBranchEffect(input: {
+const materializeBranchEffect = Effect.fnUntraced(function* (input: {
   path: string;
   branch: string;
   baseRef: string | null;
   baseSourcePath?: string;
   onLog?: (line: string) => void;
-}): Effect.Effect<void, RiftBackendError> {
+}) {
   const { path, branch, baseRef, baseSourcePath, onLog } = input;
   // --discard-changes: `--copy-all` CoW-copies the main clone's working
   // tree INCLUDING its uncommitted modifications, and a plain switch
@@ -170,32 +169,28 @@ function materializeBranchEffect(input: {
   // clone's working tree is never touched, so discarding is safe and
   // removes the whole clean-main-clone requirement.
   if (baseRef === null) {
-    return Effect.sync(() => onLog?.(`switch to ${branch}`)).pipe(
-      Effect.andThen(git(["switch", "--discard-changes", branch], path)),
-      Effect.asVoid,
-      Effect.mapError((cause) => new RiftBackendError({ operation: "materialize", detail: cause.message, cause })),
-    );
+    onLog?.(`switch to ${branch}`);
+    yield* git(["switch", "--discard-changes", branch], path);
+    return;
   }
 
   const resolvesInClone = gitQuiet(["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`], path);
-  return Effect.gen(function* () {
-    let start = baseRef;
-    if (baseSourcePath) {
-      onLog?.(`fetching base ${baseRef} from ${basename(baseSourcePath)}`);
-      const fetched = yield* run(["git", "fetch", "--no-tags", baseSourcePath, `refs/heads/${baseRef}`], { cwd: path });
-      if (fetched.exitCode === 0) start = "FETCH_HEAD";
-      else if (yield* resolvesInClone) onLog?.(`fetch from ${basename(baseSourcePath)} failed; using base ${baseRef} from the clone`);
-      else return yield* new RiftBackendError({ operation: "materialize", detail:
-        `could not fetch base ${baseRef} from ${baseSourcePath}: ${(fetched.stderr || fetched.stdout || `exit ${fetched.exitCode}`).trim()}` });
-    } else if (!(yield* resolvesInClone)) {
-      return yield* new RiftBackendError({ operation: "materialize", detail:
-        `base ${baseRef} is not in the new checkout and no source worktree was found to fetch it from` });
-    }
-    onLog?.(`new branch ${branch} off ${baseRef}`);
-    yield* git(["switch", "--discard-changes", "-c", branch, start], path);
-  }).pipe(Effect.mapError((cause) => cause instanceof RiftBackendError ? cause :
-    new RiftBackendError({ operation: "materialize", detail: cause.message, cause })));
-}
+  let start = baseRef;
+  if (baseSourcePath) {
+    onLog?.(`fetching base ${baseRef} from ${basename(baseSourcePath)}`);
+    const fetched = yield* run(["git", "fetch", "--no-tags", baseSourcePath, `refs/heads/${baseRef}`], { cwd: path });
+    if (fetched.exitCode === 0) start = "FETCH_HEAD";
+    else if (yield* resolvesInClone) onLog?.(`fetch from ${basename(baseSourcePath)} failed; using base ${baseRef} from the clone`);
+    else return yield* new RiftBackendError({ operation: "materialize", detail:
+      `could not fetch base ${baseRef} from ${baseSourcePath}: ${(fetched.stderr || fetched.stdout || `exit ${fetched.exitCode}`).trim()}` });
+  } else if (!(yield* resolvesInClone)) {
+    return yield* new RiftBackendError({ operation: "materialize", detail:
+      `base ${baseRef} is not in the new checkout and no source worktree was found to fetch it from` });
+  }
+  onLog?.(`new branch ${branch} off ${baseRef}`);
+  yield* git(["switch", "--discard-changes", "-c", branch, start], path);
+}, Effect.mapError((cause) => cause instanceof RiftBackendError ? cause :
+  new RiftBackendError({ operation: "materialize", detail: cause.message, cause })));
 
 /**
  * Copy-on-write checkout via rift. `--copy-all` brings `node_modules`
@@ -208,8 +203,7 @@ function materializeBranchEffect(input: {
  * the branch switch below — a branch-name-sensitive hook sees the main
  * clone's commit, not the target branch (see docs/backends.md).
  */
-export function createRiftWorktree(input: BackendCreateInput): Effect.Effect<void, RiftBackendError> {
-  return Effect.gen(function* () {
+export const createRiftWorktree = Effect.fn("createRiftWorktree")(function* (input: BackendCreateInput) {
     const { path, branch, slug, baseRef, baseSourcePath, mainClone, onLog } = input;
     const rift = yield* requireRiftBinEffect();
     yield* ensureRiftInitEffect(rift, mainClone, onLog);
@@ -272,12 +266,10 @@ export function createRiftWorktree(input: BackendCreateInput): Effect.Effect<voi
       }
       })),
     );
-  }).pipe(Effect.mapError((cause) => cause instanceof RiftBackendError ? cause :
+}, Effect.mapError((cause) => cause instanceof RiftBackendError ? cause :
     new RiftBackendError({ operation: "create", detail: cause.message, cause })));
-}
 
-export function removeRiftWorktree(input: BackendRemoveInput): Effect.Effect<BackendRemoveResult, RiftBackendError> {
-  return Effect.gen(function* () {
+export const removeRiftWorktree = Effect.fn("removeRiftWorktree")(function* (input: BackendRemoveInput) {
     const { path, force, mainClone, onLog } = input;
     const rift = yield* resolveRiftBin();
     if (!rift) {
@@ -304,8 +296,7 @@ export function removeRiftWorktree(input: BackendRemoveInput): Effect.Effect<Bac
       onLog?.(`rift gc warning: ${(gc.stderr || gc.stdout || "").trim()}`);
     }
     return { ok: true };
-  }).pipe(Effect.mapError((cause) => new RiftBackendError({ operation: "remove", detail: cause.message, cause })));
-}
+}, Effect.mapError((cause) => new RiftBackendError({ operation: "remove", detail: cause.message, cause })));
 
 export const riftBackend: WorktreeBackend = {
   id: "rift",

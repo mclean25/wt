@@ -216,13 +216,6 @@ export const enableAutoMerge = Effect.fn("enableAutoMerge")(function* (
   };
 });
 
-export function enableAutoMergePromise(
-  prId: string,
-  opts: { baseRefName?: string; headRefOid?: string } = {},
-): Promise<GhActionResult> {
-  return Effect.runPromise(enableAutoMerge(prId, opts));
-}
-
 /**
  * Did the merge queue refuse this PR for a reason a CLOCK will fix?
  *
@@ -367,13 +360,6 @@ export const disableAutoMerge = Effect.fn("disableAutoMerge")(function* (
   );
 });
 
-export function disableAutoMergePromise(
-  prNumber: number,
-  opts: { prId?: string; baseRefName?: string } = {},
-): Promise<GhActionResult> {
-  return Effect.runPromise(disableAutoMerge(prNumber, opts));
-}
-
 /**
  * Edit a PR's review requests via `gh pr edit`. Both `add` and
  * `remove` may be passed in the same call — gh accepts both flag
@@ -391,13 +377,6 @@ export function editReviewers(
   for (const l of changes.add) argv.push("--add-reviewer", l);
   for (const l of changes.remove) argv.push("--remove-reviewer", l);
   return runGhMutation(argv, "edit reviewers failed", { prNumber, changes });
-}
-
-export function editReviewersPromise(
-  prNumber: number,
-  changes: { add: readonly string[]; remove: readonly string[] },
-): Promise<GhActionResult> {
-  return Effect.runPromise(editReviewers(prNumber, changes));
 }
 
 /**
@@ -418,10 +397,6 @@ export function retargetPrBase(
   );
 }
 
-export function retargetPrBasePromise(prNumber: number, base: string): Promise<GhActionResult> {
-  return Effect.runPromise(retargetPrBase(prNumber, base));
-}
-
 /**
  * Flip a draft PR to "ready for review" via `gh pr ready`. Notifies
  * reviewers and triggers any code-owner auto-requests, so callers
@@ -438,10 +413,6 @@ export function markPullRequestReady(
   );
 }
 
-export function markPullRequestReadyPromise(prNumber: number): Promise<GhActionResult> {
-  return Effect.runPromise(markPullRequestReady(prNumber));
-}
-
 /**
  * Close a GitHub issue on the origin repo as completed. Used by the
  * `builtin:close-issue` automation once a worktree's branch lands.
@@ -455,10 +426,6 @@ export function closeGithubIssue(issue: number): Effect.Effect<GhActionResult> {
     "close issue failed",
     { issue },
   );
-}
-
-export function closeGithubIssuePromise(issue: number): Promise<GhActionResult> {
-  return Effect.runPromise(closeGithubIssue(issue));
 }
 
 /**
@@ -496,10 +463,6 @@ export const deleteRemoteBranch = Effect.fn("deleteRemoteBranch")(function* (
     { branch },
   );
 });
-
-export function deleteRemoteBranchPromise(branch: string): Promise<GhActionResult> {
-  return Effect.runPromise(deleteRemoteBranch(branch));
-}
 
 /**
  * Stream the failed-job logs of the most recent failed CI run for
@@ -544,13 +507,6 @@ export const streamFailedRunLog = Effect.fn("streamFailedRunLog")(function* (
   return { ok: true };
 });
 
-export function streamFailedRunLogPromise(
-  branch: string,
-  onLine: (line: string) => void,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  return Effect.runPromise(streamFailedRunLog(branch, onLine));
-}
-
 /**
  * Read the live `baseRefName` / `state` for a branch's PR via
  * `gh pr view`. The restack reconcile/retarget paths use it to compare
@@ -588,7 +544,3 @@ export const viewPrInfo = Effect.fn("viewPrInfo")(function* (
     headRefOid: typeof d.headRefOid === "string" ? d.headRefOid : "",
   };
 });
-
-export function viewPrInfoPromise(branch: string): Promise<LivePrInfo | null> {
-  return Effect.runPromise(viewPrInfo(branch));
-}

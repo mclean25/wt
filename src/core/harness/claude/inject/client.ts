@@ -225,6 +225,7 @@ export async function connectInspector(socketPath: string, signal?: AbortSignal)
     }
   }
 
+  // @effect-diagnostics-next-line effect/newPromise:off -- raw inspector-socket handshake: the websocket upgrade is a Node stream event, not an Effect
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     const finish = (err?: Error): void => {
@@ -352,6 +353,7 @@ export async function connectInspector(socketPath: string, signal?: AbortSignal)
     call(method, params) {
       if (dead) return Promise.reject(dead);
       const id = nextId++;
+      // @effect-diagnostics-next-line effect/newPromise:off -- per-request reply slot on the raw socket; the client is the transport boundary
       return new Promise<InspectorResult>((resolve, reject) => {
         waiters.set(id, { resolve, reject });
         try {

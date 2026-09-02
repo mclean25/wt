@@ -10,9 +10,9 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 
-import { effectiveBaseOrTrunkPromise } from "./git.ts";
-import { resolveAnchorPromise } from "./stack-ops.ts";
-import { anchorParentRefPromise, resolveNewBaseShaPromise } from "./stack-ops/replay.ts";
+import { effectiveBaseOrTrunk } from "./git.ts";
+import { resolveAnchor } from "./stack-ops.ts";
+import { anchorParentRef, resolveNewBaseSha } from "./stack-ops/replay.ts";
 import { restackEngine } from "./stack-ops/engine.ts";
 import { git as rawGit, trackedTmpDirs } from "./test-fixtures.ts";
 
@@ -69,22 +69,22 @@ test("rift: the anchor resolves via origin/<parent>, not the absent local branch
   // The child has no local `p`, so the bare name — what the old engine
   // passed to merge-base — can't anchor (the reported "no merge-base
   // with <parent>").
-  expect(await resolveAnchorPromise(step("p"), "p", child)).toBeNull();
+  expect(await Effect.runPromise(resolveAnchor(step("p"), "p", child))).toBeNull();
 
   // `anchorParentRef` prefers the local branch, falls back to the
   // remote-tracking ref every clone carries — which resolves here.
-  const parentRef = await anchorParentRefPromise(step("p"), "main", child);
-  expect(await resolveAnchorPromise(step("p"), parentRef, child)).toBe(p1);
+  const parentRef = await Effect.runPromise(anchorParentRef(step("p"), "main", child));
+  expect(await Effect.runPromise(resolveAnchor(step("p"), parentRef, child))).toBe(p1);
 });
 
 test("rift: a stacked base resolves through origin/<parent> when the local branch is absent", async () => {
   const { parent, child } = buildClones();
   // The parent has a local `p` (git-worktree analogue) → used directly.
-  expect(await effectiveBaseOrTrunkPromise(parent, "p")).toBe("p");
+  expect(await Effect.runPromise(effectiveBaseOrTrunk(parent, "p"))).toBe("p");
   // The child (independent clone) has no local `p`, only `origin/p` — the
   // resolution the conflict probe / diff rely on so a rift slice bases on
   // its real parent instead of a stale/polluted ref or a fat trunk diff.
-  expect(await effectiveBaseOrTrunkPromise(child, "p")).toBe("origin/p");
+  expect(await Effect.runPromise(effectiveBaseOrTrunk(child, "p"))).toBe("origin/p");
 });
 
 test("rift: the new base is brought over from the parent clone when absent locally", async () => {
@@ -103,19 +103,19 @@ test("rift: the new base is brought over from the parent clone when absent local
 
   // With no way to reach the parent clone, the child can't resolve p1'.
   expect(
-    await resolveNewBaseShaPromise(step("p"), "main", newTip, new Map(), child),
+    await Effect.runPromise(resolveNewBaseSha(step("p"), "main", newTip, new Map(), child)),
   ).toBeNull();
 
   // Given the parent's worktree path, it fetches p1' in (FETCH_HEAD, no
   // ref created) and the squash-safe replay lands C on it.
   const p1old = git(child, ["rev-parse", "origin/p"]);
-  const base = await resolveNewBaseShaPromise(
+  const base = await Effect.runPromise(resolveNewBaseSha(
     step("p"),
     "main",
     newTip,
     new Map([["p", parent]]),
     child,
-  );
+  ));
   expect(base).toBe(p1b);
 
   const out = await Effect.runPromise(restackEngine.replayStep(

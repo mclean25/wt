@@ -225,6 +225,3 @@ export const reapWorktreeListeners = Effect.fn("reapWorktreeListeners")(function
     }
     return reaped;
 });
-
-export const reapWorktreeListenersPromise = (wtPath: string): Promise<ReapedProcess[]> =>
-  Effect.runPromise(reapWorktreeListeners(wtPath));

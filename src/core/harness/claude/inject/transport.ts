@@ -441,18 +441,10 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
     }));
   }
 
-  const deliverClaudeMessagePromise = (
-    tmuxName: string, text: string,
-    opts: { readyBudgetMs: number; abortIfBlocked?: () => string | null; signal?: AbortSignal },
-  ): Promise<InjectOutcome> => Effect.runPromise(deliverClaudeMessage(tmuxName, text, opts), { signal: opts.signal });
-  const claudeInjectSelftestPromise = (tmuxName: string): Promise<SelftestOutcome> =>
-    Effect.runPromise(claudeInjectSelftest(tmuxName));
 
-  return { deliverClaudeMessage, claudeInjectSelftest, deliverClaudeMessagePromise, claudeInjectSelftestPromise };
+  return { deliverClaudeMessage, claudeInjectSelftest };
 }
 
 const injector = createClaudeInjector();
 export const deliverClaudeMessage = injector.deliverClaudeMessage;
 export const claudeInjectSelftest = injector.claudeInjectSelftest;
-/** Promise adapter kept for this module's own tests; the messenger's DI seam is Effect-native. */
-export const deliverClaudeMessagePromise = injector.deliverClaudeMessagePromise;

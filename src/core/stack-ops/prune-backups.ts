@@ -84,10 +84,3 @@ export const pruneStackBackups = Effect.fn("pruneStackBackups")(function* (
     main,
   );
 });
-
-export function pruneStackBackupsPromise(
-  olderThanDays: number,
-  onLog: Logger,
-): Promise<PruneBackupsResult> {
-  return Effect.runPromise(pruneStackBackups(olderThanDays, onLog));
-}

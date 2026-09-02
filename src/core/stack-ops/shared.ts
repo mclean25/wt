@@ -173,13 +173,6 @@ export const lockChain = Effect.fn("lockChain")(function* (
   );
 });
 
-export function lockChainPromise(
-  branch: string,
-  phase: string,
-): Promise<ChainLockResult> {
-  return Effect.runPromise(lockChain(branch, phase));
-}
-
 export function withLockedChain<A, E, R>(
   branch: string,
   phase: string,
@@ -240,11 +233,3 @@ export const retargetIfNeeded = Effect.fn("retargetIfNeeded")(function* (
   if (r.ok) onLog(`  retargeted PR #${live.number} base → ${expectedBase}`);
   else onLog(`  warn: retarget PR #${live.number} base: ${r.error}`);
 });
-
-export function retargetIfNeededPromise(
-  branch: string,
-  expectedBase: string,
-  onLog: Logger,
-): Promise<void> {
-  return Effect.runPromise(retargetIfNeeded(branch, expectedBase, onLog));
-}

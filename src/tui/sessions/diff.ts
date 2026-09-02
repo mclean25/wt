@@ -12,7 +12,6 @@
  * state, mirroring the F12 claude-session model.
  */
 import type { CliRenderer } from "@opentui/core";
-import { Effect } from "effect";
 
 import {
   enterWorktreeSession,
@@ -45,6 +44,3 @@ export function enterDiffSession(opts: EnterDiffSessionOptions) {
     diffBase: base,
   });
 }
-
-export const enterDiffSessionPromise = (opts: EnterDiffSessionOptions): Promise<DiffResult> =>
-  Effect.runPromise(enterDiffSession(opts));

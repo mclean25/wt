@@ -81,12 +81,6 @@ export function runWorktreeWt(
   );
 }
 
-export const runWorktreeWtPromise = (
-  target: WorktreeTarget,
-  args: readonly string[],
-  opts: WorktreeRunOptions = {},
-): Promise<number> => Effect.runPromise(runWorktreeWt(target, args, opts));
-
 export function captureWorktreeWt(
   target: WorktreeTarget,
   args: readonly string[],
@@ -99,12 +93,6 @@ export function captureWorktreeWt(
     Effect.mapError((cause) => new WorktreeExecutorError({ operation: "wait", cause })),
   );
 }
-
-export const captureWorktreeWtPromise = (
-  target: WorktreeTarget,
-  args: readonly string[],
-  opts: Omit<RunOptions, "cwd"> = {},
-): Promise<RunResult> => Effect.runPromise(captureWorktreeWt(target, args, opts));
 
 /** Read supervised dev output from the machine that owns the checkout. */
 export function readWorktreeDevLogs(
@@ -126,9 +114,6 @@ export function readWorktreeDevLogs(
       : result.stderr.trim() || result.stdout.trim() || null),
   );
 }
-
-export const readWorktreeDevLogsPromise = (target: WorktreeTarget): Promise<string | null> =>
-  Effect.runPromise(readWorktreeDevLogs(target));
 
 export type WorktreeMessageResult =
   | {
@@ -173,11 +158,3 @@ export function sendWorktreeMessage(
       : { ok: false, reason: `remote send exited ${code}` }),
   );
 }
-
-export const sendWorktreeMessagePromise = (
-  target: WorktreeTarget,
-  harnessId: HarnessId,
-  text: string,
-  onLine?: (line: string) => void,
-): Promise<WorktreeMessageResult> =>
-  Effect.runPromise(sendWorktreeMessage(target, harnessId, text, onLine));

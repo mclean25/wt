@@ -71,10 +71,10 @@ export type Debounced = {
    * `cancel` to completion synchronously. Kept name- and
    * behavior-compatible so those callers need no changes.
    */
-  cancelPromise: () => void;
+  cancelUnsafe: () => void;
   /**
    * The PRIMARY cancellation implementation — disposes and interrupts
-   * the pending fiber. `cancelPromise` is a thin sync wrapper around
+   * the pending fiber. `cancelUnsafe` is a thin sync wrapper around
    * this; scoped owners and tests should prefer yielding it directly.
    */
   cancel: Effect.Effect<void>;
@@ -115,14 +115,14 @@ export const makeDebounced = Effect.fn("makeDebounced")(function* (
       );
       Effect.runSyncWith(context)(Ref.set(current, fiber));
     },
-    cancelPromise: () => {
+    cancelUnsafe: () => {
       Effect.runSyncWith(context)(cancel);
     },
     cancel,
   };
 });
 
-export function makeDebouncedPromise(onChange: () => void, ms: number): Debounced {
+export function makeDebouncedUnsafe(onChange: () => void, ms: number): Debounced {
   const scope = Effect.runSync(Scope.make());
   const debounced = Effect.runSync(makeDebounced(onChange, ms).pipe(Scope.provide(scope)));
   const cancel = debounced.cancel.pipe(
@@ -131,7 +131,7 @@ export function makeDebouncedPromise(onChange: () => void, ms: number): Debounce
   let cancelled = false;
   return {
     trigger: debounced.trigger,
-    cancelPromise: () => {
+    cancelUnsafe: () => {
       if (cancelled) return;
       cancelled = true;
       Effect.runSync(cancel);
@@ -150,7 +150,7 @@ export function watchRefs(
   onChange: () => void,
 ): () => void {
   const dir = join(mainClonePath, ".git", "refs");
-  const debounced = makeDebouncedPromise(onChange, REFS_DEBOUNCE_MS);
+  const debounced = makeDebouncedUnsafe(onChange, REFS_DEBOUNCE_MS);
   let watcher: FSWatcher | null = null;
   try {
     watcher = watch(dir, { persistent: false, recursive: true }, () =>
@@ -161,10 +161,10 @@ export function watchRefs(
     });
   } catch (err) {
     log.warn("refs watcher failed", { err: String(err), dir });
-    return () => debounced.cancelPromise();
+    return () => debounced.cancelUnsafe();
   }
   return () => {
-    debounced.cancelPromise();
+    debounced.cancelUnsafe();
     closeSilent(watcher);
   };
 }
@@ -193,12 +193,12 @@ export function watchWorktreeDir(
   onChange: (area: WorktreeDirArea) => void,
 ): () => void {
   const debouncers: Record<WorktreeDirArea, Debounced> = {
-    tree: makeDebouncedPromise(() => onChange("tree"), WT_DEBOUNCE_MS),
-    sst: makeDebouncedPromise(() => onChange("sst"), WT_DEBOUNCE_MS),
+    tree: makeDebouncedUnsafe(() => onChange("tree"), WT_DEBOUNCE_MS),
+    sst: makeDebouncedUnsafe(() => onChange("sst"), WT_DEBOUNCE_MS),
   };
   const cancelAll = (): void => {
-    debouncers.tree.cancelPromise();
-    debouncers.sst.cancelPromise();
+    debouncers.tree.cancelUnsafe();
+    debouncers.sst.cancelUnsafe();
   };
   let watcher: FSWatcher | null = null;
   try {
@@ -252,7 +252,7 @@ export function watchWorktreesAdmin(
   onChange: () => void,
 ): () => void {
   const dir = join(mainClonePath, ".git", "worktrees");
-  const debounced = makeDebouncedPromise(onChange, REFS_DEBOUNCE_MS);
+  const debounced = makeDebouncedUnsafe(onChange, REFS_DEBOUNCE_MS);
   let watcher: FSWatcher | null = null;
   try {
     mkdirSync(dir, { recursive: true });
@@ -262,10 +262,10 @@ export function watchWorktreesAdmin(
     });
   } catch (err) {
     log.warn("worktrees-admin watcher failed", { err: String(err), dir });
-    return () => debounced.cancelPromise();
+    return () => debounced.cancelUnsafe();
   }
   return () => {
-    debounced.cancelPromise();
+    debounced.cancelUnsafe();
     closeSilent(watcher);
   };
 }
@@ -286,7 +286,7 @@ export function watchWorktreeRoot(
   worktreeRoot: string,
   onChange: () => void,
 ): () => void {
-  const debounced = makeDebouncedPromise(onChange, REFS_DEBOUNCE_MS);
+  const debounced = makeDebouncedUnsafe(onChange, REFS_DEBOUNCE_MS);
   let watcher: FSWatcher | null = null;
   try {
     mkdirSync(worktreeRoot, { recursive: true });
@@ -296,10 +296,10 @@ export function watchWorktreeRoot(
     });
   } catch (err) {
     log.warn("worktree-root watcher failed", { err: String(err), worktreeRoot });
-    return () => debounced.cancelPromise();
+    return () => debounced.cancelUnsafe();
   }
   return () => {
-    debounced.cancelPromise();
+    debounced.cancelUnsafe();
     closeSilent(watcher);
   };
 }
@@ -333,14 +333,14 @@ export function watchRebaseState(
   const debouncerFor = (slug: string): Debounced => {
     let d = debouncers.get(slug);
     if (!d) {
-      d = makeDebouncedPromise(() => onChange(slug), REFS_DEBOUNCE_MS);
+      d = makeDebouncedUnsafe(() => onChange(slug), REFS_DEBOUNCE_MS);
       debouncers.set(slug, d);
     }
     return d;
   };
   const cancelAll = (): void => {
     disposed = true;
-    for (const d of debouncers.values()) d.cancelPromise();
+    for (const d of debouncers.values()) d.cancelUnsafe();
     debouncers.clear();
   };
   let watcher: FSWatcher | null = null;
@@ -391,12 +391,12 @@ export function watchWtStateFiles(
   onChange: (file: WtStateFile) => void,
 ): () => void {
   const debouncers: Record<WtStateFile, Debounced> = {
-    state: makeDebouncedPromise(() => onChange("state"), REFS_DEBOUNCE_MS),
-    archive: makeDebouncedPromise(() => onChange("archive"), REFS_DEBOUNCE_MS),
+    state: makeDebouncedUnsafe(() => onChange("state"), REFS_DEBOUNCE_MS),
+    archive: makeDebouncedUnsafe(() => onChange("archive"), REFS_DEBOUNCE_MS),
   };
   const cancelAll = (): void => {
-    debouncers.state.cancelPromise();
-    debouncers.archive.cancelPromise();
+    debouncers.state.cancelUnsafe();
+    debouncers.archive.cancelUnsafe();
   };
   let watcher: FSWatcher | null = null;
   try {
@@ -457,14 +457,14 @@ export function watchLockDir(
   const debouncerFor = (slug: string): Debounced => {
     let d = debouncers.get(slug);
     if (!d) {
-      d = makeDebouncedPromise(() => onChange(slug), REFS_DEBOUNCE_MS);
+      d = makeDebouncedUnsafe(() => onChange(slug), REFS_DEBOUNCE_MS);
       debouncers.set(slug, d);
     }
     return d;
   };
   const cancelAll = (): void => {
     disposed = true;
-    for (const d of debouncers.values()) d.cancelPromise();
+    for (const d of debouncers.values()) d.cancelUnsafe();
     debouncers.clear();
   };
   let watcher: FSWatcher | null = null;
@@ -513,7 +513,7 @@ export function watchRiftRebaseDir(
   onChange: () => void,
 ): () => void {
   const gitDir = join(worktreePath, ".git");
-  const debounced = makeDebouncedPromise(onChange, REFS_DEBOUNCE_MS);
+  const debounced = makeDebouncedUnsafe(onChange, REFS_DEBOUNCE_MS);
   let watcher: FSWatcher | null = null;
   try {
     watcher = watch(gitDir, { persistent: false }, (_event, filename) => {
@@ -528,10 +528,10 @@ export function watchRiftRebaseDir(
     });
   } catch (err) {
     log.warn("rift rebase watcher failed", { err: String(err), gitDir });
-    return () => debounced.cancelPromise();
+    return () => debounced.cancelUnsafe();
   }
   return () => {
-    debounced.cancelPromise();
+    debounced.cancelUnsafe();
     closeSilent(watcher);
   };
 }

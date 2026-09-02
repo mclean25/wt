@@ -21,8 +21,9 @@ export type EnterRemoteWorktreeSessionOptions = {
 };
 
 /** Hand the terminal to one selected remote worktree's tmux session. */
-export function enterRemoteWorktreeSession(opts: EnterRemoteWorktreeSessionOptions) {
-  return Effect.gen(function* () {
+export const enterRemoteWorktreeSession = Effect.fn("enterRemoteWorktreeSession")(function* (
+  opts: EnterRemoteWorktreeSessionOptions,
+) {
     const { renderer, worktree, target, harnessId } = opts;
     if (worktree.location.kind !== "remote") {
       return yield* new RemoteSessionTargetError({
@@ -45,9 +46,4 @@ export function enterRemoteWorktreeSession(opts: EnterRemoteWorktreeSessionOptio
         setWezTermTabTitle("wt", config.paths.weztermCli).pipe(Effect.ignore),
       ),
     );
-  });
-}
-
-export const enterRemoteWorktreeSessionPromise = (
-  opts: EnterRemoteWorktreeSessionOptions,
-): Promise<number> => Effect.runPromise(enterRemoteWorktreeSession(opts));
+});

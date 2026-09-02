@@ -2,12 +2,19 @@
  * Reviewer-picker flows (`v`): build the candidate list, and submit the
  * add/remove set through the optimistic github mutation. Extracted from
  * `app.tsx`; rebuilt per render so the closures see fresh rows + modal.
+ *
+ * `submitReviewerPicker` stays a thin `Effect.runPromise` wrapper around
+ * `submitReviewers`, the exported Effect. See `github-pr.ts`'s module
+ * doc for the `io.promise(...).pipe(Effect.result)` / `.failure.cause`
+ * idiom this mirrors — one `mutate()` rejection, wrapped once more by
+ * this file's own `io`, unwrapped by exactly one `.cause` to reproduce
+ * the original direct-await wording.
  */
 import type { QueryFilters } from "@tanstack/react-query";
 
 import { config } from "../../core/config.ts";
-import { editReviewersPromise } from "../../core/github.ts";
-import { operationErrors } from "../../core/errors.ts";
+import { editReviewers } from "../../core/github.ts";
+import { causeMessage, operationErrors } from "../../core/errors.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Contributor } from "../../core/types.ts";
 import { patchPullRequest, type GithubData } from "../../state/index.ts";
@@ -15,9 +22,20 @@ import type { Modal } from "../modal-state.ts";
 import type { MultiPickerItem } from "../panels/picker.tsx";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 
 const io = operationErrors("reviewers flow");
+
+/** See `github-pr.ts`'s `GhMutationFailed` — same tagged-failure shape
+ *  for a `GhActionResult` coming back `{ ok: false }` inside a `run:`
+ *  effect, kept local since it's this file's only use. */
+class GhMutationFailed extends Data.TaggedError("GhMutationFailed")<{
+  readonly reason: string;
+}> {
+  override get message(): string {
+    return this.reason;
+  }
+}
 
 type ReviewerFlowsCtx = {
   rows: WorktreeRow[];
@@ -28,7 +46,7 @@ type ReviewerFlowsCtx = {
   mutate: <TData>(opts: {
     filter: QueryFilters;
     patch: (prev: TData | undefined) => TData | undefined;
-    run: () => Promise<void>;
+    run: (() => Promise<void>) | Effect.Effect<void, unknown>;
   }) => Promise<void>;
 };
 
@@ -132,9 +150,9 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
   // render-closure `modal`: a Space-toggle and the committing Enter can
   // land in one input tick, and the closure would still hold the
   // pre-toggle checked set — silently dropping the toggle.
-  async function submitReviewerPicker(
+  const submitReviewers = Effect.fn("submitReviewers")(function* (
     picker: Extract<Modal, { kind: "reviewerPicker" }>,
-  ): Promise<void> {
+  ): Effect.fn.Return<void> {
     const { slug, prNumber, checked, original } = picker;
     const log = createLogger(slug);
     const branch = rows.find((r) => r.wt.slug === slug)?.wt.branch;
@@ -156,8 +174,8 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
       toast("no changes", theme.fgDim, 1500);
       return;
     }
-    try {
-      await mutate<GithubData>({
+    const outcome = yield* io.promise("edit reviewers", () =>
+      mutate<GithubData>({
         filter: { queryKey: ["github"] },
         patch: (data) =>
           patchPullRequest(data, branch, (pr) => ({
@@ -165,13 +183,15 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
             requestedReviewers: [...checked],
             reviewRequests: pr.reviewRequests + add.length - remove.length,
           })),
-        run: async () => {
-          const result = await editReviewersPromise(prNumber, { add, remove });
-          if (!result.ok) throw new Error(result.error);
-        },
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+        run: editReviewers(prNumber, { add, remove }).pipe(
+          Effect.flatMap((result) =>
+            result.ok ? Effect.void : Effect.fail(new GhMutationFailed({ reason: result.error })),
+          ),
+        ),
+      }),
+    ).pipe(Effect.result);
+    if (outcome._tag === "Failure") {
+      const msg = causeMessage(outcome.failure.cause);
       log.event.err(`edit reviewers failed for #${prNumber}: ${msg}`);
       toast(`edit reviewers failed: ${msg}`, theme.err, 4000);
       return;
@@ -187,7 +207,13 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
       .filter(Boolean)
       .join(", ");
     toast(summary, theme.ok, 2500);
+  });
+
+  function submitReviewerPicker(
+    picker: Extract<Modal, { kind: "reviewerPicker" }>,
+  ): Promise<void> {
+    return Effect.runPromise(submitReviewers(picker));
   }
 
-  return { openReviewerPicker, submitReviewerPicker };
+  return { openReviewerPicker, submitReviewerPicker, submitReviewers };
 }

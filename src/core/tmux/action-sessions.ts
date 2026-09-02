@@ -175,14 +175,6 @@ export function startActionSession(opts: {
   );
 }
 
-export const startActionSessionPromise = (opts: {
-  slug: string;
-  cwd: string;
-  runDir: string;
-  argv: readonly string[];
-}): Promise<{ ok: true } | { ok: false; reason: string }> =>
-  Effect.runPromise(startActionSession(opts));
-
 /**
  * Kill one slug's action session. Idempotent — silently no-ops when
  * the session doesn't exist or the server isn't running (`run` never
@@ -206,6 +198,3 @@ export function killActionSession(slug: string): Effect.Effect<void> {
     `=${actionSessionName(slug)}`,
   ]).pipe(Effect.ignore);
 }
-
-export const killActionSessionPromise = (slug: string): Promise<void> =>
-  Effect.runPromise(killActionSession(slug));

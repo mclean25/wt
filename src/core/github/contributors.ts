@@ -128,9 +128,3 @@ export const fetchRepoContributors = Effect.fn("fetchRepoContributors")(
     return out;
   },
 );
-
-export function fetchRepoContributorsPromise(
-  signal?: AbortSignal,
-): Promise<Contributor[]> {
-  return Effect.runPromise(fetchRepoContributors(signal));
-}

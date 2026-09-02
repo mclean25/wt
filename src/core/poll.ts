@@ -40,29 +40,3 @@ export const pollUntil = Effect.fn("pollUntil")(function* (opts: PollUntilOption
     yield* Effect.sleep(Duration.millis(opts.intervalMs));
   }
 });
-
-export async function pollUntilPromise(opts: {
-  /** Cheap, synchronous, side-effect-free. Called immediately, then per tick. */
-  check(): boolean;
-  budgetMs: number;
-  intervalMs: number;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-  signal?: AbortSignal;
-}): Promise<boolean> {
-  if (!opts.now && !opts.sleep) {
-    return Effect.runPromise(
-      pollUntil(opts),
-      opts.signal ? { signal: opts.signal } : undefined,
-    );
-  }
-  const now = opts.now ?? Date.now;
-  const sleep = opts.sleep ?? ((ms: number) => Effect.runPromise(Effect.sleep(ms)));
-  const deadline = now() + opts.budgetMs;
-  for (;;) {
-    opts.signal?.throwIfAborted();
-    if (opts.check()) return true;
-    if (now() >= deadline) return false;
-    await sleep(opts.intervalMs);
-  }
-}

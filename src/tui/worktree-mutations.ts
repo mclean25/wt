@@ -1,4 +1,3 @@
-import { Effect } from "effect";
 import { operationErrors } from "../core/errors.ts";
 import type { WorktreeTarget } from "../core/worktree-target.ts";
 import { worktreeTargetKey } from "../core/worktree-target.ts";
@@ -22,8 +21,6 @@ export function makeWorktreeMutations(deps: WorktreeMutationDeps) {
     });
   }
 
-  const setSectionPromise = (target: WorktreeTarget, section: string | null): Promise<void> =>
-    Effect.runPromise(setSection(target, section));
 
-  return { setSectionPromise, setSection };
+  return { setSection };
 }

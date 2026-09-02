@@ -135,10 +135,3 @@ export function runRemoteWt(
     Effect.mapError((cause) => new RemoteRunError({ operation: "wait", cause })),
   );
 }
-
-/** Promise adapter for the CLI and React boundaries. */
-export const runRemoteWtPromise = (
-  remote: RemoteConfig,
-  argv: readonly string[],
-  opts: RemoteRunOptions = {},
-): Promise<number> => Effect.runPromise(runRemoteWt(remote, argv, opts));

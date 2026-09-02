@@ -5,23 +5,37 @@
  * helpers so the returned closures always see fresh state. All three
  * flows follow the optimistic-patch rules from `state/hooks.ts` —
  * patch `["github"]` via `patchPullRequest`, reconcile on settle.
+ *
+ * Each keystroke entrypoint (`doMarkReady`, `doAutoMerge`, `doShipPr`)
+ * stays a thin `Effect.runPromise` wrapper around the exported Effect
+ * that holds the actual logic (`markReady`, `setAutoMerge`, `shipPr`).
+ *
+ * `mutate`'s `run` is an `Effect`, so `runOptimisticMutation` wraps its
+ * failure exactly once, tagged `"hooks"` (see `state/hooks.ts`). Every
+ * `mutate(...)` call below is adopted with `io.promise(label, …)`
+ * (this file's own boundary, tagged `"github pr flows"`), so a failure
+ * arrives as `OperationError{ cause: OperationError{ cause: <original> } }`
+ * — one level deeper than a bare `mutate()` rejection. Reading the
+ * *inner* `.cause` (`causeMessage(outer.cause)`) peels exactly that one
+ * extra layer back off, reproducing the same wording a direct
+ * `try { await mutate(...) } catch (err) { err.message }` would have
+ * shown.
  */
 import { config } from "../../core/config.ts";
 import {
   AUTO_MERGE_METHOD,
-  disableAutoMergePromise,
-  editReviewersPromise,
+  disableAutoMerge,
+  editReviewers,
   enableAutoMerge,
-  enableAutoMergePromise,
-  markPullRequestReadyPromise,
+  markPullRequestReady,
   streamFailedRunLog,
 } from "../../core/github.ts";
-import { causeMessage, operationErrors } from "../../core/errors.ts";
+import { causeMessage, operationErrors, type OperationError } from "../../core/errors.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { PullRequest } from "../../core/types.ts";
 import { patchPullRequest, type GithubData } from "../../state/index.ts";
 import type { QueryFilters } from "@tanstack/react-query";
-import { Effect } from "effect";
+import { Clock, Data, DateTime, Effect } from "effect";
 
 import { armedFromPr } from "../badges.ts";
 import {
@@ -36,13 +50,31 @@ import { theme } from "../theme.ts";
 
 const io = operationErrors("github pr flows");
 
+/**
+ * A `GhActionResult` coming back `{ ok: false }` inside a `mutate`
+ * `run:` effect — tagged (rather than a bare `Error`) so it doesn't
+ * merge into an untyped failure channel. `.message` is the raw
+ * `result.error` verbatim, so wording downstream (`causeMessage`
+ * unwrapping the `mutate`/`runOptimisticMutation` wrap) is unchanged
+ * from when this threw a plain `Error`.
+ */
+class GhMutationFailed extends Data.TaggedError("GhMutationFailed")<{
+  readonly reason: string;
+}> {
+  override get message(): string {
+    return this.reason;
+  }
+}
+const ghFail = (reason: string): Effect.Effect<never, GhMutationFailed> =>
+  Effect.fail(new GhMutationFailed({ reason }));
+
 export type GithubPrFlowsCtx = {
   rows: readonly WorktreeRow[];
   toast: (message: string, color?: string, ms?: number) => void;
   mutate: <TData>(opts: {
     filter: QueryFilters;
     patch: (prev: TData | undefined) => TData | undefined;
-    run: () => Promise<void>;
+    run: (() => Promise<void>) | Effect.Effect<void, unknown>;
   }) => Promise<void>;
   /**
    * Invalidate `["github"]`. Needed by the registration-gap retry,
@@ -53,10 +85,15 @@ export type GithubPrFlowsCtx = {
   refreshGithub: () => Promise<void>;
 };
 
+/** The current moment as an ISO string, off `Clock` rather than `Date.now()`. */
+const nowIso = Effect.map(Clock.currentTimeMillis, (ms) =>
+  DateTime.formatIso(DateTime.makeUnsafe(ms)),
+);
+
 export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
   const { rows, toast, mutate, refreshGithub } = ctx;
 
-  async function doMarkReady(slug: string): Promise<void> {
+  const markReady = Effect.fn("markReady")(function* (slug: string): Effect.fn.Return<void> {
     const log = createLogger(slug);
     const row = rows.find((r) => r.wt.slug === slug);
     if (!row?.pr) {
@@ -65,24 +102,28 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     }
     const prNumber = row.pr.number;
     const branch = row.wt.branch;
-    try {
-      await mutate<GithubData>({
+    const outcome = yield* io.promise("mark ready", () =>
+      mutate<GithubData>({
         filter: { queryKey: ["github"] },
         patch: (data) =>
           patchPullRequest(data, branch, (pr) => ({ ...pr, isDraft: false })),
-        run: async () => {
-          const result = await markPullRequestReadyPromise(prNumber);
-          if (!result.ok) throw new Error(result.error);
-        },
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+        run: markPullRequestReady(prNumber).pipe(
+          Effect.flatMap((r) => (r.ok ? Effect.void : ghFail(r.error))),
+        ),
+      }),
+    ).pipe(Effect.result);
+    if (outcome._tag === "Failure") {
+      const msg = causeMessage(outcome.failure.cause);
       log.event.err(`mark ready failed for #${prNumber}: ${msg}`);
       toast(`mark ready failed: ${msg}`, theme.err, 4000);
       return;
     }
     log.event.ok(`marked #${prNumber} ready for review`);
     toast(`marked #${prNumber} ready`, theme.ok, 2500);
+  });
+
+  function doMarkReady(slug: string): Promise<void> {
+    return Effect.runPromise(markReady(slug));
   }
 
   /**
@@ -98,10 +139,10 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
    * acknowledgement of a keystroke, and the settling invalidate replaces
    * it with whichever badge GitHub actually lands on.
    */
-  async function doAutoMerge(
+  const setAutoMerge = Effect.fn("setAutoMerge")(function* (
     subject: ActionSubject,
     action: "enable" | "disable",
-  ): Promise<void> {
+  ): Effect.fn.Return<void> {
     const log = createLogger(subject.slug);
     const { pr } = subject;
     if (!pr) {
@@ -149,40 +190,44 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     // enableAutoMerge). The invalidate that fires on success replaces it
     // with truth on the next refetch — what matters for UX is that the
     // badge flips immediately.
-    let retryable = false;
     const optimisticAutoMerge: PullRequest["autoMerge"] | null =
       action === "enable"
-        ? { enabledAt: new Date().toISOString(), mergeMethod: AUTO_MERGE_METHOD }
+        ? { enabledAt: yield* nowIso, mergeMethod: AUTO_MERGE_METHOD }
         : null;
-    try {
-      await mutate<GithubData>({
+    // `retryable` rides a closure the way the pre-Effect code did (set
+    // from inside the mutation's own Effect before it fails) — the
+    // failure channel carries only what `mutate`'s optimistic wrapper
+    // needs (`Error`), and this is the one bit downstream branching
+    // needs back out.
+    let retryable = false;
+    const mutationEffect = (
+      action === "enable"
+        ? enableAutoMerge(prId ?? "", { baseRefName: pr.baseRefName, headRefOid: pr.headRefOid })
+        : disableAutoMerge(prNumber, { prId, baseRefName: pr.baseRefName })
+    ).pipe(
+      Effect.tap((result) =>
+        result.ok
+          ? Effect.void
+          : Effect.sync(() => {
+              retryable = result.retryable === true;
+            }),
+      ),
+      Effect.flatMap((result) => (result.ok ? Effect.void : ghFail(result.error))),
+    );
+    const outcome = yield* io.promise("auto-merge mutation", () =>
+      mutate<GithubData>({
         filter: { queryKey: ["github"] },
         patch: (data) =>
           patchPullRequest(data, branch, (pr) => ({
             ...pr,
             autoMerge: optimisticAutoMerge,
           })),
-        run: async () => {
-          const result =
-            action === "enable"
-              ? await enableAutoMergePromise(prId ?? "", {
-                  baseRefName: pr.baseRefName,
-                  headRefOid: pr.headRefOid,
-                })
-              : await disableAutoMergePromise(prNumber, {
-                  prId,
-                  baseRefName: pr.baseRefName,
-                });
-          if (!result.ok) {
-            // The flag dies in the Error otherwise, and it is the one
-            // bit that says whether waiting would help.
-            retryable = result.retryable === true;
-            throw new Error(result.error);
-          }
-        },
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+        run: mutationEffect,
+      }),
+    ).pipe(Effect.result);
+
+    if (outcome._tag === "Failure") {
+      const msg = causeMessage(outcome.failure.cause);
       const verb = action === "enable" ? "auto-merge" : "disable auto-merge";
       if (retryable) {
         // A required check that has not reported yet — unregistered or
@@ -241,6 +286,13 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     const past = action === "enable" ? "enabled" : "disabled";
     log.event.ok(`auto-merge ${past} for #${prNumber}`);
     toast(`auto-merge ${past} for #${prNumber}`, theme.ok, 2500);
+  });
+
+  function doAutoMerge(
+    subject: ActionSubject,
+    action: "enable" | "disable",
+  ): Promise<void> {
+    return Effect.runPromise(setAutoMerge(subject, action));
   }
 
   /**
@@ -252,7 +304,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
    * Each leg is idempotent: a re-press after partial failure only
    * re-runs the still-pending legs.
    */
-  async function doShipPr(slug: string): Promise<void> {
+  const shipPr = Effect.fn("shipPr")(function* (slug: string): Effect.fn.Return<void> {
     const log = createLogger(slug);
     const row = rows.find((r) => r.wt.slug === slug);
     if (!row?.pr) {
@@ -291,52 +343,42 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     if (needsAutoMerge) steps.push("arm auto-merge");
     log.event.info(`ship #${prNumber}: ${steps.join(" + ")}`);
 
-    const markReadyP: Promise<unknown> = wasDraft
-      ? mutate<GithubData>({
-          filter: { queryKey: ["github"] },
-          patch: (data) =>
-            patchPullRequest(data, branch, (pr) => ({ ...pr, isDraft: false })),
-          run: async () => {
-            const r = await markPullRequestReadyPromise(prNumber);
-            if (!r.ok) throw new Error(r.error);
-          },
-        })
-      : Promise.resolve();
-    const reviewerP: Promise<unknown> = reviewerToAdd
-      ? mutate<GithubData>({
-          filter: { queryKey: ["github"] },
-          patch: (data) =>
-            patchPullRequest(data, branch, (pr) => ({
-              ...pr,
-              requestedReviewers: [...pr.requestedReviewers, reviewerToAdd],
-              reviewRequests: pr.reviewRequests + 1,
-            })),
-          run: async () => {
-            const r = await editReviewersPromise(prNumber, {
-              add: [reviewerToAdd],
-              remove: [],
-            });
-            if (!r.ok) throw new Error(r.error);
-          },
-        })
-      : Promise.resolve();
+    const markReadyEffect: Effect.Effect<void, OperationError> = wasDraft
+      ? io.promise("mark ready", () =>
+          mutate<GithubData>({
+            filter: { queryKey: ["github"] },
+            patch: (data) =>
+              patchPullRequest(data, branch, (pr) => ({ ...pr, isDraft: false })),
+            run: markPullRequestReady(prNumber).pipe(
+              Effect.flatMap((r) => (r.ok ? Effect.void : ghFail(r.error))),
+            ),
+          }),
+        )
+      : Effect.void;
+    const reviewerEffect: Effect.Effect<void, OperationError> = reviewerToAdd
+      ? io.promise("request reviewer", () =>
+          mutate<GithubData>({
+            filter: { queryKey: ["github"] },
+            patch: (data) =>
+              patchPullRequest(data, branch, (pr) => ({
+                ...pr,
+                requestedReviewers: [...pr.requestedReviewers, reviewerToAdd],
+                reviewRequests: pr.reviewRequests + 1,
+              })),
+            run: editReviewers(prNumber, { add: [reviewerToAdd], remove: [] }).pipe(
+              Effect.flatMap((r) => (r.ok ? Effect.void : ghFail(r.error))),
+            ),
+          }),
+        )
+      : Effect.void;
 
-    const [readyRes, reviewerRes] = await Effect.runPromise(
-      Effect.all(
-        [
-          io.promise("mark ready", () => markReadyP).pipe(Effect.result),
-          io.promise("request reviewer", () => reviewerP).pipe(Effect.result),
-        ],
-        { concurrency: 2 },
-      ),
+    const [readyRes, reviewerRes] = yield* Effect.all(
+      [markReadyEffect.pipe(Effect.result), reviewerEffect.pipe(Effect.result)],
+      { concurrency: 2 },
     );
 
     if (readyRes._tag === "Failure") {
-      const reason = readyRes.failure.cause;
-      const msg =
-        reason instanceof Error
-          ? reason.message
-          : String(reason);
+      const msg = causeMessage(readyRes.failure.cause);
       log.event.err(`mark ready failed for #${prNumber}: ${msg}`);
       toast(`mark ready failed: ${msg}`, theme.err, 4000);
       // Bail: auto-merge would fail on the still-draft PR.
@@ -345,11 +387,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     if (wasDraft) log.event.ok(`marked #${prNumber} ready`);
 
     if (reviewerRes._tag === "Failure") {
-      const reason = reviewerRes.failure.cause;
-      const msg =
-        reason instanceof Error
-          ? reason.message
-          : String(reason);
+      const msg = causeMessage(reviewerRes.failure.cause);
       log.event.err(
         `request reviewer ${reviewerToAdd} failed for #${prNumber}: ${msg}`,
       );
@@ -360,35 +398,37 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     }
 
     if (needsAutoMerge) {
-      try {
-        await mutate<GithubData>({
+      const enabledAt = yield* nowIso;
+      const armOutcome = yield* io.promise("enable auto-merge", () =>
+        mutate<GithubData>({
           filter: { queryKey: ["github"] },
           patch: (data) =>
             patchPullRequest(data, branch, (pr) => ({
               ...pr,
-              autoMerge: {
-                enabledAt: new Date().toISOString(),
-                mergeMethod: AUTO_MERGE_METHOD,
-              },
+              autoMerge: { enabledAt, mergeMethod: AUTO_MERGE_METHOD },
             })),
-          run: async () => {
-            const r = await enableAutoMergePromise(prId ?? "", {
-              baseRefName: row.pr?.baseRefName,
-              headRefOid: row.pr?.headRefOid,
-            });
-            if (!r.ok) throw new Error(r.error);
-          },
-        });
-        log.event.ok(`auto-merge enabled for #${prNumber}`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+          run: enableAutoMerge(prId ?? "", {
+            baseRefName: row.pr?.baseRefName,
+            headRefOid: row.pr?.headRefOid,
+          }).pipe(
+            Effect.flatMap((r) => (r.ok ? Effect.void : ghFail(r.error))),
+          ),
+        }),
+      ).pipe(Effect.result);
+      if (armOutcome._tag === "Failure") {
+        const msg = causeMessage(armOutcome.failure.cause);
         log.event.err(`auto-merge failed for #${prNumber}: ${msg}`);
         toast(`auto-merge failed: ${msg}`, theme.err, 4000);
         return;
       }
+      log.event.ok(`auto-merge enabled for #${prNumber}`);
     }
 
     toast(`shipped #${prNumber}`, theme.ok, 2500);
+  });
+
+  function doShipPr(slug: string): Promise<void> {
+    return Effect.runPromise(shipPr(slug));
   }
 
   /**
@@ -440,5 +480,14 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     return Effect.runPromise(tailFailedChecks(slug));
   }
 
-  return { doMarkReady, doAutoMerge, doShipPr, doTailFailedChecks, tailFailedChecks };
+  return {
+    doMarkReady,
+    doAutoMerge,
+    doShipPr,
+    doTailFailedChecks,
+    markReady,
+    setAutoMerge,
+    shipPr,
+    tailFailedChecks,
+  };
 }

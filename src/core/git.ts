@@ -4,7 +4,7 @@ import { Data, Effect, Semaphore } from "effect";
 
 import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
-import { run, runOk, runQuiet, type ProcError, type RunResult } from "./proc.ts";
+import { run, runOk, runQuiet, type ProcError } from "./proc.ts";
 import { readWtState } from "./wtstate.ts";
 
 const log = createLogger("[git]");
@@ -48,13 +48,6 @@ export function gitQuiet(args: readonly string[], cwd?: string) {
 export function gitRun(args: readonly string[], cwd?: string) {
   return run(["git", ...args], { cwd: gitCwd(cwd) });
 }
-
-export const gitPromise = (args: string[], cwd?: string): Promise<string> =>
-  Effect.runPromise(git(args, cwd));
-export const gitQuietPromise = (args: string[], cwd?: string): Promise<boolean> =>
-  Effect.runPromise(gitQuiet(args, cwd).pipe(Effect.catch(() => Effect.succeed(false))));
-export const gitRunPromise = (args: string[], cwd?: string): Promise<RunResult> =>
-  Effect.runPromise(gitRun(args, cwd).pipe(Effect.catch((e) => Effect.succeed({ stdout: "", stderr: e.message, exitCode: -1 }))));
 
 /**
  * Resolve the effective diff/sync base for a worktree, guarding against a
@@ -105,8 +98,6 @@ export function effectiveBaseOrTrunk(
     return revParse(originRef, wtPath).pipe(Effect.map((remote) => remote ? originRef : trunk));
   }));
 }
-export const effectiveBaseOrTrunkPromise = (wtPath: string, effectiveBase?: string | null): Promise<string> =>
-  Effect.runPromise(effectiveBaseOrTrunk(wtPath, effectiveBase));
 
 /**
  * Swap a trunk base ref for the main clone's SHA when the checkout can
@@ -215,8 +206,6 @@ export const mergeConflictProbe = Effect.fn("mergeConflictProbe")(function* (
   }
   return { status: "unknown", base } as const;
 });
-export const mergeConflictProbePromise = (headRef: string, base: string, cwd?: string): Promise<MergeConflictProbe> =>
-  Effect.runPromise(mergeConflictProbe(headRef, base, cwd));
 
 /**
  * Resolve a ref to its commit SHA in `cwd` (default: the main clone),
@@ -230,8 +219,6 @@ export const revParse = (ref: string, cwd?: string) =>
       return r.exitCode === 0 && sha ? sha : null;
     }),
   );
-export const revParsePromise = (ref: string, cwd?: string): Promise<string | null> =>
-  Effect.runPromise(revParse(ref, cwd));
 
 /**
  * Whether `sha` is an ancestor of `ref` (or `ref` itself). False when
@@ -248,8 +235,6 @@ export function shaIsAncestor(
     Effect.map((r) => r.exitCode === 0),
   );
 }
-export const shaIsAncestorPromise = (sha: string, ref: string, cwd?: string): Promise<boolean> =>
-  Effect.runPromise(shaIsAncestor(sha, ref, cwd));
 
 /**
  * Current tip of the branch a worktree merges INTO, resolved in the
@@ -277,8 +262,6 @@ export function baseTipSha(baseBranch: string | null) {
     Effect.flatMap((remote) => remote ? Effect.succeed(remote) : revParse(branch)),
   );
 }
-export const baseTipShaPromise = (baseBranch: string | null): Promise<string | null> =>
-  Effect.runPromise(baseTipSha(baseBranch));
 
 /** First ref among `refs` that resolves to a commit in `cwd`, as a SHA. */
 export const firstSha = Effect.fn("firstSha")(function* (cwd: string, refs: readonly string[]) {
@@ -299,7 +282,6 @@ export const originBranchExists = (branch: string, cwd?: string) =>
 export const branchExists = (branch: string) => localBranchExists(branch).pipe(
   Effect.flatMap((local) => local ? Effect.succeed(true) : originBranchExists(branch)),
 );
-export const branchExistsPromise = (branch: string): Promise<boolean> => Effect.runPromise(branchExists(branch));
 
 /**
  * `wtPath` is required for rift worktrees: an independent clone keeps
@@ -313,8 +295,6 @@ export function branchIsGone(branch: string, wtPath?: string) {
     { cwd: wtPath ?? config.paths.mainClone },
   ).pipe(Effect.map((r) => r.exitCode === 0 && r.stdout.trim() === "[gone]"));
 }
-export const branchIsGonePromise = (branch: string, wtPath?: string): Promise<boolean> =>
-  Effect.runPromise(branchIsGone(branch, wtPath));
 
 let _mainFirstParents: Set<string> | null = null;
 // Bumped by every invalidation. A read captures it before spawning and
@@ -422,8 +402,6 @@ export const branchIsMerged = Effect.fn("branchIsMerged")(function* (wt: {
   log.debug("branchIsMerged probe failed, folding to false", { err: err instanceof Error ? err.message : String(err) });
   return false;
 })));
-export const branchIsMergedPromise = (wt: { slug: string; branch: string; path?: string }): Promise<boolean> =>
-  Effect.runPromise(branchIsMerged(wt));
 
 /**
  * VACUOUS CONTAINMENT: is this branch contained in trunk only because

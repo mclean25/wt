@@ -77,24 +77,22 @@ export type InjectResult =
  * guessing a fixed delay. Returns whether it settled (false = hit the
  * cap; the caller pastes anyway).
  */
-function waitForPaneReadyEffect(name: string): Effect.Effect<boolean> {
-  return Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + READY_MAX_MS;
-    let prev: string | null = null;
-    // Initial grace — harnesses often write nothing for the first beat after spawn.
+const waitForPaneReadyEffect = Effect.fnUntraced(function* (name: string) {
+  const deadline = (yield* Clock.currentTimeMillis) + READY_MAX_MS;
+  let prev: string | null = null;
+  // Initial grace — harnesses often write nothing for the first beat after spawn.
+  yield* Effect.sleep(Duration.millis(READY_POLL_MS));
+  while ((yield* Clock.currentTimeMillis) < deadline) {
+    const cur = (yield* capturePane(name))?.trim() ?? "";
+    if (cur.length > 0 && cur === prev) return true;
+    prev = cur;
     yield* Effect.sleep(Duration.millis(READY_POLL_MS));
-    while ((yield* Clock.currentTimeMillis) < deadline) {
-      const cur = (yield* capturePane(name))?.trim() ?? "";
-      if (cur.length > 0 && cur === prev) return true;
-      prev = cur;
-      yield* Effect.sleep(Duration.millis(READY_POLL_MS));
-    }
-    return false;
-  });
-}
+  }
+  return false;
+});
 
 /** Pipe text into the inject buffer and paste it into a session's pane. */
-function pasteBufferEffect(name: string, text: string): Effect.Effect<void> {
+const pasteBufferEffect = Effect.fnUntraced(function* (name: string, text: string) {
   // A UNIQUE buffer name per call: `load-buffer` and `paste-buffer` hand off
   // by buffer name, so a fixed name races when two injects overlap (two
   // automations firing, or an automation + a manual `!` action) — the
@@ -104,27 +102,25 @@ function pasteBufferEffect(name: string, text: string): Effect.Effect<void> {
   const buffer = `${INJECT_BUFFER}-${process.pid}-${++injectSeq}`;
   // load-buffer reads stdin, so arbitrary text (quotes, `$`, newlines)
   // needs no shell escaping.
-  return Effect.gen(function* () {
-    // Exit code deliberately unchecked (audited, accepted): a failed load
-    // means the following paste/Enter lands on an empty buffer, preserving
-    // the historical best-effort fallback contract.
-    yield* run(
-      ["tmux", "-L", TMUX_SOCKET, "load-buffer", "-b", buffer, "-"],
-      { cwd: homedir(), input: text },
-    ).pipe(Effect.ignore);
-    // `-p` = bracketed paste, so internal newlines do not submit early;
-    // `-d` drops the buffer after.
-    yield* runTmux([
-      "paste-buffer",
-      "-d",
-      "-p",
-      "-b",
-      buffer,
-      "-t",
-      paneTarget(name),
-    ]);
-  });
-}
+  // Exit code deliberately unchecked (audited, accepted): a failed load
+  // means the following paste/Enter lands on an empty buffer, preserving
+  // the historical best-effort fallback contract.
+  yield* run(
+    ["tmux", "-L", TMUX_SOCKET, "load-buffer", "-b", buffer, "-"],
+    { cwd: homedir(), input: text },
+  ).pipe(Effect.ignore);
+  // `-p` = bracketed paste, so internal newlines do not submit early;
+  // `-d` drops the buffer after.
+  yield* runTmux([
+    "paste-buffer",
+    "-d",
+    "-p",
+    "-b",
+    buffer,
+    "-t",
+    paneTarget(name),
+  ]);
+});
 
 /**
  * Send `text` to a worktree's primary (F12) harness session as if typed
@@ -175,13 +171,6 @@ export function injectIntoSession(opts: {
   return lockedInject(opts);
 }
 
-/** Promise boundary for message transports that still expose callbacks. */
-export function injectIntoSessionPromise(
-  opts: Parameters<typeof injectIntoSession>[0],
-): Promise<InjectResult> {
-  return Effect.runPromise(injectIntoSession(opts));
-}
-
 /**
  * The one sanctioned way to type into a Claude session's pane.
  *
@@ -204,13 +193,6 @@ export function injectClaudeFallback(opts: {
   text: string;
 }): Effect.Effect<InjectResult> {
   return lockedInject({ ...opts, harnessId: "claude" });
-}
-
-/** Promise boundary for the harness transport interface. */
-export function injectClaudeFallbackPromise(
-  opts: Parameters<typeof injectClaudeFallback>[0],
-): Promise<InjectResult> {
-  return Effect.runPromise(injectClaudeFallback(opts));
 }
 
 function lockedInject(opts: {
@@ -240,14 +222,13 @@ function lockedInject(opts: {
   );
 }
 
-function injectIntoSessionUnlockedEffect(opts: {
+const injectIntoSessionUnlockedEffect = Effect.fnUntraced(function* (opts: {
   slug: string;
   cwd: string;
   harnessId: HarnessId;
   managedName?: string | null;
   text: string;
-}): Effect.Effect<InjectResult> {
-  return Effect.gen(function* () {
+}) {
     const { slug, cwd, text } = opts;
     const harnessId = opts.harnessId;
     const managedName = opts.managedName ?? null;
@@ -306,8 +287,7 @@ function injectIntoSessionUnlockedEffect(opts: {
       });
     }
     return { ok: true as const, coldStarted, delivered, resent };
-  });
-}
+});
 
 /**
  * Poll the harness's transcript until the injected prompt shows up.
@@ -345,12 +325,11 @@ function confirmDeliveryEffect(opts: {
 }
 
 /** Paste `text` into a ready pane and press the harness's submit keys. */
-function pasteAndSubmitEffect(
+const pasteAndSubmitEffect = Effect.fnUntraced(function* (
   name: string,
   harnessId: HarnessId,
   text: string,
-): Effect.Effect<{ ok: true } | { ok: false; reason: string }> {
-  return Effect.gen(function* () {
+) {
     // Paste, then verify the pane actually changed. A harness can
     // sit visually stable — banner rendered, prompt drawn — while its
     // input is not yet accepting paste (the MCP-connect window on a
@@ -408,5 +387,4 @@ function pasteAndSubmitEffect(
       }
     }
     return { ok: true as const };
-  });
-}
+});

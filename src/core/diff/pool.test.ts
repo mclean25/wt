@@ -50,6 +50,7 @@ class FakeWorker {
 }
 globalThis.Worker = FakeWorker;
 const pool = await import(${POOL_HREF});
+const { Effect, Cause, Exit } = await import("effect");
 const runIdOf = (worker) => worker.posted.find((m) => m.type === "run").id;
 async function tick() { await new Promise((r) => setTimeout(r, 0)); }
 `;
@@ -73,18 +74,21 @@ function runScenario(body: string): unknown {
   return JSON.parse(lastLine);
 }
 
-test("a cancelled dispatch rejects as AbortError and drops its pending entry", () => {
+test("a cancelled dispatch interrupts the Effect and drops its pending entry", () => {
   const result = runScenario(`
     const ac = new AbortController();
-    const pending = pool.buildDiffContextViaPoolPromise("/wt/a", "origin/main", ac.signal);
+    const pendingExit = Effect.runPromiseExit(
+      pool.buildDiffContextViaPool("/wt/a", "origin/main"),
+      { signal: ac.signal },
+    );
     // No await yet — the fake worker cannot have replied before this
     // synchronous abort runs, so the cancel path is deterministic.
     ac.abort();
     const worker = FakeWorker.instances[0];
     const id = runIdOf(worker);
 
-    let rejectedName = null;
-    try { await pending; } catch (err) { rejectedName = err?.name ?? null; }
+    const exit = await pendingExit;
+    const interrupted = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause);
 
     // A late reply for the now-cancelled job must be silently dropped —
     // no pending entry left to resolve/reject a second time.
@@ -94,14 +98,14 @@ test("a cancelled dispatch rejects as AbortError and drops its pending entry", (
     } catch { threwOnLateReply = true; }
 
     console.log(JSON.stringify({
-      rejectedName,
+      interrupted,
       cancelPosted: worker.posted.some((m) => m.type === "cancel" && m.id === id),
       threwOnLateReply,
     }));
   `);
 
   expect(result).toEqual({
-    rejectedName: "AbortError",
+    interrupted: true,
     cancelPosted: true,
     threwOnLateReply: false,
   });
@@ -109,8 +113,8 @@ test("a cancelled dispatch rejects as AbortError and drops its pending entry", (
 
 test("a worker death rejects only the jobs dispatched to it", () => {
   const result = runScenario(`
-    const first = pool.buildDiffContextViaPoolPromise("/wt/a", "origin/main");
-    const second = pool.buildDiffContextViaPoolPromise("/wt/b", "origin/main");
+    const first = Effect.runPromise(pool.buildDiffContextViaPool("/wt/a", "origin/main"));
+    const second = Effect.runPromise(pool.buildDiffContextViaPool("/wt/b", "origin/main"));
     const [workerA, workerB] = FakeWorker.instances;
     const idA = runIdOf(workerA);
     const idB = runIdOf(workerB);
@@ -143,21 +147,24 @@ test("a worker death rejects only the jobs dispatched to it", () => {
 
 test("disposeDiffPool rejects every pending job as an abort", () => {
   const result = runScenario(`
-    const first = pool.buildDiffContextViaPoolPromise("/wt/a", "origin/main");
-    const second = pool.buildDiffContextViaPoolPromise("/wt/b", "origin/main");
+    const first = Effect.runPromise(pool.buildDiffContextViaPool("/wt/a", "origin/main"));
+    const second = Effect.runPromise(pool.buildDiffContextViaPool("/wt/b", "origin/main"));
     const dispatched = [...FakeWorker.instances];
 
-    pool.disposeDiffPoolPromise();
+    Effect.runPromise(pool.disposeDiffPool());
 
+    // The pool settles pending entries with an AbortError DOMException
+    // (not a fiber interruption), so it surfaces here wrapped in the
+    // typed DiffPoolError — the cause is what carries the abort.
     let firstName = null, secondName = null;
-    try { await first; } catch (err) { firstName = err?.name ?? null; }
-    try { await second; } catch (err) { secondName = err?.name ?? null; }
+    try { await first; } catch (err) { firstName = err?.cause?.name ?? null; }
+    try { await second; } catch (err) { secondName = err?.cause?.name ?? null; }
 
     // Disposal is permanent — a dispatch afterward refuses immediately
     // rather than silently re-spawning a pool nothing will tear down.
     let thirdName = null;
-    try { await pool.buildDiffContextViaPoolPromise("/wt/c", "origin/main"); }
-    catch (err) { thirdName = err?.name ?? null; }
+    try { await Effect.runPromise(pool.buildDiffContextViaPool("/wt/c", "origin/main")); }
+    catch (err) { thirdName = err?.cause?.name ?? null; }
 
     console.log(JSON.stringify({
       firstName,

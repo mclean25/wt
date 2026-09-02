@@ -270,17 +270,9 @@ export function attachOrCreate(opts: {
   return attachOrCreateInternal(opts);
 }
 
-/** Promise boundary for terminal/CLI callers. */
-export function attachOrCreatePromise(
+const attachOrCreateInternal = Effect.fnUntraced(function* (
   opts: Parameters<typeof attachOrCreate>[0],
-): Promise<AttachResult> {
-  return Effect.runPromise(attachOrCreate(opts));
-}
-
-function attachOrCreateInternal(
-  opts: Parameters<typeof attachOrCreate>[0],
-): Effect.Effect<AttachResult, AttachOperationError> {
- return Effect.gen(function* () {
+) {
   const {
     slug,
     cwd,
@@ -521,9 +513,8 @@ function attachOrCreateInternal(
     stderrText = raw === null ? null : scrubStderr(raw);
   }
   return { kind: "exited", code, stderr: stderrText } as AttachResult;
- }).pipe(Effect.mapError((cause) =>
+}, Effect.mapError((cause) =>
    cause instanceof AttachOperationError
      ? cause
      : new AttachOperationError({ message: "tmux attach failed", cause }),
  ));
-}

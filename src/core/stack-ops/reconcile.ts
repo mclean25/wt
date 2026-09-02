@@ -48,14 +48,6 @@ export function reconcileStack(
   );
 }
 
-export function reconcileStackPromise(
-  branch: string,
-  trunk: string,
-  onLog: Logger,
-): Promise<Set<string>> {
-  return Effect.runPromise(reconcileStack(branch, trunk, onLog));
-}
-
 const reconcileStackLocked = Effect.fnUntraced(function* (
   chain: RestackChain,
   trunk: string,

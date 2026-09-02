@@ -26,7 +26,7 @@ import { lockStatus } from "../../core/locks.ts";
 import type { LockMeta, Worktree } from "../../core/types.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
 import {
-  fetchOriginPromise,
+  fetchOrigin,
   listWorktrees,
   syncState,
   type SyncState,
@@ -50,14 +50,13 @@ export const worktreesQuery = () =>
   });
 
 /**
- * Force an `origin` fetch. Named distinctly from core's `fetchOrigin`
- * Effect (it wraps `fetchOriginPromise` for single-flight dedup) —
- * the two collided under the same name. Once `fetchOrigin` itself
- * gains single-flight dedup (see `core/worktree.ts`), this can call it
- * directly instead of adopting the Promise adapter.
+ * Force an `origin` fetch and drop the caches that key on trunk. Named
+ * distinctly from core's `fetchOrigin` (single-flight inside the Effect,
+ * so concurrent refreshes join one fetch) because this one also
+ * invalidates and reports the fetch time for the query.
  */
 export const refreshOrigin = () =>
-  io.promise("fetch origin", () => fetchOriginPromise()).pipe(
+  fetchOrigin().pipe(
     Effect.tap(() => Effect.sync(invalidateMainFirstParents)),
     Effect.flatMap(() => Clock.currentTimeMillis),
   );

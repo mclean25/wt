@@ -77,6 +77,7 @@ export class CodexDiscoveryClient {
     if (this.disposed) {
       return Promise.reject(abortError("codex discovery disposed"));
     }
+    // @effect-diagnostics-next-line effect/newPromise:off -- worker-message boundary: the job resolves from the Worker's onmessage
     return new Promise<HarnessSession[]>((resolve, reject) => {
       const job: Job = {
         id: this.nextId++,

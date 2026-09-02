@@ -96,9 +96,3 @@ export const fetchRemoteWorktrees = Effect.fn("fetchRemoteWorktrees")(function* 
   yield* Effect.sync(() => reapRemoteLayouts(remote.host, new Set(rows.map((row) => row.slug))));
   return rows;
 });
-
-export const fetchRemoteWorktreesPromise = (
-  remote: RemoteConfig,
-  signal?: AbortSignal,
-): Promise<RemoteWorktreeSummary[]> =>
-  Effect.runPromise(fetchRemoteWorktrees(remote, signal));

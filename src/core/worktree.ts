@@ -29,8 +29,6 @@ export function listWorktrees(): Effect.Effect<Worktree[], WorktreeError> {
   );
 }
 
-export const listWorktreesPromise = (): Promise<Worktree[]> => Effect.runPromise(listWorktrees());
-
 function parseWorktrees(out: string): Worktree[] {
   const lines = [...out.split("\n"), ""];
   const worktrees: Worktree[] = [];
@@ -253,28 +251,6 @@ function countsFor(wtPath: string, range: string): Effect.Effect<SyncCounts, Pro
   );
 }
 
-/**
- * Ahead/behind of HEAD vs both the effective base and the branch's own
- * copy on origin.
- *
- * `remote` deliberately measures against `origin/<branch>` and NEVER
- * against `@{u}`: wt points a worktree branch's upstream at its BASE
- * (e.g. `origin/staging`), so an @{u} count answers the same question
- * `main` already answers. That made the two bracket groups render
- * identical numbers, and — far worse — made "ahead of base" the input
- * to every unpushed guard, so a fully pushed branch with an open PR
- * refused to be removed as "3 unpushed commits". An explicit-refspec
- * push (`git push origin <branch>`, how agents push) sets no tracking
- * at all, so the branch's own ref is the only reliable answer anyway.
- *
- * `effectiveBase` defaults to `origin/<config.branch.base>` (trunk).
- * Stacked worktrees pass the parent's branch instead so the brackets
- * read as "vs your actual base" rather than "vs main." Mirrors the
- * effective-base resolution used by the diff context.
- */
-export const syncStatePromise = (wtPath: string, effectiveBase?: string | null): Promise<SyncState> =>
-  Effect.runPromise(syncState(wtPath, effectiveBase));
-
 export const syncState = Effect.fn("syncState")(function* (wtPath: string, effectiveBase?: string | null) {
   const resolved = yield* effectiveBaseOrTrunk(wtPath, effectiveBase);
   const base = yield* freshBaseRev(wtPath, resolved);
@@ -287,42 +263,12 @@ export const syncState = Effect.fn("syncState")(function* (wtPath: string, effec
   return { main, remote: yield* countsFor(wtPath, `${originRef}...HEAD`) };
 });
 
-/**
- * Paths flagged by `git status --porcelain` (relative to the worktree
- * root). Empty array == clean. Each entry is the porcelain `XY path`
- * line with the leading 3 chars stripped — fine for plain modifies /
- * adds / deletes / untracked, treats renames as the literal `old ->
- * new` payload (which callers comparing against a known path will
- * naturally fall through on).
- */
-export const worktreeDirtyFilesPromise = (wtPath: string): Promise<string[]> =>
-  Effect.runPromise(worktreeDirtyFiles(wtPath));
-
 export const worktreeDirtyFiles = (wtPath: string) =>
   runOk(["git", "status", "--porcelain"], { cwd: wtPath }).pipe(
     Effect.map((porcelain) => porcelain.split("\n").filter((line) => line.length > 0).map((line) => line.slice(3))),
   );
-
-/**
- * True when the working tree has uncommitted changes — matches git's
- * own "dirty" convention. Unpushed commits are tracked separately via
- * `syncState`; callers that want to guard against losing *any* kind of
- * work (e.g. `wt rm`) should check both.
- */
-export const worktreeIsDirtyPromise = (wtPath: string): Promise<boolean> =>
-  Effect.runPromise(worktreeIsDirty(wtPath));
 export const worktreeIsDirty = (wtPath: string) =>
   worktreeDirtyFiles(wtPath).pipe(Effect.map((files) => files.length > 0));
-
-/**
- * Tracked-file changes only (staged or unstaged); untracked files don't
- * count. The stack replay gate uses this — `git rebase` is safe alongside
- * untracked files (it refuses cleanly if one would be overwritten), and the
- * workflow itself drops files like `prompt.txt` into slice worktrees by
- * convention, so blocking a replay on them is self-inflicted friction.
- */
-export const worktreeHasTrackedChangesPromise = (wtPath: string): Promise<boolean> =>
-  Effect.runPromise(worktreeHasTrackedChanges(wtPath));
 export const worktreeHasTrackedChanges = (wtPath: string) =>
   runOk(["git", "status", "--porcelain", "--untracked-files=no"], { cwd: wtPath }).pipe(
     Effect.map((porcelain) => porcelain.split("\n").some((line) => line.trim().length > 0)),
@@ -362,8 +308,6 @@ export const unpushedCommits = Effect.fn("unpushedCommits")(function* (wtPath: s
   log.error(err instanceof Error ? err : String(err), { wtPath });
   return null;
 }))));
-export const unpushedCommitsPromise = (wtPath: string): Promise<number | null> =>
-  Effect.runPromise(unpushedCommits(wtPath));
 
 export type PushCounts = {
   /**
@@ -419,8 +363,6 @@ export const pushCounts = Effect.fn("pushCounts")(function* (wtPath: string) {
     return { unpushed: null, aheadOfBase, pushed: null };
   })));
 });
-export const pushCountsPromise = (wtPath: string): Promise<PushCounts> =>
-  Effect.runPromise(pushCounts(wtPath));
 
 export const worktreeStatus = Effect.fn("worktreeStatus")(function* (wt: Worktree): Effect.fn.Return<Status, ProcError> {
   const lock = lockStatus(wt.slug);
@@ -448,7 +390,6 @@ export const worktreeStatus = Effect.fn("worktreeStatus")(function* (wt: Worktre
   if (yield* worktreeIsDirty(wt.path)) return { kind: StatusKind.Dirty, label: "dirty" };
   return { kind: StatusKind.Clean, label: "clean" };
 });
-export const worktreeStatusPromise = (wt: Worktree): Promise<Status> => Effect.runPromise(worktreeStatus(wt));
 
 const acquireFetchOriginLock = Effect.fnUntraced(function* () {
   return yield* Effect.suspend(() => {
@@ -696,9 +637,6 @@ export const fetchOrigin = (opts: { onWarn?: (msg: string) => void } = {}): Effe
       Effect.tap((fiber) => Effect.sync(() => { fetchOriginFiber = fiber; })),
     );
   })).pipe(Effect.flatMap(Fiber.join));
-
-export const fetchOriginPromise = (opts: { onWarn?: (msg: string) => void } = {}): Promise<void> =>
-  Effect.runPromise(fetchOrigin(opts));
 
 /**
  * After the main clone fast-forwards to fresh trunk, reinstall deps IF the

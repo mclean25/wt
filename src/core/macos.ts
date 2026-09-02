@@ -41,11 +41,6 @@ export function openUrlCommand(
   return ["open", url];
 }
 
-/** Fire-and-forget `open <url>`. The macOS `open` binary returns immediately. */
-export function openUrlPromise(url: string): void {
-  Effect.runFork(openUrl(url).pipe(Effect.catch(() => Effect.void)));
-}
-
 export function openUrl(url: string): Effect.Effect<void, MacosCommandError> {
   return run(openUrlCommand(url)).pipe(
     Effect.flatMap((result) =>
@@ -82,19 +77,6 @@ export function openUrlHidingTerminal(
 ): Effect.Effect<void, MacosCommandError> {
   return hideFrontmostTerminal().pipe(
     Effect.andThen(openUrl(url)),
-  );
-}
-
-export function openUrlHidingTerminalPromise(url: string): Promise<void> {
-  return Effect.runPromise(
-    openUrlHidingTerminal(url).pipe(Effect.catch(() => Effect.void)),
-  );
-}
-
-/** Write to the macOS clipboard via pbcopy. Fire-and-forget. */
-export function writeClipboardPromise(text: string): void {
-  Effect.runFork(
-    writeClipboard(text).pipe(Effect.catch(() => Effect.void)),
   );
 }
 

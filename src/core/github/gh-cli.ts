@@ -23,10 +23,6 @@ export function hasGh(): Effect.Effect<boolean> {
   );
 }
 
-export function hasGhPromise(): Promise<boolean> {
-  return Effect.runPromise(hasGh());
-}
-
 // Cache the resolved `owner/name` — it never changes for a given clone.
 // Same positive-only rule as `hasGh`: a transient failure (gh not yet
 // authed at startup) shouldn't pin null for the whole session.
@@ -52,10 +48,6 @@ export function repoSlug(): Effect.Effect<string | null> {
     }),
     Effect.catch(() => Effect.succeed(null)),
   );
-}
-
-export function repoSlugPromise(): Promise<string | null> {
-  return Effect.runPromise(repoSlug());
 }
 
 /**
@@ -86,7 +78,3 @@ export const fetchAuthenticatedLogin = Effect.fn(
   if (login.length > 0) _authedLogin = login;
   return _authedLogin ?? null;
 });
-
-export function fetchAuthenticatedLoginPromise(): Promise<string | null> {
-  return Effect.runPromise(fetchAuthenticatedLogin());
-}

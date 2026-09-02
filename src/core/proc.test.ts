@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Fiber } from "effect";
+import { Cause, Effect, Exit, Fiber } from "effect";
 
-import { runPromise, run, runStreaming, terminateSubprocess } from "./proc.ts";
+import { ProcInterruptedError, ProcSpawnError, run, runStreaming, terminateSubprocess } from "./proc.ts";
 
 test("terminateSubprocess escalates and joins a child that ignores SIGTERM", async () => {
   const signals: Array<number | NodeJS.Signals | undefined> = [];
@@ -239,23 +239,27 @@ describe("runStreaming killAfterMs", () => {
 // makes it easy to walk into: `runStreaming`, tested directly above,
 // leaves cwd undefined and inherits the process's.
 describe("run timedOut", () => {
-  test("a spawn failure is returned instead of rejecting", async () => {
-    const result = await runPromise(["echo", "never-spawned"], {
+  test("a spawn failure is a typed ProcSpawnError, not a defect", async () => {
+    const exit = await Effect.runPromiseExit(run(["echo", "never-spawned"], {
       cwd: "/definitely/missing/wt-proc-cwd",
-    });
-    expect(result.exitCode).toBe(-1);
-    expect(result.stderr.length).toBeGreaterThan(0);
+    }));
+    expect(Exit.isFailure(exit)).toBeTrue();
+    const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : null;
+    expect(error).toBeInstanceOf(ProcSpawnError);
+    expect((error as ProcSpawnError).message.length).toBeGreaterThan(0);
   });
 
-  test("an external abort is returned instead of rejecting", async () => {
+  test("an already-aborted signal fails with ProcInterruptedError before spawning", async () => {
     const controller = new AbortController();
     controller.abort();
-    const result = await runPromise(["sleep", "30"], {
+    const exit = await Effect.runPromiseExit(run(["sleep", "30"], {
       cwd: "/",
       signal: controller.signal,
-    });
-    expect(result.exitCode).toBe(-1);
-    expect(result.stderr).toContain("aborted");
+    }));
+    expect(Exit.isFailure(exit)).toBeTrue();
+    const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : null;
+    expect(error).toBeInstanceOf(ProcInterruptedError);
+    expect((error as ProcInterruptedError).message).toContain("aborted");
   });
 
   test("a running external abort preserves captured output", async () => {
@@ -263,7 +267,7 @@ describe("run timedOut", () => {
     const marker = join(dir, "started");
     const controller = new AbortController();
     try {
-      const resultPromise = runPromise(
+      const resultPromise = Effect.runPromise(run(
         [
           "sh",
           "-c",
@@ -274,7 +278,7 @@ describe("run timedOut", () => {
           env: { WT_PROC_MARKER: marker },
           signal: controller.signal,
         },
-      );
+      ));
       await Effect.runPromise(
         waitUntilEffect(() => existsSync(marker), "the abort target to spawn"),
       );
@@ -292,7 +296,7 @@ describe("run timedOut", () => {
     const marker = join(dir, "started");
     const controller = new AbortController();
     try {
-      const resultPromise = runPromise(
+      const resultPromise = Effect.runPromise(run(
         [
           "sh",
           "-c",
@@ -303,7 +307,7 @@ describe("run timedOut", () => {
           env: { WT_PROC_MARKER: marker },
           signal: controller.signal,
         },
-      );
+      ));
       await Effect.runPromise(
         waitUntilEffect(() => existsSync(marker), "the SIGTERM-resistant abort target"),
       );
@@ -323,7 +327,7 @@ describe("run timedOut", () => {
     // and the drain blocks until the child exits on its own. lsof, the
     // real caller, does not fork — and buffers, so its stdout is empty
     // here for the same reason this one's is.
-    const r = await runPromise(["sleep", "5"], { cwd: "/", timeoutMs: 200 });
+    const r = await Effect.runPromise(run(["sleep", "5"], { cwd: "/", timeoutMs: 200 }));
     expect(r.timedOut).toBe(true);
     expect(r.exitCode).not.toBe(0);
     // The trap in one line: indistinguishable from a completed scan of
@@ -333,23 +337,23 @@ describe("run timedOut", () => {
 
   test("a timeout reaps background descendants holding captured pipes", async () => {
     const started = Date.now();
-    const result = await runPromise(["sh", "-c", "sleep 30 &"], {
+    const result = await Effect.runPromise(run(["sh", "-c", "sleep 30 &"], {
       cwd: "/",
       timeoutMs: 100,
-    });
+    }));
     expect(Date.now() - started).toBeLessThan(3_000);
     expect(result.timedOut).toBe(true);
   }, 5_000);
 
   test("a command that finishes inside its budget is not flagged", async () => {
-    const r = await runPromise(["echo", "hi"], { cwd: "/", timeoutMs: 30_000 });
+    const r = await Effect.runPromise(run(["echo", "hi"], { cwd: "/", timeoutMs: 30_000 }));
     expect(r.timedOut).toBe(false);
     expect(r.exitCode).toBe(0);
     expect(r.stdout.trim()).toBe("hi");
   });
 
   test("no budget at all leaves the flag off", async () => {
-    const r = await runPromise(["echo", "hi"], { cwd: "/" });
+    const r = await Effect.runPromise(run(["echo", "hi"], { cwd: "/" }));
     expect(r.timedOut).toBe(false);
   });
 });

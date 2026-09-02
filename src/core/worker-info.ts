@@ -96,23 +96,24 @@ export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
     remote: RemoteConfig,
     force: boolean,
   ): Effect.Effect<WorkerInfo | SharedRequest, never> =>
-    SynchronizedRef.modifyEffect(state, (current): Effect.Effect<
-      readonly [WorkerInfo | SharedRequest, FetcherState]
-    > => {
-      const key = remoteKey(remote);
-      const successful = new Map(current.successful);
-      if (force) successful.delete(key);
-      const cached = successful.get(key);
-      if (cached) {
-        return Effect.succeed([cached, { ...current, successful }] as const);
-      }
-      const existing = current.inFlight.get(key);
-      if (existing) {
-        const shared = { ...existing, consumers: existing.consumers + 1 };
-        const inFlight = new Map(current.inFlight).set(key, shared);
-        return Effect.succeed([shared, { successful, inFlight }] as const);
-      }
-      return Effect.gen(function* () {
+    SynchronizedRef.modifyEffect(
+      state,
+      Effect.fnUntraced(function* (
+        current: FetcherState,
+      ): Effect.fn.Return<readonly [WorkerInfo | SharedRequest, FetcherState]> {
+        const key = remoteKey(remote);
+        const successful = new Map(current.successful);
+        if (force) successful.delete(key);
+        const cached = successful.get(key);
+        if (cached) {
+          return [cached, { ...current, successful }] as const;
+        }
+        const existing = current.inFlight.get(key);
+        if (existing) {
+          const shared = { ...existing, consumers: existing.consumers + 1 };
+          const inFlight = new Map(current.inFlight).set(key, shared);
+          return [shared, { successful, inFlight }] as const;
+        }
         const token = {};
         const fiber = yield* Effect.forkDetach(
           Effect.interruptible(load(remote)),
@@ -121,8 +122,8 @@ export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
         const shared = { fiber, consumers: 1, token };
         const inFlight = new Map(current.inFlight).set(key, shared);
         return [shared, { successful, inFlight }] as const;
-      });
-    });
+      }),
+    );
 
   const release = (
     remote: RemoteConfig,

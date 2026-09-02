@@ -38,7 +38,7 @@ function injector(opts: StubOpts & { connectFails?: boolean; noSocket?: boolean 
         if (opts.enableThrows) throw new Error("enable exploded");
         return {};
       }
-      if (opts.hang) return await new Promise(() => {});
+      if (opts.hang) return await Effect.runPromise(Effect.never);
       if (method === "Runtime.evaluate") return { result: { objectId: "app" } };
       if (method === "Runtime.getProperties") {
         return { internalProperties: [{ name: "boundThis", value: { objectId: "ink" } }] };
@@ -48,7 +48,7 @@ function injector(opts: StubOpts & { connectFails?: boolean; noSocket?: boolean 
       }
       routines += 1;
       if (opts.hangAfterRoutines !== undefined && routines > opts.hangAfterRoutines) {
-        return await new Promise(() => {});
+        return await Effect.runPromise(Effect.never);
       }
       const next = results.shift() ?? { ok: true, submitted: true, draftLen: 0, cursor: null };
       return { result: { value: JSON.stringify(next) } };
@@ -78,7 +78,7 @@ const NOT_MOUNTED = { ok: false, err: "prompt fiber not found" };
 describe("failure classification", () => {
   test("a missing socket is `absent` — the session predates this wt", async () => {
     const { injector: inj } = injector({ noSocket: true });
-    const out = await inj.deliverClaudeMessagePromise("eng-1", "hi", { readyBudgetMs: 50 });
+    const out = await Effect.runPromise(inj.deliverClaudeMessage("eng-1", "hi", { readyBudgetMs: 50 }));
     expect(out).toMatchObject({ ok: false, kind: "absent" });
   });
 
@@ -86,13 +86,13 @@ describe("failure classification", () => {
     // Distinct from absent because the remedy differs: only the live
     // process can rebind that path, so this never heals on retry.
     const { injector: inj } = injector({ connectFails: true });
-    const out = await inj.deliverClaudeMessagePromise("eng-1", "hi", { readyBudgetMs: 50 });
+    const out = await Effect.runPromise(inj.deliverClaudeMessage("eng-1", "hi", { readyBudgetMs: 50 }));
     expect(out).toMatchObject({ ok: false, kind: "stale" });
   });
 
   test("a prompt that never mounts is `not-ready` after the budget", async () => {
     const { injector: inj } = injector({ results: Array(200).fill(NOT_MOUNTED) });
-    const out = await inj.deliverClaudeMessagePromise("eng-1", "hi", { readyBudgetMs: 50 });
+    const out = await Effect.runPromise(inj.deliverClaudeMessage("eng-1", "hi", { readyBudgetMs: 50 }));
     expect(out).toMatchObject({ ok: false, kind: "not-ready" });
   });
 
@@ -100,7 +100,7 @@ describe("failure classification", () => {
     const { injector: inj } = injector({
       results: [NOT_MOUNTED, NOT_MOUNTED, READY, { ok: true, submitted: true, draftLen: 4 }],
     });
-    const out = await inj.deliverClaudeMessagePromise("eng-1", "hi", { readyBudgetMs: 200 });
+    const out = await Effect.runPromise(inj.deliverClaudeMessage("eng-1", "hi", { readyBudgetMs: 200 }));
     expect(out).toMatchObject({ ok: true, draftPreserved: true });
   });
 
@@ -110,10 +110,10 @@ describe("failure classification", () => {
     // hasn't mounted yet.
     let ticks = 0;
     const { injector: inj } = injector({ results: Array(200).fill(NOT_MOUNTED) });
-    const out = await inj.deliverClaudeMessagePromise("eng-1", "hi", {
+    const out = await Effect.runPromise(inj.deliverClaudeMessage("eng-1", "hi", {
       readyBudgetMs: 200,
       abortIfBlocked: () => (++ticks > 2 ? "waiting on a permission prompt" : null),
-    });
+    }));
     expect(out).toMatchObject({ ok: false, kind: "blocked" });
   });
 
@@ -124,14 +124,14 @@ describe("failure classification", () => {
     // transcript rather than fall back and type the same text again.
     const stub = injector({ results: [READY], hangAfterRoutines: 1 });
     const { injector: inj } = stub;
-    const out = await inj.deliverClaudeMessagePromise("eng-1", "hi", { readyBudgetMs: 50 });
+    const out = await Effect.runPromise(inj.deliverClaudeMessage("eng-1", "hi", { readyBudgetMs: 50 }));
     expect(out).toMatchObject({ ok: false, kind: "submitted-unknown" });
     expect(stub.closes()).toBe(1);
   });
 
   test("a hang on the PROBE is an ordinary failure — nothing was submitted", async () => {
     const { injector: inj } = injector({ hangAfterRoutines: 0 });
-    const out = await inj.deliverClaudeMessagePromise("eng-1", "hi", { readyBudgetMs: 50 });
+    const out = await Effect.runPromise(inj.deliverClaudeMessage("eng-1", "hi", { readyBudgetMs: 50 }));
     expect(out).toMatchObject({ ok: false, kind: "failed" });
   });
 
@@ -140,7 +140,7 @@ describe("failure classification", () => {
     // back as "Unexpected end of JSON input" — hiding the cause and
     // matching none of the classification patterns.
     const { injector: inj } = injector({ exception: "TypeError: f.child is undefined" });
-    const out = await inj.claudeInjectSelftestPromise("eng-1");
+    const out = await Effect.runPromise(inj.claudeInjectSelftest("eng-1"));
     expect(out).toMatchObject({ ok: false });
     expect(out.ok === false && out.reason).toContain("f.child is undefined");
   });
@@ -149,7 +149,7 @@ describe("failure classification", () => {
     // It sits outside the per-attempt retry, so an unhandled rejection
     // here would escape the whole ladder.
     const { injector: inj } = injector({ enableThrows: true });
-    const out = await inj.deliverClaudeMessagePromise("eng-1", "hi", { readyBudgetMs: 50 });
+    const out = await Effect.runPromise(inj.deliverClaudeMessage("eng-1", "hi", { readyBudgetMs: 50 }));
     expect(out).toMatchObject({ ok: false, kind: "failed" });
   });
 
@@ -158,7 +158,7 @@ describe("failure classification", () => {
     // upstream Claude Code, so its shape is an assumption. An unchecked
     // cast put `undefined` into a user-facing warning.
     const { injector: inj } = injector({ results: [{ ok: true, mystery: 1 }] });
-    const out = await inj.claudeInjectSelftestPromise("eng-1");
+    const out = await Effect.runPromise(inj.claudeInjectSelftest("eng-1"));
     expect(out).toMatchObject({ ok: false });
     expect(out.ok === false && typeof out.reason).toBe("string");
   });
@@ -167,7 +167,7 @@ describe("failure classification", () => {
 describe("selftest", () => {
   test("a mounted prompt with caret support passes", async () => {
     const { injector: inj } = injector({ results: [READY] });
-    expect(await inj.claudeInjectSelftestPromise("eng-1")).toMatchObject({
+    expect(await Effect.runPromise(inj.claudeInjectSelftest("eng-1"))).toMatchObject({
       ok: true,
       foundInput: true,
       foundCaret: true,
@@ -178,7 +178,7 @@ describe("selftest", () => {
     const { injector: inj } = injector({
       results: [{ ok: true, foundPrompt: true, foundInput: true, foundCaret: false }],
     });
-    expect(await inj.claudeInjectSelftestPromise("eng-1")).toMatchObject({
+    expect(await Effect.runPromise(inj.claudeInjectSelftest("eng-1"))).toMatchObject({
       ok: true,
       foundCaret: false,
     });
@@ -188,7 +188,7 @@ describe("selftest", () => {
     const { injector: inj } = injector({
       results: [{ ok: true, foundPrompt: true, foundInput: false, foundCaret: false }],
     });
-    expect(await inj.claudeInjectSelftestPromise("eng-1")).toMatchObject({
+    expect(await Effect.runPromise(inj.claudeInjectSelftest("eng-1"))).toMatchObject({
       ok: false,
       kind: "not-ready",
     });

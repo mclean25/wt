@@ -723,7 +723,3 @@ export function claudeStatus(wt: {
     return { sessions };
   });
 }
-
-/** Harness-interface adapter. */
-export const claudeStatusPromise = (wt: { slug: string; path: string }): Promise<ClaudeStatus> =>
-  Effect.runPromise(claudeStatus(wt));

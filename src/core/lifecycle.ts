@@ -306,14 +306,6 @@ export const parseInput = Effect.fn("parseInput")(function* <E = never>(
     return `${config.branch.prefix}/${slugify(raw)}`;
 });
 
-/** Promise boundary for React/TUI callers while their callback is modal-based. */
-export function parseInputPromise<E = never>(
-  raw: string,
-  opts: ParseInputOptions<E> = {},
-): Promise<string> {
-  return Effect.runPromise(parseInput(raw, opts));
-}
-
 export type CreateOptions = {
   onPhase?: (phase: string) => void;
   onLog?: (line: string) => void;
@@ -601,19 +593,6 @@ export const createWorktree = Effect.fn("createWorktree")(function* (
   }
   return result;
 }, Effect.scoped);
-
-export function createWorktreePromise(
-  branch: string,
-  opts: CreateOptions = {},
-): Promise<CreateResult> {
-  return Effect.runPromise(
-    createWorktree(branch, opts).pipe(
-      Effect.catchTag("LifecycleError", (error) =>
-        Effect.succeed({ ok: false as const, reason: error.message }),
-      ),
-    ),
-  );
-}
 
 export type RemoveOptions = {
   force?: boolean;
@@ -936,24 +915,6 @@ export const removeWorktree = Effect.fn("removeWorktree")(function* (
   return result;
 }, Effect.scoped);
 
-export function removeWorktreePromise(
-  wt: Worktree,
-  opts: RemoveOptions = {},
-): Promise<RemoveResult> {
-  return Effect.runPromise(
-    removeWorktree(wt, opts).pipe(
-      Effect.catchTag("LifecycleError", (error) =>
-        Effect.succeed({
-          ok: false,
-          message: error.message,
-          destroyedStage: false,
-          deletedBranch: false,
-        }),
-      ),
-    ),
-  );
-}
-
 /**
  * Spawn a detached background process to run the destroy tail (including
  * `pnpm sst remove` when `destroyStage` is set).
@@ -1030,14 +991,3 @@ export const spawnBackgroundRemove = Effect.fn("spawnBackgroundRemove")(function
       (fd) => Effect.sync(() => closeSync(fd)),
     );
 });
-
-export function spawnBackgroundRemovePromise(
-  slug: string,
-  opts: {
-    force: boolean;
-    destroyStage: boolean;
-    deleteBranch: boolean;
-  },
-): string {
-  return Effect.runSync(spawnBackgroundRemove(slug, opts));
-}

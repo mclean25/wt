@@ -12,10 +12,11 @@ describe("devServerLogPoll", () => {
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
           devServerLogPoll(
-            () =>
+            Effect.suspend(() =>
               ++reads === 1
-                ? Promise.reject(new Error("temporary"))
-                : Promise.resolve("ready"),
+                ? Effect.fail("temporary" as const)
+                : Effect.succeed("ready"),
+            ),
             (output) => outputs.push(output),
             100,
           ),

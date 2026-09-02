@@ -125,14 +125,6 @@ export const rebaseStack = Effect.fn("rebaseStack")(function* (
   return rebaseResult({ ok: true, output: outputs.join("; ") });
 }, Effect.mapError(replayError("rebase stack")));
 
-export function rebaseStackPromise(
-  branch: string,
-  opts: RebaseOptions,
-  onLog: Logger,
-): Promise<RebaseResult> {
-  return Effect.runPromise(rebaseStack(branch, opts, onLog));
-}
-
 /**
  * Replay every member of the stack containing `branch` onto its parent,
  * squash-safe, parents before children: rebase each member's own
@@ -162,14 +154,6 @@ export function replayStack(
   }
   return replayStackLocked(locked.chain, opts, onLog);
   }).pipe(Effect.mapError(replayError("replay stack")));
-}
-
-export function replayStackPromise(
-  branch: string,
-  opts: RebaseOptions,
-  onLog: Logger,
-): Promise<RebaseResult> {
-  return Effect.runPromise(replayStack(branch, opts, onLog));
 }
 
 const replayStackLocked = Effect.fnUntraced(function* (
@@ -384,14 +368,6 @@ export function anchorParentRef(
   );
 }
 
-export function anchorParentRefPromise(
-  step: ChainStep,
-  trunk: string,
-  cwd: string,
-): Promise<string> {
-  return Effect.runPromise(anchorParentRef(step, trunk, cwd));
-}
-
 /** Is `sha` a commit object present in `cwd`'s store? (`rev-parse` alone
  *  validates syntax, not presence, so a bare SHA can't be trusted.) */
 function hasCommit(cwd: string, sha: string): Effect.Effect<boolean, StackReplayError> {
@@ -460,14 +436,6 @@ export const resolveAnchor = Effect.fn("resolveAnchor")(function* (
   }
   return liveAnchor;
 }, Effect.mapError(replayError("resolve anchor")));
-
-export function resolveAnchorPromise(
-  step: Pick<ChainStep, "branch" | "baseSha">,
-  parentRef: string,
-  cwd: string,
-): Promise<string | null> {
-  return Effect.runPromise(resolveAnchor(step, parentRef, cwd));
-}
 
 /**
  * The SHA to rebase a member ONTO this run: trunk's freshly-fetched tip,
@@ -549,15 +517,3 @@ export const resolveNewBaseSha = Effect.fn("resolveNewBaseSha")(function* (
     `origin/${step.parentBranch}`,
   ]);
 }, Effect.mapError(replayError("resolve new base")));
-
-export function resolveNewBaseShaPromise(
-  step: ChainStep,
-  trunk: string,
-  newTipByBranch: Map<string, string>,
-  pathByBranch: ReadonlyMap<string, string>,
-  cwd: string,
-): Promise<string | null> {
-  return Effect.runPromise(
-    resolveNewBaseSha(step, trunk, newTipByBranch, pathByBranch, cwd),
-  );
-}

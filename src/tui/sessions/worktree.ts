@@ -87,7 +87,3 @@ export function enterWorktreeSession(opts: EnterWorktreeSessionOptions) {
     }
   }));
 }
-
-export const enterWorktreeSessionPromise = (
-  opts: EnterWorktreeSessionOptions,
-): Promise<WorktreeSessionResult> => Effect.runPromise(enterWorktreeSession(opts));

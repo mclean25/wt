@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { sameBuild } from "../build-id.ts";
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { makeDebouncedPromise } from "../repo-watch.ts";
+import { makeDebouncedUnsafe } from "../repo-watch.ts";
 import { closeSilent } from "../tail-util.ts";
 import type { MergeQueueEntry, PullRequest } from "../types.ts";
 
@@ -208,7 +208,7 @@ export function isProcessAlive(pid: number): boolean {
  */
 export function watchGithubEvents(onChange: () => void): () => void {
   ensureEventsDir();
-  const debounced = makeDebouncedPromise(onChange, 200);
+  const debounced = makeDebouncedUnsafe(onChange, 200);
   let watcher: FSWatcher | null = null;
   try {
     watcher = watch(EVENTS_DIR, { persistent: false }, (_event, filename) => {
@@ -237,10 +237,10 @@ export function watchGithubEvents(onChange: () => void): () => void {
     });
   } catch (err) {
     log.warn("events watcher failed", { err: String(err), dir: EVENTS_DIR });
-    return () => debounced.cancelPromise();
+    return () => debounced.cancelUnsafe();
   }
   return () => {
-    debounced.cancelPromise();
+    debounced.cancelUnsafe();
     closeSilent(watcher);
   };
 }

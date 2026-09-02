@@ -95,30 +95,23 @@ function inspectorPathIsUrlSafe(path: string): boolean {
  * (tmux spawn refused under fork pressure, an unreachable socket), and
  * that is precisely the moment this runs most often.
  */
-export function prepareInspectorSocket(
+export const prepareInspectorSocket = Effect.fn("prepareInspectorSocket")(function* (
   kind: InnerSessionKind,
   tmuxName: string,
-): Effect.Effect<void> {
-  if (kind !== "claude") return Effect.void;
-  return Effect.gen(function* () {
-    yield* Effect.sync(ensureInspectShims);
-    const running = yield* probeSessionNames();
-    if (running === null) {
-      log.warn("tmux liveness unknown; leaving the inspector socket alone", { tmuxName });
-      return;
-    }
-    if (running.has(tmuxName)) return;
-    yield* Effect.sync(() => {
-      ensureInspectorDir();
-      clearInspectorSocket(tmuxName);
-    });
+) {
+  if (kind !== "claude") return;
+  yield* Effect.sync(ensureInspectShims);
+  const running = yield* probeSessionNames();
+  if (running === null) {
+    log.warn("tmux liveness unknown; leaving the inspector socket alone", { tmuxName });
+    return;
+  }
+  if (running.has(tmuxName)) return;
+  yield* Effect.sync(() => {
+    ensureInspectorDir();
+    clearInspectorSocket(tmuxName);
   });
-}
-
-export const prepareInspectorSocketPromise = (
-  kind: InnerSessionKind,
-  tmuxName: string,
-): Promise<void> => Effect.runPromise(prepareInspectorSocket(kind, tmuxName));
+});
 
 /**
  * Strip tmux identity from every inner process, and capture stderr only

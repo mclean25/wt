@@ -47,10 +47,6 @@ export function hideFrontmostTerminal(): Effect.Effect<void> {
     );
 }
 
-export function hideFrontmostTerminalPromise(): Promise<void> {
-  return Effect.runPromise(hideFrontmostTerminal());
-}
-
 /**
  * Open `path` in Zed using focus-if-open, else-new-window semantics.
  * Zed 0.20x made `zed <path>` reuse the current window regardless of
@@ -72,7 +68,3 @@ export const openInZed = Effect.fn("openInZed")(function* (
   if (existing !== null && (yield* focusYabaiWindow(existing))) return;
   yield* spawnZedAndTrack(path);
 });
-
-export function openInZedPromise(path: string): Promise<void> {
-  return Effect.runPromise(openInZed(path));
-}
