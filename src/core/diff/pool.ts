@@ -183,7 +183,7 @@ function dispatchDiffContext(
   });
 }
 
-export function buildDiffContextViaPoolEffect(
+export function buildDiffContextViaPool(
   wtPath: string,
   base: string,
 ): Effect.Effect<DiffContext | null, DiffPoolError> {
@@ -194,7 +194,7 @@ export function buildDiffContextViaPoolEffect(
 }
 
 /** TanStack adapter preserving its AbortSignal / AbortError contract. */
-export function buildDiffContextViaPool(
+export function buildDiffContextViaPoolPromise(
   wtPath: string,
   base: string,
   signal?: AbortSignal,
@@ -202,7 +202,7 @@ export function buildDiffContextViaPool(
   return dispatchDiffContext(wtPath, base, signal);
 }
 
-export function disposeDiffPool(): void {
+export function disposeDiffPoolPromise(): void {
   disposed = true;
   for (const worker of workers) {
     try {
@@ -223,5 +223,5 @@ export function disposeDiffPool(): void {
   pending.clear();
 }
 
-export const disposeDiffPoolEffect = (): Effect.Effect<void> =>
-  Effect.sync(disposeDiffPool);
+export const disposeDiffPool = (): Effect.Effect<void> =>
+  Effect.sync(disposeDiffPoolPromise);

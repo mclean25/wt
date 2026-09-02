@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 
-import { repoUpdateStateEffect, wtVersion } from "../../core/update.ts";
+import { repoUpdateState, wtVersion } from "../../core/update.ts";
 import { hasHelpFlag } from "../args.ts";
 import { dim, yellow } from "../colors.ts";
 
@@ -18,7 +18,7 @@ export function run(argv: string[]): Effect.Effect<number> {
       return 0;
     }
     console.log(`wt ${wtVersion()}`);
-    const state = yield* repoUpdateStateEffect;
+    const state = yield* repoUpdateState;
     if (state && state.behind > 0 && !state.dirty && state.ahead === 0) {
       console.log(
         yellow(

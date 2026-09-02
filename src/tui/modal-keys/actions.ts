@@ -2,7 +2,7 @@ import type { KeyEvent } from "@opentui/core";
 
 import { recentValues } from "../../core/actions.ts";
 import { createLogger } from "../../core/logger.ts";
-import { openInEditor } from "../../core/editor.ts";
+import { openInEditorPromise } from "../../core/editor.ts";
 import { printableMultiline } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import { SESSION_SLOTS } from "../sessions/slots.ts";
@@ -84,7 +84,7 @@ export function handleActionPickerKey(
         if (!slot) return;
         const editorLog = createLogger(slot.label);
         Effect.runFork(
-          actionEffect(() => openInEditor(slot.path)).pipe(
+          actionEffect(() => openInEditorPromise(slot.path)).pipe(
             Effect.tap(() =>
               Effect.sync(() => editorLog.event.info(`opened ${slot.path}`)),
             ),

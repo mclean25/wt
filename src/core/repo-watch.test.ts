@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import { makeDebouncedEffect } from "./repo-watch.ts";
+import { makeDebounced } from "./repo-watch.ts";
 
-describe("makeDebouncedEffect", () => {
+describe("makeDebounced", () => {
   test("retriggering cancels and replaces the pending callback", async () => {
     let calls = 0;
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-      const debounced = yield* makeDebouncedEffect(() => { calls++; }, 100);
+      const debounced = yield* makeDebounced(() => { calls++; }, 100);
       debounced.trigger();
       yield* TestClock.adjust(50);
       debounced.trigger();
@@ -24,7 +24,7 @@ describe("makeDebouncedEffect", () => {
     let calls = 0;
     await Effect.runPromise(Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(Effect.scoped(Effect.gen(function* () {
-        const debounced = yield* makeDebouncedEffect(() => { calls++; }, 100);
+        const debounced = yield* makeDebounced(() => { calls++; }, 100);
         debounced.trigger();
         return yield* Effect.never;
       })));
@@ -38,7 +38,7 @@ describe("makeDebouncedEffect", () => {
   test("cancel is idempotent", async () => {
     let calls = 0;
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-      const debounced = yield* makeDebouncedEffect(() => { calls++; }, 100);
+      const debounced = yield* makeDebounced(() => { calls++; }, 100);
       debounced.trigger();
       yield* debounced.cancelEffect;
       yield* debounced.cancelEffect;

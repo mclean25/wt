@@ -9,9 +9,9 @@ import {
 import { createLogger } from "../logger.ts";
 import { buildInnerArgs, ensureHarnessTrusted, sessionsDir, tmuxClientCwd } from "./attach.ts";
 import { ensureConfig } from "./config.ts";
-import { prepareInspectorSocketEffect, wrapInnerArgs } from "./inner-process.ts";
+import { prepareInspectorSocket, wrapInnerArgs } from "./inner-process.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
-import { listAllSessionsRawEffect } from "./process.ts";
+import { listAllSessionsRaw } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
@@ -45,7 +45,7 @@ class HarnessStartError extends Data.TaggedError("HarnessStartError")<{
  * start as successful rather than surfacing tmux's duplicate-session
  * error.
  */
-export function startHarnessSessionDetachedEffect(
+export function startHarnessSessionDetached(
   slug: string,
   cwd: string,
   harnessId: HarnessId,
@@ -91,7 +91,7 @@ export function startHarnessSessionDetachedEffect(
   });
   // Before the spawn, so a leftover socket from a dead session of the
   // same name can't cost this one its inspector (see the helper).
-  yield* prepareInspectorSocketEffect(harnessId, name);
+  yield* prepareInspectorSocket(harnessId, name);
   const outcome = yield* Effect.result(Effect.acquireUseRelease(
     Effect.try({
       try: () => Bun.spawn(
@@ -158,7 +158,7 @@ export function startHarnessSessionDetachedEffect(
   }
   const { code, stderr } = outcome.success;
   if (code !== 0) {
-    const nowExists = (yield* listAllSessionsRawEffect()).has(name);
+    const nowExists = (yield* listAllSessionsRaw()).has(name);
     if (nowExists) {
       log.warn("detached harness start adopted an existing session", {
         slug,
@@ -175,10 +175,10 @@ export function startHarnessSessionDetachedEffect(
   });
 }
 
-export const startHarnessSessionDetached = (
+export const startHarnessSessionDetachedPromise = (
   slug: string,
   cwd: string,
   harnessId: HarnessId,
   managedName: string | null = null,
 ): Promise<StartHarnessSessionResult> =>
-  Effect.runPromise(startHarnessSessionDetachedEffect(slug, cwd, harnessId, managedName));
+  Effect.runPromise(startHarnessSessionDetached(slug, cwd, harnessId, managedName));

@@ -10,7 +10,7 @@
  * reason — this runs at the exact moment a project's dev environment is
  * already broken, so it must not be able to fail for a second reason.
  */
-import { handleDevGiveUp } from "../../core/dev-server.ts";
+import { handleDevGiveUpPromise } from "../../core/dev-server.ts";
 import { Data, Effect } from "effect";
 
 class DevGiveUpCommandError extends Data.TaggedError("DevGiveUpCommandError")<{
@@ -24,7 +24,7 @@ export function run(argv: string[]): Effect.Effect<number> {
     return Effect.succeed(2);
   }
   return Effect.tryPromise({
-    try: () => handleDevGiveUp(slug),
+    try: () => handleDevGiveUpPromise(slug),
     catch: (cause) => new DevGiveUpCommandError({ cause }),
   }).pipe(
     Effect.catchTag("DevGiveUpCommandError", (error) =>

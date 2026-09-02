@@ -10,7 +10,7 @@ import {
 } from "../harness/claude/inject.ts";
 import { createLogger } from "../logger.ts";
 import { harnessIdForKind, type SessionKind } from "./naming.ts";
-import { probeSessionNamesEffect } from "./process.ts";
+import { probeSessionNames } from "./process.ts";
 
 const log = createLogger("[tmux]");
 const SOURCE_WT_BIN_DIR = join(import.meta.dir, "..", "..", "..", "bin");
@@ -95,14 +95,14 @@ function inspectorPathIsUrlSafe(path: string): boolean {
  * (tmux spawn refused under fork pressure, an unreachable socket), and
  * that is precisely the moment this runs most often.
  */
-export function prepareInspectorSocketEffect(
+export function prepareInspectorSocket(
   kind: InnerSessionKind,
   tmuxName: string,
 ): Effect.Effect<void> {
   if (kind !== "claude") return Effect.void;
   return Effect.gen(function* () {
     yield* Effect.sync(ensureInspectShims);
-    const running = yield* probeSessionNamesEffect();
+    const running = yield* probeSessionNames();
     if (running === null) {
       log.warn("tmux liveness unknown; leaving the inspector socket alone", { tmuxName });
       return;
@@ -115,10 +115,10 @@ export function prepareInspectorSocketEffect(
   });
 }
 
-export const prepareInspectorSocket = (
+export const prepareInspectorSocketPromise = (
   kind: InnerSessionKind,
   tmuxName: string,
-): Promise<void> => Effect.runPromise(prepareInspectorSocketEffect(kind, tmuxName));
+): Promise<void> => Effect.runPromise(prepareInspectorSocket(kind, tmuxName));
 
 /**
  * Strip tmux identity from every inner process, and capture stderr only

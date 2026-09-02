@@ -246,7 +246,7 @@ let bootPromoted = false;
  * to the TUI program, so failure interrupts it before the crash handler can
  * wait at a rollback prompt.
  */
-export function armBootSentinelEffect(): Effect.Effect<void, never, Scope.Scope> {
+export function armBootSentinel(): Effect.Effect<void, never, Scope.Scope> {
   return Effect.gen(function* () {
     const head = yield* Effect.sync(() => gitSync(["rev-parse", "HEAD"]));
     if (!head) return;

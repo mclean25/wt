@@ -708,7 +708,7 @@ function tailSession(wtPath: string, name: string | null): SessionTail {
  * consumer so tmux liveness (a separate, polled query) flows through
  * reactively without forcing this filesystem source to refetch.
  */
-export function claudeStatusEffect(wt: {
+export function claudeStatus(wt: {
   slug: string;
   path: string;
 }): Effect.Effect<ClaudeStatus> {
@@ -725,5 +725,5 @@ export function claudeStatusEffect(wt: {
 }
 
 /** Harness-interface adapter. */
-export const claudeStatus = (wt: { slug: string; path: string }): Promise<ClaudeStatus> =>
-  Effect.runPromise(claudeStatusEffect(wt));
+export const claudeStatusPromise = (wt: { slug: string; path: string }): Promise<ClaudeStatus> =>
+  Effect.runPromise(claudeStatus(wt));

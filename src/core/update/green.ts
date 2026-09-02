@@ -17,7 +17,7 @@
  */
 import { Data, Effect } from "effect";
 
-import { gitOkEffect, logSafe } from "./exec.ts";
+import { gitOk, logSafe } from "./exec.ts";
 
 /** Check-run names that gate updates: the ci.yml job (and its typecheck-only predecessor). */
 export const GATE_CHECK_NAMES: ReadonlySet<string> = new Set(["ci", "typecheck"]);
@@ -30,10 +30,10 @@ const API_TIMEOUT_MS = 5_000;
 export type CheckStatus = "green" | "red" | "pending" | "unknown";
 
 /** `owner/repo` of the clone's GitHub origin, or null (gate disabled). */
-export const originGithubRepoEffect: Effect.Effect<{
+export const originGithubRepo: Effect.Effect<{
   owner: string;
   repo: string;
-} | null> = gitOkEffect(["remote", "get-url", "origin"]).pipe(
+} | null> = gitOk(["remote", "get-url", "origin"]).pipe(
   Effect.map((url) => {
     if (!url) return null;
     const match = url.match(
@@ -148,7 +148,7 @@ export type GateResult = {
  * red and pending are skipped. Stops at the first eligible hit, so the
  * common case costs one API call.
  */
-export function findNewestEligibleEffect(
+export function findNewestEligible(
   candidates: string[],
   fetchImpl: typeof fetch = fetch,
 ): Effect.Effect<GateResult> {
@@ -156,7 +156,7 @@ export function findNewestEligibleEffect(
     if (candidates.length === 0) {
       return { target: null, checked: [], gated: false };
     }
-    const origin = yield* originGithubRepoEffect;
+    const origin = yield* originGithubRepo;
     if (!origin) {
       return { target: candidates[0] ?? null, checked: [], gated: false };
     }

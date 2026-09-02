@@ -1,8 +1,8 @@
 import { statSync } from "node:fs";
 import { Effect } from "effect";
 
-import { effectiveBaseOrTrunkEffect } from "./git.ts";
-import { runEffect } from "./proc.ts";
+import { effectiveBaseOrTrunk } from "./git.ts";
+import { run } from "./proc.ts";
 
 export type GitActivity = {
   /** Worktree directory creation time (epoch ms). null if path is gone. */
@@ -34,7 +34,7 @@ function createdMsFor(path: string): number | null {
 }
 
 function lastCommitMsForEffect(path: string) {
-  return runEffect(["git", "log", "-1", "--format=%ct", "HEAD"], {
+  return run(["git", "log", "-1", "--format=%ct", "HEAD"], {
     cwd: path,
     timeoutMs: TIMEOUT_MS,
   }).pipe(
@@ -61,12 +61,12 @@ function diffForEffect(
 ) {
   if (!branch) return Effect.succeed(null);
   return Effect.gen(function* () {
-    const mb = yield* runEffect(["git", "merge-base", base, "HEAD"], {
+    const mb = yield* run(["git", "merge-base", base, "HEAD"], {
       cwd: path,
       timeoutMs: TIMEOUT_MS,
     });
     if (mb.exitCode !== 0) return null;
-    const r = yield* runEffect(
+    const r = yield* run(
       ["git", "diff", "--shortstat", mb.stdout.trim()],
       { cwd: path, timeoutMs: TIMEOUT_MS },
     );
@@ -97,7 +97,7 @@ function untrackedCountsEffect(
   path: string,
 ) {
   return Effect.gen(function* () {
-    const ls = yield* runEffect(
+    const ls = yield* run(
       ["git", "ls-files", "--others", "--exclude-standard", "-z"],
       { cwd: path, timeoutMs: TIMEOUT_MS },
     );
@@ -105,7 +105,7 @@ function untrackedCountsEffect(
     const names = ls.stdout.split("\0").filter(Boolean);
     if (names.length === 0) return { files: 0, added: 0 };
     // "./" prefix so a name starting with "-" can't read as a wc flag.
-    const wc = yield* runEffect(["wc", "-l", ...names.map((n) => `./${n}`)], {
+    const wc = yield* run(["wc", "-l", ...names.map((n) => `./${n}`)], {
       cwd: path,
       timeoutMs: TIMEOUT_MS,
     });
@@ -122,11 +122,11 @@ function untrackedCountsEffect(
   });
 }
 
-export function gitActivityEffect(
+export function gitActivity(
   wt: { path: string; branch: string },
   effectiveBase?: string | null,
 ): Effect.Effect<GitActivity> {
-  return effectiveBaseOrTrunkEffect(wt.path, effectiveBase).pipe(
+  return effectiveBaseOrTrunk(wt.path, effectiveBase).pipe(
     Effect.flatMap((base) => Effect.all({
         createdMs: Effect.sync(() => createdMsFor(wt.path)),
         lastCommitMs: lastCommitMsForEffect(wt.path).pipe(Effect.orElseSucceed(() => null)),
@@ -139,5 +139,5 @@ export function gitActivityEffect(
     })),
   );
 }
-export const gitActivity = (wt: { path: string; branch: string }, effectiveBase?: string | null) =>
-  Effect.runPromise(gitActivityEffect(wt, effectiveBase));
+export const gitActivityPromise = (wt: { path: string; branch: string }, effectiveBase?: string | null) =>
+  Effect.runPromise(gitActivity(wt, effectiveBase));

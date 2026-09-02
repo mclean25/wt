@@ -107,7 +107,7 @@ const RUNNERS: Record<string, Loader> = {
  * broken leaf cannot take down unrelated recovery/status commands.
  *
  */
-export function dispatchEffect(argv: string[]): Effect.Effect<number, DispatchError> {
+export function dispatch(argv: string[]): Effect.Effect<number, DispatchError> {
   const [cmd, ...rest] = argv;
   if (cmd === "--help" || cmd === "-h") {
     return Effect.sync(() => {

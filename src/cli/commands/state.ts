@@ -19,7 +19,7 @@ import {
   readForeignRepositoryRows,
   type ForeignRepositoryRow,
 } from "../../core/state-db.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 import {
   GROUP_ARCHIVED,
   GROUP_INBOX,
@@ -359,7 +359,7 @@ function migrate(
 ): Effect.Effect<number, StateCommandError> {
   return Effect.gen(function* () {
     const worktrees = yield* Effect.tryPromise({
-      try: () => listWorktrees(),
+      try: () => listWorktreesPromise(),
       catch: (cause) =>
         new StateCommandError({ operation: "list worktrees", cause }),
     });

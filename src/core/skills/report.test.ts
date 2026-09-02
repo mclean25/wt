@@ -18,7 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { applyReport, touchedRulesyncRoots } from "./apply.ts";
+import { applyReportPromise, touchedRulesyncRoots } from "./apply.ts";
 import type { SkillsMemory } from "./memory.ts";
 import { emptySkillsMemory } from "./memory.ts";
 import { unitKey, UNITS, type Unit } from "./registry.ts";
@@ -67,7 +67,7 @@ describe("native claude-only machine", () => {
 
   test("apply → fresh; hand edit → modified; stamp intact → outdated", () => {
     const first = findReport(reportsFor(), WT_UNIT);
-    applyReport(first);
+    applyReportPromise(first);
     expect(findReport(reportsFor(), WT_UNIT).state).toBe("fresh");
     // Native install must have stripped the rulesync-only targets key.
     const installed = readFileSync(first.path, "utf8");
@@ -111,7 +111,7 @@ describe("native claude-only machine", () => {
     writeFileSync(claudeMd, "# My rules\n\nkeep me\n");
     let r = findReport(reportsFor(), INSTRUCTIONS_UNIT);
     expect(r.state).toBe("missing");
-    applyReport(r);
+    applyReportPromise(r);
     const text = readFileSync(claudeMd, "utf8");
     expect(text).toContain("keep me");
     expect(extractInstructionsBlock(text)?.body).toBe(r.expected);
@@ -121,7 +121,7 @@ describe("native claude-only machine", () => {
   test("instructions file absent entirely still applies (creates it)", () => {
     const r = findReport(reportsFor(), INSTRUCTIONS_UNIT);
     expect(r.state).toBe("missing");
-    applyReport(r);
+    applyReportPromise(r);
     expect(existsSync(join(home, ".claude", "CLAUDE.md"))).toBe(true);
     expect(findReport(reportsFor(), INSTRUCTIONS_UNIT).state).toBe("fresh");
   });
@@ -186,7 +186,7 @@ describe("stow-style rulesync machine (all harnesses one real tree)", () => {
     const r = findReport(reportsFor(), WT_UNIT);
     expect(r.state).toBe("missing");
     expect(r.path).toBe(join(dotfiles, ".rulesync", "skills", "wt", "SKILL.md"));
-    applyReport(r);
+    applyReportPromise(r);
     const installed = readFileSync(r.path, "utf8");
     expect(installed).toContain("targets:");
     expect(findReport(reportsFor(), WT_UNIT).state).toBe("fresh");
@@ -196,7 +196,7 @@ describe("stow-style rulesync machine (all harnesses one real tree)", () => {
   test("instructions block goes into the root rule source file", () => {
     const r = findReport(reportsFor(), INSTRUCTIONS_UNIT);
     expect(r.path).toBe(join(dotfiles, ".rulesync", "rules", "CLAUDE.md"));
-    applyReport(r);
+    applyReportPromise(r);
     const text = readFileSync(r.path, "utf8");
     expect(text).toContain("## My rules");
     expect(extractInstructionsBlock(text)?.body).toBe(r.expected);
@@ -257,7 +257,7 @@ describe("instructions-file hazards", () => {
     const claudeMd = join(home, ".claude", "CLAUDE.md");
     writeFileSync(claudeMd, "x\n");
     const r = findReport(reportsFor(), INSTRUCTIONS_UNIT);
-    applyReport({ ...r, path: claudeMd });
+    applyReportPromise({ ...r, path: claudeMd });
     const once = readFileSync(claudeMd, "utf8");
     writeFileSync(claudeMd, `${once}\n${once}`);
     const dup = findReport(reportsFor(), INSTRUCTIONS_UNIT);
@@ -273,7 +273,7 @@ describe("apply hygiene", () => {
     mkdirSync(stale, { recursive: true });
     writeFileSync(join(stale, "SKILL.md"), "abandoned\n");
     const r = findReport(reportsFor(), WT_UNIT);
-    applyReport(r);
+    applyReportPromise(r);
     expect(existsSync(stale)).toBe(false);
     expect(findReport(reportsFor(), WT_UNIT).state).toBe("fresh");
   });

@@ -5,13 +5,13 @@
 export type { Logger } from "./stack-ops/shared.ts";
 export { STACK_BUSY } from "./stack-ops/shared.ts";
 
-export { resolveChain } from "./stack-ops/chain.ts";
+export { resolveChainPromise } from "./stack-ops/chain.ts";
 export type { ChainStep, RestackChain } from "./stack-ops/chain.ts";
 
-export { rebaseStack, replayStack, resolveAnchor } from "./stack-ops/replay.ts";
+export { rebaseStackPromise, replayStackPromise, resolveAnchorPromise } from "./stack-ops/replay.ts";
 export type { RebaseOptions, RebaseResult } from "./stack-ops/replay.ts";
 
-export { reconcileStack } from "./stack-ops/reconcile.ts";
+export { reconcileStackPromise } from "./stack-ops/reconcile.ts";
 
-export { pruneStackBackups } from "./stack-ops/prune-backups.ts";
+export { pruneStackBackupsPromise } from "./stack-ops/prune-backups.ts";
 export type { PruneBackupsResult } from "./stack-ops/prune-backups.ts";

@@ -9,7 +9,7 @@ import { reapArchived } from "../core/archive.ts";
 import { recordWorktreeEdit } from "../core/automations.ts";
 import { watchRegistry } from "../core/harness/claude/registry.ts";
 import { config } from "../core/config.ts";
-import { disposeDiffPool } from "../core/diff/pool.ts";
+import { disposeDiffPoolPromise } from "../core/diff/pool.ts";
 import { lockStatus } from "../core/locks.ts";
 import { watchGithubEvents } from "../core/events/store.ts";
 import { closeOpencodeDb, HARNESSES } from "../core/harness/index.ts";
@@ -17,9 +17,9 @@ import { startCodexEventPolling } from "../core/harness/codex/events.ts";
 import { disposeCodexDiscoveryWorker } from "../core/harness/codex/discovery.ts";
 import { harnessTailRegistry } from "../core/harness/tail.ts";
 import { startOpencodeEventPolling } from "../core/harness/opencode/events.ts";
-import { createLogger, flushLoggerEffect, setEventSink } from "../core/logger.ts";
+import { createLogger, flushLogger, setEventSink } from "../core/logger.ts";
 import { ensureManagerClaudeName, MANAGER_SLUG } from "../core/manager.ts";
-import { killHarnessSession, listAllSessionsRaw } from "../core/tmux.ts";
+import { killHarnessSessionPromise, listAllSessionsRawPromise } from "../core/tmux.ts";
 import { reapDevServerFiles } from "../core/dev-server.ts";
 import { reapDestroyLogs } from "../core/logs.ts";
 import {
@@ -40,8 +40,8 @@ import {
 import { isRiftWorktree } from "../core/backend.ts";
 import { attachInputLatencyProbe, startLoopLagProbe } from "../core/perf.ts";
 import { reapShellLogs, shellTailRegistry } from "../core/shell-tail.ts";
-import { reapOrphanedSessions } from "../core/tmux.ts";
-import { listWorktrees } from "../core/worktree.ts";
+import { reapOrphanedSessionsPromise } from "../core/tmux.ts";
+import { listWorktreesPromise } from "../core/worktree.ts";
 import { readWtState, reapWtState } from "../core/wtstate.ts";
 import { createWtQueryClient } from "../state/index.ts";
 import { qk } from "../state/keys.ts";
@@ -256,7 +256,7 @@ class InvalidationScheduler {
  * swallowed; a stale entry is a worse outcome than blocking startup.
  */
 const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
-    const wts = yield* startupReapPromise("list worktrees", listWorktrees);
+    const wts = yield* startupReapPromise("list worktrees", listWorktreesPromise);
     const live = new Set(wts.map((w) => w.slug));
     const liveHarnessSlugs = new Set(live);
     for (const slug of SLOT_SLUGS) liveHarnessSlugs.add(slug);
@@ -281,7 +281,7 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
       protectedSlugs.add(slug);
     }
     yield* startupReapPromise("reap orphaned sessions", () =>
-      reapOrphanedSessions(protectedSlugs));
+      reapOrphanedSessionsPromise(protectedSlugs));
     // One-time migration: the manager now lives as a NAMED claude
     // session (`manager~manager`) with its own conversation UUID —
     // the old bare `manager` primary shared main's conversation (same
@@ -289,7 +289,7 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
     // would linger protected forever and confuse `m` (which no longer
     // attaches it), so kill it here. New code never creates it.
     ensureManagerClaudeName();
-    const tmuxLive = yield* startupReapPromise("list tmux sessions", listAllSessionsRaw).pipe(
+    const tmuxLive = yield* startupReapPromise("list tmux sessions", listAllSessionsRawPromise).pipe(
       Effect.catch(() => Effect.succeed(new Set<string>())),
     );
     if (tmuxLive.has(MANAGER_SLUG)) {
@@ -297,7 +297,7 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
         "killing legacy primary-form manager session (shared main's conversation)",
       );
       yield* startupReapPromise("kill legacy manager session", () =>
-        killHarnessSession(MANAGER_SLUG, "claude", null)).pipe(
+        killHarnessSessionPromise(MANAGER_SLUG, "claude", null)).pipe(
           Effect.catch(() => Effect.void),
         );
     }
@@ -322,11 +322,11 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
   })),
 );
 
-export const runTuiEffect = Effect.gen(function* () {
+export const runTui = Effect.gen(function* () {
   // These process-wide registries may acquire handles lazily while the UI is
   // alive. Register their shutdown before startup begins so a later startup
   // failure still drains anything acquired in the meantime.
-  yield* Effect.addFinalizer(() => flushLoggerEffect);
+  yield* Effect.addFinalizer(() => flushLogger);
   yield* addRuntimeFinalizer(() => {
     sessionTailRegistry.stopAll();
     shellTailRegistry.stopAll();
@@ -336,7 +336,7 @@ export const runTuiEffect = Effect.gen(function* () {
   yield* addRuntimeFinalizer(cancelAllAutoMergeRetries);
   yield* addRuntimeFinalizer(closeOpencodeDb);
   yield* addRuntimeFinalizer(disposeCodexDiscoveryWorker);
-  yield* addRuntimeFinalizer(disposeDiffPool);
+  yield* addRuntimeFinalizer(disposeDiffPoolPromise);
 
   // Restore the pane feeds from the daily logs FIRST (a restart must
   // not wipe the attention trail), then forward live logger.event.*

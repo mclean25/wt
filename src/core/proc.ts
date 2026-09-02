@@ -131,7 +131,7 @@ type KillableProcess = {
  * wait forever. Interactive handoffs cannot use the captured-process runner,
  * but they need the same TERM, bounded grace, KILL, join contract.
  */
-export function terminateSubprocessEffect(
+export function terminateSubprocess(
   proc: KillableProcess & { readonly exited: Promise<number> },
   graceMs = TERMINATION_GRACE_MS,
 ): Effect.Effect<void> {
@@ -361,7 +361,7 @@ function capturedRunEffect(
 }
 
 /** Effect-native captured subprocess execution. */
-export function runEffect(
+export function run(
   argv: readonly string[],
   opts: RunOptions = {},
 ): Effect.Effect<
@@ -389,11 +389,11 @@ export function runEffect(
 }
 
 /** Run and return trimmed stdout, failing with the precise expected cause. */
-export function runOkEffect(
+export function runOk(
   argv: readonly string[],
   opts: RunOptions = {},
 ): Effect.Effect<string, ProcError> {
-  return runEffect(argv, opts).pipe(
+  return run(argv, opts).pipe(
     Effect.flatMap(
       (
         result,
@@ -417,14 +417,14 @@ export function runOkEffect(
 }
 
 /** Returns true when the command exits zero. */
-export function runQuietEffect(
+export function runQuiet(
   argv: readonly string[],
   opts: RunOptions = {},
 ): Effect.Effect<
   boolean,
   ProcSpawnError | ProcReadError | ProcInterruptedError
 > {
-  return runEffect(argv, opts).pipe(
+  return run(argv, opts).pipe(
     Effect.map((result) => result.exitCode === 0),
   );
 }
@@ -436,26 +436,26 @@ function failedRunResult(
 }
 
 /** Compatibility boundary. Captures every expected failure as a RunResult. */
-export function run(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
+export function runPromise(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
   return Effect.runPromise(
-    runEffect(argv, opts).pipe(
+    run(argv, opts).pipe(
       Effect.catch((error) => Effect.succeed(failedRunResult(error))),
     ),
   );
 }
 
 /** Compatibility boundary for callers not yet migrated to Effect. */
-export function runOk(argv: string[], opts: RunOptions = {}): Promise<string> {
-  return Effect.runPromise(runOkEffect(argv, opts));
+export function runOkPromise(argv: string[], opts: RunOptions = {}): Promise<string> {
+  return Effect.runPromise(runOk(argv, opts));
 }
 
 /** Compatibility boundary for callers not yet migrated to Effect. */
-export function runQuiet(
+export function runQuietPromise(
   argv: string[],
   opts: RunOptions = {},
 ): Promise<boolean> {
   return Effect.runPromise(
-    runQuietEffect(argv, opts).pipe(
+    runQuiet(argv, opts).pipe(
       Effect.catch(() => Effect.succeed(false)),
     ),
   );
@@ -475,7 +475,7 @@ export function sanitizeLine(line: string): string {
 }
 
 /** Effect-native, interruptible line drain with scoped reader cancellation. */
-export function streamLinesEffect(
+export function streamLines(
   stream: ReadableStream<Uint8Array>,
   onLine: (line: string) => void,
 ): Effect.Effect<void, ProcReadError> {
@@ -532,11 +532,11 @@ export function streamLinesEffect(
 }
 
 /** Compatibility boundary for non-Effect stream consumers. */
-export function streamLines(
+export function streamLinesPromise(
   stream: ReadableStream<Uint8Array>,
   onLine: (line: string) => void,
 ): Promise<void> {
-  return Effect.runPromise(streamLinesEffect(stream, onLine));
+  return Effect.runPromise(streamLines(stream, onLine));
 }
 
 type StreamingProcess = Bun.Subprocess<"ignore", "pipe", "pipe">;
@@ -563,7 +563,7 @@ const releaseStreaming = (
   Exit.isSuccess(exit) ? awaitStreaming(proc) : terminateStreaming(proc);
 
 /** Effect-native streaming subprocess execution. */
-export function runStreamingEffect(
+export function runStreaming(
   argv: readonly string[],
   opts: RunStreamingOptions = {},
 ): Effect.Effect<number, ProcSpawnError | ProcReadError> {
@@ -610,8 +610,8 @@ export function runStreamingEffect(
             catch: (cause) =>
               new ProcReadError({ argv, stream: "stderr", cause }),
           }),
-          streamLinesEffect(proc.stdout, emit),
-          streamLinesEffect(proc.stderr, emit),
+          streamLines(proc.stdout, emit),
+          streamLines(proc.stderr, emit),
         ],
         { concurrency: "unbounded" },
       );

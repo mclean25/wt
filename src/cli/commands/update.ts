@@ -8,18 +8,18 @@
 import { Cause, Effect } from "effect";
 
 import {
-  applyWtUpdateEffect,
-  fetchWtOriginEffect,
-  findNewestEligibleEffect,
-  listRunningWtInstancesEffect,
+  applyWtUpdate,
+  fetchWtOrigin,
+  findNewestEligible,
+  listRunningWtInstances,
   logSafe,
-  pendingCommitsEffect,
+  pendingCommits,
   readUpdateMemory,
   recordUpdateApplied,
   rememberUpdateCheck,
   rememberUpdateDecline,
-  restartEventsDaemonAfterUpdateEffect,
-  repoUpdateStateEffect,
+  restartEventsDaemonAfterUpdate,
+  repoUpdateState,
   selectOffer,
   shortSha,
   startupCheckGate,
@@ -31,7 +31,7 @@ import {
 } from "../../core/update.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
-import { confirmEffect, isInteractive } from "../prompt.ts";
+import { confirm, isInteractive } from "../prompt.ts";
 
 const USAGE = `usage: wt update [log] [--check] [--head]
 
@@ -61,7 +61,7 @@ function printCommits(commits: PendingCommit[]): void {
 }
 
 const noteRunningInstances = Effect.gen(function* () {
-  const pids = yield* listRunningWtInstancesEffect;
+  const pids = yield* listRunningWtInstances;
   if (pids.length > 0) {
     console.log(
       yellow(
@@ -103,12 +103,12 @@ function fetchAndSelectEffect(useGate: boolean): Effect.Effect<
 > {
   return Effect.gen(function* () {
     yield* Effect.sync(() => rememberUpdateCheck(Date.now()));
-    if (!(yield* fetchWtOriginEffect)) return null;
-    const fresh = yield* repoUpdateStateEffect;
+    if (!(yield* fetchWtOrigin)) return null;
+    const fresh = yield* repoUpdateState;
     if (!fresh) return null;
-    const commits = fresh.behind > 0 ? yield* pendingCommitsEffect() : [];
+    const commits = fresh.behind > 0 ? yield* pendingCommits() : [];
     const gate: GateResult = useGate
-      ? yield* findNewestEligibleEffect(commits.map((c) => c.sha))
+      ? yield* findNewestEligible(commits.map((c) => c.sha))
       : { target: commits[0]?.sha ?? null, checked: [], gated: false };
     const decision = selectOffer({
       behind: fresh.behind,
@@ -127,7 +127,7 @@ function commitsUpTo(commits: PendingCommit[], target: string): PendingCommit[] 
 
 const runLog: Effect.Effect<number> = Effect.gen(function* () {
   const mem = readUpdateMemory();
-  const state = yield* repoUpdateStateEffect;
+  const state = yield* repoUpdateState;
   const head = state?.headSha ?? null;
   console.log(
     `current ${head ? shortSha(head) : "?"} · last good boot ${mem.lastGoodSha ? shortSha(mem.lastGoodSha) : dim("none recorded")}${
@@ -168,7 +168,7 @@ export function run(argv: string[]): Effect.Effect<number> {
     }
     const checkOnly = argv.includes("--check");
 
-    const state = yield* repoUpdateStateEffect;
+    const state = yield* repoUpdateState;
     if (!state) {
       console.error(
         red(`${WT_REPO_ROOT} is not a git checkout (or git is missing) — can't update`),
@@ -242,7 +242,7 @@ export function run(argv: string[]): Effect.Effect<number> {
     }
 
     const before = wtVersion();
-    const result = yield* applyWtUpdateEffect(target);
+    const result = yield* applyWtUpdate(target);
     if (!result.ok) {
       if (result.stage === "smoke") {
         rememberUpdateDecline(target);
@@ -287,10 +287,10 @@ export function run(argv: string[]): Effect.Effect<number> {
  * modules would come from the new checkout. One process must never
  * run that mix.
  */
-export function startupUpdatePromptEffect(): Effect.Effect<"updated" | null> {
+export function startupUpdatePrompt(): Effect.Effect<"updated" | null> {
   if (!isInteractive()) return Effect.succeed(null);
   return Effect.gen(function* () {
-    const state = yield* repoUpdateStateEffect;
+    const state = yield* repoUpdateState;
     if (!state) return null;
     if (startupCheckGate(state, readUpdateMemory(), Date.now()) !== "run") return null;
     const sel = yield* fetchAndSelectEffect(true);
@@ -307,12 +307,12 @@ export function startupUpdatePromptEffect(): Effect.Effect<"updated" | null> {
     console.log(
       dim('(a "no" is remembered for this version; [update] startup_check = false disables this check)'),
     );
-    if (!(yield* confirmEffect(`${cyan("•")} Update now?`, true))) {
+    if (!(yield* confirm(`${cyan("•")} Update now?`, true))) {
       rememberUpdateDecline(target);
       console.log(dim("  skipped (won't ask again until new commits land)"));
       return null;
     }
-    const result = yield* applyWtUpdateEffect(target);
+    const result = yield* applyWtUpdate(target);
     if (!result.ok) {
       if (result.stage === "smoke") {
         rememberUpdateDecline(target);
@@ -329,7 +329,7 @@ export function startupUpdatePromptEffect(): Effect.Effect<"updated" | null> {
     recordUpdateApplied({ now: Date.now(), fromSha: sel.fresh.headSha, toSha: target });
     if (result.depsWarning) console.error(yellow(`⚠ ${result.depsWarning}`));
     console.log(green(`✓ updated to ${wtVersion()}`));
-    const daemon = yield* restartEventsDaemonAfterUpdateEffect();
+    const daemon = yield* restartEventsDaemonAfterUpdate();
     if (daemon.status === "restarted") {
       console.log(dim("  restarted the events daemon on the new build"));
     } else if (daemon.status === "failed") {

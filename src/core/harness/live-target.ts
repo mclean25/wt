@@ -24,7 +24,7 @@
  * mistake that routes a message to a fresh session while the real one
  * is sitting there.
  */
-import { probeSessionNamesEffect } from "../tmux/process.ts";
+import { probeSessionNames } from "../tmux/process.ts";
 import { Effect } from "effect";
 import { CLAUDE_NAMED_SEP, sessionName, type SessionKind } from "../tmux/naming.ts";
 
@@ -93,18 +93,18 @@ function liveHarnesses(
  * there, since `send` is about to cold-start something and the primary
  * is exactly "what to start".
  */
-export function resolveWorktreeHarnessEffect(
+export function resolveWorktreeHarness(
   slug: string,
   knownSlugs: ReadonlySet<string>,
 ): Effect.Effect<HarnessChoice> {
   // The probe is three-valued and never fails (an unreachable tmux reads
   // as "no sessions known"), so there is no error channel to wrap.
-  return probeSessionNamesEffect().pipe(
+  return probeSessionNames().pipe(
     Effect.map((names) => chooseHarness(slug, names, knownSlugs, readPrimaryHarness())),
   );
 }
-export const resolveWorktreeHarness = (slug: string, knownSlugs: ReadonlySet<string>) =>
-  Effect.runPromise(resolveWorktreeHarnessEffect(slug, knownSlugs));
+export const resolveWorktreeHarnessPromise = (slug: string, knownSlugs: ReadonlySet<string>) =>
+  Effect.runPromise(resolveWorktreeHarness(slug, knownSlugs));
 
 /** The rule itself, with the tmux probe already done — the tested half. */
 export function chooseHarness(

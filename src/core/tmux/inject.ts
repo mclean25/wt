@@ -2,13 +2,13 @@ import { homedir } from "node:os";
 import { Clock, Duration, Effect } from "effect";
 
 import { getHarness, type HarnessId } from "../harness/index.ts";
-import { withAsyncFileLockEffect } from "../locks.ts";
+import { withAsyncFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
-import { pollUntilEffect } from "../poll.ts";
-import { runEffect } from "../proc.ts";
-import { startHarnessSessionDetachedEffect } from "./lifecycle.ts";
+import { pollUntil } from "../poll.ts";
+import { run } from "../proc.ts";
+import { startHarnessSessionDetached } from "./lifecycle.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
-import { capturePaneEffect, listAllSessionsRawEffect, paneTarget, runTmuxEffect } from "./process.ts";
+import { capturePane, listAllSessionsRaw, paneTarget, runTmux } from "./process.ts";
 
 type TerminalHarnessId = Exclude<HarnessId, "claude">;
 
@@ -84,7 +84,7 @@ function waitForPaneReadyEffect(name: string): Effect.Effect<boolean> {
     // Initial grace — harnesses often write nothing for the first beat after spawn.
     yield* Effect.sleep(Duration.millis(READY_POLL_MS));
     while ((yield* Clock.currentTimeMillis) < deadline) {
-      const cur = (yield* capturePaneEffect(name))?.trim() ?? "";
+      const cur = (yield* capturePane(name))?.trim() ?? "";
       if (cur.length > 0 && cur === prev) return true;
       prev = cur;
       yield* Effect.sleep(Duration.millis(READY_POLL_MS));
@@ -108,13 +108,13 @@ function pasteBufferEffect(name: string, text: string): Effect.Effect<void> {
     // Exit code deliberately unchecked (audited, accepted): a failed load
     // means the following paste/Enter lands on an empty buffer, preserving
     // the historical best-effort fallback contract.
-    yield* runEffect(
+    yield* run(
       ["tmux", "-L", TMUX_SOCKET, "load-buffer", "-b", buffer, "-"],
       { cwd: homedir(), input: text },
     ).pipe(Effect.ignore);
     // `-p` = bracketed paste, so internal newlines do not submit early;
     // `-d` drops the buffer after.
-    yield* runTmuxEffect([
+    yield* runTmux([
       "paste-buffer",
       "-d",
       "-p",
@@ -154,7 +154,7 @@ function pasteBufferEffect(name: string, text: string): Effect.Effect<void> {
  * dialog instead of submitting. Attaching via F12 once (to accept trust)
  * before injecting avoids it.
  */
-export function injectIntoSessionEffect(opts: {
+export function injectIntoSession(opts: {
   slug: string;
   cwd: string;
   harnessId: TerminalHarnessId;
@@ -176,10 +176,10 @@ export function injectIntoSessionEffect(opts: {
 }
 
 /** Promise boundary for message transports that still expose callbacks. */
-export function injectIntoSession(
-  opts: Parameters<typeof injectIntoSessionEffect>[0],
+export function injectIntoSessionPromise(
+  opts: Parameters<typeof injectIntoSession>[0],
 ): Promise<InjectResult> {
-  return Effect.runPromise(injectIntoSessionEffect(opts));
+  return Effect.runPromise(injectIntoSession(opts));
 }
 
 /**
@@ -197,7 +197,7 @@ export function injectIntoSession(
  * that reaching it stays a deliberate act with a place to explain
  * itself.
  */
-export function injectClaudeFallbackEffect(opts: {
+export function injectClaudeFallback(opts: {
   slug: string;
   cwd: string;
   managedName?: string | null;
@@ -207,10 +207,10 @@ export function injectClaudeFallbackEffect(opts: {
 }
 
 /** Promise boundary for the harness transport interface. */
-export function injectClaudeFallback(
-  opts: Parameters<typeof injectClaudeFallbackEffect>[0],
+export function injectClaudeFallbackPromise(
+  opts: Parameters<typeof injectClaudeFallback>[0],
 ): Promise<InjectResult> {
-  return Effect.runPromise(injectClaudeFallbackEffect(opts));
+  return Effect.runPromise(injectClaudeFallback(opts));
 }
 
 function lockedInject(opts: {
@@ -227,7 +227,7 @@ function lockedInject(opts: {
   // near-simultaneous injections interleave paste text and stray
   // Enters in one pane, and two cold starts race. Worktree targets get
   // the same guard for free.
-  return withAsyncFileLockEffect(
+  return withAsyncFileLock(
     `__inject__${sessionName(opts.slug, opts.harnessId, opts.managedName ?? null)}`,
     injectIntoSessionUnlockedEffect(opts),
   ).pipe(
@@ -252,10 +252,10 @@ function injectIntoSessionUnlockedEffect(opts: {
     const harnessId = opts.harnessId;
     const managedName = opts.managedName ?? null;
     const name = sessionName(slug, harnessId, managedName);
-    const running = (yield* listAllSessionsRawEffect()).has(name);
+    const running = (yield* listAllSessionsRaw()).has(name);
     let coldStarted = false;
     if (!running) {
-      const started = yield* startHarnessSessionDetachedEffect(
+      const started = yield* startHarnessSessionDetached(
         slug,
         cwd,
         harnessId,
@@ -325,7 +325,7 @@ function confirmDeliveryEffect(opts: {
   const { cwd, harnessId, managedName, text, sinceMs } = opts;
   const harness = getHarness(harnessId);
   if (!harness.injectionLanded) return Effect.succeed(null);
-  return pollUntilEffect({
+  return pollUntil({
     check: () => harness.injectionLanded!({ cwd, managedName, text, sinceMs }),
     budgetMs: DELIVERY_CONFIRM_MS,
     intervalMs: DELIVERY_POLL_MS,
@@ -369,19 +369,19 @@ function pasteAndSubmitEffect(
     // behavior); observed drops are cold-start-only, where the pane is
     // static and the comparison is clean. The final attempt proceeds to
     // submit regardless.
-    const prePaste = (yield* capturePaneEffect(name))?.trim() ?? "";
+    const prePaste = (yield* capturePane(name))?.trim() ?? "";
     const verifyDeadline = (yield* Clock.currentTimeMillis) + PASTE_VERIFY_BUDGET_MS;
     yield* pasteBufferEffect(name, text);
     yield* Effect.sleep(Duration.millis(SUBMIT_DELAY_MS));
     for (let attempt = 0; attempt < PASTE_MAX_RETRIES; attempt++) {
-      let now = (yield* capturePaneEffect(name))?.trim() ?? "";
+      let now = (yield* capturePane(name))?.trim() ?? "";
       if (now !== prePaste || (yield* Clock.currentTimeMillis) >= verifyDeadline) break;
       log.warn("inject paste left no trace in pane; waiting, then re-pasting", { name, attempt });
       yield* Effect.sleep(Duration.millis(PASTE_RETRY_GRACE_MS));
       yield* waitForPaneReadyEffect(name);
       // Late landing? The earlier paste may have rendered during the
       // grace/settle — re-pasting on top would submit the text twice.
-      now = (yield* capturePaneEffect(name))?.trim() ?? "";
+      now = (yield* capturePane(name))?.trim() ?? "";
       if (now !== prePaste) break;
       yield* pasteBufferEffect(name, text);
       yield* Effect.sleep(Duration.millis(SUBMIT_DELAY_MS));
@@ -394,7 +394,7 @@ function pasteAndSubmitEffect(
     const submitKeys = getHarness(harnessId).injectSubmitKeys;
     for (let i = 0; i < submitKeys.length; i++) {
       if (i > 0) yield* Effect.sleep(Duration.millis(SUBMIT_KEY_GAP_MS));
-      const { code, stderr } = yield* runTmuxEffect([
+      const { code, stderr } = yield* runTmux([
         "send-keys",
         "-t",
         paneTarget(name),

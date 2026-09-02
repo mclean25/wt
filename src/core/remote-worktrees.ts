@@ -1,9 +1,9 @@
 import { Data, Effect } from "effect";
 
 import type { RemoteConfig } from "./config.ts";
-import { runEffect } from "./proc.ts";
+import { run } from "./proc.ts";
 import { remoteWtCommand } from "./remote-protocol.ts";
-import { fetchRemoteWorkerInfoEffect } from "./worker-info.ts";
+import { fetchRemoteWorkerInfo } from "./worker-info.ts";
 import {
   parseWorkerSnapshot,
   type WorktreeSnapshot,
@@ -50,19 +50,19 @@ export function parseRemoteWorkerWorktrees(
 }
 
 /** Read the authoritative execution snapshot from one configured SSH worker. */
-export function fetchRemoteWorktreesEffect(
+export function fetchRemoteWorktrees(
   remote: RemoteConfig,
   signal?: AbortSignal,
 ): Effect.Effect<RemoteWorktreeSummary[], RemoteWorktreesError> {
   return Effect.gen(function* () {
-  yield* fetchRemoteWorkerInfoEffect(remote).pipe(
+  yield* fetchRemoteWorkerInfo(remote).pipe(
     Effect.mapError((cause) => new RemoteWorktreesError({
       operation: "handshake",
       message: `worker handshake failed for ${remote.label}`,
       cause,
     })),
   );
-  const result = yield* runEffect(
+  const result = yield* run(
     [
       "ssh",
       "-o",
@@ -99,8 +99,8 @@ export function fetchRemoteWorktreesEffect(
   });
 }
 
-export const fetchRemoteWorktrees = (
+export const fetchRemoteWorktreesPromise = (
   remote: RemoteConfig,
   signal?: AbortSignal,
 ): Promise<RemoteWorktreeSummary[]> =>
-  Effect.runPromise(fetchRemoteWorktreesEffect(remote, signal));
+  Effect.runPromise(fetchRemoteWorktrees(remote, signal));

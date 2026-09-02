@@ -12,7 +12,7 @@ import type {
   NamingReasoningEffort,
 } from "../config.ts";
 import { Data, Effect } from "effect";
-import { runEffect, type ProcError } from "../proc.ts";
+import { run, type ProcError } from "../proc.ts";
 import { readPrimaryHarness } from "./primary.ts";
 import type { HarnessId } from "./types.ts";
 
@@ -114,7 +114,7 @@ export function buildHarnessCompletion(
   }
 }
 
-export function runHarnessCompletionEffect(
+export function runHarnessCompletion(
   naming: NamingConfig,
   prompt: string,
   cwd: string,
@@ -125,7 +125,7 @@ export function runHarnessCompletionEffect(
     prompt,
     cwd,
   );
-  return runEffect(completion.argv, {
+  return run(completion.argv, {
     cwd,
     ...(completion.input !== undefined ? { input: completion.input } : {}),
     timeoutMs: naming.timeoutMs,

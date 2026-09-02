@@ -22,9 +22,9 @@
 import { Clock, Data, Effect } from "effect";
 
 import {
-  gitRunEffect,
-  rebaseInProgressEffect,
-  revParseEffect,
+  gitRun,
+  rebaseInProgress,
+  revParse,
 } from "../git.ts";
 import type { RunResult } from "../proc.ts";
 import { causeMessage } from "../errors.ts";
@@ -96,7 +96,7 @@ function oneLine(s: string): string {
 const REBASE_ATTEMPTS = 5;
 const ABORT_ATTEMPTS = 4;
 
-export function restackBackoffEffect(
+export function restackBackoff(
   attempt: number,
   jitterMs = Math.floor(Math.random() * 250),
 ): Effect.Effect<void> {
@@ -116,7 +116,7 @@ function looksLikeLockError(detail: string): boolean {
  * The authoritative success test is `rebaseInProgress`, not the exit code.
  */
 function safeGitRunEffect(args: readonly string[], cwd: string): Effect.Effect<RunResult> {
-  return gitRunEffect(args, cwd).pipe(
+  return gitRun(args, cwd).pipe(
     Effect.catch((error) =>
       Effect.succeed({ stdout: "", stderr: error.message, exitCode: -1 }),
     ),
@@ -130,13 +130,13 @@ function safeGitRunEffect(args: readonly string[], cwd: string): Effect.Effect<R
  * "no rebase" from "cannot tell"; only the latter lands here.)
  */
 function safeRebaseInProgressEffect(cwd: string): Effect.Effect<boolean> {
-  return rebaseInProgressEffect(cwd).pipe(
+  return rebaseInProgress(cwd).pipe(
     Effect.catch(() => Effect.succeed(true)),
   );
 }
 
 function safeRevParseEffect(ref: string, cwd: string): Effect.Effect<string | null> {
-  return revParseEffect(ref, cwd).pipe(Effect.catch(() => Effect.succeed(null)));
+  return revParse(ref, cwd).pipe(Effect.catch(() => Effect.succeed(null)));
 }
 
 function abortRebaseWithRetryEffect(
@@ -148,7 +148,7 @@ function abortRebaseWithRetryEffect(
     const aborted = yield* safeGitRunEffect(["rebase", "--abort"], cwd);
     if (!(yield* safeRebaseInProgressEffect(cwd))) return { ok: true };
     lastErr = oneLine(aborted.stderr || aborted.stdout);
-    yield* restackBackoffEffect(attempt);
+    yield* restackBackoff(attempt);
   }
   return { ok: false, error: lastErr };
   });
@@ -254,7 +254,7 @@ export class NativeRestackEngine implements RestackEngine {
         if (lockMidPick && attempt < REBASE_ATTEMPTS) {
           // No conflicted paths + a lock-shaped error: not a content conflict.
           onLog(`  ${branch}: a transient lock broke the rebase mid-pick (attempt ${attempt}/${REBASE_ATTEMPTS}) — aborted clean, retrying`);
-          yield* restackBackoffEffect(attempt);
+          yield* restackBackoff(attempt);
           continue;
         }
         if (lockMidPick) {
@@ -282,7 +282,7 @@ export class NativeRestackEngine implements RestackEngine {
       // backup so it doesn't linger.
       if (attempt < REBASE_ATTEMPTS) {
         onLog(`  ${branch}: rebase didn't start (attempt ${attempt}/${REBASE_ATTEMPTS}, likely a transient lock) — retrying`);
-        yield* restackBackoffEffect(attempt);
+        yield* restackBackoff(attempt);
         continue;
       }
       yield* deleteBackupEffect(backupBranch, worktreePath);

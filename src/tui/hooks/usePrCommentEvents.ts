@@ -27,7 +27,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Data, Effect, Fiber } from "effect";
 
-import { fetchAuthenticatedLogin } from "../../core/github.ts";
+import { fetchAuthenticatedLoginPromise } from "../../core/github.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { PrComment } from "../../core/types.ts";
 import type { GithubData } from "../../state/queries/github.ts";
@@ -110,7 +110,7 @@ export function usePrCommentEvents(
     // resolves on a later one.
     const fiber = Effect.runFork(
       Effect.tryPromise({
-        try: fetchAuthenticatedLogin,
+        try: fetchAuthenticatedLoginPromise,
         catch: (cause) => new AuthenticatedLoginError({ cause }),
       }).pipe(
         Effect.tap((login) =>

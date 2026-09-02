@@ -3,7 +3,7 @@ import { resolve as resolvePath } from "node:path";
 import { Data, Effect, Semaphore } from "effect";
 
 import { config } from "./config.ts";
-import { runEffect, runOkEffect, runQuietEffect, type ProcError, type RunResult } from "./proc.ts";
+import { run, runOk, runQuiet, type ProcError, type RunResult } from "./proc.ts";
 import { readWtState } from "./wtstate.ts";
 
 export class GitError extends Data.TaggedError("GitError")<{
@@ -16,27 +16,27 @@ export class GitError extends Data.TaggedError("GitError")<{
 
 const gitCwd = (cwd?: string) => cwd ?? config.paths.mainClone;
 
-export function gitEffect(args: readonly string[], cwd?: string): Effect.Effect<string, GitError> {
+export function git(args: readonly string[], cwd?: string): Effect.Effect<string, GitError> {
   const actualCwd = gitCwd(cwd);
-  return runOkEffect(["git", ...args], { cwd: actualCwd }).pipe(
+  return runOk(["git", ...args], { cwd: actualCwd }).pipe(
     Effect.mapError((cause) => new GitError({ args, cwd: actualCwd, cause })),
   );
 }
 
-export function gitQuietEffect(args: readonly string[], cwd?: string) {
-  return runQuietEffect(["git", ...args], { cwd: gitCwd(cwd) });
+export function gitQuiet(args: readonly string[], cwd?: string) {
+  return runQuiet(["git", ...args], { cwd: gitCwd(cwd) });
 }
 
-export function gitRunEffect(args: readonly string[], cwd?: string) {
-  return runEffect(["git", ...args], { cwd: gitCwd(cwd) });
+export function gitRun(args: readonly string[], cwd?: string) {
+  return run(["git", ...args], { cwd: gitCwd(cwd) });
 }
 
-export const git = (args: string[], cwd?: string): Promise<string> =>
-  Effect.runPromise(gitEffect(args, cwd));
-export const gitQuiet = (args: string[], cwd?: string): Promise<boolean> =>
-  Effect.runPromise(gitQuietEffect(args, cwd).pipe(Effect.catch(() => Effect.succeed(false))));
-export const gitRun = (args: string[], cwd?: string): Promise<RunResult> =>
-  Effect.runPromise(gitRunEffect(args, cwd).pipe(Effect.catch((e) => Effect.succeed({ stdout: "", stderr: e.message, exitCode: -1 }))));
+export const gitPromise = (args: string[], cwd?: string): Promise<string> =>
+  Effect.runPromise(git(args, cwd));
+export const gitQuietPromise = (args: string[], cwd?: string): Promise<boolean> =>
+  Effect.runPromise(gitQuiet(args, cwd).pipe(Effect.catch(() => Effect.succeed(false))));
+export const gitRunPromise = (args: string[], cwd?: string): Promise<RunResult> =>
+  Effect.runPromise(gitRun(args, cwd).pipe(Effect.catch((e) => Effect.succeed({ stdout: "", stderr: e.message, exitCode: -1 }))));
 
 /**
  * Resolve the effective diff/sync base for a worktree, guarding against a
@@ -50,7 +50,7 @@ export const gitRun = (args: string[], cwd?: string): Promise<RunResult> =>
  * reconcile runs (or if the PR-merged probe hasn't landed yet). An external
  * base (stack-on-stack) still resolves, so it's left untouched.
  */
-export function effectiveBaseOrTrunkEffect(
+export function effectiveBaseOrTrunk(
   wtPath: string,
   effectiveBase?: string | null,
 ): Effect.Effect<string, ProcError> {
@@ -81,14 +81,14 @@ export function effectiveBaseOrTrunkEffect(
   // tip is the `origin/<parent>` remote-tracking ref. Try that before
   // degrading to a fat trunk diff, so a stacked rift slice bases on its
   // real parent. Already-`origin/…` bases resolve on the first check.
-  return revParseEffect(effectiveBase, wtPath).pipe(Effect.flatMap((local) => {
+  return revParse(effectiveBase, wtPath).pipe(Effect.flatMap((local) => {
     if (local) return Effect.succeed(effectiveBase);
     const originRef = `origin/${effectiveBase}`;
-    return revParseEffect(originRef, wtPath).pipe(Effect.map((remote) => remote ? originRef : trunk));
+    return revParse(originRef, wtPath).pipe(Effect.map((remote) => remote ? originRef : trunk));
   }));
 }
-export const effectiveBaseOrTrunk = (wtPath: string, effectiveBase?: string | null): Promise<string> =>
-  Effect.runPromise(effectiveBaseOrTrunkEffect(wtPath, effectiveBase));
+export const effectiveBaseOrTrunkPromise = (wtPath: string, effectiveBase?: string | null): Promise<string> =>
+  Effect.runPromise(effectiveBaseOrTrunk(wtPath, effectiveBase));
 
 /**
  * Swap a trunk base ref for the main clone's SHA when the checkout can
@@ -121,9 +121,9 @@ export const effectiveBaseOrTrunk = (wtPath: string, effectiveBase?: string | nu
  */
 export function freshBaseRevEffect(wtPath: string, base: string) {
   if (base !== `origin/${config.branch.base}`) return Effect.succeed(base);
-  return revParseEffect(base, config.paths.mainClone).pipe(Effect.flatMap((fresh) => {
+  return revParse(base, config.paths.mainClone).pipe(Effect.flatMap((fresh) => {
     if (!fresh) return Effect.succeed(base);
-    return gitQuietEffect(["cat-file", "-e", `${fresh}^{commit}`], wtPath).pipe(
+    return gitQuiet(["cat-file", "-e", `${fresh}^{commit}`], wtPath).pipe(
       Effect.map((exists) => exists ? fresh : base),
     );
   }));
@@ -135,9 +135,9 @@ export function freshBaseRevEffect(wtPath: string, base: string) {
  * nothing to abort, the exact ambiguity that produced false "left mid-rebase"
  * reports on slices whose rebase failed at preflight without ever starting).
  */
-export const rebaseInProgressEffect = (cwd: string) => Effect.gen(function* () {
+export const rebaseInProgress = (cwd: string) => Effect.gen(function* () {
   for (const dir of ["rebase-merge", "rebase-apply"]) {
-    const r = yield* gitRunEffect(["rev-parse", "--git-path", dir], cwd);
+    const r = yield* gitRun(["rev-parse", "--git-path", dir], cwd);
     const p = r.stdout.trim();
     // `--git-path` is ABSOLUTE for a linked worktree (the common case here) and
     // relative to `cwd` only for the main clone. `resolvePath(cwd, p)` is
@@ -173,7 +173,7 @@ export type MergeConflictProbe =
  * strong hint rather than a guarantee — good enough to warn before a
  * restack, cheap enough to run per row.
  */
-export function mergeConflictProbeEffect(
+export function mergeConflictProbe(
   headRef: string,
   base: string,
   cwd?: string,
@@ -183,8 +183,8 @@ export function mergeConflictProbeEffect(
   // probing a transient tree. The TUI renders this as "resolution in
   // progress" rather than a conflict warning.
   return Effect.gen(function* () {
-    if (cwd && (yield* rebaseInProgressEffect(cwd))) return { status: "rebasing", base } as const;
-    const r = yield* gitRunEffect(["merge-tree", "--write-tree", "--name-only", "--no-messages", base, headRef], cwd);
+    if (cwd && (yield* rebaseInProgress(cwd))) return { status: "rebasing", base } as const;
+    const r = yield* gitRun(["merge-tree", "--write-tree", "--name-only", "--no-messages", base, headRef], cwd);
     if (r.exitCode === 0) return { status: "clean", base } as const;
     if (r.exitCode === 1 && r.stdout.trim()) {
     // stdout: "<tree-oid>\n<file>\n<file>…" — first line is the result
@@ -199,23 +199,23 @@ export function mergeConflictProbeEffect(
     return { status: "unknown", base } as const;
   });
 }
-export const mergeConflictProbe = (headRef: string, base: string, cwd?: string): Promise<MergeConflictProbe> =>
-  Effect.runPromise(mergeConflictProbeEffect(headRef, base, cwd));
+export const mergeConflictProbePromise = (headRef: string, base: string, cwd?: string): Promise<MergeConflictProbe> =>
+  Effect.runPromise(mergeConflictProbe(headRef, base, cwd));
 
 /**
  * Resolve a ref to its commit SHA in `cwd` (default: the main clone),
  * or null when it doesn't resolve. The one canonical rev-parse helper —
  * the engine, stack ops, and base resolution all share it.
  */
-export const revParseEffect = (ref: string, cwd?: string) =>
-  gitRunEffect(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], cwd).pipe(
+export const revParse = (ref: string, cwd?: string) =>
+  gitRun(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], cwd).pipe(
     Effect.map((r) => {
       const sha = r.stdout.trim();
       return r.exitCode === 0 && sha ? sha : null;
     }),
   );
-export const revParse = (ref: string, cwd?: string): Promise<string | null> =>
-  Effect.runPromise(revParseEffect(ref, cwd));
+export const revParsePromise = (ref: string, cwd?: string): Promise<string | null> =>
+  Effect.runPromise(revParse(ref, cwd));
 
 /**
  * Whether `sha` is an ancestor of `ref` (or `ref` itself). False when
@@ -223,17 +223,17 @@ export const revParse = (ref: string, cwd?: string): Promise<string | null> =>
  * usually still present as a dangling object, but a pruned one reads as
  * "not an ancestor", which is the answer that matters anyway.
  */
-export function shaIsAncestorEffect(
+export function shaIsAncestor(
   sha: string,
   ref: string,
   cwd?: string,
 ): Effect.Effect<boolean, ProcError> {
-  return gitRunEffect(["merge-base", "--is-ancestor", sha, ref], cwd).pipe(
+  return gitRun(["merge-base", "--is-ancestor", sha, ref], cwd).pipe(
     Effect.map((r) => r.exitCode === 0),
   );
 }
-export const shaIsAncestor = (sha: string, ref: string, cwd?: string): Promise<boolean> =>
-  Effect.runPromise(shaIsAncestorEffect(sha, ref, cwd));
+export const shaIsAncestorPromise = (sha: string, ref: string, cwd?: string): Promise<boolean> =>
+  Effect.runPromise(shaIsAncestor(sha, ref, cwd));
 
 /**
  * Current tip of the branch a worktree merges INTO, resolved in the
@@ -255,43 +255,43 @@ export const shaIsAncestor = (sha: string, ref: string, cwd?: string): Promise<b
  * may not exist in the main clone at all (again: independent clones).
  * Null when neither resolves — callers must treat that as unknown.
  */
-export function baseTipShaEffect(baseBranch: string | null) {
+export function baseTipSha(baseBranch: string | null) {
   const branch = baseBranch && baseBranch.trim() !== "" ? baseBranch : config.branch.base;
-  return revParseEffect(`origin/${branch}`).pipe(
-    Effect.flatMap((remote) => remote ? Effect.succeed(remote) : revParseEffect(branch)),
+  return revParse(`origin/${branch}`).pipe(
+    Effect.flatMap((remote) => remote ? Effect.succeed(remote) : revParse(branch)),
   );
 }
-export const baseTipSha = (baseBranch: string | null): Promise<string | null> =>
-  Effect.runPromise(baseTipShaEffect(baseBranch));
+export const baseTipShaPromise = (baseBranch: string | null): Promise<string | null> =>
+  Effect.runPromise(baseTipSha(baseBranch));
 
 /** First ref among `refs` that resolves to a commit in `cwd`, as a SHA. */
-export const firstShaEffect = (cwd: string, refs: readonly string[]) =>
+export const firstSha = (cwd: string, refs: readonly string[]) =>
   Effect.gen(function* () {
     for (const ref of refs) {
-      const sha = yield* revParseEffect(ref, cwd);
+      const sha = yield* revParse(ref, cwd);
       if (sha) return sha;
     }
     return null;
   });
 /** Does `branch` exist as a local head? */
-export const localBranchExistsEffect = (branch: string, cwd?: string) =>
-  gitQuietEffect(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], cwd);
+export const localBranchExists = (branch: string, cwd?: string) =>
+  gitQuiet(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], cwd);
 
 /** Does `branch` exist as an origin remote-tracking ref? */
-export const originBranchExistsEffect = (branch: string, cwd?: string) =>
-  gitQuietEffect(["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], cwd);
+export const originBranchExists = (branch: string, cwd?: string) =>
+  gitQuiet(["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], cwd);
 
-export const branchExistsEffect = (branch: string) => localBranchExistsEffect(branch).pipe(
-  Effect.flatMap((local) => local ? Effect.succeed(true) : originBranchExistsEffect(branch)),
+export const branchExists = (branch: string) => localBranchExists(branch).pipe(
+  Effect.flatMap((local) => local ? Effect.succeed(true) : originBranchExists(branch)),
 );
-export const branchExists = (branch: string): Promise<boolean> => Effect.runPromise(branchExistsEffect(branch));
+export const branchExistsPromise = (branch: string): Promise<boolean> => Effect.runPromise(branchExists(branch));
 
 /**
  * `branch` itself when the local head exists, else `origin/<branch>` —
  * a ref other git commands can resolve either way. Doesn't verify the
  * origin ref; pair with `branchExists` when absence is an error.
  */
-export const localOrOriginRefEffect = (branch: string) => localBranchExistsEffect(branch).pipe(
+export const localOrOriginRef = (branch: string) => localBranchExists(branch).pipe(
   Effect.map((local) => local ? branch : `origin/${branch}`),
 );
 /**
@@ -300,14 +300,14 @@ export const localOrOriginRefEffect = (branch: string) => localBranchExistsEffec
  * clone. Linked git worktrees share refs, so main clone (the default)
  * and the worktree path are equivalent there.
  */
-export function branchIsGoneEffect(branch: string, wtPath?: string) {
-  return runEffect(
+export function branchIsGone(branch: string, wtPath?: string) {
+  return run(
     ["git", "for-each-ref", "--format=%(upstream:track)", `refs/heads/${branch}`],
     { cwd: wtPath ?? config.paths.mainClone },
   ).pipe(Effect.map((r) => r.exitCode === 0 && r.stdout.trim() === "[gone]"));
 }
-export const branchIsGone = (branch: string, wtPath?: string): Promise<boolean> =>
-  Effect.runPromise(branchIsGoneEffect(branch, wtPath));
+export const branchIsGonePromise = (branch: string, wtPath?: string): Promise<boolean> =>
+  Effect.runPromise(branchIsGone(branch, wtPath));
 
 let _mainFirstParents: Set<string> | null = null;
 // Bumped by every invalidation. A read captures it before spawning and
@@ -326,7 +326,7 @@ const mainFirstParentsSemaphore = Semaphore.makeUnsafe(1);
  * Cached after the first successful read. Effect callers compose this
  * helper directly; invalidation drops the value before the next read.
  */
-export function mainFirstParentShasEffect() {
+export function mainFirstParentShas() {
   return mainFirstParentsSemaphore.withPermits(1)(Effect.suspend(() => {
     if (_mainFirstParents) return Effect.succeed(_mainFirstParents);
     const epoch = _mainFirstParentsEpoch;
@@ -334,7 +334,7 @@ export function mainFirstParentShasEffect() {
     // an empty set reads as "no branch tip is an old trunk commit" for the
     // rest of the process, and every consumer already folds a failure into
     // the conservative answer.
-    return runOkEffect(
+    return runOk(
       ["git", "rev-list", "--first-parent", `origin/${config.branch.base}`],
       { cwd: config.paths.mainClone },
     ).pipe(Effect.map((out) => {
@@ -361,11 +361,11 @@ export function invalidateMainFirstParents(): void {
  * walks its parent's history and reports the parent's oldest commit,
  * so every sibling in a fan resolves to one identical title.
  */
-export function firstCommitSubjectEffect(
+export function firstCommitSubject(
   wtPath: string,
   base: string = `origin/${config.branch.base}`,
 ): Effect.Effect<string | null, ProcError> {
-  return runEffect(
+  return run(
     ["git", "log", "--reverse", "--format=%s", `${base}..HEAD`],
     { cwd: wtPath, timeoutMs: 5_000 },
   ).pipe(Effect.map((r) => {
@@ -381,18 +381,18 @@ export function firstCommitSubjectEffect(
  * objects are reachable in the main clone via `origin/<branch>`; an
  * unpushed tip is unknown there, and unknown-to-origin means unmerged.
  */
-export function branchIsMergedEffect(wt: {
+export function branchIsMerged(wt: {
   slug: string;
   branch: string;
   path?: string;
 }): Effect.Effect<boolean, ProcError> {
   const { branch, path: wtPath } = wt;
   return Effect.gen(function* () {
-  const branchSha = yield* gitEffect(["rev-parse", "--verify", branch], wtPath ?? config.paths.mainClone);
-  const mainSha = yield* gitEffect(["rev-parse", "--verify", `origin/${config.branch.base}`]);
+  const branchSha = yield* git(["rev-parse", "--verify", branch], wtPath ?? config.paths.mainClone);
+  const mainSha = yield* git(["rev-parse", "--verify", `origin/${config.branch.base}`]);
   // Real-divergence gate; FF-aligned branches skip out below.
   if (
-    !(yield* gitQuietEffect([
+    !(yield* gitQuiet([
       "merge-base",
       "--is-ancestor",
       branchSha,
@@ -405,13 +405,13 @@ export function branchIsMergedEffect(wt: {
   // Branch tip on main's first-parent chain = just an older main SHA
   // (branch never got its own commits). Real merge-commit merges attach
   // the branch via a second parent.
-  const fps = yield* mainFirstParentShasEffect();
+  const fps = yield* mainFirstParentShas();
   if (fps.has(branchSha)) return false;
   return !(yield* forkBaseIsVacuousEffect(wt, branchSha));
   }).pipe(Effect.catch(() => Effect.succeed(false)));
 }
-export const branchIsMerged = (wt: { slug: string; branch: string; path?: string }): Promise<boolean> =>
-  Effect.runPromise(branchIsMergedEffect(wt));
+export const branchIsMergedPromise = (wt: { slug: string; branch: string; path?: string }): Promise<boolean> =>
+  Effect.runPromise(branchIsMerged(wt));
 
 /**
  * VACUOUS CONTAINMENT: is this branch contained in trunk only because
@@ -456,7 +456,7 @@ function forkBaseIsVacuousEffect(
   const rec = readWtState().slugs[wt.slug];
   const base = rec?.baseSha ?? rec?.baseBranch;
   if (!base) return Effect.succeed(false);
-  return branchIsEmptySinceEffect(base, branchSha, wt.path);
+  return branchIsEmptySince(base, branchSha, wt.path);
 }
 
 /**
@@ -464,13 +464,13 @@ function forkBaseIsVacuousEffect(
  * vacuous-containment guard's tests; see `forkBaseIsVacuous` for why
  * an unresolvable base answers `true`.
  */
-export function branchIsEmptySinceEffect(
+export function branchIsEmptySince(
   base: string,
   branchSha: string,
   cwd?: string,
 ): Effect.Effect<boolean, ProcError> {
   if (base === branchSha) return Effect.succeed(true);
-  return gitRunEffect(["rev-list", "--count", `${base}..${branchSha}`], cwd).pipe(
+  return gitRun(["rev-list", "--count", `${base}..${branchSha}`], cwd).pipe(
     Effect.map((r) => r.exitCode !== 0 || Number(r.stdout.trim()) === 0),
   );
 }

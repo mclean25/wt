@@ -13,10 +13,10 @@ import {
 } from "../../core/tmux.ts";
 import {
   AttachOperationError,
-  attachOrCreateEffect,
+  attachOrCreate,
 } from "../../core/tmux/attach.ts";
-import { killHarnessSessionEffect } from "../../core/tmux/admin.ts";
-import { handoffTerminalEffect } from "./renderer-handoff.ts";
+import { killHarnessSession } from "../../core/tmux/admin.ts";
+import { handoffTerminal } from "./renderer-handoff.ts";
 
 export type HarnessRoute = {
   harnessId: HarnessId;
@@ -46,18 +46,18 @@ export type EnterWorktreeSessionOptions = {
   switchable?: boolean;
 };
 
-export function enterWorktreeSessionEffect(opts: EnterWorktreeSessionOptions) {
+export function enterWorktreeSession(opts: EnterWorktreeSessionOptions) {
   const { renderer, slug, cwd, diffBase, harness, switchable = true } = opts;
-  return handoffTerminalEffect(renderer, cwd, Effect.gen(function* () {
+  return handoffTerminal(renderer, cwd, Effect.gen(function* () {
     let target = opts.initial;
     let harnessPrepared = false;
 
     const attachTarget = (): Effect.Effect<AttachResult, AttachOperationError> => Effect.gen(function* () {
       if (target === "shell") {
-        return yield* attachOrCreateEffect({ slug, cwd, kind: "shell" });
+        return yield* attachOrCreate({ slug, cwd, kind: "shell" });
       }
       if (target === "diff") {
-        return yield* attachOrCreateEffect({ slug, cwd, kind: "diff", base: diffBase });
+        return yield* attachOrCreate({ slug, cwd, kind: "diff", base: diffBase });
       }
 
       if (!harnessPrepared) {
@@ -66,10 +66,10 @@ export function enterWorktreeSessionEffect(opts: EnterWorktreeSessionOptions) {
           createLogger(slug).event.warn(
             `replacing ${getHarness(harness.harnessId).label} slot`,
           );
-          yield* killHarnessSessionEffect(slug, harness.harnessId);
+          yield* killHarnessSession(slug, harness.harnessId);
         }
       }
-      return yield* attachOrCreateEffect({
+      return yield* attachOrCreate({
         slug,
         cwd,
         kind: harness.harnessId,
@@ -88,6 +88,6 @@ export function enterWorktreeSessionEffect(opts: EnterWorktreeSessionOptions) {
   }));
 }
 
-export const enterWorktreeSession = (
+export const enterWorktreeSessionPromise = (
   opts: EnterWorktreeSessionOptions,
-): Promise<WorktreeSessionResult> => Effect.runPromise(enterWorktreeSessionEffect(opts));
+): Promise<WorktreeSessionResult> => Effect.runPromise(enterWorktreeSession(opts));

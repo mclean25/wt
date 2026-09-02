@@ -67,10 +67,10 @@ import {
   tripBreaker,
 } from "../../core/automations.ts";
 import { config, type AutomationTrigger } from "../../core/config.ts";
-import { closeGithubIssue, deleteRemoteBranch, viewPrInfo } from "../../core/github.ts";
+import { closeGithubIssuePromise, deleteRemoteBranchPromise, viewPrInfoPromise } from "../../core/github.ts";
 import { lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
-import { notifyMacos } from "../../core/notify.ts";
+import { notifyMacosPromise } from "../../core/notify.ts";
 import { StatusKind } from "../../core/types.ts";
 import { setBranchTip, toggleGlobalAutomationsPaused } from "../../core/wtstate.ts";
 import { watchedBranchTipsQuery, wtStateQuery } from "../../state/queries.ts";
@@ -562,7 +562,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     if (rule.run === "builtin:notify") {
       // The attention feed already narrates the transition; this is the
       // "you're not looking at wt" leg. Detail carries state + note.
-      yield* automationPromise("notify macOS", () => notifyMacos(`wt · ${slug}`, fire.detail));
+      yield* automationPromise("notify macOS", () => notifyMacosPromise(`wt · ${slug}`, fire.detail));
       return { declined: null };
     }
     if (rule.run === "builtin:close-issue") {
@@ -575,7 +575,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         wtLog.event.dim(`auto ${rule.id}: fire carried no issue number — nothing to close`);
         return { declined: null };
       }
-      const r = yield* automationPromise("close GitHub issue", () => closeGithubIssue(issue));
+      const r = yield* automationPromise("close GitHub issue", () => closeGithubIssuePromise(issue));
       if (r.ok) {
         // ATTENTION, not the firehose: this is the one builtin that
         // writes to a system OUTSIDE wt, where wt's undo does not
@@ -607,7 +607,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // whose head ref disappears, with no close event to explain it,
       // so a wrong delete destroys a PR and hides why. A live read is
       // one gh call on a path that runs once per merged branch.
-      const live = yield* automationPromise("view GitHub pull request", () => viewPrInfo(branch));
+      const live = yield* automationPromise("view GitHub pull request", () => viewPrInfoPromise(branch));
       const confirmed = live
         ? live.state === "MERGED"
         // No PR on the branch at all: only the fire that claimed local
@@ -626,7 +626,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         );
         return { declined: null };
       }
-      const r = yield* automationPromise("delete remote branch", () => deleteRemoteBranch(branch));
+      const r = yield* automationPromise("delete remote branch", () => deleteRemoteBranchPromise(branch));
       if (r.ok) {
         // ATTENTION for the same reason close-issue takes it: this
         // writes to a system outside wt, where wt's undo does not

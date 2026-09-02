@@ -27,7 +27,7 @@
 import { buildStackIndex } from "../../core/stack-layout.ts";
 import { Data, Effect } from "effect";
 import type { Worktree } from "../../core/types.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 import {
   GROUP_INBOX,
   readWtState,
@@ -244,7 +244,7 @@ function runMove(
         return 2;
       }
     }
-    const wts = (yield* commandPromise("list worktrees", listWorktrees)).filter(
+    const wts = (yield* commandPromise("list worktrees", listWorktreesPromise)).filter(
       (w) => !w.isMain,
     );
     // A batch moves what it CAN and names what it could not, rather than
@@ -438,7 +438,7 @@ export function run(
     }
     if (isList) {
       const live = new Set(
-        (yield* commandPromise("list worktrees", listWorktrees))
+        (yield* commandPromise("list worktrees", listWorktreesPromise))
           .filter((w) => !w.isMain)
           .map((w) => w.slug),
       );

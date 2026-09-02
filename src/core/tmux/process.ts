@@ -2,13 +2,13 @@ import { homedir } from "node:os";
 import { Effect } from "effect";
 
 import { createLogger } from "../logger.ts";
-import { runEffect } from "../proc.ts";
+import { run } from "../proc.ts";
 import { TMUX_SOCKET } from "./naming.ts";
 
 const log = createLogger("[tmux]");
 
-export function killByNameEffect(name: string): Effect.Effect<void> {
-  return runEffect(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", `=${name}`]).pipe(
+export function killByName(name: string): Effect.Effect<void> {
+  return run(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", `=${name}`]).pipe(
     Effect.orElseSucceed(() => ({ stdout: "", stderr: "", exitCode: 1, timedOut: false })),
     Effect.tap((r) => Effect.sync(() => {
   // tmux exits non-zero for "session not found" (the desired no-op
@@ -28,7 +28,7 @@ export function killByNameEffect(name: string): Effect.Effect<void> {
   );
 }
 
-export const killByName = (name: string): Promise<void> => Effect.runPromise(killByNameEffect(name));
+export const killByNamePromise = (name: string): Promise<void> => Effect.runPromise(killByName(name));
 
 /**
  * Every session name on our private tmux server, including the
@@ -36,10 +36,10 @@ export const killByName = (name: string): Promise<void> => Effect.runPromise(kil
  * post-detach existence check, which need exact-name matching
  * regardless of kind.
  */
-export const listAllSessionsRawEffect = (): Effect.Effect<Set<string>> =>
-  probeSessionNamesEffect().pipe(Effect.map((names) => names ?? new Set()));
+export const listAllSessionsRaw = (): Effect.Effect<Set<string>> =>
+  probeSessionNames().pipe(Effect.map((names) => names ?? new Set()));
 
-export const listAllSessionsRaw = (): Promise<Set<string>> => Effect.runPromise(listAllSessionsRawEffect());
+export const listAllSessionsRawPromise = (): Promise<Set<string>> => Effect.runPromise(listAllSessionsRaw());
 
 /**
  * The three-valued form of `listAllSessionsRaw`: `null` means the query
@@ -51,8 +51,8 @@ export const listAllSessionsRaw = (): Promise<Set<string>> => Effect.runPromise(
  * an unanswerable question must never read as a definite no. That is
  * `prepareInspectorSocket`, which unlinks a session's message socket.
  */
-export function probeSessionNamesEffect(): Effect.Effect<Set<string> | null> {
-  return runEffect([
+export function probeSessionNames(): Effect.Effect<Set<string> | null> {
+  return run([
     "tmux",
     "-L",
     TMUX_SOCKET,
@@ -87,7 +87,7 @@ export function probeSessionNamesEffect(): Effect.Effect<Set<string> | null> {
   );
 }
 
-export const probeSessionNames = (): Promise<Set<string> | null> => Effect.runPromise(probeSessionNamesEffect());
+export const probeSessionNamesPromise = (): Promise<Set<string> | null> => Effect.runPromise(probeSessionNames());
 
 /**
  * Exact-match target for the *pane* commands below (capture-pane,
@@ -112,21 +112,21 @@ export function paneTarget(name: string): string {
  * against this socket, including this one, uses the immortal home
  * directory instead.
  */
-export function runTmuxEffect(
+export function runTmux(
   args: readonly string[],
 ): Effect.Effect<{ code: number; stderr: string }> {
-  return runEffect(["tmux", "-L", TMUX_SOCKET, ...args], { cwd: homedir() }).pipe(
+  return run(["tmux", "-L", TMUX_SOCKET, ...args], { cwd: homedir() }).pipe(
     Effect.map((r) => ({ code: r.exitCode, stderr: r.stderr })),
     Effect.orElseSucceed(() => ({ code: 1, stderr: "tmux command failed" })),
   );
 }
 
-export const runTmux = (args: readonly string[]): Promise<{ code: number; stderr: string }> =>
-  Effect.runPromise(runTmuxEffect(args));
+export const runTmuxPromise = (args: readonly string[]): Promise<{ code: number; stderr: string }> =>
+  Effect.runPromise(runTmux(args));
 
 /** Snapshot a session's active pane as plain text, or null on failure. */
-export function capturePaneEffect(name: string): Effect.Effect<string | null> {
-  return runEffect([
+export function capturePane(name: string): Effect.Effect<string | null> {
+  return run([
     "tmux",
     "-L",
     TMUX_SOCKET,
@@ -140,4 +140,4 @@ export function capturePaneEffect(name: string): Effect.Effect<string | null> {
   );
 }
 
-export const capturePane = (name: string): Promise<string | null> => Effect.runPromise(capturePaneEffect(name));
+export const capturePanePromise = (name: string): Promise<string | null> => Effect.runPromise(capturePane(name));

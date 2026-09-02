@@ -1,8 +1,8 @@
 import { Clock, Effect } from "effect";
 
 import { isRiftWorktree } from "../backend.ts";
-import { gitRunEffect } from "../git.ts";
-import { listWorktreesEffect } from "../worktree.ts";
+import { gitRun } from "../git.ts";
+import { listWorktrees } from "../worktree.ts";
 import { backupBranchOwner, backupTimestamp } from "./engine.ts";
 import type { Logger } from "./shared.ts";
 
@@ -19,7 +19,7 @@ function pruneBackupsInEffect(
   return Effect.gen(function* () {
   const out: PruneBackupsResult = { deleted: [], kept: [] };
   const args = ["for-each-ref", "--format=%(refname:short)", "refs/heads/backup/"];
-  const r = yield* gitRunEffect(args, cwd).pipe(
+  const r = yield* gitRun(args, cwd).pipe(
     Effect.catch(() => Effect.succeed(null)),
   );
   if (r === null || r.exitCode !== 0) return out;
@@ -33,7 +33,7 @@ function pruneBackupsInEffect(
       out.kept.push(ref);
       continue;
     }
-    const del = yield* gitRunEffect(["branch", "-D", ref], cwd).pipe(
+    const del = yield* gitRun(["branch", "-D", ref], cwd).pipe(
       Effect.catch(() => Effect.succeed(null)),
     );
     if (del?.exitCode === 0) {
@@ -63,7 +63,7 @@ function pruneBackupsInEffect(
  * per-slice sweep — the engine creates them in the slice cwd
  * (`engine.ts` `replayStep`), so the manual sweep must look there too.
  */
-export function pruneStackBackupsEffect(
+export function pruneStackBackups(
   olderThanDays: number,
   onLog: Logger,
 ): Effect.Effect<PruneBackupsResult> {
@@ -71,7 +71,7 @@ export function pruneStackBackupsEffect(
   const cutoff = (yield* Clock.currentTimeMillis) - olderThanDays * 86_400_000;
   const main = yield* pruneBackupsInEffect(undefined, cutoff, onLog);
   // Rift slices carry their own refs; sweep each independent clone too.
-  const worktrees = yield* listWorktreesEffect().pipe(
+  const worktrees = yield* listWorktrees().pipe(
     Effect.catch(() => Effect.succeed([])),
   );
   const rift = yield* Effect.forEach(
@@ -89,9 +89,9 @@ export function pruneStackBackupsEffect(
   });
 }
 
-export function pruneStackBackups(
+export function pruneStackBackupsPromise(
   olderThanDays: number,
   onLog: Logger,
 ): Promise<PruneBackupsResult> {
-  return Effect.runPromise(pruneStackBackupsEffect(olderThanDays, onLog));
+  return Effect.runPromise(pruneStackBackups(olderThanDays, onLog));
 }

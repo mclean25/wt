@@ -13,7 +13,7 @@
 import { Effect } from "effect";
 
 import { createLogger } from "./logger.ts";
-import { runEffect } from "./proc.ts";
+import { run } from "./proc.ts";
 
 const log = createLogger("[notify]");
 
@@ -33,7 +33,7 @@ function appleScriptString(s: string): string {
   );
 }
 
-export function notifyMacosEffect(
+export function notifyMacos(
   title: string,
   message: string,
 ): Effect.Effect<void> {
@@ -43,7 +43,7 @@ export function notifyMacosEffect(
     );
   }
   const script = `display notification ${appleScriptString(message)} with title ${appleScriptString(title)}`;
-  return runEffect(["osascript", "-e", script]).pipe(
+  return run(["osascript", "-e", script]).pipe(
     Effect.tap((result) =>
       Effect.sync(() => {
         if (result.exitCode !== 0) {
@@ -64,6 +64,6 @@ export function notifyMacosEffect(
 }
 
 /** Compatibility adapter for automation dispatch. */
-export function notifyMacos(title: string, message: string): Promise<void> {
-  return Effect.runPromise(notifyMacosEffect(title, message));
+export function notifyMacosPromise(title: string, message: string): Promise<void> {
+  return Effect.runPromise(notifyMacos(title, message));
 }

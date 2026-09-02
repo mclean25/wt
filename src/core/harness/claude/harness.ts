@@ -18,7 +18,7 @@
 import { Effect } from "effect";
 import { isRiftWorktree } from "../../backend.ts";
 import {
-  claudeStatus,
+  claudeStatusPromise,
   injectedPromptLanded,
   wtSessionArgs,
   wtSessionUuid,
@@ -89,7 +89,7 @@ export const claudeHarness: Harness = {
   },
 
   async discoverSessions({ slug, wtPath }) {
-    const status = await claudeStatus({ slug, path: wtPath });
+    const status = await claudeStatusPromise({ slug, path: wtPath });
     const tailByName = new Map(status.sessions.map((t) => [t.name, t]));
     // Two live claude processes can share one sessionId: the primary
     // conversation UUID is keyed on wtPath alone, and the main-clone

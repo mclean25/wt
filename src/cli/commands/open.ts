@@ -1,10 +1,10 @@
 import { Data, Effect } from "effect";
 
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 import { hasHelpFlag } from "../args.ts";
 import { red, yellow } from "../colors.ts";
-import { isInteractive, pickIndexEffect, type PromptError } from "../prompt.ts";
-import { openInEditor } from "../../core/editor.ts";
+import { isInteractive, pickIndex, type PromptError } from "../prompt.ts";
+import { openInEditorPromise } from "../../core/editor.ts";
 
 const USAGE = `usage: wt open [<slug-or-query>]
 
@@ -39,7 +39,7 @@ export function run(
       return 0;
     }
     const query = argv.find((a) => !a.startsWith("-")) ?? null;
-    const wts = (yield* commandPromise("list worktrees", listWorktrees)).filter(
+    const wts = (yield* commandPromise("list worktrees", listWorktreesPromise)).filter(
       (w) => !w.isMain,
     );
     if (wts.length === 0) {
@@ -55,7 +55,7 @@ export function run(
         console.error(red("A slug is required in non-interactive mode."));
         return 2;
       }
-      const idx = yield* pickIndexEffect(
+      const idx = yield* pickIndex(
         wts.map((w) => w.slug),
         "Open which worktree?",
       );
@@ -67,7 +67,7 @@ export function run(
       return 1;
     }
     const opened = yield* Effect.result(
-      commandPromise("open editor", () => openInEditor(target.path)),
+      commandPromise("open editor", () => openInEditorPromise(target.path)),
     );
     if (opened._tag === "Failure") {
       console.error(red(causeMessage(opened.failure.cause)));

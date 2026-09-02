@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import { pollUntilEffect } from "./poll.ts";
+import { pollUntil } from "./poll.ts";
 
-describe("pollUntilEffect", () => {
+describe("pollUntil", () => {
   test("checks immediately and then on the configured cadence", async () => {
     let checks = 0;
     await Effect.runPromise(Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(pollUntilEffect({
+      const fiber = yield* Effect.forkChild(pollUntil({
         check: () => ++checks === 3,
         budgetMs: 1_000,
         intervalMs: 100,
@@ -25,7 +25,7 @@ describe("pollUntilEffect", () => {
   test("interrupting during sleep performs no later checks", async () => {
     let checks = 0;
     await Effect.runPromise(Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(pollUntilEffect({
+      const fiber = yield* Effect.forkChild(pollUntil({
         check: () => { checks++; return false; },
         budgetMs: 1_000,
         intervalMs: 100,
@@ -39,7 +39,7 @@ describe("pollUntilEffect", () => {
 
   test("returns false at the deadline", async () => {
     await Effect.runPromise(Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(pollUntilEffect({
+      const fiber = yield* Effect.forkChild(pollUntil({
         check: () => false,
         budgetMs: 200,
         intervalMs: 100,

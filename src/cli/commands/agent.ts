@@ -1,11 +1,11 @@
 import { getHarness } from "../../core/harness/index.ts";
-import { resolveWorktreeHarness } from "../../core/harness/live-target.ts";
+import { resolveWorktreeHarnessPromise } from "../../core/harness/live-target.ts";
 import {
   fallbackAdvice,
-  sendSessionMessage,
+  sendSessionMessagePromise,
 } from "../../core/harness/session-messaging.ts";
 import { dirSlug } from "../../core/stage.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 import { dim, green, red } from "../colors.ts";
 import { Data, Effect } from "effect";
 
@@ -43,7 +43,7 @@ function resolveWorktree(slugOrBranch: string) {
   const slug = slugOrBranch.includes("/")
     ? dirSlug(slugOrBranch)
     : slugOrBranch;
-  return tryCommand("list worktrees", () => listWorktrees()).pipe(
+  return tryCommand("list worktrees", () => listWorktreesPromise()).pipe(
     Effect.map((all) => ({
       wt:
         all.find(
@@ -87,7 +87,7 @@ export function run(argv: string[]): Effect.Effect<number, AgentCommandError> {
     const choice = parsed.harness
       ? ({ harnessId: parsed.harness, source: "explicit" } as const)
       : yield* tryCommand("resolve live harness", () =>
-          resolveWorktreeHarness(wt.slug, slugs),
+          resolveWorktreeHarnessPromise(wt.slug, slugs),
         );
     const harnessId = choice.harnessId;
     const harness = getHarness(harnessId);
@@ -113,7 +113,7 @@ export function run(argv: string[]): Effect.Effect<number, AgentCommandError> {
     }
 
     const result = yield* tryCommand("send session message", () =>
-      sendSessionMessage({
+      sendSessionMessagePromise({
         slug: wt.slug,
         cwd: wt.path,
         harnessId,

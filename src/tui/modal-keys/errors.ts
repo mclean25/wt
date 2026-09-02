@@ -1,6 +1,6 @@
 import type { KeyEvent } from "@opentui/core";
 
-import { writeClipboard } from "../../core/macos.ts";
+import { writeClipboardPromise } from "../../core/macos.ts";
 import {
   formatCapturedError,
   latestCapturedError,
@@ -42,7 +42,7 @@ export function handleErrorsKey(
       return true;
     }
     try {
-      writeClipboard(formatCapturedError(captured));
+      writeClipboardPromise(formatCapturedError(captured));
       toast("copied error", infoColor, 1500);
     } catch (err) {
       toast(

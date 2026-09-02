@@ -11,11 +11,11 @@ import { Cause, Effect } from "effect";
 
 import {
   gitSync,
-  listRunningWtInstancesEffect,
+  listRunningWtInstances,
   logSafe,
-  performRollbackEffect,
+  performRollback,
   readUpdateMemory,
-  repoUpdateStateEffect,
+  repoUpdateState,
   shortSha,
   spawnFreshWt,
   wtVersion,
@@ -23,7 +23,7 @@ import {
 } from "../../core/update.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
-import { confirmEffect, isInteractive } from "../prompt.ts";
+import { confirm, isInteractive } from "../prompt.ts";
 
 const USAGE = `usage: wt rollback [<ref>]
 
@@ -48,7 +48,7 @@ function defaultTarget(): string | null {
 
 /** Guards shared by the command and the offers. Null = fine to roll back. */
 const rollbackBlocker: Effect.Effect<string | null> = Effect.gen(function* () {
-  const state = yield* repoUpdateStateEffect;
+  const state = yield* repoUpdateState;
   if (!state) return `${WT_REPO_ROOT} is not a git checkout (or git is missing)`;
   if (state.dirty) return "the wt clone has local changes — roll back by hand with git";
   if (state.ahead > 0) return `the wt clone is ${state.ahead} commit(s) ahead of ${state.upstream} — roll back by hand with git`;
@@ -57,7 +57,7 @@ const rollbackBlocker: Effect.Effect<string | null> = Effect.gen(function* () {
 
 function rollBackTo(target: string): Effect.Effect<number> {
   return Effect.gen(function* () {
-    const result = yield* performRollbackEffect(target, Date.now());
+    const result = yield* performRollback(target, Date.now());
     if (!result.ok) {
       console.error(red(`rollback failed: ${result.detail}`));
       return 1;
@@ -69,7 +69,7 @@ function rollBackTo(target: string): Effect.Effect<number> {
         `${shortSha(result.fromSha)} is skipped until new commits land on origin (wt update can still re-apply it)`,
       ),
     );
-    const pids = yield* listRunningWtInstancesEffect;
+    const pids = yield* listRunningWtInstances;
     if (pids.length > 0) {
       console.log(
         yellow(
@@ -181,7 +181,7 @@ const reexecTuiEffect: Effect.Effect<never> = Effect.sync((): void => {
  * other case it returns so the caller can exit with the original
  * failure. Must never throw: it runs inside a crash handler.
  */
-export function maybeOfferCrashRollbackEffect(): Effect.Effect<void> {
+export function maybeOfferCrashRollback(): Effect.Effect<void> {
   return Effect.gen(function* () {
     const ctx = yield* offerContext();
     if (!ctx) return;
@@ -189,7 +189,7 @@ export function maybeOfferCrashRollbackEffect(): Effect.Effect<void> {
     console.error(
       bold(`wt crashed on ${shortSha(ctx.head)}, a fresh update that has not booted successfully before.`),
     );
-    const yes = yield* confirmEffect(
+    const yes = yield* confirm(
       `${cyan("•")} Roll back to ${shortSha(ctx.target)} — the last version that worked?`,
       true,
     );
@@ -208,7 +208,7 @@ export function maybeOfferCrashRollbackEffect(): Effect.Effect<void> {
  * evidence than a live crash, so the offer defaults to NO; declining
  * just boots normally (and a healthy boot clears the suspicion).
  */
-export function maybeOfferStaleBootRollbackEffect(): Effect.Effect<void> {
+export function maybeOfferStaleBootRollback(): Effect.Effect<void> {
   return Effect.gen(function* () {
     const mem = readUpdateMemory();
     // Root must match: another clone's sentinel is not our evidence.
@@ -218,7 +218,7 @@ export function maybeOfferStaleBootRollbackEffect(): Effect.Effect<void> {
     console.log(
       yellow(`the last start of wt ${shortSha(ctx.head)} (a fresh update) never finished booting — it may have crashed.`),
     );
-    const yes = yield* confirmEffect(
+    const yes = yield* confirm(
       `${cyan("•")} Roll back to ${shortSha(ctx.target)} before starting?`,
       false,
     );

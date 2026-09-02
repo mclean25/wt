@@ -21,7 +21,7 @@
  */
 import { createLogger } from "./logger.ts";
 import { Effect } from "effect";
-import { runStreamingEffect } from "./proc.ts";
+import { runStreaming } from "./proc.ts";
 
 const log = createLogger("[teardown]");
 
@@ -67,7 +67,7 @@ export function resolveTeardownCommand(
  * exist to fix is a leak, and refusing the destroy (or the stop) turns
  * one leak into a bigger one.
  */
-export function runTeardownCommandEffect(opts: {
+export function runTeardownCommand(opts: {
   /** Config key name, used verbatim in log lines: `destroy_command`, … */
   label: string;
   command: string;
@@ -78,7 +78,7 @@ export function runTeardownCommandEffect(opts: {
 }): Effect.Effect<boolean> {
   const { label, command, cwd, slug, onLog } = opts;
   onLog?.(`${label}: ${command}`);
-  return runStreamingEffect([process.env.SHELL || "bash", "-lc", command], {
+  return runStreaming([process.env.SHELL || "bash", "-lc", command], {
     cwd,
     onLine: (line) => onLog?.(line),
     killAfterMs: TEARDOWN_TIMEOUT_MS,
@@ -100,5 +100,5 @@ export function runTeardownCommandEffect(opts: {
   );
 }
 
-export const runTeardownCommand = (opts: Parameters<typeof runTeardownCommandEffect>[0]): Promise<boolean> =>
-  Effect.runPromise(runTeardownCommandEffect(opts));
+export const runTeardownCommandPromise = (opts: Parameters<typeof runTeardownCommand>[0]): Promise<boolean> =>
+  Effect.runPromise(runTeardownCommand(opts));

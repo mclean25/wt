@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { samplePerf, type PerfSnapshot } from "../../core/perf.ts";
+import { samplePerfPromise, type PerfSnapshot } from "../../core/perf.ts";
 import { qk } from "../keys.ts";
 
 export type { PerfSnapshot };
@@ -32,7 +32,7 @@ export function perfSnapshotQuery(opts: { enabled: boolean }) {
     queryKey: qk.perf(),
     // Forward the signal so closing the overlay actually kills an
     // in-flight `ps`/`tmux` rather than leaving it to finish unobserved.
-    queryFn: ({ signal }) => samplePerf(signal),
+    queryFn: ({ signal }) => samplePerfPromise(signal),
     enabled: opts.enabled,
     refetchInterval: opts.enabled ? PERF_SAMPLE_MS : false,
     // Always stale: every observation wants a fresh sample.

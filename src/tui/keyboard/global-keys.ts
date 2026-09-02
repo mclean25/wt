@@ -11,7 +11,7 @@ import type { KeyEvent } from "@opentui/core";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { createLogger } from "../../core/logger.ts";
 import { isPlainLetter, isShiftedLetter } from "../app-helpers.ts";
-import { openInEditor } from "../../core/editor.ts";
+import { openInEditorPromise } from "../../core/editor.ts";
 import type { Modal } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { emptyEdit } from "../text-edit.tsx";
@@ -265,7 +265,7 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
   if (k.sequence === "O") {
     const slotLog = createLogger(MAIN_CLONE_SLOT.label);
     Effect.runFork(
-      keyPromise(() => openInEditor(MAIN_CLONE_SLOT.path)).pipe(
+      keyPromise(() => openInEditorPromise(MAIN_CLONE_SLOT.path)).pipe(
         Effect.tap(() =>
           Effect.sync(() =>
             slotLog.event.info(`opened ${MAIN_CLONE_SLOT.path}`),

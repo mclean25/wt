@@ -7,7 +7,7 @@
 import { expect, test } from "bun:test";
 import { Effect, Exit, Fiber } from "effect";
 
-import { branchIsEmptySinceEffect, gitEffect, gitRunEffect, GitError } from "./git.ts";
+import { branchIsEmptySince, git as coreGit, gitRun, GitError } from "./git.ts";
 import { git, trackedTmpDirs } from "./test-fixtures.ts";
 
 const { tmp } = trackedTmpDirs();
@@ -29,7 +29,7 @@ test("a stacked child that never committed is empty against its fork base", asyn
   const childTip = git(dir, ["rev-parse", "HEAD"]).trim();
 
   expect(childTip).toBe(parentTip);
-  expect(await Effect.runPromise(branchIsEmptySinceEffect(parentTip, childTip, dir))).toBe(true);
+  expect(await Effect.runPromise(branchIsEmptySince(parentTip, childTip, dir))).toBe(true);
 });
 
 test("one commit of its own is enough to stop being empty", async () => {
@@ -38,7 +38,7 @@ test("one commit of its own is enough to stop being empty", async () => {
   git(dir, ["commit", "-q", "--allow-empty", "-m", "C1"]);
   const childTip = git(dir, ["rev-parse", "HEAD"]).trim();
 
-  expect(await Effect.runPromise(branchIsEmptySinceEffect(parentTip, childTip, dir))).toBe(false);
+  expect(await Effect.runPromise(branchIsEmptySince(parentTip, childTip, dir))).toBe(false);
 });
 
 test("the parent advancing under an unstarted child keeps it empty", async () => {
@@ -51,7 +51,7 @@ test("the parent advancing under an unstarted child keeps it empty", async () =>
   git(dir, ["checkout", "-q", "parent"]);
   git(dir, ["commit", "-q", "--allow-empty", "-m", "P2"]);
 
-  expect(await Effect.runPromise(branchIsEmptySinceEffect(parentTip, childTip, dir))).toBe(true);
+  expect(await Effect.runPromise(branchIsEmptySince(parentTip, childTip, dir))).toBe(true);
 });
 
 test("an UNSTACKED worktree forked at trunk is empty against its recorded base", async () => {
@@ -72,7 +72,7 @@ test("an UNSTACKED worktree forked at trunk is empty against its recorded base",
   git(dir, ["checkout", "-q", "main"]);
   git(dir, ["merge", "-q", "--no-ff", "--no-edit", "parent", "-m", "Merge parent"]);
 
-  expect(await Effect.runPromise(branchIsEmptySinceEffect(trunkTipAtFork, soloTip, dir))).toBe(true);
+  expect(await Effect.runPromise(branchIsEmptySince(trunkTipAtFork, soloTip, dir))).toBe(true);
 });
 
 test("an unresolvable base answers empty, the safe direction", async () => {
@@ -82,14 +82,14 @@ test("an unresolvable base answers empty, the safe direction", async () => {
   const { dir } = repo();
   const tip = git(dir, ["rev-parse", "HEAD"]).trim();
 
-  expect(await Effect.runPromise(branchIsEmptySinceEffect("0".repeat(40), tip, dir))).toBe(true);
+  expect(await Effect.runPromise(branchIsEmptySince("0".repeat(40), tip, dir))).toBe(true);
 });
 
 test("interrupting an Effect git command kills it and releases its process permit", async () => {
   const { dir } = repo();
   const exit = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
     const fiber = yield* Effect.forkScoped(
-      gitRunEffect(["-c", "alias.wait=!sleep 30", "wait"], dir),
+      gitRun(["-c", "alias.wait=!sleep 30", "wait"], dir),
     );
     yield* Effect.sleep(50);
     yield* Fiber.interrupt(fiber);
@@ -99,17 +99,17 @@ test("interrupting an Effect git command kills it and releases its process permi
 
   const tips = await Effect.runPromise(
     Effect.all(
-      Array.from({ length: 8 }, () => gitEffect(["rev-parse", "HEAD"], dir)),
+      Array.from({ length: 8 }, () => coreGit(["rev-parse", "HEAD"], dir)),
       { concurrency: "unbounded" },
     ),
   );
   expect(new Set(tips).size).toBe(1);
 });
 
-test("gitEffect reports nonzero commands as tagged GitError", async () => {
+test("git reports nonzero commands as tagged GitError", async () => {
   const { dir } = repo();
   const error = await Effect.runPromise(
-    gitEffect(["rev-parse", "missing-ref"], dir).pipe(Effect.flip),
+    coreGit(["rev-parse", "missing-ref"], dir).pipe(Effect.flip),
   );
   expect(error).toBeInstanceOf(GitError);
   expect(error._tag).toBe("GitError");

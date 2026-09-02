@@ -98,8 +98,8 @@ import {
 } from "../core/archive.ts";
 import { config } from "../core/config.ts";
 import type { DiffContext } from "../core/diff/index.ts";
-import { gitRunEffect, invalidateMainFirstParents } from "../core/git.ts";
-import { fetchAuthenticatedLogin } from "../core/github.ts";
+import { gitRun, invalidateMainFirstParents } from "../core/git.ts";
+import { fetchAuthenticatedLoginPromise } from "../core/github.ts";
 import { createLogger } from "../core/logger.ts";
 import { markSelfSectionWrite } from "./self-writes.ts";
 import type { PullRequest, Worktree } from "../core/types.ts";
@@ -662,7 +662,7 @@ export function useWtActions() {
     fetchMe(): Promise<string | null> {
       return Effect.runPromise(
         Effect.tryPromise({
-          try: () => fetchAuthenticatedLogin(),
+          try: () => fetchAuthenticatedLoginPromise(),
           catch: (cause) => hookError("fetch authenticated login", cause),
         }),
       );
@@ -964,7 +964,7 @@ export function useWtActions() {
       return Effect.runPromise(
         Effect.gen(function* () {
           if (branch) {
-            const mb = yield* gitRunEffect(
+            const mb = yield* gitRun(
               ["merge-base", wt.branch, branch],
               wt.path,
             );

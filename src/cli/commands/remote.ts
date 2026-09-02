@@ -1,8 +1,8 @@
 import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
-import { runRemoteWt } from "../../core/remote.ts";
-import { setWezTermTabTitle } from "../../core/wezterm.ts";
+import { runRemoteWtPromise } from "../../core/remote.ts";
+import { setWezTermTabTitlePromise } from "../../core/wezterm.ts";
 import { NF } from "../../tui/icons.ts";
 import { red } from "../colors.ts";
 
@@ -13,7 +13,7 @@ class RemoteCommandError extends Data.TaggedError("RemoteCommandError")<{
 
 const titleEffect = (title: string) =>
   Effect.tryPromise({
-    try: () => setWezTermTabTitle(title, config.paths.weztermCli),
+    try: () => setWezTermTabTitlePromise(title, config.paths.weztermCli),
     catch: (cause) => new RemoteCommandError({ operation: "title", cause }),
   });
 
@@ -34,7 +34,7 @@ export function run(argv: string[]): Effect.Effect<number, RemoteCommandError> {
   const interactive = argv.length === 0;
   const command = Effect.tryPromise({
     try: () =>
-      runRemoteWt(remote, argv, {
+      runRemoteWtPromise(remote, argv, {
         interactive,
         onLine: interactive ? undefined : (line) => console.log(line),
       }),

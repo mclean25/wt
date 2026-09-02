@@ -15,7 +15,7 @@ import {
   devServerCrashSummary,
 } from "../../core/dev-server.ts";
 import { createLogger } from "../../core/logger.ts";
-import { readWorktreeDevLogs } from "../../core/worktree-executor.ts";
+import { readWorktreeDevLogsPromise } from "../../core/worktree-executor.ts";
 import { worktreeLedgerLabel } from "../../core/worktree-ref.ts";
 import type { WorktreeModel } from "../worktree-model.ts";
 
@@ -69,7 +69,7 @@ export function useDevServerEvents(rows: readonly WorktreeModel[]): void {
           const row = byKey.get(key);
           if (!row) return Effect.succeed(null);
           return Effect.tryPromise({
-            try: () => readWorktreeDevLogs(row.target),
+            try: () => readWorktreeDevLogsPromise(row.target),
             catch: (cause) => new DevServerEventReadError({ key, cause }),
           }).pipe(
             Effect.map((output) => ({

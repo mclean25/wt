@@ -11,7 +11,7 @@
  */
 import { Data, Effect, Schedule, Semaphore } from "effect";
 import { config } from "./config.ts";
-import { runHarnessCompletionEffect, type HarnessCompletionError } from "./harness/completion.ts";
+import { runHarnessCompletion, type HarnessCompletionError } from "./harness/completion.ts";
 
 const SYSTEM_PROMPT = `You summarise git changes for a developer scanning their worktrees.
 
@@ -77,10 +77,10 @@ export class AiNamingError extends Data.TaggedError("AiNamingError")<{
  * megabyte-prompt process running to completion,
  * burning latency on a result nobody sees.
  */
-export const summarizeDiffEffect = (prompt: string) =>
+export const summarizeDiff = (prompt: string) =>
   callNamingHarnessEffect(SYSTEM_PROMPT, prompt).pipe(Effect.map(parseTitleDescription));
-export const summarizeDiff = (prompt: string, external?: AbortSignal): Promise<AiSummary> =>
-  Effect.runPromise(summarizeDiffEffect(prompt), { signal: external });
+export const summarizeDiffPromise = (prompt: string, external?: AbortSignal): Promise<AiSummary> =>
+  Effect.runPromise(summarizeDiff(prompt), { signal: external });
 
 /**
  * Stack-naming round trip. Same client as `summarizeDiff` but a
@@ -93,7 +93,7 @@ export const summarizeDiff = (prompt: string, external?: AbortSignal): Promise<A
  * transport / HTTP errors; if the model emits a non-TITLE response
  * the whole content is used as a last-resort fallback.
  */
-export function summarizeStackEffect(
+export function summarizeStack(
   members: ReadonlyArray<{ branch: string; brief: string }>,
 ): Effect.Effect<string, AiNamingError> {
   const userPrompt = `Branches in this stack:\n${members
@@ -126,9 +126,9 @@ export function summarizeStackEffect(
     `stack title: model only echoed meta-vocabulary ("${lastRejected}")` });
   });
 }
-export const summarizeStack = (
+export const summarizeStackPromise = (
   members: ReadonlyArray<{ branch: string; brief: string }>, external?: AbortSignal,
-): Promise<string> => Effect.runPromise(summarizeStackEffect(members), { signal: external });
+): Promise<string> => Effect.runPromise(summarizeStack(members), { signal: external });
 
 /**
  * Words the stack-naming prompt uses to describe *itself* (the tool, the
@@ -168,7 +168,7 @@ export function isStackTitleMetaOnly(title: string): boolean {
 const namingSemaphore = Semaphore.makeUnsafe(1);
 
 /** Test seam for the cancellation semantics of the shared naming queue. */
-export const withNamingPermitEffect = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+export const withNamingPermit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   namingSemaphore.withPermits(1)(effect);
 
 /**
@@ -190,7 +190,7 @@ function callNamingHarnessEffect(
   if (!naming) {
     return Effect.fail(new AiNamingError({ kind: "not-configured", detail: "naming is not configured ([naming] missing in config.toml)" }));
   }
-  const attempt = runHarnessCompletionEffect(
+  const attempt = runHarnessCompletion(
           naming,
           `${systemPrompt}\n\nINPUT:\n${userPrompt}`,
           config.paths.mainClone,
@@ -200,7 +200,7 @@ function callNamingHarnessEffect(
         );
   // Semaphore acquisition is interruptible. A query cancelled while queued
   // is removed from the waiter set and never invokes the harness.
-  return withNamingPermitEffect(attempt);
+  return withNamingPermit(attempt);
 }
 
 /**

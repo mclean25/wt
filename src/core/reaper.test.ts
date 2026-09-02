@@ -15,7 +15,7 @@ import {
   parseCwdMap,
   parseListeners,
   type ReapedProcess,
-  reapWorktreeListeners,
+  reapWorktreeListenersPromise,
 } from "./reaper.ts";
 
 describe("parseListeners", () => {
@@ -137,7 +137,7 @@ describe.skipIf(!Bun.which("lsof"))("reapWorktreeListeners (live)", () => {
       // fails below.
       let reaped: ReapedProcess[] = [];
       for (let attempt = 1; attempt <= 3 && reaped.length === 0; attempt++) {
-        reaped = await reapWorktreeListeners(wtDir);
+        reaped = await reapWorktreeListenersPromise(wtDir);
       }
       expect(reaped.map((p) => p.pid)).toContain(target.proc.pid);
       expect(reaped.map((p) => p.pid)).not.toContain(bystander.proc.pid);

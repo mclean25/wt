@@ -26,7 +26,7 @@
 import { config } from "./config.ts";
 import { Clock, Effect, Schedule } from "effect";
 import { createLogger } from "./logger.ts";
-import { runEffect } from "./proc.ts";
+import { run } from "./proc.ts";
 
 const log = createLogger("[reaper]");
 
@@ -122,7 +122,7 @@ function lsofScanEffect(
   wtPath: string,
 ): Effect.Effect<{ out: string; complete: boolean }> {
   let attempt = 0;
-  return runEffect(argv, { cwd: "/", timeoutMs: LSOF_TIMEOUT_MS }).pipe(
+  return run(argv, { cwd: "/", timeoutMs: LSOF_TIMEOUT_MS }).pipe(
     Effect.flatMap((r) => {
       attempt += 1;
       if (!r.timedOut) return Effect.succeed({ out: r.stdout, complete: true });
@@ -152,7 +152,7 @@ function alive(pid: number): boolean {
  * SIGKILL whatever ignores it. Returns what was reaped, for the
  * destroy log; empty on any failure.
  */
-export function reapWorktreeListenersEffect(wtPath: string): Effect.Effect<ReapedProcess[]> {
+export function reapWorktreeListeners(wtPath: string): Effect.Effect<ReapedProcess[]> {
   return Effect.gen(function* () {
     // A killer keyed on path containment earns paranoia about its root:
     // never sweep from the main clone (a preview server there is the
@@ -208,5 +208,5 @@ export function reapWorktreeListenersEffect(wtPath: string): Effect.Effect<Reape
   });
 }
 
-export const reapWorktreeListeners = (wtPath: string): Promise<ReapedProcess[]> =>
-  Effect.runPromise(reapWorktreeListenersEffect(wtPath));
+export const reapWorktreeListenersPromise = (wtPath: string): Promise<ReapedProcess[]> =>
+  Effect.runPromise(reapWorktreeListeners(wtPath));

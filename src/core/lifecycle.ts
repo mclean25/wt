@@ -22,20 +22,20 @@ import {
   setSlugBase,
 } from "./wtstate.ts";
 import { getBackend, getBackendForPath } from "./backend.ts";
-import { createGitWorktreeEffect, removeGitWorktreeEffect } from "./backend/git.ts";
-import { createRiftWorktreeEffect, removeRiftWorktreeEffect } from "./backend/rift.ts";
-import { closeWorktreeBrowserSessionsEffect } from "./browser.ts";
+import { createGitWorktree, removeGitWorktree } from "./backend/git.ts";
+import { createRiftWorktree, removeRiftWorktree } from "./backend/rift.ts";
+import { closeWorktreeBrowserSessions } from "./browser.ts";
 import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { clearDevServerFiles } from "./dev-server.ts";
 import { resolveInstallCommand } from "./install.ts";
 import {
-  branchExistsEffect,
-  gitEffect,
-  gitQuietEffect,
-  gitRunEffect,
-  originBranchExistsEffect,
-  revParseEffect,
+  branchExists,
+  git,
+  gitQuiet,
+  gitRun,
+  originBranchExists,
+  revParse,
 } from "./git.ts";
 import { ISSUE_ID_RE, ISSUE_URL_RE } from "./issue-tracker.ts";
 import {
@@ -44,8 +44,8 @@ import {
   tryAcquireLock,
   type LockHandle,
 } from "./locks.ts";
-import { runStreamingEffect } from "./proc.ts";
-import { reapWorktreeListenersEffect } from "./reaper.ts";
+import { runStreaming } from "./proc.ts";
+import { reapWorktreeListeners } from "./reaper.ts";
 import { resolveTeardownCommand, TEARDOWN_TIMEOUT_MS } from "./teardown.ts";
 import { RESERVED_SESSION_SLUGS } from "./tmux/naming.ts";
 import { computeStage, dirSlug, slugify } from "./stage.ts";
@@ -57,7 +57,7 @@ import {
 import { Cause, Data, Effect, Schedule } from "effect";
 import { safeStage } from "./stage-safety.ts";
 import type { Worktree } from "./types.ts";
-import { fetchOriginEffect } from "./worktree.ts";
+import { fetchOrigin } from "./worktree.ts";
 
 /**
  * How long `removeWorktree` waits out a transient lock holder before
@@ -97,7 +97,7 @@ const runDestroyCommandEffect = (opts: {
   onLog?: (line: string) => void;
 }): Effect.Effect<boolean> => {
   opts.onLog?.(`destroy_command: ${opts.command}`);
-  return runStreamingEffect([process.env.SHELL || "bash", "-lc", opts.command], {
+  return runStreaming([process.env.SHELL || "bash", "-lc", opts.command], {
     cwd: opts.cwd,
     onLine: (line) => opts.onLog?.(line),
     killAfterMs: TEARDOWN_TIMEOUT_MS,
@@ -122,12 +122,12 @@ const runDestroyCommandEffect = (opts: {
  * and local `X` collapse to a single entry (local preferred implicitly
  * — `git branch -a` lists locals before remotes in typical output).
  */
-export function findBranchesForIssueEffect(
+export function findBranchesForIssue(
   issueLower: string,
   opts: { anyAuthor?: boolean } = {},
 ): Effect.Effect<string[]> {
   return Effect.gen(function* () {
-    const out = yield* gitEffect(["branch", "-a", "--format=%(refname:short)"]).pipe(
+    const out = yield* git(["branch", "-a", "--format=%(refname:short)"]).pipe(
       Effect.mapError((cause) => new BranchLookupError({ cause })),
       Effect.orElseSucceed(() => ""),
     );
@@ -174,7 +174,7 @@ function randomFreeSuffixEffect(
         length: 2,
         style: "lowerCase",
       });
-      const exists = yield* branchExistsEffect(`${config.branch.prefix}/${idLower}-${suffix}`).pipe(
+      const exists = yield* branchExists(`${config.branch.prefix}/${idLower}-${suffix}`).pipe(
         Effect.mapError((cause) => new ParseInputError({ message: "failed to inspect branches", cause })),
       );
       if (!exists) {
@@ -222,7 +222,7 @@ const parseInputFailure = (
 ): Effect.Effect<never, ParseInputError> =>
   Effect.fail(new ParseInputError({ message }));
 
-export function parseInputEffect(
+export function parseInput(
   raw: string,
   opts: ParseInputOptions = {},
 ): Effect.Effect<string, ParseInputError> {
@@ -239,7 +239,7 @@ export function parseInputEffect(
       const id = tokens[0]!.toUpperCase();
       const idLower = id.toLowerCase();
       if (opts.attach) {
-        const found = yield* findBranchesForIssueEffect(idLower, {
+        const found = yield* findBranchesForIssue(idLower, {
           anyAuthor: opts.anyAuthor,
         });
         if (found.length === 1) return found[0]!;
@@ -301,7 +301,7 @@ export function parseInputEffect(
     // Exact-match escape hatch for non-standard branch names.
     if (
       tokens.length === 1 &&
-      (yield* branchExistsEffect(raw).pipe(
+      (yield* branchExists(raw).pipe(
         Effect.mapError((cause) => new ParseInputError({ message: "failed to inspect branches", cause })),
       ))
     ) {
@@ -313,11 +313,11 @@ export function parseInputEffect(
 }
 
 /** Promise boundary for React/TUI callers while their callback is modal-based. */
-export function parseInput(
+export function parseInputPromise(
   raw: string,
   opts: ParseInputOptions = {},
 ): Promise<string> {
-  return Effect.runPromise(parseInputEffect(raw, opts));
+  return Effect.runPromise(parseInput(raw, opts));
 }
 
 export type CreateOptions = {
@@ -378,10 +378,10 @@ function createWorktreeProgram(
     const backend = getBackend(config.backend.kind);
 
     opts.onPhase?.("fetching origin");
-    yield* fetchOriginEffect();
+    yield* fetchOrigin();
 
     handle.phase(`creating worktree (${backend.id})`);
-    const existing = yield* branchExistsEffect(branch);
+    const existing = yield* branchExists(branch);
     if (existing && opts.base) {
       opts.onLog?.(`note: --base ignored, ${branch} already exists`);
     }
@@ -413,15 +413,15 @@ function createWorktreeProgram(
       onLog: opts.onLog,
     };
     yield* backend.id === "rift"
-      ? createRiftWorktreeEffect(backendInput)
-      : createGitWorktreeEffect(backendInput);
+      ? createRiftWorktree(backendInput)
+      : createGitWorktree(backendInput);
 
     if (existing) {
       if (
-        (yield* originBranchExistsEffect(branch, path)) &&
-        !(yield* gitQuietEffect(["rev-parse", "--abbrev-ref", "@{u}"], path))
+        (yield* originBranchExists(branch, path)) &&
+        !(yield* gitQuiet(["rev-parse", "--abbrev-ref", "@{u}"], path))
       ) {
-        yield* gitQuietEffect(
+        yield* gitQuiet(
           ["branch", "--set-upstream-to", `origin/${branch}`],
           path,
         );
@@ -444,7 +444,7 @@ function createWorktreeProgram(
       // parent" (`stack-layout.ts`, `stack-ops/chain.ts`), so recording
       // it changes no grouping; it just gives the guard its anchor.
       const baseBranch = baseRef.replace(/^origin\//, "");
-      const sha = yield* revParseEffect("HEAD", path);
+      const sha = yield* revParse("HEAD", path);
       yield* Effect.uninterruptible(Effect.sync(() =>
         setSlugBase(slug, { branch: baseBranch, sha: sha ?? undefined })));
       if (baseBranch !== config.branch.base) {
@@ -467,14 +467,14 @@ function createWorktreeProgram(
     // the trunk default only when nothing set a value already (it may
     // carry deliberate config from a previous life).
     const ghMergeBase = existing
-      ? (yield* gitRunEffect(["config", `branch.${branch}.gh-merge-base`], path))
+      ? (yield* gitRun(["config", `branch.${branch}.gh-merge-base`], path))
           .exitCode === 0
         ? null
         : config.branch.base
       : (baseRef ?? "").replace(/^origin\//, "") || config.branch.base;
     if (ghMergeBase) {
       if (
-        yield* gitQuietEffect(
+        yield* gitQuiet(
           ["config", `branch.${branch}.gh-merge-base`, ghMergeBase],
           path,
         )
@@ -545,7 +545,7 @@ function createWorktreeProgram(
       } else {
         handle.phase(install.label);
         opts.onLog?.(`${install.label}...`);
-        const code = yield* runStreamingEffect(install.argv, {
+        const code = yield* runStreaming(install.argv, {
           cwd: path,
           onLine: (line) => opts.onLog?.(line),
         });
@@ -558,7 +558,7 @@ function createWorktreeProgram(
   });
 }
 
-export function createWorktreeEffect(
+export function createWorktree(
   branch: string,
   opts: CreateOptions = {},
 ): Effect.Effect<Extract<CreateResult, { ok: true }>, LifecycleError> {
@@ -620,12 +620,12 @@ export function createWorktreeEffect(
   );
 }
 
-export function createWorktree(
+export function createWorktreePromise(
   branch: string,
   opts: CreateOptions = {},
 ): Promise<CreateResult> {
   return Effect.runPromise(
-    createWorktreeEffect(branch, opts).pipe(
+    createWorktree(branch, opts).pipe(
       Effect.catchTag("LifecycleError", (error) =>
         Effect.succeed({ ok: false as const, reason: error.message }),
       ),
@@ -688,7 +688,7 @@ function removeWorktreeProgram(
         opts.onPhase?.("sst remove");
         handle.phase("sst remove");
         opts.onLog?.(`pnpm sst remove --stage ${safe.stage}`);
-        const sstExit = yield* runStreamingEffect(
+        const sstExit = yield* runStreaming(
           ["pnpm", "sst", "remove", "--stage", safe.stage],
           {
             cwd: wt.path,
@@ -759,7 +759,7 @@ function removeWorktreeProgram(
     // restart, while a closed tab's state is gone for good. wt-managed
     // sessions are already dead by now (callers run killAllSessionsFor
     // first), so this only ever sees processes wt doesn't manage.
-    const reaped = yield* reapWorktreeListenersEffect(wt.path);
+    const reaped = yield* reapWorktreeListeners(wt.path);
     for (const p of reaped) {
       opts.onLog?.(
         `reaped ${p.command} (pid ${p.pid}, port ${p.ports.join(", ") || "?"})`,
@@ -781,8 +781,8 @@ function removeWorktreeProgram(
       onLog: opts.onLog,
     };
     const removed = yield* backend.id === "rift"
-      ? removeRiftWorktreeEffect(backendInput)
-      : removeGitWorktreeEffect(backendInput);
+      ? removeRiftWorktree(backendInput)
+      : removeGitWorktree(backendInput);
     if (!removed.ok) {
       return {
         ok: false,
@@ -796,7 +796,7 @@ function removeWorktreeProgram(
     // bailed above leaves a worktree the user is still working in, and
     // closing its tabs would be pure loss. Best-effort and silent when
     // there was nothing to close, which is the common case.
-    const browser = yield* closeWorktreeBrowserSessionsEffect(
+    const browser = yield* closeWorktreeBrowserSessions(
       wt.slug,
       readWtState().slugs[wt.slug]?.devPort ?? null,
     );
@@ -820,9 +820,9 @@ function removeWorktreeProgram(
       // returns false for a rift branch, since it's not in the main
       // clone — keying on the backend here makes this independent of it.)
       deletedBranch = true;
-    } else if (deleteBranch && wt.branch && (yield* branchExistsEffect(wt.branch))) {
+    } else if (deleteBranch && wt.branch && (yield* branchExists(wt.branch))) {
       handle.phase("deleting branch");
-      if (yield* gitQuietEffect(["branch", "-D", wt.branch])) {
+      if (yield* gitQuiet(["branch", "-D", wt.branch])) {
         deletedBranch = true;
       }
     }
@@ -907,7 +907,7 @@ const removeLockSchedule = Schedule.spaced(150).pipe(
   Schedule.upTo({ duration: LOCK_ACQUIRE_WAIT_MS }),
 );
 
-export function removeWorktreeEffect(
+export function removeWorktree(
   wt: Worktree,
   opts: RemoveOptions = {},
 ): Effect.Effect<RemoveResult, LifecycleError> {
@@ -961,12 +961,12 @@ export function removeWorktreeEffect(
   );
 }
 
-export function removeWorktree(
+export function removeWorktreePromise(
   wt: Worktree,
   opts: RemoveOptions = {},
 ): Promise<RemoveResult> {
   return Effect.runPromise(
-    removeWorktreeEffect(wt, opts).pipe(
+    removeWorktree(wt, opts).pipe(
       Effect.catchTag("LifecycleError", (error) =>
         Effect.succeed({
           ok: false,
@@ -996,7 +996,7 @@ export function removeWorktree(
  * one that silently stranded work. This mirrors why actions run under tmux
  * (`core/tmux/action-sessions.ts`): destroy work must outlive the TUI.
  */
-export function spawnBackgroundRemoveEffect(
+export function spawnBackgroundRemove(
   slug: string,
   opts: {
     force: boolean;
@@ -1060,7 +1060,7 @@ export function spawnBackgroundRemoveEffect(
   });
 }
 
-export function spawnBackgroundRemove(
+export function spawnBackgroundRemovePromise(
   slug: string,
   opts: {
     force: boolean;
@@ -1068,5 +1068,5 @@ export function spawnBackgroundRemove(
     deleteBranch: boolean;
   },
 ): string {
-  return Effect.runSync(spawnBackgroundRemoveEffect(slug, opts));
+  return Effect.runSync(spawnBackgroundRemove(slug, opts));
 }

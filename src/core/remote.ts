@@ -1,7 +1,7 @@
 import { Data, Effect } from "effect";
 
 import type { RemoteConfig } from "./config.ts";
-import { runStreamingEffect, terminateSubprocessEffect } from "./proc.ts";
+import { runStreaming, terminateSubprocess } from "./proc.ts";
 import { remoteWtCommand } from "./remote-protocol.ts";
 
 export type RemoteRunOptions = {
@@ -100,7 +100,7 @@ export class RemoteRunError extends Data.TaggedError("RemoteRunError")<{
   readonly cause: unknown;
 }> {}
 
-export function runRemoteWtEffect(
+export function runRemoteWt(
   remote: RemoteConfig,
   argv: readonly string[],
   opts: RemoteRunOptions = {},
@@ -119,11 +119,11 @@ export function runRemoteWtEffect(
         try: () => proc.exited,
         catch: (cause) => new RemoteRunError({ operation: "wait", cause }),
       }),
-      (proc) => terminateSubprocessEffect(proc),
+      (proc) => terminateSubprocess(proc),
     );
   }
 
-  return runStreamingEffect(
+  return runStreaming(
     remoteWtSshArgv(remote, argv),
     { cwd: process.cwd(), onLine: opts.onLine },
   ).pipe(
@@ -132,8 +132,8 @@ export function runRemoteWtEffect(
 }
 
 /** Promise adapter for the CLI and React boundaries. */
-export const runRemoteWt = (
+export const runRemoteWtPromise = (
   remote: RemoteConfig,
   argv: readonly string[],
   opts: RemoteRunOptions = {},
-): Promise<number> => Effect.runPromise(runRemoteWtEffect(remote, argv, opts));
+): Promise<number> => Effect.runPromise(runRemoteWt(remote, argv, opts));

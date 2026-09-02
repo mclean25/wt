@@ -27,7 +27,7 @@ export {
   classifyProcess,
   formatPerfReport,
   PERF_CATEGORIES,
-  samplePerf,
+  samplePerfPromise,
   shortCommand,
 } from "./perf/sample.ts";
 export type {

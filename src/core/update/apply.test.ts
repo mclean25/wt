@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Fiber } from "effect";
 
-import { applyWtUpdateEffect, type ApplyDependencies } from "./apply.ts";
+import { applyWtUpdate, type ApplyDependencies } from "./apply.ts";
 
 function dependencies(overrides: Partial<ApplyDependencies> = {}): ApplyDependencies {
   return {
@@ -17,7 +17,7 @@ function dependencies(overrides: Partial<ApplyDependencies> = {}): ApplyDependen
   };
 }
 
-describe("applyWtUpdateEffect lifecycle", () => {
+describe("applyWtUpdate lifecycle", () => {
   test("interruption joins the active command and releases the git lock", async () => {
     let releases = 0;
     let commands = 0;
@@ -33,7 +33,7 @@ describe("applyWtUpdateEffect lifecycle", () => {
     });
 
     await Effect.runPromise(Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(applyWtUpdateEffect("target-sha", deps));
+      const fiber = yield* Effect.forkChild(applyWtUpdate("target-sha", deps));
       yield* Effect.yieldNow;
       expect(commands).toBe(1);
       yield* Fiber.interrupt(fiber);
@@ -43,7 +43,7 @@ describe("applyWtUpdateEffect lifecycle", () => {
 
   test("a busy lock performs no git mutation", async () => {
     let commands = 0;
-    const result = await Effect.runPromise(applyWtUpdateEffect("target-sha", dependencies({
+    const result = await Effect.runPromise(applyWtUpdate("target-sha", dependencies({
       lock: Effect.succeed(false),
       runIn: () => {
         commands++;
@@ -71,7 +71,7 @@ describe("applyWtUpdateEffect lifecycle", () => {
         return Effect.succeed({ stdout: "", stderr: "", exitCode: 0 });
       },
     });
-    const result = await Effect.runPromise(applyWtUpdateEffect("target-sha", deps));
+    const result = await Effect.runPromise(applyWtUpdate("target-sha", deps));
     expect(result).toMatchObject({ ok: false, stage: "smoke", reverted: true });
     expect(calls.some((call) => call.includes("git reset --hard --quiet before-sha"))).toBeTrue();
     expect(calls.at(-1)).toBe("release");

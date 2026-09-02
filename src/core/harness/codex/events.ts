@@ -54,7 +54,7 @@ function emit(result: CodexEventsWorkerResult, onActivity?: () => void): void {
  * @returns A cleanup function that stops the interval and terminates
  *   the worker. Call it during TUI shutdown.
  */
-export function codexEventPollingEffect(
+export function codexEventPolling(
   getActiveSlugs: () => ReadonlyArray<ActiveCodexSlug>,
   onActivity?: () => void,
   options: {
@@ -124,6 +124,6 @@ export function startCodexEventPolling(
   getActiveSlugs: () => ReadonlyArray<ActiveCodexSlug>,
   onActivity?: () => void,
 ): () => Promise<void> {
-  const fiber = Effect.runFork(codexEventPollingEffect(getActiveSlugs, onActivity));
+  const fiber = Effect.runFork(codexEventPolling(getActiveSlugs, onActivity));
   return () => Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.asVoid));
 }

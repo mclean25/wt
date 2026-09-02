@@ -1,6 +1,6 @@
 import { Data, Effect } from "effect";
 
-import { runOkEffect } from "./proc.ts";
+import { runOk } from "./proc.ts";
 
 export class WezTermError extends Data.TaggedError("WezTermError")<{
   readonly cause: unknown;
@@ -23,7 +23,7 @@ export function wezTermCliPath(
 }
 
 /** Set the containing WezTerm tab's explicit title. Failure is non-fatal. */
-export function setWezTermTabTitleEffect(
+export function setWezTermTabTitle(
   title: string,
   configuredCliPath: string | null,
 ): Effect.Effect<void, WezTermError> {
@@ -32,19 +32,19 @@ export function setWezTermTabTitleEffect(
   const wezterm = wezTermCliPath(configuredCliPath);
   if (!wezterm) return Effect.void;
 
-  return runOkEffect([wezterm, "cli", "set-tab-title", title]).pipe(
+  return runOk([wezterm, "cli", "set-tab-title", title]).pipe(
     Effect.mapError((cause) => new WezTermError({ cause })),
     Effect.asVoid,
   );
 }
 
 /** Compatibility boundary. Tab naming remains cosmetic and non-fatal. */
-export function setWezTermTabTitle(
+export function setWezTermTabTitlePromise(
   title: string,
   configuredCliPath: string | null,
 ): Promise<void> {
   return Effect.runPromise(
-    setWezTermTabTitleEffect(title, configuredCliPath).pipe(
+    setWezTermTabTitle(title, configuredCliPath).pipe(
       Effect.catch(() => Effect.void),
     ),
   );

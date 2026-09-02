@@ -4,7 +4,7 @@ import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
 import { latestLogFor } from "../../core/logs.ts";
-import { listWorktreesEffect } from "../../core/worktree.ts";
+import { listWorktrees } from "../../core/worktree.ts";
 import { hasHelpFlag } from "../args.ts";
 import { dim, red } from "../colors.ts";
 
@@ -25,14 +25,14 @@ type TailProcess = {
 };
 
 export type LogsDeps = {
-  readonly listWorktrees: typeof listWorktreesEffect;
+  readonly listWorktrees: typeof listWorktrees;
   readonly latestLogFor: typeof latestLogFor;
   readonly existsSync: typeof existsSync;
   readonly spawnTail: (logPath: string) => TailProcess;
 };
 
 const defaultDeps: LogsDeps = {
-  listWorktrees: listWorktreesEffect,
+  listWorktrees: listWorktrees,
   latestLogFor,
   existsSync,
   spawnTail: (logPath) =>

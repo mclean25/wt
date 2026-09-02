@@ -12,9 +12,9 @@ import { Clock, Data, Effect } from "effect";
 import { config } from "../config.ts";
 import { tryAcquireLock, type LockHandle } from "../locks.ts";
 import { createLogger } from "../logger.ts";
-import { retargetPrBaseEffect, viewPrInfoEffect } from "../github/mutations.ts";
-import { gitQuietEffect } from "../git.ts";
-import { resolveChainEffect, type RestackChain } from "./chain.ts";
+import { retargetPrBase, viewPrInfo } from "../github/mutations.ts";
+import { gitQuiet } from "../git.ts";
+import { resolveChain, type RestackChain } from "./chain.ts";
 import { causeMessage } from "../errors.ts";
 
 /** PRs already warned about as closed-by-base-deletion (once per process). */
@@ -47,7 +47,7 @@ function releaseHandles(handles: readonly LockHandle[]): void {
   for (const handle of handles) handle.release();
 }
 
-export function withLockHandlesEffect<A, E, R>(
+export function withLockHandles<A, E, R>(
   handles: readonly LockHandle[],
   use: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> {
@@ -91,14 +91,14 @@ export function withLockHandlesEffect<A, E, R>(
  * reconcile re-derives. The wtstate file itself stays consistent via
  * its own `__wtstate__` flock.
  */
-export function lockChainEffect(
+export function lockChain(
   branch: string,
   phase: string,
 ): Effect.Effect<ChainLockResult, StackLockError> {
   return Effect.gen(function* () {
   const deadline = (yield* Clock.currentTimeMillis) + 5_000;
   for (;;) {
-    const probe = yield* resolveChainEffect(branch).pipe(
+    const probe = yield* resolveChain(branch).pipe(
       Effect.mapError((cause) => new StackLockError({ cause })),
     );
     if (!probe) return { status: "gone" } as const;
@@ -125,7 +125,7 @@ export function lockChainEffect(
         handles.push(h);
       }
       if (!refused) {
-        const chain = yield* resolveChainEffect(branch).pipe(
+        const chain = yield* resolveChain(branch).pipe(
           Effect.mapError((cause) => new StackLockError({ cause })),
         );
         if (!chain) {
@@ -157,20 +157,20 @@ export function lockChainEffect(
   });
 }
 
-export function lockChain(
+export function lockChainPromise(
   branch: string,
   phase: string,
 ): Promise<ChainLockResult> {
-  return Effect.runPromise(lockChainEffect(branch, phase));
+  return Effect.runPromise(lockChain(branch, phase));
 }
 
-export function withLockedChainEffect<A, E, R>(
+export function withLockedChain<A, E, R>(
   branch: string,
   phase: string,
   use: (locked: ChainLockResult) => Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | StackLockError, R> {
   return Effect.acquireUseRelease(
-    lockChainEffect(branch, phase),
+    lockChain(branch, phase),
     use,
     (locked) => Effect.sync(() => {
       if (locked.status === "ok") releaseHandles(locked.handles);
@@ -183,13 +183,13 @@ export function withLockedChainEffect<A, E, R>(
  *  with no PR, or a PR that already left OPEN, is left alone — EXCEPT
  *  the one recoverable-by-human case below, which gets an attention
  *  line instead of silence. */
-export function retargetIfNeededEffect(
+export function retargetIfNeeded(
   branch: string,
   expectedBase: string,
   onLog: Logger,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-  const live = yield* viewPrInfoEffect(branch);
+  const live = yield* viewPrInfo(branch);
   if (!live) return;
   // Deleting a merged parent's branch via the API (`gh pr merge
   // --delete-branch`) makes GitHub CLOSE the child PRs that target it,
@@ -207,7 +207,7 @@ export function retargetIfNeededEffect(
     if (warnedClosedPrs.has(live.number)) return;
     // A probe that cannot run is not evidence the ref is gone: skip the
     // warning this pass rather than send the human to open a PR on a guess.
-    const baseStillExists = yield* gitQuietEffect(
+    const baseStillExists = yield* gitQuiet(
       ["rev-parse", "--verify", "--quiet", `origin/${live.baseRefName}`],
       config.paths.mainClone,
     ).pipe(Effect.catch(() => Effect.succeed(true)));
@@ -221,16 +221,16 @@ export function retargetIfNeededEffect(
     return;
   }
   if (live.state !== "OPEN" || live.baseRefName === expectedBase) return;
-  const r = yield* retargetPrBaseEffect(live.number, expectedBase);
+  const r = yield* retargetPrBase(live.number, expectedBase);
   if (r.ok) onLog(`  retargeted PR #${live.number} base → ${expectedBase}`);
   else onLog(`  warn: retarget PR #${live.number} base: ${r.error}`);
   });
 }
 
-export function retargetIfNeeded(
+export function retargetIfNeededPromise(
   branch: string,
   expectedBase: string,
   onLog: Logger,
 ): Promise<void> {
-  return Effect.runPromise(retargetIfNeededEffect(branch, expectedBase, onLog));
+  return Effect.runPromise(retargetIfNeeded(branch, expectedBase, onLog));
 }

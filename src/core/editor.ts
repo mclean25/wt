@@ -20,7 +20,7 @@ import { spawn } from "node:child_process";
 import { Data, Effect } from "effect";
 
 import { config } from "./config.ts";
-import { hideFrontmostTerminalEffect, openInZedEffect } from "./zed.ts";
+import { hideFrontmostTerminal, openInZed } from "./zed.ts";
 
 export class EditorLaunchError extends Data.TaggedError("EditorLaunchError")<{
   readonly command: string;
@@ -84,12 +84,12 @@ function spawnDetachedEffect(
   });
 }
 
-export function openInEditorEffect(
+export function openInEditor(
   path: string,
 ): Effect.Effect<void, EditorLaunchError> {
   const command = config.editor.command;
   if (command === null) {
-    return openInZedEffect(path).pipe(
+    return openInZed(path).pipe(
       Effect.mapError((cause) =>
         new EditorLaunchError({ command: `zed -n ${path}`, cause }),
       ),
@@ -97,12 +97,12 @@ export function openInEditorEffect(
   }
   const shell = process.env.SHELL || "bash";
   const rendered = renderEditorCommand(command, path);
-  return hideFrontmostTerminalEffect().pipe(
+  return hideFrontmostTerminal().pipe(
     Effect.andThen(spawnDetachedEffect(shell, rendered)),
   );
 }
 
 /** Promise adapter for CLI and React event boundaries. */
-export function openInEditor(path: string): Promise<void> {
-  return Effect.runPromise(openInEditorEffect(path));
+export function openInEditorPromise(path: string): Promise<void> {
+  return Effect.runPromise(openInEditor(path));
 }

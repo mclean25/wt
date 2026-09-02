@@ -4,17 +4,17 @@ import { TestClock } from "effect/testing";
 
 import {
   DEV_SERVER_STOPPED,
-  probePortEffect,
-  waitForDevReadyEffect,
-  waitForDevSlotEffect,
+  probePort,
+  waitForDevReady,
+  waitForDevSlot,
 } from "./dev-server.ts";
 
-test("waitForDevReadyEffect retries an unhealthy environment on TestClock", async () => {
+test("waitForDevReady retries an unhealthy environment on TestClock", async () => {
   let healthChecks = 0;
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(
-        waitForDevReadyEffect(
+        waitForDevReady(
           { slug: "demo", path: "/tmp/demo" },
           { timeoutMs: 10_000 },
           {
@@ -42,12 +42,12 @@ test("waitForDevReadyEffect retries an unhealthy environment on TestClock", asyn
   expect(healthChecks).toBe(3);
 });
 
-test("interrupting waitForDevSlotEffect always leaves the queue", async () => {
+test("interrupting waitForDevSlot always leaves the queue", async () => {
   const events: string[] = [];
   await Effect.runPromise(
     Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(
-        waitForDevSlotEffect(
+        waitForDevSlot(
           "demo",
           { timeoutMs: 60_000 },
           {
@@ -66,13 +66,13 @@ test("interrupting waitForDevSlotEffect always leaves the queue", async () => {
   expect(events).toEqual(["join", "leave"]);
 });
 
-test("waitForDevSlotEffect counts a slow slot check against its deadline", async () => {
+test("waitForDevSlot counts a slow slot check against its deadline", async () => {
   let checks = 0;
   let waits = 0;
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(
-        waitForDevSlotEffect(
+        waitForDevSlot(
           "demo",
           { timeoutMs: 1_000, onWait: () => { waits += 1; } },
           {
@@ -97,7 +97,7 @@ test("waitForDevSlotEffect counts a slow slot check against its deadline", async
   expect(waits).toBe(0);
 });
 
-test("interrupting probePortEffect closes its socket resource", async () => {
+test("interrupting probePort closes its socket resource", async () => {
   const server = Bun.listen({
     hostname: "127.0.0.1",
     port: 0,
@@ -106,7 +106,7 @@ test("interrupting probePortEffect closes its socket resource", async () => {
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.forkChild(probePortEffect(server.port, 10_000));
+        const fiber = yield* Effect.forkChild(probePort(server.port, 10_000));
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(fiber);
       }),

@@ -3,34 +3,34 @@ import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
 import {
-  devServerStatus,
+  devServerStatusPromise,
   type DevServerStatus,
 } from "../../core/dev-server.ts";
 import {
-  claudeStatus,
+  claudeStatusPromise,
   type ClaudeStatus,
 } from "../../core/harness/claude/jsonl.ts";
 import {
-  branchIsGoneEffect,
-  branchIsMerged,
-  effectiveBaseOrTrunkEffect,
-  firstCommitSubjectEffect,
+  branchIsGone,
+  branchIsMergedPromise,
+  effectiveBaseOrTrunk,
+  firstCommitSubject,
   freshBaseRevEffect,
   invalidateMainFirstParents,
-  mergeConflictProbe,
-  revParseEffect,
+  mergeConflictProbePromise,
+  revParse,
   type MergeConflictProbe,
 } from "../../core/git.ts";
-import { gitActivity, type GitActivity } from "../../core/git-activity.ts";
+import { gitActivityPromise, type GitActivity } from "../../core/git-activity.ts";
 import { lockStatus } from "../../core/locks.ts";
 import type { LockMeta, Worktree } from "../../core/types.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
 import {
-  fetchOrigin,
-  listWorktreesEffect,
-  syncStateEffect,
+  fetchOriginPromise,
+  listWorktrees,
+  syncState,
   type SyncState,
-  worktreeDirtyFilesEffect,
+  worktreeDirtyFiles,
 } from "../../core/worktree.ts";
 
 import { qk } from "../keys.ts";
@@ -69,12 +69,12 @@ const syncEffect = <A>(operation: string, evaluate: () => A) =>
 export const worktreesQuery = () =>
   queryOptions({
     queryKey: qk.worktrees(),
-    queryFn: (): Promise<Worktree[]> => queryPromise(listWorktreesEffect()),
+    queryFn: (): Promise<Worktree[]> => queryPromise(listWorktrees()),
     staleTime: STALE.mid,
   });
 
 export const fetchOriginEffect = () =>
-  promiseEffect("fetch origin", () => fetchOrigin()).pipe(
+  promiseEffect("fetch origin", () => fetchOriginPromise()).pipe(
     Effect.tap(() => Effect.sync(invalidateMainFirstParents)),
     Effect.map(() => Date.now()),
   );
@@ -95,7 +95,7 @@ export const wtDirtyQuery = (wt: Pick<Worktree, "slug" | "path">) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).dirty(),
     queryFn: (): Promise<readonly string[]> =>
-      queryPromise(worktreeDirtyFilesEffect(wt.path)),
+      queryPromise(worktreeDirtyFiles(wt.path)),
     staleTime: STALE.fast,
   });
 
@@ -144,7 +144,7 @@ export const wtDevQuery = (
     queryFn: (): Promise<DevServerStatus> =>
       queryPromise(
         promiseEffect("read dev server status", () =>
-          devServerStatus(wt.slug, {
+          devServerStatusPromise(wt.slug, {
             sessionExists: sessionExists ?? undefined,
             // Enables the rebase-staleness check: one `git merge-base
             // --is-ancestor` (0.1s), which is why it can ride this poll
@@ -168,7 +168,7 @@ export const wtMergedQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
       queryPromise(
         wt.branch
           ? promiseEffect("check merged branch", () =>
-              branchIsMerged({
+              branchIsMergedPromise({
                 slug: wt.slug,
                 branch: wt.branch,
                 path: wt.path,
@@ -185,7 +185,7 @@ export const wtGoneQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
     queryFn: (): Promise<boolean> =>
       queryPromise(
         wt.branch
-          ? branchIsGoneEffect(wt.branch, wt.path)
+          ? branchIsGone(wt.branch, wt.path)
           : Effect.succeed(false),
       ),
     staleTime: STALE.mid,
@@ -199,7 +199,7 @@ export const wtSyncQuery = (
   return queryOptions({
     queryKey: qk.wt(wt.slug).sync(base),
     queryFn: (): Promise<SyncState> =>
-      queryPromise(syncStateEffect(wt.path, base)),
+      queryPromise(syncState(wt.path, base)),
     staleTime: STALE.mid,
     ...KEEP_PREV,
   });
@@ -211,7 +211,7 @@ export const wtClaudeQuery = (wt: Pick<Worktree, "slug" | "path">) =>
     queryFn: (): Promise<ClaudeStatus> =>
       queryPromise(
         promiseEffect("read Claude status", () =>
-          claudeStatus({ slug: wt.slug, path: wt.path }),
+          claudeStatusPromise({ slug: wt.slug, path: wt.path }),
         ),
       ),
     staleTime: STALE.fast,
@@ -237,7 +237,7 @@ export const wtGitActivityQuery = (
     queryFn: (): Promise<GitActivity> =>
       queryPromise(
         promiseEffect("read git activity", () =>
-          gitActivity({ path: wt.path, branch: wt.branch }, base),
+          gitActivityPromise({ path: wt.path, branch: wt.branch }, base),
         ),
       ),
     staleTime: STALE.mid,
@@ -269,10 +269,10 @@ export const wtConflictQuery = (
     queryKey: qk.wt(wt.slug).conflict(base),
     queryFn: (): Promise<MergeConflictProbe> =>
       queryPromise(
-        effectiveBaseOrTrunkEffect(wt.path, base).pipe(
+        effectiveBaseOrTrunk(wt.path, base).pipe(
           Effect.flatMap((effectiveBase) =>
             promiseEffect("probe merge conflict", () =>
-              mergeConflictProbe("HEAD", effectiveBase, wt.path),
+              mergeConflictProbePromise("HEAD", effectiveBase, wt.path),
             ),
           ),
         ),
@@ -328,7 +328,7 @@ export const watchedBranchTipsQuery = (branches: readonly string[]) =>
       queryPromise(
         Effect.all(
           branches.map((branch) =>
-            revParseEffect(branch, config.paths.mainClone).pipe(
+            revParse(branch, config.paths.mainClone).pipe(
               Effect.map((sha) => [branch, sha] as const),
             ),
           ),
@@ -357,12 +357,12 @@ export const wtFirstCommitQuery = (
     queryFn: (): Promise<string | null> =>
       queryPromise(
         Effect.gen(function* () {
-          const effectiveBase = yield* effectiveBaseOrTrunkEffect(
+          const effectiveBase = yield* effectiveBaseOrTrunk(
             wt.path,
             baseBranch,
           );
           const freshBase = yield* freshBaseRevEffect(wt.path, effectiveBase);
-          return yield* firstCommitSubjectEffect(wt.path, freshBase);
+          return yield* firstCommitSubject(wt.path, freshBase);
         }),
       ),
     staleTime: STALE.mid,

@@ -53,8 +53,8 @@ export {
   type UnitState,
 } from "./skills/report.ts";
 export {
-  applyReport,
-  regenRulesync,
+  applyReportPromise,
+  regenRulesyncPromise,
   touchedRulesyncRoots,
   type RegenResult,
 } from "./skills/apply.ts";

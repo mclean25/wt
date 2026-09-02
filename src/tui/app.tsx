@@ -85,7 +85,7 @@ import { useErrorOverlayAutoPop } from "./hooks/useErrorOverlay.ts";
 import { usePrTargetChord } from "./hooks/usePrTargetChord.ts";
 import { useRemovedView } from "./hooks/useRemovedView.ts";
 import { useSessionsPickerData } from "./hooks/useSessionsPickerData.ts";
-import { writeClipboard } from "../core/macos.ts";
+import { writeClipboardPromise } from "../core/macos.ts";
 import { theme } from "./theme.ts";
 import { showToast } from "./toast.ts";
 import {
@@ -725,7 +725,7 @@ export function App({ onExit }: Props) {
       return;
     }
     try {
-      writeClipboard(value);
+      writeClipboardPromise(value);
     } catch (err) {
       log.event.err(`pbcopy failed: ${err instanceof Error ? err.message : String(err)}`);
       log.error(err instanceof Error ? err : String(err));

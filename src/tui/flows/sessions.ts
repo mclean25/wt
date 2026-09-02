@@ -23,16 +23,16 @@ import { createLogger } from "../../core/logger.ts";
 import { canEnterSessionDuringLock } from "../../core/session-readiness.ts";
 import {
   claudeSessionName,
-  killHarnessSession,
-  listSessions as listTmuxSessions,
+  killHarnessSessionPromise,
+  listSessionsPromise as listTmuxSessions,
 } from "../../core/tmux.ts";
-import { effectiveBaseOrTrunk } from "../../core/git.ts";
+import { effectiveBaseOrTrunkPromise } from "../../core/git.ts";
 import { config } from "../../core/config.ts";
 
-import { enterHarnessSession } from "../sessions/harness.ts";
-import { enterRemoteWorktreeSession } from "../sessions/remote.ts";
-import { enterDiffSession } from "../sessions/diff.ts";
-import { enterShellSession } from "../sessions/shell.ts";
+import { enterHarnessSessionPromise } from "../sessions/harness.ts";
+import { enterRemoteWorktreeSessionPromise } from "../sessions/remote.ts";
+import { enterDiffSessionPromise } from "../sessions/diff.ts";
+import { enterShellSessionPromise } from "../sessions/shell.ts";
 import type { HarnessRoute } from "../sessions/worktree.ts";
 import { resolveDiffBase, sessionLaunchBlockedReason } from "../app-helpers.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
@@ -189,11 +189,11 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
     const sessionLog = createLogger(slug);
     forkReported(`${harness.label} session`, Effect.gen(function* () {
       const diffBase = yield* sessionPromise("resolve diff base", () =>
-        effectiveBaseOrTrunk(row.wt.path, resolveDiffBase(row)));
+        effectiveBaseOrTrunkPromise(row.wt.path, resolveDiffBase(row)));
       sessionLog.event.info(
         `entering ${harness.label} session (F12 to detach)`,
       );
-      const result = yield* sessionPromise("enter harness session", () => enterHarnessSession({
+      const result = yield* sessionPromise("enter harness session", () => enterHarnessSessionPromise({
         renderer,
         slug,
         cwd: row.wt.path,
@@ -274,7 +274,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
           freshSlot = target.freshSlot;
         }
         const result = yield* sessionPromise("enter slot session", () =>
-          enterHarnessSession({
+          enterHarnessSessionPromise({
             renderer,
             slug: slot.slug,
             cwd: slot.path,
@@ -334,13 +334,13 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
       "named claude session",
       Effect.gen(function* () {
       const diffBase = yield* sessionPromise("resolve diff base", () =>
-        effectiveBaseOrTrunk(row.wt.path, resolveDiffBase(row)));
+        effectiveBaseOrTrunkPromise(row.wt.path, resolveDiffBase(row)));
       sessionLog.event.info(`entering claude session "${name}" (F12 to detach)`);
       const result = yield* withNamedClaudePersistenceEffect(
         slug,
         name,
         sessionPromise("refresh claude summaries", () => refreshClaudeSummaries(slug)),
-        sessionPromise("enter named claude session", () => enterHarnessSession({
+        sessionPromise("enter named claude session", () => enterHarnessSessionPromise({
           renderer,
           slug,
           cwd: row.wt.path,
@@ -397,7 +397,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         // and named claude sessions through the same call — same
         // implementation as the legacy `killSession` /
         // `killClaudeNamedSession` pair, one source of truth.
-        await killHarnessSession(slug, "claude", name);
+        await killHarnessSessionPromise(slug, "claude", name);
         appLog.event.warn(
           name === null
             ? `killed primary claude session on ${slug}`
@@ -454,7 +454,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
       forkReported(
         "remote session",
         sessionPromise("enter remote session", () =>
-          enterRemoteWorktreeSession({
+          enterRemoteWorktreeSessionPromise({
             renderer,
             worktree: worktree.target,
             target,
@@ -482,14 +482,14 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
     forkReported(
       `${target} session`,
       sessionPromise(`enter ${target} session`, async () => {
-      const base = await effectiveBaseOrTrunk(
+      const base = await effectiveBaseOrTrunkPromise(
         worktree.path,
         resolveDiffBase(row),
       );
       const result = target === "shell"
         ? await (async () => {
             sessionLog.event.info("entering shell (F10 to detach)");
-            return enterShellSession({
+            return enterShellSessionPromise({
               renderer,
               slug: worktree.slug,
               cwd: worktree.path,
@@ -499,7 +499,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
           })()
         : await (async () => {
             sessionLog.event.info(`opening diff vs ${base} (F11 to detach)`);
-            return enterDiffSession({
+            return enterDiffSessionPromise({
               renderer,
               slug: worktree.slug,
               cwd: worktree.path,

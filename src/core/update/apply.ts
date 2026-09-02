@@ -6,11 +6,11 @@
 import { Clock, Effect, Scope } from "effect";
 
 import {
-  gitOkEffect,
+  gitOk,
   resetWtVersionCache,
-  runInResultEffect,
+  runInResult,
   shortSha,
-  updateGitLockEffect,
+  updateGitLock,
   WT_REPO_ROOT,
   type RunResult,
 } from "./exec.ts";
@@ -29,9 +29,9 @@ export type ApplyDependencies = {
 };
 
 const productionDependencies: ApplyDependencies = {
-  gitOk: gitOkEffect,
-  runIn: runInResultEffect,
-  lock: updateGitLockEffect,
+  gitOk: gitOk,
+  runIn: runInResult,
+  lock: updateGitLock,
   now: Clock.currentTimeMillis,
   resetVersionCache: resetWtVersionCache,
   markApplying,
@@ -73,7 +73,7 @@ function syncDepsAcrossEffect(
  * child process, so a syntax error, missing dep, or config rejection
  * surfaces here instead of at the user's next launch.
  */
-export function smokeCheckoutEffect(
+export function smokeCheckout(
   dependencies: ApplyDependencies = productionDependencies,
 ): Effect.Effect<{ ok: true } | { ok: false; detail: string }> {
   return Effect.gen(function* () {
@@ -125,7 +125,7 @@ export type ApplyResult =
  * by the `applying` marker so a kill mid-sequence still leaves the
  * offers a rollback target.
  */
-export function applyWtUpdateEffect(
+export function applyWtUpdate(
   targetSha: string,
   dependencies: ApplyDependencies = productionDependencies,
 ): Effect.Effect<ApplyResult> {
@@ -164,7 +164,7 @@ export function applyWtUpdateEffect(
     const deps = before
       ? yield* syncDepsAcrossEffect(before, targetSha, dependencies)
       : { ran: false, ok: true, detail: "" };
-    const smoke = yield* smokeCheckoutEffect(dependencies);
+    const smoke = yield* smokeCheckout(dependencies);
     if (!smoke.ok) {
       const detail = smoke.detail;
       let depsRestoreWarning: string | null = null;
@@ -210,7 +210,7 @@ export function applyWtUpdateEffect(
  * boot — an explicit `wt rollback <ref>` target carries no such proof,
  * which the command surfaces to the user rather than probing here.
  */
-export function performRollbackEffect(
+export function performRollback(
   targetSha: string,
   now: number,
   dependencies: ApplyDependencies = productionDependencies,

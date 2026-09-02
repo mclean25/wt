@@ -2,8 +2,8 @@ import { keepPreviousData, queryOptions } from "@tanstack/react-query";
 import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
-import { fetchRemoteWorktrees } from "../../core/remote-worktrees.ts";
-import { refreshRemoteWorkerInfoEffect } from "../../core/worker-info.ts";
+import { fetchRemoteWorktreesPromise } from "../../core/remote-worktrees.ts";
+import { refreshRemoteWorkerInfo } from "../../core/worker-info.ts";
 import { DEV_SERVER_STOPPED } from "../../core/dev-server.ts";
 import { qk } from "../keys.ts";
 
@@ -26,7 +26,7 @@ export const remoteWorkerInfoQuery = (remote = config.remote) =>
     queryKey: qk.remoteWorkerInfo(remote?.host),
     queryFn: ({ signal }) =>
       queryPromise(
-        remote ? refreshRemoteWorkerInfoEffect(remote) : Effect.succeed(null),
+        remote ? refreshRemoteWorkerInfo(remote) : Effect.succeed(null),
         signal,
       ),
     staleTime: Infinity,
@@ -41,7 +41,7 @@ export const remoteWorktreesQuery = (remote = config.remote) =>
       queryPromise(
         remote
           ? Effect.tryPromise({
-              try: () => fetchRemoteWorktrees(remote, signal),
+              try: () => fetchRemoteWorktreesPromise(remote, signal),
               catch: (cause) =>
                 new RemoteQueryError({ operation: "fetch worktrees", cause }),
             })

@@ -9,11 +9,11 @@
 import { config } from "../../core/config.ts";
 import {
   AUTO_MERGE_METHOD,
-  disableAutoMerge,
-  editReviewers,
-  enableAutoMerge,
-  markPullRequestReady,
-  streamFailedRunLog,
+  disableAutoMergePromise,
+  editReviewersPromise,
+  enableAutoMergePromise,
+  markPullRequestReadyPromise,
+  streamFailedRunLogPromise,
 } from "../../core/github.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { PullRequest } from "../../core/types.ts";
@@ -78,7 +78,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
         patch: (data) =>
           patchPullRequest(data, branch, (pr) => ({ ...pr, isDraft: false })),
         run: async () => {
-          const result = await markPullRequestReady(prNumber);
+          const result = await markPullRequestReadyPromise(prNumber);
           if (!result.ok) throw new Error(result.error);
         },
       });
@@ -172,11 +172,11 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
         run: async () => {
           const result =
             action === "enable"
-              ? await enableAutoMerge(prId ?? "", {
+              ? await enableAutoMergePromise(prId ?? "", {
                   baseRefName: pr.baseRefName,
                   headRefOid: pr.headRefOid,
                 })
-              : await disableAutoMerge(prNumber, {
+              : await disableAutoMergePromise(prNumber, {
                   prId,
                   baseRefName: pr.baseRefName,
                 });
@@ -201,7 +201,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
         startAutoMergeRetry(
           prNumber,
           () =>
-            enableAutoMerge(prId ?? "", {
+            enableAutoMergePromise(prId ?? "", {
               baseRefName: pr.baseRefName,
               headRefOid: pr.headRefOid,
             }),
@@ -304,7 +304,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
           patch: (data) =>
             patchPullRequest(data, branch, (pr) => ({ ...pr, isDraft: false })),
           run: async () => {
-            const r = await markPullRequestReady(prNumber);
+            const r = await markPullRequestReadyPromise(prNumber);
             if (!r.ok) throw new Error(r.error);
           },
         })
@@ -319,7 +319,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
               reviewRequests: pr.reviewRequests + 1,
             })),
           run: async () => {
-            const r = await editReviewers(prNumber, {
+            const r = await editReviewersPromise(prNumber, {
               add: [reviewerToAdd],
               remove: [],
             });
@@ -379,7 +379,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
               },
             })),
           run: async () => {
-            const r = await enableAutoMerge(prId ?? "", {
+            const r = await enableAutoMergePromise(prId ?? "", {
               baseRefName: row.pr?.baseRefName,
               headRefOid: row.pr?.headRefOid,
             });
@@ -426,11 +426,11 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     toast("fetching failed CI logs…", theme.info, 2500);
     const CAP = 200;
     let emitted = 0;
-    let res: Awaited<ReturnType<typeof streamFailedRunLog>>;
+    let res: Awaited<ReturnType<typeof streamFailedRunLogPromise>>;
     try {
       res = await Effect.runPromise(
         githubPromise("stream failed CI logs", () =>
-          streamFailedRunLog(branch, (line) => {
+          streamFailedRunLogPromise(branch, (line) => {
             if (emitted < CAP) log.event.dim(line);
             else if (emitted === CAP) {
               log.event.dim(`… (truncated at ${CAP} lines; \`gh run view --log-failed\` for the rest)`);

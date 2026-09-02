@@ -3,7 +3,7 @@ import { Data, Effect, Fiber } from "effect";
 
 import { createLogger } from "../../core/logger.ts";
 import { latestLogFor } from "../../core/logs.ts";
-import { streamLinesEffect, terminateSubprocessEffect } from "../../core/proc.ts";
+import { streamLines, terminateSubprocess } from "../../core/proc.ts";
 import { StatusKind } from "../../core/types.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
 
@@ -67,7 +67,7 @@ export function useLogTails(rows: WorktreeRow[]): Set<string> {
           return Effect.all(
             [
               stdout
-                ? streamLinesEffect(stdout, (line) => {
+                ? streamLines(stdout, (line) => {
                     if (line.trim()) log.event.dim(line);
                   })
                 : Effect.void,
@@ -79,7 +79,7 @@ export function useLogTails(rows: WorktreeRow[]): Set<string> {
             { concurrency: "unbounded", discard: true },
           );
         },
-        (proc) => terminateSubprocessEffect(proc),
+        (proc) => terminateSubprocess(proc),
       ).pipe(
         Effect.tap(() =>
           Effect.sync(() => log.event.dim("tail exited; will restart if still busy")),

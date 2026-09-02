@@ -4,7 +4,7 @@ import { Deferred, Effect, Exit, Fiber, Ref } from "effect";
 import {
   isStackTitleMetaOnly,
   parseTitleDescription,
-  withNamingPermitEffect,
+  withNamingPermit,
 } from "./ai.ts";
 
 describe("isStackTitleMetaOnly", () => {
@@ -41,11 +41,11 @@ test("a queued naming request cancelled before its permit never runs", async () 
     const release = yield* Deferred.make<void>();
     const acquired = yield* Deferred.make<void>();
     const count = yield* Ref.make(0);
-    const holder = yield* Effect.forkScoped(withNamingPermitEffect(
+    const holder = yield* Effect.forkScoped(withNamingPermit(
       Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
     ));
     yield* Deferred.await(acquired);
-    const queued = yield* Effect.forkScoped(withNamingPermitEffect(Ref.update(count, (n) => n + 1)));
+    const queued = yield* Effect.forkScoped(withNamingPermit(Ref.update(count, (n) => n + 1)));
     yield* Fiber.interrupt(queued);
     const queuedExit = yield* Fiber.await(queued);
     yield* Deferred.succeed(release, undefined);

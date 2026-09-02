@@ -1,5 +1,5 @@
 import { config } from "../../core/config.ts";
-import { collectWorkerSnapshot } from "../../core/worktree-snapshot.ts";
+import { collectWorkerSnapshotPromise } from "../../core/worktree-snapshot.ts";
 import { Data, Effect } from "effect";
 
 export class SnapshotCommandError extends Data.TaggedError(
@@ -24,7 +24,7 @@ export function run(
       return 1;
     }
     const snapshot = yield* Effect.tryPromise({
-      try: () => collectWorkerSnapshot(),
+      try: () => collectWorkerSnapshotPromise(),
       catch: (cause) => new SnapshotCommandError({ cause }),
     });
     console.log(JSON.stringify(snapshot));

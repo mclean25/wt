@@ -4,7 +4,7 @@ import { useRenderer } from "@opentui/react";
 
 import { createLogger } from "../../core/logger.ts";
 import { pluralize } from "../../core/text.ts";
-import { writeClipboard } from "../../core/macos.ts";
+import { writeClipboardPromise } from "../../core/macos.ts";
 
 const log = createLogger("app");
 
@@ -39,7 +39,7 @@ export function useAutoCopy(): void {
       const text = extractSelection(selection);
       if (!text) return;
       try {
-        writeClipboard(text);
+        writeClipboardPromise(text);
       } catch (err) {
         log.event.err(`pbcopy failed: ${err instanceof Error ? err.message : String(err)}`);
         log.error(err instanceof Error ? err : String(err));

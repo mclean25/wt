@@ -1,7 +1,7 @@
 import { Data, Effect, Fiber, SynchronizedRef } from "effect";
 
 import type { RemoteConfig } from "./config.ts";
-import { runEffect } from "./proc.ts";
+import { run } from "./proc.ts";
 import { remoteWtCommand } from "./remote-protocol.ts";
 import { wtVersion } from "./update.ts";
 
@@ -188,7 +188,7 @@ const loadRemoteWorkerInfo = (
   remote: RemoteConfig,
 ): Effect.Effect<WorkerInfo, WorkerInfoError> =>
   Effect.gen(function* () {
-    const result = yield* runEffect(
+    const result = yield* run(
       [
         "ssh",
         "-o",
@@ -242,5 +242,5 @@ const loadRemoteWorkerInfo = (
 
 const workerInfoFetcher = createWorkerInfoFetcher(loadRemoteWorkerInfo);
 
-export const fetchRemoteWorkerInfoEffect = workerInfoFetcher.fetchEffect;
-export const refreshRemoteWorkerInfoEffect = workerInfoFetcher.refreshEffect;
+export const fetchRemoteWorkerInfo = workerInfoFetcher.fetchEffect;
+export const refreshRemoteWorkerInfo = workerInfoFetcher.refreshEffect;

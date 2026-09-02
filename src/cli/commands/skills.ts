@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Data, Effect } from "effect";
 
-import { runEffect as shEffect } from "../../core/proc.ts";
+import { run as shEffect } from "../../core/proc.ts";
 import {
   buildReports,
   clearSkillsMemory,
@@ -28,7 +28,7 @@ import {
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import { isInteractive } from "../prompt.ts";
-import { runSkillsSyncEffect } from "../skills-sync.ts";
+import { runSkillsSync } from "../skills-sync.ts";
 
 const USAGE = `usage: wt skills [status|sync|diff|reset] [options]
 
@@ -214,7 +214,7 @@ function sync(argv: string[]): Effect.Effect<number, SkillsCommandError> {
       return Effect.succeed(2);
     } else names.push(a);
   }
-  return runSkillsSyncEffect({
+  return runSkillsSync({
     // Both ends must be a TTY: a redirected stdout would print the
     // prompts into the redirect while the terminal looks hung.
     interactive: isInteractive() && !yes,

@@ -14,10 +14,10 @@ test("remove teardown keeps checkout-dependent cleanup before removal and browse
   const teardown = source.indexOf(
     "const destroyCommand = resolveTeardownCommand",
   );
-  const reaper = source.indexOf("const reaped = yield* reapWorktreeListenersEffect");
+  const reaper = source.indexOf("const reaped = yield* reapWorktreeListeners");
   const backend = source.indexOf("const removed = yield* backend.id");
   const browser = source.indexOf(
-    "const browser = yield* closeWorktreeBrowserSessionsEffect",
+    "const browser = yield* closeWorktreeBrowserSessions",
     backend,
   );
   expect(teardown).toBeGreaterThan(0);
@@ -97,16 +97,16 @@ exec sleep 3
   ).href;
   const script = `
     const { Effect } = await import(${JSON.stringify(effectModule)});
-    const { createWorktree, createWorktreeEffect } = await import(${JSON.stringify(lifecycleModule)});
+    const { createWorktreePromise, createWorktree } = await import(${JSON.stringify(lifecycleModule)});
     const { lockStatus } = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "locks.ts")).href)});
-    const result = await createWorktree("test/copy-agents", { runInstall: false });
-    const failed = await createWorktree("test/bad-base", {
+    const result = await createWorktreePromise("test/copy-agents", { runInstall: false });
+    const failed = await createWorktreePromise("test/bad-base", {
       runInstall: false,
       base: "missing-ref-that-does-not-exist",
     });
     const controller = new AbortController();
     const interrupted = await Effect.runPromiseExit(
-      createWorktreeEffect("test/interrupted", {
+      createWorktree("test/interrupted", {
         runInstall: false,
         onPhase: () => controller.abort(),
       }),
@@ -114,7 +114,7 @@ exec sleep 3
     );
     const backendController = new AbortController();
     const backendInterrupted = await Effect.runPromiseExit(
-      createWorktreeEffect("test/backend-interrupted", {
+      createWorktree("test/backend-interrupted", {
         runInstall: false,
         onLog: (line) => {
           if (line.includes("new branch test/backend-interrupted")) {
@@ -126,7 +126,7 @@ exec sleep 3
     );
     const installController = new AbortController();
     const installInterrupted = await Effect.runPromiseExit(
-      createWorktreeEffect("test/install-interrupted", {
+      createWorktree("test/install-interrupted", {
         onLog: (line) => {
           if (line === "install-ready") setTimeout(() => installController.abort(), 40);
         },
@@ -135,7 +135,7 @@ exec sleep 3
     );
     const removeController = new AbortController();
     const removeInterrupted = await Effect.runPromiseExit(
-      (await import(${JSON.stringify(lifecycleModule)})).removeWorktreeEffect(
+      (await import(${JSON.stringify(lifecycleModule)})).removeWorktree(
         { ...result, isMain: false },
         { onPhase: (phase) => {
           if (phase.startsWith("worktree remove")) setTimeout(() => removeController.abort(), 40);
@@ -143,12 +143,12 @@ exec sleep 3
       ),
       { signal: removeController.signal },
     );
-    const sstCreated = await createWorktree("test/sst-interrupted", { runInstall: false });
+    const sstCreated = await createWorktreePromise("test/sst-interrupted", { runInstall: false });
     (await import("node:fs")).mkdirSync(${JSON.stringify(join(worktrees, "sst-interrupted", ".sst"))}, { recursive: true });
     await Bun.write(${JSON.stringify(join(worktrees, "sst-interrupted", ".sst", "stage"))}, ${JSON.stringify("test-owned\n")});
     const sstController = new AbortController();
     const sstInterrupted = await Effect.runPromiseExit(
-      (await import(${JSON.stringify(lifecycleModule)})).removeWorktreeEffect(
+      (await import(${JSON.stringify(lifecycleModule)})).removeWorktree(
         { ...sstCreated, isMain: false },
         { destroyStage: true, onPhase: (phase) => {
           if (phase === "sst remove") setTimeout(() => sstController.abort(), 40);

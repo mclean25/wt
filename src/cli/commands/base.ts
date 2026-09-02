@@ -1,8 +1,8 @@
 import { config } from "../../core/config.ts";
 import { Data, Effect } from "effect";
-import { gitRun, revParse } from "../../core/git.ts";
+import { gitRunPromise, revParsePromise } from "../../core/git.ts";
 import { readWtState, setSlugBase } from "../../core/wtstate.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 import type { Worktree } from "../../core/types.ts";
 import { hasHelpFlag } from "../args.ts";
 import { dim, green, red, yellow } from "../colors.ts";
@@ -46,7 +46,7 @@ function commandPromise<A>(
 function findWorktree(
   slug: string,
 ): Effect.Effect<Worktree | null, BaseCommandError> {
-  return commandPromise("list worktrees", listWorktrees).pipe(
+  return commandPromise("list worktrees", listWorktreesPromise).pipe(
     Effect.map(
       (wts) =>
         wts.filter((w) => !w.isMain).find((w) => w.slug === slug) ?? null,
@@ -100,12 +100,12 @@ function set(
       return 2;
     }
     const localRef = yield* commandPromise(`resolve ref ${ref}`, () =>
-      revParse(ref),
+      revParsePromise(ref),
     );
     const remoteRef = localRef
       ? localRef
       : yield* commandPromise(`resolve ref origin/${branch}`, () =>
-          revParse(`origin/${branch}`),
+          revParsePromise(`origin/${branch}`),
         );
     if (!remoteRef) {
       console.error(red(`ref does not resolve: ${ref}`));
@@ -115,7 +115,7 @@ function set(
     // have advanced since the fork. Best-effort; the branch name alone is
     // enough for display/diff.
     const mb = yield* commandPromise("find merge base", () =>
-      gitRun(["merge-base", wt.branch, ref], wt.path),
+      gitRunPromise(["merge-base", wt.branch, ref], wt.path),
     );
     const sha = mb.exitCode === 0 ? mb.stdout.trim() : "";
     yield* commandIo("set fork base", () =>

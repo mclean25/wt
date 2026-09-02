@@ -4,10 +4,10 @@ import { Data, Effect } from "effect";
 import { config } from "../../core/config.ts";
 import type { HarnessId } from "../../core/harness/index.ts";
 import type { WorktreeTarget } from "../../core/worktree-target.ts";
-import { runWorktreeWtEffect } from "../../core/worktree-executor.ts";
-import { setWezTermTabTitleEffect } from "../../core/wezterm.ts";
+import { runWorktreeWt } from "../../core/worktree-executor.ts";
+import { setWezTermTabTitle } from "../../core/wezterm.ts";
 import { NF } from "../icons.ts";
-import { handoffTerminalEffect } from "./renderer-handoff.ts";
+import { handoffTerminal } from "./renderer-handoff.ts";
 
 export class RemoteSessionTargetError extends Data.TaggedError("RemoteSessionTargetError")<{
   readonly message: string;
@@ -21,7 +21,7 @@ export type EnterRemoteWorktreeSessionOptions = {
 };
 
 /** Hand the terminal to one selected remote worktree's tmux session. */
-export function enterRemoteWorktreeSessionEffect(opts: EnterRemoteWorktreeSessionOptions) {
+export function enterRemoteWorktreeSession(opts: EnterRemoteWorktreeSessionOptions) {
   return Effect.gen(function* () {
     const { renderer, worktree, target, harnessId } = opts;
     if (worktree.location.kind !== "remote") {
@@ -30,24 +30,24 @@ export function enterRemoteWorktreeSessionEffect(opts: EnterRemoteWorktreeSessio
       });
     }
     const remote = worktree.location.endpoint;
-    return yield* setWezTermTabTitleEffect(
+    return yield* setWezTermTabTitle(
       `${NF.remote} ${worktree.slug} · ${remote.label}`,
       config.paths.weztermCli,
     ).pipe(
-      Effect.andThen(handoffTerminalEffect(
+      Effect.andThen(handoffTerminal(
         renderer,
         process.cwd(),
-        runWorktreeWtEffect(worktree, ["_session", worktree.slug, target, harnessId], {
+        runWorktreeWt(worktree, ["_session", worktree.slug, target, harnessId], {
           interactive: true,
         }),
       )),
       Effect.ensuring(
-        setWezTermTabTitleEffect("wt", config.paths.weztermCli).pipe(Effect.ignore),
+        setWezTermTabTitle("wt", config.paths.weztermCli).pipe(Effect.ignore),
       ),
     );
   });
 }
 
-export const enterRemoteWorktreeSession = (
+export const enterRemoteWorktreeSessionPromise = (
   opts: EnterRemoteWorktreeSessionOptions,
-): Promise<number> => Effect.runPromise(enterRemoteWorktreeSessionEffect(opts));
+): Promise<number> => Effect.runPromise(enterRemoteWorktreeSession(opts));

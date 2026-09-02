@@ -14,10 +14,10 @@ import {
   type MergeEdgeStrength,
 } from "../../core/merge-edges.ts";
 import { Data, Effect } from "effect";
-import { revParse } from "../../core/git.ts";
+import { revParsePromise } from "../../core/git.ts";
 import type { Worktree } from "../../core/types.ts";
 import { workAge } from "../../core/work-status.ts";
-import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
+import { listWorktreesPromise, worktreeAtCwd } from "../../core/worktree.ts";
 import {
   pruneMergeEdges,
   recentlyRemovedWorktrees,
@@ -135,7 +135,7 @@ export function run(argv: string[]): Effect.Effect<number, EdgeCommandError> {
       } else positional.push(a);
     }
 
-    const wts = (yield* commandPromise("list worktrees", listWorktrees)).filter(
+    const wts = (yield* commandPromise("list worktrees", listWorktreesPromise)).filter(
       (w) => !w.isMain,
     );
 
@@ -158,7 +158,7 @@ export function run(argv: string[]): Effect.Effect<number, EdgeCommandError> {
             const wt = wts.find((w) => w.slug === slug);
             const head = wt
               ? yield* commandPromise(`resolve ${slug} HEAD`, () =>
-                  revParse("HEAD", wt.path),
+                  revParsePromise("HEAD", wt.path),
                 )
               : null;
             heads.set(slug, head);
@@ -282,10 +282,10 @@ export function run(argv: string[]): Effect.Effect<number, EdgeCommandError> {
     const [fromSha, toSha] = yield* Effect.all(
       [
         commandPromise(`resolve ${from.slug} HEAD`, () =>
-          revParse("HEAD", from.path),
+          revParsePromise("HEAD", from.path),
         ),
         commandPromise(`resolve ${to.slug} HEAD`, () =>
-          revParse("HEAD", to.path),
+          revParsePromise("HEAD", to.path),
         ),
       ],
       { concurrency: "unbounded" },

@@ -16,8 +16,8 @@ import { CryptoHasher } from "bun";
 import { Data, Effect } from "effect";
 
 import { config } from "../config.ts";
-import { effectiveBaseOrTrunkEffect } from "../git.ts";
-import { runEffect } from "../proc.ts";
+import { effectiveBaseOrTrunk } from "../git.ts";
+import { run } from "../proc.ts";
 
 import { fitParts, formatCompaction, type ModeCounts } from "./fit.ts";
 import { parseDiff } from "./parts.ts";
@@ -95,7 +95,7 @@ export class DiffContextError extends Data.TaggedError("DiffContextError")<{
  * across base changes — equivalent diffs against different bases hash
  * to different keys.
  */
-export function buildDiffContextEffect(
+export function buildDiffContext(
   wtPath: string,
   effectiveBase?: string | null,
   signal?: AbortSignal,
@@ -103,7 +103,7 @@ export function buildDiffContextEffect(
   const naming = config.naming;
   if (!naming) return Effect.succeed(null);
   return Effect.gen(function* () {
-  const base = yield* effectiveBaseOrTrunkEffect(wtPath, effectiveBase).pipe(
+  const base = yield* effectiveBaseOrTrunk(wtPath, effectiveBase).pipe(
     Effect.mapError((cause) =>
       new DiffContextError({ operation: "resolve base", cause }),
     ),
@@ -169,12 +169,12 @@ export function buildDiffContextEffect(
   });
 }
 
-export function buildDiffContext(
+export function buildDiffContextPromise(
   wtPath: string,
   effectiveBase?: string | null,
   signal?: AbortSignal,
 ): Promise<DiffContext | null> {
-  return Effect.runPromise(buildDiffContextEffect(wtPath, effectiveBase, signal));
+  return Effect.runPromise(buildDiffContext(wtPath, effectiveBase, signal));
 }
 
 // Three-dot (`base...HEAD` = `merge-base(base, HEAD)..HEAD`) so the diff
@@ -183,7 +183,7 @@ export function buildDiffContext(
 // behind base produces the *inverse* of the commits base has gained —
 // the LLM then summarises those as if they were this branch's work.
 function diffStatEffect(wtPath: string, base: string, signal?: AbortSignal) {
-  return runEffect(
+  return run(
     ["git", "diff", "--stat", `${base}...HEAD`, "--", ...STATIC_EXCLUDES],
     { cwd: wtPath, timeoutMs: 10_000, signal },
   ).pipe(
@@ -193,7 +193,7 @@ function diffStatEffect(wtPath: string, base: string, signal?: AbortSignal) {
 }
 
 function commitLogEffect(wtPath: string, base: string, signal?: AbortSignal) {
-  return runEffect(
+  return run(
     ["git", "log", "--reverse", "--format=%s", `${base}..HEAD`],
     { cwd: wtPath, timeoutMs: 5_000, signal },
   ).pipe(
@@ -203,7 +203,7 @@ function commitLogEffect(wtPath: string, base: string, signal?: AbortSignal) {
 }
 
 function fullDiffEffect(wtPath: string, base: string, signal?: AbortSignal) {
-  return runEffect(
+  return run(
     [
       "git",
       "diff",

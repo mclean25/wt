@@ -13,12 +13,12 @@
 import { Cause, Data, Effect } from "effect";
 
 import {
-  applyReport,
+  applyReportPromise,
   buildReports,
   declineKey,
   detectTargets,
   readSkillsMemory,
-  regenRulesync,
+  regenRulesyncPromise,
   rememberAnswer,
   rememberDecline,
   reportIsActionable,
@@ -28,10 +28,10 @@ import {
   type Unit,
   type UnitReport,
 } from "../core/skills.ts";
-import { withAsyncFileLockEffect } from "../core/locks.ts";
+import { withAsyncFileLock } from "../core/locks.ts";
 import { createLogger } from "../core/logger.ts";
 import { bold, cyan, dim, green, red, yellow } from "./colors.ts";
-import { askEffect, confirmEffect, isInteractive } from "./prompt.ts";
+import { ask, confirm, isInteractive } from "./prompt.ts";
 
 const log = createLogger("[skills]");
 
@@ -87,7 +87,7 @@ function tryRemember(fn: () => void): void {
  * Run the sync. Returns a process exit code. Never throws for
  * per-unit failures — they're printed and reflected in the code.
  */
-export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, SkillsSyncError> {
+export function runSkillsSync(mode: SyncMode): Effect.Effect<number, SkillsSyncError> {
   return Effect.gen(function* () {
     const targets = detectTargets();
     if (targets.harnesses.length === 0) {
@@ -158,7 +158,7 @@ export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, Skill
         }
         const detail = rs.find((r) => r.detail)?.detail ?? "local copy differs";
         if (
-          !(yield* confirmEffect(
+          !(yield* confirm(
             `${yellow("~")} ${bold(unit.name)}: ${detail}. Overwrite with the wt-managed version?`,
             false,
           ))
@@ -180,7 +180,7 @@ export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, Skill
         unit.kind === "instructions"
           ? `${verb} the managed wt block in your agent instructions file(s)?`
           : `${verb} skill ${bold(unit.name)} ${dim(`(${unit.summary})`)}?`;
-      if (yield* confirmEffect(`${cyan("•")} ${what}`, true)) {
+      if (yield* confirm(`${cyan("•")} ${what}`, true)) {
         accepted.push(unit);
       } else {
         tryRemember(() => {
@@ -199,7 +199,7 @@ export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, Skill
     if (mode.interactive) {
       const acceptedReports = reports.filter((r) => acceptedSet.has(unitKey(r.unit)) && r.target.kind === "rulesync");
       for (const rs of touchedRulesyncRoots(acceptedReports)) {
-        const ok = yield* confirmEffect(
+        const ok = yield* confirm(
           `${cyan("•")} ${bold(rs.root)} is rulesync-managed: applying will run ${bold(rs.regen.join(" "))} there. Continue?`,
           true,
         );
@@ -217,7 +217,7 @@ export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, Skill
         if (v.key in memory.answers || asked.has(v.key)) continue;
         asked.add(v.key);
         if (!mode.interactive) continue; // fallback text renders; a later interactive run can still answer
-        const answer = (yield* askEffect(`${cyan("?")} ${v.prompt}: `)).trim();
+        const answer = (yield* ask(`${cyan("?")} ${v.prompt}: `)).trim();
         tryRemember(() => rememberAnswer(v.key, answer));
       }
     }
@@ -227,7 +227,7 @@ export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, Skill
     // units come back "fresh" and drop out), apply, regenerate once per
     // touched rulesync pipeline.
     let failures = 0;
-    yield* withAsyncFileLockEffect(
+    yield* withAsyncFileLock(
       "__skills_sync__",
       Effect.gen(function* () {
         memory = readSkillsMemory();
@@ -242,7 +242,7 @@ export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, Skill
         for (const r of toApply) {
           const result = yield* Effect.result(
             Effect.try({
-              try: () => applyReport(r),
+              try: () => applyReportPromise(r),
               catch: (cause) => new SkillsSyncError({ operation: "apply", cause }),
             }),
           );
@@ -266,7 +266,7 @@ export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, Skill
             console.log(dim(`regenerating rulesync output (${rs.regen.join(" ")}) …`));
           }
           const results = yield* Effect.tryPromise({
-            try: () => regenRulesync(roots),
+            try: () => regenRulesyncPromise(roots),
             catch: (cause) => new SkillsSyncError({ operation: "regenerate", cause }),
           });
           for (const result of results) {
@@ -302,9 +302,9 @@ export function runSkillsSyncEffect(mode: SyncMode): Effect.Effect<number, Skill
  * TUI on a bug in the skills system — unexpected errors are logged
  * and swallowed.
  */
-export function startupSkillsPromptEffect(): Effect.Effect<void> {
+export function startupSkillsPrompt(): Effect.Effect<void> {
   if (!isInteractive()) return Effect.void;
-  return runSkillsSyncEffect({
+  return runSkillsSync({
     interactive: true,
     yes: false,
     force: false,

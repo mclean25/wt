@@ -2,14 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Fiber, Ref } from "effect";
 import { TestClock } from "effect/testing";
 
-import { waitForNewZedWindowEffect } from "./zed-windows.ts";
+import { waitForNewZedWindow } from "./zed-windows.ts";
 
-describe("waitForNewZedWindowEffect", () => {
+describe("waitForNewZedWindow", () => {
   test("finds a window after the polling interval", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
-          waitForNewZedWindowEffect(
+          waitForNewZedWindow(
             new Set([1]),
             () => Effect.succeed(new Set([1, 2])),
             { intervalMs: 150, timeoutMs: 3000 },
@@ -27,7 +27,7 @@ describe("waitForNewZedWindowEffect", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
-          waitForNewZedWindowEffect(
+          waitForNewZedWindow(
             new Set([1]),
             () => Effect.succeed(new Set([1])),
             { intervalMs: 150, timeoutMs: 3000 },
@@ -46,7 +46,7 @@ describe("waitForNewZedWindowEffect", () => {
       Effect.gen(function* () {
         const count = yield* Ref.make(0);
         const fiber = yield* Effect.forkChild(
-          waitForNewZedWindowEffect(
+          waitForNewZedWindow(
             new Set([1]),
             () => Ref.update(count, (value) => value + 1).pipe(Effect.as(new Set([1]))),
           ),

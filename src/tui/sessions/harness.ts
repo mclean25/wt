@@ -14,7 +14,7 @@ import { Effect } from "effect";
 
 import type { HarnessId } from "../../core/harness/index.ts";
 import {
-  enterWorktreeSessionEffect,
+  enterWorktreeSession,
   type WorktreeSessionResult,
 } from "./worktree.ts";
 
@@ -62,7 +62,7 @@ export type EnterHarnessSessionOptions = {
   switchable?: boolean;
 };
 
-export function enterHarnessSessionEffect(opts: EnterHarnessSessionOptions) {
+export function enterHarnessSession(opts: EnterHarnessSessionOptions) {
   const {
     renderer,
     slug,
@@ -75,7 +75,7 @@ export function enterHarnessSessionEffect(opts: EnterHarnessSessionOptions) {
     diffBase,
     switchable,
   } = opts;
-  return enterWorktreeSessionEffect({
+  return enterWorktreeSession({
     renderer,
     slug,
     cwd,
@@ -92,5 +92,5 @@ export function enterHarnessSessionEffect(opts: EnterHarnessSessionOptions) {
   });
 }
 
-export const enterHarnessSession = (opts: EnterHarnessSessionOptions): Promise<EnterResult> =>
-  Effect.runPromise(enterHarnessSessionEffect(opts));
+export const enterHarnessSessionPromise = (opts: EnterHarnessSessionOptions): Promise<EnterResult> =>
+  Effect.runPromise(enterHarnessSession(opts));

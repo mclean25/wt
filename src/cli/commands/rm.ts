@@ -1,25 +1,25 @@
 import { Data, Effect } from "effect";
 
-import { branchExists, branchIsGone, branchIsMerged } from "../../core/git.ts";
-import { removeWorktree, spawnBackgroundRemove } from "../../core/lifecycle.ts";
+import { branchExistsPromise, branchIsGonePromise, branchIsMergedPromise } from "../../core/git.ts";
+import { removeWorktreePromise, spawnBackgroundRemovePromise } from "../../core/lifecycle.ts";
 import { lockAge, lockLabel, lockStatus } from "../../core/locks.ts";
 import { latestLogFor } from "../../core/logs.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
-import { killAllSessionsFor } from "../../core/tmux.ts";
+import { killAllSessionsForPromise } from "../../core/tmux.ts";
 import type { Worktree } from "../../core/types.ts";
 import {
-  listWorktrees,
-  pushCounts,
-  worktreeIsDirty,
+  listWorktreesPromise,
+  pushCountsPromise,
+  worktreeIsDirtyPromise,
 } from "../../core/worktree.ts";
 import { owesPostMergeVerification } from "../../core/work-status.ts";
 import { readWtState } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, dim, green, red, yellow } from "../colors.ts";
 import {
-  confirmEffect,
+  confirm,
   isInteractive,
-  pickIndexEffect,
+  pickIndex,
   type PromptError,
 } from "../prompt.ts";
 
@@ -115,7 +115,7 @@ function decideDestroyStage(
     if (!isOurStageDeployed(wt)) return false;
     if (yes) return true;
     if (isInteractive()) {
-      return yield* confirmEffect(
+      return yield* confirm(
         `Stage ${bold(wt.stage)} looks deployed (.sst/outputs.json has live outputs). Run \`sst remove\`?`,
         true,
       );
@@ -140,7 +140,7 @@ function decideDeleteBranch(
     if (
       !wt.branch ||
       !(yield* commandPromise("check whether branch exists", () =>
-        branchExists(wt.branch),
+        branchExistsPromise(wt.branch),
       ))
     ) {
       return false;
@@ -164,7 +164,7 @@ export function run(
       return 2;
     }
 
-    const wts = (yield* commandPromise("list worktrees", listWorktrees)).filter(
+    const wts = (yield* commandPromise("list worktrees", listWorktreesPromise)).filter(
       (w) => !w.isMain,
     );
     if (wts.length === 0) {
@@ -184,7 +184,7 @@ export function run(
         console.error(red("Picking a worktree requires a TTY."));
         return 2;
       }
-      const idx = yield* pickIndexEffect(
+      const idx = yield* pickIndex(
         wts.map((w) => w.slug),
         "Remove which worktree?",
       );
@@ -236,14 +236,14 @@ export function run(
           console.error(red("Refusing to remove without --force."));
           return 1;
         }
-        if (!(yield* confirmEffect("Remove anyway?", false))) return 0;
+        if (!(yield* confirm("Remove anyway?", false))) return 0;
       }
     }
 
     let force = parsed.force;
     if (!force) {
       const dirty = yield* commandPromise("check working tree", () =>
-        worktreeIsDirty(target.path),
+        worktreeIsDirtyPromise(target.path),
       );
       // A squash-merged branch keeps its pre-squash commits locally, which
       // read as "unpushed" once origin prunes the branch — but the work IS
@@ -253,14 +253,14 @@ export function run(
       const landed =
         !dirty && target.branch
           ? (yield* commandPromise("check whether branch is merged", () =>
-              branchIsMerged({
+              branchIsMergedPromise({
                 slug: target.slug,
                 branch: target.branch,
                 path: target.path,
               }),
             )) ||
             (yield* commandPromise("check whether branch is gone", () =>
-              branchIsGone(target.branch, target.path),
+              branchIsGonePromise(target.branch, target.path),
             ))
           : false;
       // `pushCounts`, not `unpushedCommits`: wt points a worktree branch's
@@ -271,7 +271,7 @@ export function run(
         dirty || landed
           ? 0
           : (yield* commandPromise("read push counts", () =>
-              pushCounts(target.path),
+              pushCountsPromise(target.path),
             )).unpushed;
       // null = git couldn't answer; a data-loss guard fails cautious, so
       // treat unknown like unpushed work rather than like a clean tree.
@@ -292,7 +292,7 @@ export function run(
           );
           return 1;
         }
-        if (!(yield* confirmEffect("Remove anyway?", false))) return 0;
+        if (!(yield* confirm("Remove anyway?", false))) return 0;
         force = true;
       }
     }
@@ -308,7 +308,7 @@ export function run(
       // Launch first. A bad executable/log path must not tear down a live
       // session for a removal that never started.
       const logPath = yield* commandIo("launch background removal", () =>
-        spawnBackgroundRemove(target.slug, {
+        spawnBackgroundRemovePromise(target.slug, {
           force,
           destroyStage,
           deleteBranch,
@@ -316,7 +316,7 @@ export function run(
       );
       const cleanup = yield* Effect.result(
         commandPromise("kill worktree sessions", () =>
-          killAllSessionsFor(target.slug),
+          killAllSessionsForPromise(target.slug),
         ),
       );
       console.log(
@@ -338,7 +338,7 @@ export function run(
     }
 
     const result = yield* commandPromise("remove worktree", () =>
-      removeWorktree(target, {
+      removeWorktreePromise(target, {
         force,
         destroyStage,
         deleteBranch,
@@ -363,7 +363,7 @@ export function run(
     // remain visible in the exit code.
     const cleanup = yield* Effect.result(
       commandPromise("kill removed worktree sessions", () =>
-        killAllSessionsFor(target.slug),
+        killAllSessionsForPromise(target.slug),
       ),
     );
     console.log(green(`✓ ${result.message}`));

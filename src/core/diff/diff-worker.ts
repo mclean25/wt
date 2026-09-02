@@ -10,7 +10,7 @@
  * `buildDiffContext`) turns into a SIGTERM of the git subprocess —
  * the kill happens there, not here.
  */
-import { buildDiffContext } from "./index.ts";
+import { buildDiffContextPromise } from "./index.ts";
 import type { DiffJobMessage, DiffJobResult } from "./protocol.ts";
 
 declare var self: Worker;
@@ -35,7 +35,7 @@ self.onmessage = (event: MessageEvent<DiffJobMessage>) => {
   // never attach, the throw escapes onmessage, and the job would strand
   // with no reply. Reply an error synchronously instead.
   try {
-    buildDiffContext(msg.wtPath, msg.base, ac.signal)
+    buildDiffContextPromise(msg.wtPath, msg.base, ac.signal)
       .then((ctx) => {
         controllers.delete(msg.id);
         reply({ type: "result", id: msg.id, ctx });

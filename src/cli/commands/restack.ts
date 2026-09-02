@@ -1,9 +1,9 @@
 import { Data, Effect } from "effect";
 
-import { git } from "../../core/git.ts";
+import { gitPromise } from "../../core/git.ts";
 import {
-  pruneStackBackups,
-  rebaseStack,
+  pruneStackBackupsPromise,
+  rebaseStackPromise,
   type RebaseResult,
 } from "../../core/stack-ops.ts";
 import { hasHelpFlag } from "../args.ts";
@@ -99,7 +99,7 @@ function runPruneBackups(
       }
     }
     const res = yield* commandPromise("prune restack backups", () =>
-      pruneStackBackups(days, logLine),
+      pruneStackBackupsPromise(days, logLine),
     );
     if (res.deleted.length === 0 && res.kept.length === 0) {
       console.log(dim("no backup branches found"));
@@ -118,7 +118,7 @@ function runPruneBackups(
 /** The current worktree's branch, for the bare `wt restack` form. */
 function branchFromCwd(): Effect.Effect<string | null, never> {
   return commandPromise("resolve current branch", () =>
-    git(["rev-parse", "--abbrev-ref", "HEAD"], process.cwd()),
+    gitPromise(["rev-parse", "--abbrev-ref", "HEAD"], process.cwd()),
   ).pipe(
     Effect.map((output) => output.trim()),
     Effect.map((branch) => (branch && branch !== "HEAD" ? branch : null)),
@@ -171,7 +171,7 @@ export function run(
     }
     const opts = onto ? { onto } : {};
     const result = yield* commandPromise("restack branches", () =>
-      rebaseStack(branch, opts, logLine),
+      rebaseStackPromise(branch, opts, logLine),
     );
     return report(branch, result);
   });

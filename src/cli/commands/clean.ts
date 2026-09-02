@@ -1,22 +1,22 @@
 import { Data, Effect } from "effect";
 
-import { fetchGithubEffect } from "../../core/github.ts";
-import { removeWorktree, spawnBackgroundRemove } from "../../core/lifecycle.ts";
+import { fetchGithub } from "../../core/github.ts";
+import { removeWorktreePromise, spawnBackgroundRemovePromise } from "../../core/lifecycle.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
-import { killAllSessionsFor } from "../../core/tmux.ts";
+import { killAllSessionsForPromise } from "../../core/tmux.ts";
 import type { Status, Worktree } from "../../core/types.ts";
 import { StatusKind } from "../../core/types.ts";
 import {
-  fetchOrigin,
-  listWorktrees,
-  worktreeIsDirty,
-  worktreeStatus,
+  fetchOriginPromise,
+  listWorktreesPromise,
+  worktreeIsDirtyPromise,
+  worktreeStatusPromise,
 } from "../../core/worktree.ts";
 import { owesPostMergeVerification } from "../../core/work-status.ts";
 import { readWtState } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
-import { confirmEffect, isInteractive, type PromptError } from "../prompt.ts";
+import { confirm, isInteractive, type PromptError } from "../prompt.ts";
 
 const USAGE = `usage: wt clean [options]
 
@@ -62,35 +62,35 @@ export class CleanCommandError extends Data.TaggedError("CleanCommandError")<{
   readonly cause: unknown;
 }> {}
 
-type RemoveResult = Awaited<ReturnType<typeof removeWorktree>>;
+type RemoveResult = Awaited<ReturnType<typeof removeWorktreePromise>>;
 
 export type CleanDeps = {
-  readonly fetchOrigin: typeof fetchOrigin;
-  readonly listWorktrees: typeof listWorktrees;
-  readonly worktreeStatus: typeof worktreeStatus;
-  readonly fetchGithub: typeof fetchGithubEffect;
-  readonly worktreeIsDirty: typeof worktreeIsDirty;
+  readonly fetchOrigin: typeof fetchOriginPromise;
+  readonly listWorktrees: typeof listWorktreesPromise;
+  readonly worktreeStatus: typeof worktreeStatusPromise;
+  readonly fetchGithub: typeof fetchGithub;
+  readonly worktreeIsDirty: typeof worktreeIsDirtyPromise;
   readonly readWtState: typeof readWtState;
   readonly removeWorktree: (
     wt: Worktree,
-    opts: Parameters<typeof removeWorktree>[1],
+    opts: Parameters<typeof removeWorktreePromise>[1],
   ) => Promise<RemoveResult>;
-  readonly spawnBackgroundRemove: typeof spawnBackgroundRemove;
+  readonly spawnBackgroundRemove: typeof spawnBackgroundRemovePromise;
   readonly isOurStageDeployed: typeof isOurStageDeployed;
-  readonly killAllSessionsFor: typeof killAllSessionsFor;
+  readonly killAllSessionsFor: typeof killAllSessionsForPromise;
 };
 
 const defaultDeps: CleanDeps = {
-  fetchOrigin,
-  listWorktrees,
-  worktreeStatus,
-  fetchGithub: fetchGithubEffect,
-  worktreeIsDirty,
+  fetchOrigin: fetchOriginPromise,
+  listWorktrees: listWorktreesPromise,
+  worktreeStatus: worktreeStatusPromise,
+  fetchGithub: fetchGithub,
+  worktreeIsDirty: worktreeIsDirtyPromise,
   readWtState,
-  removeWorktree,
-  spawnBackgroundRemove,
+  removeWorktree: removeWorktreePromise,
+  spawnBackgroundRemove: spawnBackgroundRemovePromise,
   isOurStageDeployed,
-  killAllSessionsFor,
+  killAllSessionsFor: killAllSessionsForPromise,
 };
 
 function commandIo<A>(
@@ -296,7 +296,7 @@ export function runWithDeps(
         console.error(red("Confirming clean requires a TTY. Pass -y."));
         return 2;
       }
-      if (!(yield* confirmEffect(`Remove ${candidates.length}?`, true)))
+      if (!(yield* confirm(`Remove ${candidates.length}?`, true)))
         return 0;
     }
 

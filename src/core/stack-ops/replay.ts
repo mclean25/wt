@@ -2,25 +2,25 @@ import { Data, Effect, Result } from "effect";
 
 import { config } from "../config.ts";
 import {
-  firstShaEffect,
-  gitQuietEffect,
-  gitRunEffect,
-  rebaseInProgressEffect,
-  revParseEffect,
+  firstSha,
+  gitQuiet,
+  gitRun,
+  rebaseInProgress,
+  revParse,
 } from "../git.ts";
-import { runEffect } from "../proc.ts";
+import { run } from "../proc.ts";
 import { replayStepEffect, restackEngine } from "./engine.ts";
-import { resolveChainEffect, type ChainStep, type RestackChain } from "./chain.ts";
+import { resolveChain, type ChainStep, type RestackChain } from "./chain.ts";
 import { advanceBaseAnchor } from "../wtstate.ts";
-import { fetchOriginEffect, worktreeHasTrackedChangesEffect } from "../worktree.ts";
+import { fetchOrigin, worktreeHasTrackedChanges } from "../worktree.ts";
 import {
   log,
-  retargetIfNeededEffect,
+  retargetIfNeeded,
   STACK_BUSY,
   type Logger,
-  withLockedChainEffect,
+  withLockedChain,
 } from "./shared.ts";
-import { reconcileStackEffect } from "./reconcile.ts";
+import { reconcileStack } from "./reconcile.ts";
 import { causeMessage } from "../errors.ts";
 
 // ---------- reconcile / replay / rebase ----------
@@ -80,25 +80,25 @@ const rebaseResult = (result: RebaseResult): RebaseResult => result;
  * a surviving sibling safe while a merged member is still on disk, and
  * makes the automation pre-clean's dispatch-then-restack ordering benign.
  */
-export function rebaseStackEffect(
+export function rebaseStack(
   branch: string,
   opts: RebaseOptions,
   onLog: Logger,
 ): Effect.Effect<RebaseResult, StackReplayError> {
   return Effect.gen(function* () {
   const trunk = opts.onto ?? config.branch.base;
-  const pre = yield* resolveChainEffect(branch);
-  const landed = yield* reconcileStackEffect(branch, trunk, onLog);
+  const pre = yield* resolveChain(branch);
+  const landed = yield* reconcileStack(branch, trunk, onLog);
   const candidates = (pre ? pre.steps.map((s) => s.branch) : [branch]).filter(
     (b) => !landed.has(b),
   );
   const replayedRoots = new Set<string>();
   const outputs: string[] = [];
   for (const candidate of candidates) {
-    const chain = yield* resolveChainEffect(candidate);
+    const chain = yield* resolveChain(candidate);
     if (!chain || replayedRoots.has(chain.root)) continue;
     replayedRoots.add(chain.root);
-    const res = yield* replayStackEffect(candidate, { onto: trunk }, onLog);
+    const res = yield* replayStack(candidate, { onto: trunk }, onLog);
     if (!res.ok) return res;
     outputs.push(res.output);
   }
@@ -120,12 +120,12 @@ export function rebaseStackEffect(
   );
 }
 
-export function rebaseStack(
+export function rebaseStackPromise(
   branch: string,
   opts: RebaseOptions,
   onLog: Logger,
 ): Promise<RebaseResult> {
-  return Effect.runPromise(rebaseStackEffect(branch, opts, onLog));
+  return Effect.runPromise(rebaseStack(branch, opts, onLog));
 }
 
 /**
@@ -139,12 +139,12 @@ export function rebaseStack(
  * worktrees by the members' per-slug flocks (see `lockChain`); disjoint
  * chains replay concurrently.
  */
-export function replayStackEffect(
+export function replayStack(
   branch: string,
   opts: RebaseOptions,
   onLog: Logger,
 ) : Effect.Effect<RebaseResult, StackReplayError> {
-  return withLockedChainEffect(branch, "replay", (locked) => {
+  return withLockedChain(branch, "replay", (locked) => {
   if (locked.status === "busy") {
     return Effect.succeed<RebaseResult>({ ok: false, conflict: false, error: STACK_BUSY });
   }
@@ -159,12 +159,12 @@ export function replayStackEffect(
   }).pipe(Effect.mapError(replayError("replay stack")));
 }
 
-export function replayStack(
+export function replayStackPromise(
   branch: string,
   opts: RebaseOptions,
   onLog: Logger,
 ): Promise<RebaseResult> {
-  return Effect.runPromise(replayStackEffect(branch, opts, onLog));
+  return Effect.runPromise(replayStack(branch, opts, onLog));
 }
 
 function replayStackLockedEffect(
@@ -183,7 +183,7 @@ function replayStackLockedEffect(
   // TRACKED changes block: untracked files ride through a rebase safely
   // (git refuses cleanly if one would be overwritten).
   for (const s of chain.steps) {
-    if (yield* worktreeHasTrackedChangesEffect(s.worktreePath)) {
+    if (yield* worktreeHasTrackedChanges(s.worktreePath)) {
       return rebaseResult({
         ok: false,
         conflict: false,
@@ -195,7 +195,7 @@ function replayStackLockedEffect(
     // dirty check alone misses it. Replaying into it would make the
     // engine abort and silently discard that in-flight state — refuse
     // up front instead.
-    if (yield* rebaseInProgressEffect(s.worktreePath)) {
+    if (yield* rebaseInProgress(s.worktreePath)) {
       return rebaseResult({
         ok: false,
         conflict: false,
@@ -206,7 +206,7 @@ function replayStackLockedEffect(
 
   // Freshen origin before replaying. A failed fetch would silently
   // leave stale refs and replay every member onto an outdated base.
-  const fetched = yield* fetchOriginEffect().pipe(Effect.result);
+  const fetched = yield* fetchOrigin().pipe(Effect.result);
   if (Result.isFailure(fetched)) {
     const err = fetched.failure;
     return rebaseResult({
@@ -229,9 +229,9 @@ function replayStackLockedEffect(
   // run before a single branch has been pushed.
   const anchorByBranch = new Map<string, string>();
   for (const s of chain.steps) {
-    const anchor = yield* resolveAnchorEffect(
+    const anchor = yield* resolveAnchor(
       s,
-      yield* anchorParentRefEffect(s, trunk, s.worktreePath),
+      yield* anchorParentRef(s, trunk, s.worktreePath),
       s.worktreePath,
     );
     if (!anchor) {
@@ -250,7 +250,7 @@ function replayStackLockedEffect(
   let replayed = 0;
   for (const s of chain.steps) {
     const anchor = anchorByBranch.get(s.branch)!;
-    const newBase = yield* resolveNewBaseShaEffect(
+    const newBase = yield* resolveNewBaseSha(
       s,
       trunk,
       newTipByBranch,
@@ -323,7 +323,7 @@ function replayStackLockedEffect(
     // hand-resolved conflict may have changed the parent too.
     if (out.moved) replayed++;
     if (out.moved || out.pushed) {
-      yield* retargetIfNeededEffect(s.branch, s.parentBranch ?? trunk, onLog);
+      yield* retargetIfNeeded(s.branch, s.parentBranch ?? trunk, onLog);
     }
   }
 
@@ -357,13 +357,13 @@ function parentRefOf(step: ChainStep, trunk: string): string {
  * `resolveAnchor` lean on the recorded `baseSha`. Trunk roots anchor on
  * `origin/<trunk>`, which exists in every clone.
  */
-export function anchorParentRefEffect(
+export function anchorParentRef(
   step: ChainStep,
   trunk: string,
   cwd: string,
 ): Effect.Effect<string, StackReplayError> {
   if (step.parentBranch === null) return Effect.succeed(`origin/${trunk}`);
-  return firstShaEffect(cwd, [
+  return firstSha(cwd, [
     step.parentBranch,
     `origin/${step.parentBranch}`,
   ]).pipe(
@@ -372,18 +372,18 @@ export function anchorParentRefEffect(
   );
 }
 
-export function anchorParentRef(
+export function anchorParentRefPromise(
   step: ChainStep,
   trunk: string,
   cwd: string,
 ): Promise<string> {
-  return Effect.runPromise(anchorParentRefEffect(step, trunk, cwd));
+  return Effect.runPromise(anchorParentRef(step, trunk, cwd));
 }
 
 /** Is `sha` a commit object present in `cwd`'s store? (`rev-parse` alone
  *  validates syntax, not presence, so a bare SHA can't be trusted.) */
 function hasCommitEffect(cwd: string, sha: string): Effect.Effect<boolean, StackReplayError> {
-  return runEffect(["git", "cat-file", "-e", `${sha}^{commit}`], { cwd }).pipe(
+  return run(["git", "cat-file", "-e", `${sha}^{commit}`], { cwd }).pipe(
     Effect.map((result) => result.exitCode === 0),
     Effect.mapError(replayError("check commit")),
   );
@@ -420,17 +420,17 @@ function hasCommitEffect(cwd: string, sha: string): Effect.Effect<boolean, Stack
  * commits sit ABOVE the pre-squash merge-base, so it stays the cut point that
  * excludes the squash-merged parent). Self-healing, no manual bookkeeping.
  */
-export function resolveAnchorEffect(
+export function resolveAnchor(
   step: Pick<ChainStep, "branch" | "baseSha">,
   parentRef: string,
   cwd: string,
 ): Effect.Effect<string | null, StackReplayError> {
   return Effect.gen(function* () {
-  const mb = yield* gitRunEffect(["merge-base", step.branch, parentRef], cwd);
+  const mb = yield* gitRun(["merge-base", step.branch, parentRef], cwd);
   const liveAnchor = mb.exitCode === 0 && mb.stdout.trim() ? mb.stdout.trim() : null;
 
   if (step.baseSha) {
-    const storedIsAncestor = yield* gitQuietEffect(
+    const storedIsAncestor = yield* gitQuiet(
       ["merge-base", "--is-ancestor", step.baseSha, step.branch],
       cwd,
     );
@@ -440,7 +440,7 @@ export function resolveAnchorEffect(
       // the live merge-base means the branch was rebased onto newer trunk —
       // the live merge-base is the true fork point (case 2). Otherwise the live
       // merge-base is at/below `baseSha` (squash case), so `baseSha` stands.
-      const baseShaBelowLive = yield* gitQuietEffect(
+      const baseShaBelowLive = yield* gitQuiet(
         ["merge-base", "--is-ancestor", step.baseSha, liveAnchor],
         cwd,
       );
@@ -451,12 +451,12 @@ export function resolveAnchorEffect(
   }).pipe(Effect.mapError(replayError("resolve anchor")));
 }
 
-export function resolveAnchor(
+export function resolveAnchorPromise(
   step: Pick<ChainStep, "branch" | "baseSha">,
   parentRef: string,
   cwd: string,
 ): Promise<string | null> {
-  return Effect.runPromise(resolveAnchorEffect(step, parentRef, cwd));
+  return Effect.runPromise(resolveAnchor(step, parentRef, cwd));
 }
 
 /**
@@ -480,7 +480,7 @@ export function resolveAnchor(
  * that left stale phantom-conflict refs behind. Gated on `hasCommit`, so
  * the git-worktree path never fetches; composes across a mixed chain.
  */
-export function resolveNewBaseShaEffect(
+export function resolveNewBaseSha(
   step: ChainStep,
   trunk: string,
   newTipByBranch: Map<string, string>,
@@ -505,9 +505,9 @@ export function resolveNewBaseShaEffect(
     // reader in that clone (ahead/behind counts, the conflict probe, the
     // agent's own `git log origin/<trunk>..HEAD`) measuring against a
     // tip that is now several merges behind.
-    const mainTrunk = yield* revParseEffect(`origin/${trunk}`, config.paths.mainClone);
-    if (mainTrunk && (yield* revParseEffect(`origin/${trunk}`, cwd)) !== mainTrunk) {
-      yield* runEffect(
+    const mainTrunk = yield* revParse(`origin/${trunk}`, config.paths.mainClone);
+    if (mainTrunk && (yield* revParse(`origin/${trunk}`, cwd)) !== mainTrunk) {
+      yield* run(
         [
           "git", "fetch", "--no-tags", config.paths.mainClone,
           `+refs/remotes/origin/${trunk}:refs/remotes/origin/${trunk}`,
@@ -515,14 +515,14 @@ export function resolveNewBaseShaEffect(
         { cwd },
       );
     }
-    return mainTrunk ?? (yield* revParseEffect(`origin/${trunk}`, cwd));
+    return mainTrunk ?? (yield* revParse(`origin/${trunk}`, cwd));
   }
   const replayed = newTipByBranch.get(step.parentBranch);
   if (replayed) {
     if (yield* hasCommitEffect(cwd, replayed)) return replayed;
     const parentPath = pathByBranch.get(step.parentBranch);
     if (parentPath) {
-      yield* runEffect(
+      yield* run(
         [
           "git", "fetch", "--no-tags", parentPath,
           `+refs/heads/${step.parentBranch}:refs/remotes/origin/${step.parentBranch}`,
@@ -535,14 +535,14 @@ export function resolveNewBaseShaEffect(
   }
   // Parent outside this run (external ref, or the standalone fallback):
   // prefer the local checkout, fall back to the remote-tracking ref.
-  return yield* firstShaEffect(cwd, [
+  return yield* firstSha(cwd, [
     step.parentBranch,
     `origin/${step.parentBranch}`,
   ]);
   }).pipe(Effect.mapError(replayError("resolve new base")));
 }
 
-export function resolveNewBaseSha(
+export function resolveNewBaseShaPromise(
   step: ChainStep,
   trunk: string,
   newTipByBranch: Map<string, string>,
@@ -550,6 +550,6 @@ export function resolveNewBaseSha(
   cwd: string,
 ): Promise<string | null> {
   return Effect.runPromise(
-    resolveNewBaseShaEffect(step, trunk, newTipByBranch, pathByBranch, cwd),
+    resolveNewBaseSha(step, trunk, newTipByBranch, pathByBranch, cwd),
   );
 }

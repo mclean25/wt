@@ -1,10 +1,10 @@
 import { Data, Effect } from "effect";
 
-import { branchExistsEffect } from "../git.ts";
-import { viewPrInfoEffect } from "../github/mutations.ts";
+import { branchExists } from "../git.ts";
+import { viewPrInfo } from "../github/mutations.ts";
 import { setSlugBase } from "../wtstate.ts";
 import { type ChainStep, type RestackChain } from "./chain.ts";
-import { STACK_BUSY, type Logger, withLockedChainEffect } from "./shared.ts";
+import { STACK_BUSY, type Logger, withLockedChain } from "./shared.ts";
 import { causeMessage } from "../errors.ts";
 
 export class StackReconcileError extends Data.TaggedError("StackReconcileError")<{
@@ -28,12 +28,12 @@ export class StackReconcileError extends Data.TaggedError("StackReconcileError")
  * GitHub/git state but never rewrites branches — so `/restack` can run
  * it on its own before deciding to replay.
  */
-export function reconcileStackEffect(
+export function reconcileStack(
   branch: string,
   trunk: string,
   onLog: Logger,
 ): Effect.Effect<Set<string>, StackReconcileError> {
-  return withLockedChainEffect(branch, "reconcile", (locked) => {
+  return withLockedChain(branch, "reconcile", (locked) => {
   if (locked.status === "busy") {
     onLog(`skipped reconcile of ${branch} — ${STACK_BUSY}`);
     return Effect.succeed(new Set<string>());
@@ -47,12 +47,12 @@ export function reconcileStackEffect(
   );
 }
 
-export function reconcileStack(
+export function reconcileStackPromise(
   branch: string,
   trunk: string,
   onLog: Logger,
 ): Promise<Set<string>> {
-  return Effect.runPromise(reconcileStackEffect(branch, trunk, onLog));
+  return Effect.runPromise(reconcileStack(branch, trunk, onLog));
 }
 
 function reconcileStackLockedEffect(
@@ -75,7 +75,7 @@ function reconcileStackLockedEffect(
   ];
   const probed = yield* Effect.forEach(
     parents,
-    (p) => viewPrInfoEffect(p).pipe(Effect.map((live) => ({ parent: p, live }))),
+    (p) => viewPrInfo(p).pipe(Effect.map((live) => ({ parent: p, live }))),
     { concurrency: 4 },
   );
 
@@ -94,7 +94,7 @@ function reconcileStackLockedEffect(
     // transient gh failure exactly as it does for "no PR", and without
     // the second check a gh hiccup would reparent a member whose parent
     // is alive.
-    if (!live && !stepByBranch.has(parent) && !(yield* branchExistsEffect(parent))) {
+    if (!live && !stepByBranch.has(parent) && !(yield* branchExists(parent))) {
       landed.add(parent);
       onLog(`parent ${parent} is gone`);
     }

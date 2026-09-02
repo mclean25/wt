@@ -1,13 +1,13 @@
 import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
-import { categorizeStagesEffect, humanSize, listSstStagesEffect } from "../../core/sst.ts";
+import { categorizeStages, humanSize, listSstStages } from "../../core/sst.ts";
 import type { SstStage } from "../../core/types.ts";
-import { listWorktreesEffect } from "../../core/worktree.ts";
+import { listWorktrees } from "../../core/worktree.ts";
 import { cyan, dim, green, red, yellow } from "../colors.ts";
 import { humanAge } from "../../core/locks.ts";
 import { renderTable } from "../render.ts";
-import { confirmEffect, isInteractive, type PromptError } from "../prompt.ts";
+import { confirm, isInteractive, type PromptError } from "../prompt.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 
 const USAGE = `usage: wt stages [options]
@@ -137,7 +137,7 @@ export function run(
       return 1;
     }
 
-    const stages = yield* listSstStagesEffect().pipe(
+    const stages = yield* listSstStages().pipe(
       Effect.mapError((cause) =>
         new StagesCommandError({ operation: "list SST stages", cause }),
       ),
@@ -146,7 +146,7 @@ export function run(
       console.error(red("Failed to list SST state bucket."));
       return 1;
     }
-    const wts = yield* listWorktreesEffect().pipe(
+    const wts = yield* listWorktrees().pipe(
       Effect.mapError((cause) =>
         new StagesCommandError({ operation: "list worktrees", cause }),
       ),
@@ -154,7 +154,7 @@ export function run(
     const worktreeStages = new Set(
       wts.filter((w) => !w.isMain).map((w) => w.stage),
     );
-    const { live, orphaned } = yield* categorizeStagesEffect(
+    const { live, orphaned } = yield* categorizeStages(
       stages,
       worktreeStages,
     ).pipe(
@@ -232,7 +232,7 @@ export function run(
         return 2;
       }
       if (
-        !(yield* confirmEffect(
+        !(yield* confirm(
           `Destroy ${orphaned.length} orphaned stage(s)?`,
           false,
         ))

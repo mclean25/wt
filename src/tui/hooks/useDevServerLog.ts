@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { Data, Effect, Fiber } from "effect";
 
 import type { WorktreeTarget } from "../../core/worktree-target.ts";
-import { readWorktreeDevLogs } from "../../core/worktree-executor.ts";
+import { readWorktreeDevLogsPromise } from "../../core/worktree-executor.ts";
 
 const POLL_MS = 1_000;
 
@@ -16,7 +16,7 @@ class DevLogReadError extends Data.TaggedError("DevLogReadError")<{
   readonly cause: unknown;
 }> {}
 
-export function devServerLogPollEffect(
+export function devServerLogPoll(
   read: () => Promise<string | null>,
   onOutput: (output: string | null) => void,
   intervalMs = POLL_MS,
@@ -42,9 +42,9 @@ export function useDevServerLog(
   useEffect(() => {
     setOutput(null);
     const read = () =>
-      target ? readWorktreeDevLogs(target) : Promise.resolve(null);
+      target ? readWorktreeDevLogsPromise(target) : Promise.resolve(null);
     const fiber = Effect.runFork(
-      devServerLogPollEffect(read, (next) =>
+      devServerLogPoll(read, (next) =>
         setOutput((previous) => (previous === next ? previous : next)),
       ),
     );

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Exit, Fiber } from "effect";
 
-import { tryAcquireLock, withAsyncFileLockEffect } from "./locks.ts";
+import { tryAcquireLock, withAsyncFileLock } from "./locks.ts";
 
 test("a synchronous lock handle can be released repeatedly", () => {
   const name = `idempotent-release-${process.pid}-${performance.now()}`;
@@ -20,7 +20,7 @@ test("interrupting a lock holder releases the flock before the fiber exits", asy
   const acquired = Effect.runSync(Deferred.make<void>());
 
   const holder = Effect.runFork(
-    withAsyncFileLockEffect(
+    withAsyncFileLock(
       name,
       Deferred.succeed(acquired, undefined).pipe(
         Effect.andThen(Effect.never),
@@ -35,7 +35,7 @@ test("interrupting a lock holder releases the flock before the fiber exits", asy
   expect(Exit.hasInterrupts(interrupted)).toBe(true);
 
   const value = await Effect.runPromise(
-    withAsyncFileLockEffect(name, Effect.succeed("reacquired"), {
+    withAsyncFileLock(name, Effect.succeed("reacquired"), {
       pollMs: 1,
       timeoutMs: 100,
     }),

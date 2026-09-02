@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { resolveTeardownCommand, runTeardownCommand } from "./teardown.ts";
+import { resolveTeardownCommand, runTeardownCommandPromise } from "./teardown.ts";
 
 // The shared resolver behind `[lifecycle] destroy_command` and
 // `[dev_server] stop_command`.
@@ -48,7 +48,7 @@ test("resolveTeardownCommand still runs a port-independent command with no port"
 // an environment that is still up is what leaves it unstartable.
 test("runTeardownCommand reports success and failure", async () => {
   expect(
-    await runTeardownCommand({
+    await runTeardownCommandPromise({
       label: "stop_command",
       command: "exit 0",
       cwd: "/",
@@ -57,7 +57,7 @@ test("runTeardownCommand reports success and failure", async () => {
     }),
   ).toBe(true);
   expect(
-    await runTeardownCommand({
+    await runTeardownCommandPromise({
       label: "stop_command",
       command: "exit 7",
       cwd: "/",

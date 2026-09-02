@@ -1,6 +1,6 @@
 import { Data, Effect } from "effect";
 
-import { formatPerfReport, samplePerf } from "../../core/perf.ts";
+import { formatPerfReport, samplePerfPromise } from "../../core/perf.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { red } from "../colors.ts";
 
@@ -40,7 +40,7 @@ export function run(argv: string[]): Effect.Effect<number, PerfSampleError> {
     // Unlike the overlay (where the TUI is `process.pid`), this one-shot
     // process is nobody's ancestor — root at live wt instances too.
     const snap = yield* Effect.tryPromise({
-      try: () => samplePerf(undefined, { rootAtWtInstances: true }),
+      try: () => samplePerfPromise(undefined, { rootAtWtInstances: true }),
       catch: (cause) => new PerfSampleError({ cause }),
     });
     console.log(argv.includes("--json") ? JSON.stringify(snap, null, 2) : formatPerfReport(snap));

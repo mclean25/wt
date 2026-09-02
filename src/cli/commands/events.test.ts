@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Duration, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import { plistProgramOf, restartLaunchdAgentEffect, waitForRestartedDaemonEffect } from "./events.ts";
+import { plistProgramOf, restartLaunchdAgent, waitForRestartedDaemon } from "./events.ts";
 
 /**
  * The plist bakes an interpreter path, and on Homebrew that path is
@@ -51,7 +51,7 @@ describe("restartLaunchdAgent", () => {
     let ready = false;
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.forkChild(waitForRestartedDaemonEffect(null, () => ready));
+        const fiber = yield* Effect.forkChild(waitForRestartedDaemon(null, () => ready));
         yield* TestClock.adjust(Duration.seconds(9));
         ready = true;
         yield* TestClock.adjust(Duration.millis(100));
@@ -64,7 +64,7 @@ describe("restartLaunchdAgent", () => {
   test("unloads before loading", async () => {
     const calls: Array<{ action: string; ignoreFailure: boolean }> = [];
     const exit = await Effect.runPromise(
-      restartLaunchdAgentEffect({
+      restartLaunchdAgent({
         control: (action, opts) =>
           Effect.sync(() => {
             calls.push({ action, ignoreFailure: opts?.ignoreFailure ?? false });
@@ -83,7 +83,7 @@ describe("restartLaunchdAgent", () => {
   test("still loads an installed agent that was not running", async () => {
     const calls: string[] = [];
     const exit = await Effect.runPromise(
-      restartLaunchdAgentEffect({
+      restartLaunchdAgent({
         control: (action) =>
           Effect.sync(() => {
             calls.push(action);
@@ -98,7 +98,7 @@ describe("restartLaunchdAgent", () => {
 
   test("returns the load failure", async () => {
     const exit = await Effect.runPromise(
-      restartLaunchdAgentEffect({
+      restartLaunchdAgent({
         control: (action) => Effect.succeed(action === "load" ? 7 : 0),
         waitUntilRunning: () => Effect.succeed(true),
       }),
@@ -109,7 +109,7 @@ describe("restartLaunchdAgent", () => {
   test("fails when launchd loads but no new daemon becomes ready", async () => {
     const seenPreviousPids: Array<number | null> = [];
     const exit = await Effect.runPromise(
-      restartLaunchdAgentEffect({
+      restartLaunchdAgent({
         control: () => Effect.succeed(0),
         waitUntilRunning: (previousPid) =>
           Effect.sync(() => {

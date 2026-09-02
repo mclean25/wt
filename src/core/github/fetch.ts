@@ -2,10 +2,10 @@ import { Data, Effect, Schedule } from "effect";
 
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { runEffect, type RunResult } from "../proc.ts";
+import { run, type RunResult } from "../proc.ts";
 import type { MergeQueueEntry, PullRequest } from "../types.ts";
-import { listWorktreesEffect } from "../worktree.ts";
-import { hasGhEffect, repoSlugEffect } from "./gh-cli.ts";
+import { listWorktrees } from "../worktree.ts";
+import { hasGh, repoSlug } from "./gh-cli.ts";
 import { nodeToPr } from "./parse.ts";
 import type { GithubData, GqlResponse } from "./types.ts";
 
@@ -325,7 +325,7 @@ type GithubExecutor = (
 ) => Effect.Effect<RunResult, GithubTransportError>;
 
 const executeGithub: GithubExecutor = (args) =>
-  runEffect(args, {
+  run(args, {
     cwd: config.paths.mainClone,
     timeoutMs: ATTEMPT_TIMEOUT_MS,
   }).pipe(
@@ -384,7 +384,7 @@ const retrySchedule = Schedule.exponential(RETRY_BASE_MS).pipe(
   Schedule.jittered,
 );
 
-export function fetchChunkEffect(
+export function fetchChunk(
   owner: string,
   name: string,
   branches: string[],
@@ -425,7 +425,7 @@ export function fetchChunkEffect(
   );
 }
 
-export function fetchChunksEffect(
+export function fetchChunks(
   owner: string,
   name: string,
   groups: string[][],
@@ -433,7 +433,7 @@ export function fetchChunksEffect(
 ): Effect.Effect<GithubData, GithubFetchError> {
   return Effect.all(
     groups.map((group, index) =>
-      fetchChunkEffect(owner, name, group, index === 0, execute),
+      fetchChunk(owner, name, group, index === 0, execute),
     ),
     { concurrency: "unbounded" },
   ).pipe(
@@ -514,19 +514,19 @@ function parseChunk(
  * previous fetch returned — actually stops the subprocesses instead of
  * letting them burn graphql round trips on data nobody will read.
  */
-export function fetchGithubEffect(
+export function fetchGithub(
   branches: string[],
 ): Effect.Effect<GithubData, GithubFetchError> {
   const empty: GithubData = { prs: new Map(), mergeQueue: new Map() };
   return Effect.gen(function* () {
-    if (!(yield* hasGhEffect())) return empty;
-    const slug = yield* repoSlugEffect();
+    if (!(yield* hasGh())) return empty;
+    const slug = yield* repoSlug();
     if (!slug) return empty;
     const [owner, name] = slug.split("/");
     if (!owner || !name || branches.length === 0) return empty;
 
     const groups = chunkBranches(branches, CHUNK_SIZE);
-    return yield* fetchChunksEffect(owner, name, groups).pipe(
+    return yield* fetchChunks(owner, name, groups).pipe(
       Effect.timeoutOrElse({
         duration: RETRY_DEADLINE_MS,
         orElse: () =>
@@ -551,11 +551,11 @@ export function fetchGithubEffect(
 }
 
 /** TanStack/CLI compatibility boundary. Cancellation rejects as interruption. */
-export function fetchGithub(
+export function fetchGithubPromise(
   branches: string[],
   signal?: AbortSignal,
 ): Promise<GithubData> {
-  return Effect.runPromise(fetchGithubEffect(branches), { signal });
+  return Effect.runPromise(fetchGithub(branches), { signal });
 }
 
 /**
@@ -565,13 +565,13 @@ export function fetchGithub(
  * listing without PR columns beats a crashed listing — but says so on
  * stderr instead of impersonating "no PRs".
  */
-export function fetchPrsEffect(): Effect.Effect<Map<string, PullRequest>> {
+export function fetchPrs(): Effect.Effect<Map<string, PullRequest>> {
   return Effect.gen(function* () {
-    const worktrees = yield* listWorktreesEffect();
+    const worktrees = yield* listWorktrees();
     const branches = worktrees
       .filter((worktree) => !worktree.isMain && worktree.branch)
       .map((worktree) => worktree.branch as string);
-    return (yield* fetchGithubEffect(branches)).prs;
+    return (yield* fetchGithub(branches)).prs;
   }).pipe(
     Effect.catch((error) =>
       Effect.sync(() => {
@@ -584,6 +584,6 @@ export function fetchPrsEffect(): Effect.Effect<Map<string, PullRequest>> {
   );
 }
 
-export function fetchPrs(): Promise<Map<string, PullRequest>> {
-  return Effect.runPromise(fetchPrsEffect());
+export function fetchPrsPromise(): Promise<Map<string, PullRequest>> {
+  return Effect.runPromise(fetchPrs());
 }

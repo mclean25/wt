@@ -12,7 +12,7 @@
 import { Component, type ReactNode } from "react";
 import { useKeyboard } from "@opentui/react";
 
-import { writeClipboard } from "../core/macos.ts";
+import { writeClipboardPromise } from "../core/macos.ts";
 import {
   captureError,
   formatCapturedError,
@@ -57,7 +57,7 @@ function CrashScreen({
     }
     if (k.name === "y" && !k.ctrl && !k.meta && captured) {
       try {
-        writeClipboard(formatCapturedError(captured));
+        writeClipboardPromise(formatCapturedError(captured));
       } catch {
         // Nowhere safe to report from here; the log has the error.
       }

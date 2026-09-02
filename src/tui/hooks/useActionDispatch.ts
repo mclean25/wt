@@ -26,9 +26,9 @@ import {
 import { recordRun as recordHistoryRun } from "../../core/actions.ts";
 import { config } from "../../core/config.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessageEffect } from "../../core/harness/session-messaging.ts";
+import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
-import { sendWorktreeMessageEffect } from "../../core/worktree-executor.ts";
+import { sendWorktreeMessage } from "../../core/worktree-executor.ts";
 import { StatusKind } from "../../core/types.ts";
 import {
   isRemoteWorktreeTarget,
@@ -356,7 +356,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           `${def.name} → ${label}${location}`,
         );
         ack(`sending ${def.name} to ${label}${location}…`, theme.info, 2000);
-        Effect.runFork(sendWorktreeMessageEffect(
+        Effect.runFork(sendWorktreeMessage(
           subject.target,
           primaryHarness,
           body,
@@ -395,7 +395,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       ensureManagerClaudeName();
       sessionLog.event.info(`${def.name} → ${deliveryTarget.label}`);
       ack(`sending ${def.name} to ${deliveryTarget.label}…`, theme.info, 2000);
-      Effect.runFork(sendSessionMessageEffect({
+      Effect.runFork(sendSessionMessage({
         slug: deliveryTarget.slug,
         cwd: deliveryTarget.cwd,
         harnessId: primaryHarness,
@@ -506,7 +506,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     const slotLog = createLogger(slot.slug);
     slotLog.event.info(`${label} → ${slot.label}`);
     toast(`sending ${label} to ${slot.label}…`, theme.info, 2000);
-    Effect.runFork(sendSessionMessageEffect({
+    Effect.runFork(sendSessionMessage({
       slug: slot.slug,
       cwd: slot.path,
       harnessId: primaryHarness,

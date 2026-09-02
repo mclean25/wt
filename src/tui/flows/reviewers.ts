@@ -6,7 +6,7 @@
 import type { QueryFilters } from "@tanstack/react-query";
 
 import { config } from "../../core/config.ts";
-import { editReviewers } from "../../core/github.ts";
+import { editReviewersPromise } from "../../core/github.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Contributor } from "../../core/types.ts";
 import { patchPullRequest, type GithubData } from "../../state/index.ts";
@@ -170,7 +170,7 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
             reviewRequests: pr.reviewRequests + add.length - remove.length,
           })),
         run: async () => {
-          const result = await editReviewers(prNumber, { add, remove });
+          const result = await editReviewersPromise(prNumber, { add, remove });
           if (!result.ok) throw new Error(result.error);
         },
       });

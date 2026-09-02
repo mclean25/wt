@@ -75,7 +75,7 @@ export type Debounced = {
  * github-events marker watcher (`core/events/store.ts`) — FSEvents bursts,
  * one invalidation pass per burst is enough.
  */
-export const makeDebouncedEffect = (
+export const makeDebounced = (
   onChange: () => void,
   ms: number,
 ): Effect.Effect<Debounced, never, Scope.Scope> => Effect.gen(function* () {
@@ -117,9 +117,9 @@ export const makeDebouncedEffect = (
   };
 });
 
-export function makeDebounced(onChange: () => void, ms: number): Debounced {
+export function makeDebouncedPromise(onChange: () => void, ms: number): Debounced {
   const scope = Effect.runSync(Scope.make());
-  const debounced = Effect.runSync(makeDebouncedEffect(onChange, ms).pipe(Scope.provide(scope)));
+  const debounced = Effect.runSync(makeDebounced(onChange, ms).pipe(Scope.provide(scope)));
   let cancelled = false;
   return {
     trigger: debounced.trigger,
@@ -143,7 +143,7 @@ export function watchRefs(
   onChange: () => void,
 ): () => void {
   const dir = join(mainClonePath, ".git", "refs");
-  const debounced = makeDebounced(onChange, REFS_DEBOUNCE_MS);
+  const debounced = makeDebouncedPromise(onChange, REFS_DEBOUNCE_MS);
   let watcher: FSWatcher | null = null;
   try {
     watcher = watch(dir, { persistent: false, recursive: true }, () =>
@@ -186,8 +186,8 @@ export function watchWorktreeDir(
   onChange: (area: WorktreeDirArea) => void,
 ): () => void {
   const debouncers: Record<WorktreeDirArea, Debounced> = {
-    tree: makeDebounced(() => onChange("tree"), WT_DEBOUNCE_MS),
-    sst: makeDebounced(() => onChange("sst"), WT_DEBOUNCE_MS),
+    tree: makeDebouncedPromise(() => onChange("tree"), WT_DEBOUNCE_MS),
+    sst: makeDebouncedPromise(() => onChange("sst"), WT_DEBOUNCE_MS),
   };
   const cancelAll = (): void => {
     debouncers.tree.cancel();
@@ -245,7 +245,7 @@ export function watchWorktreesAdmin(
   onChange: () => void,
 ): () => void {
   const dir = join(mainClonePath, ".git", "worktrees");
-  const debounced = makeDebounced(onChange, REFS_DEBOUNCE_MS);
+  const debounced = makeDebouncedPromise(onChange, REFS_DEBOUNCE_MS);
   let watcher: FSWatcher | null = null;
   try {
     mkdirSync(dir, { recursive: true });
@@ -279,7 +279,7 @@ export function watchWorktreeRoot(
   worktreeRoot: string,
   onChange: () => void,
 ): () => void {
-  const debounced = makeDebounced(onChange, REFS_DEBOUNCE_MS);
+  const debounced = makeDebouncedPromise(onChange, REFS_DEBOUNCE_MS);
   let watcher: FSWatcher | null = null;
   try {
     mkdirSync(worktreeRoot, { recursive: true });
@@ -326,7 +326,7 @@ export function watchRebaseState(
   const debouncerFor = (slug: string): Debounced => {
     let d = debouncers.get(slug);
     if (!d) {
-      d = makeDebounced(() => onChange(slug), REFS_DEBOUNCE_MS);
+      d = makeDebouncedPromise(() => onChange(slug), REFS_DEBOUNCE_MS);
       debouncers.set(slug, d);
     }
     return d;
@@ -384,8 +384,8 @@ export function watchWtStateFiles(
   onChange: (file: WtStateFile) => void,
 ): () => void {
   const debouncers: Record<WtStateFile, Debounced> = {
-    state: makeDebounced(() => onChange("state"), REFS_DEBOUNCE_MS),
-    archive: makeDebounced(() => onChange("archive"), REFS_DEBOUNCE_MS),
+    state: makeDebouncedPromise(() => onChange("state"), REFS_DEBOUNCE_MS),
+    archive: makeDebouncedPromise(() => onChange("archive"), REFS_DEBOUNCE_MS),
   };
   const cancelAll = (): void => {
     debouncers.state.cancel();
@@ -450,7 +450,7 @@ export function watchLockDir(
   const debouncerFor = (slug: string): Debounced => {
     let d = debouncers.get(slug);
     if (!d) {
-      d = makeDebounced(() => onChange(slug), REFS_DEBOUNCE_MS);
+      d = makeDebouncedPromise(() => onChange(slug), REFS_DEBOUNCE_MS);
       debouncers.set(slug, d);
     }
     return d;
@@ -506,7 +506,7 @@ export function watchRiftRebaseDir(
   onChange: () => void,
 ): () => void {
   const gitDir = join(worktreePath, ".git");
-  const debounced = makeDebounced(onChange, REFS_DEBOUNCE_MS);
+  const debounced = makeDebouncedPromise(onChange, REFS_DEBOUNCE_MS);
   let watcher: FSWatcher | null = null;
   try {
     watcher = watch(gitDir, { persistent: false }, (_event, filename) => {

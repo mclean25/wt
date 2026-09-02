@@ -53,7 +53,7 @@
 import { Effect } from "effect";
 
 import { createLogger } from "./logger.ts";
-import { runEffect } from "./proc.ts";
+import { run } from "./proc.ts";
 
 const log = createLogger("[browser]");
 
@@ -130,7 +130,7 @@ type StatusJson = {
  */
 function liveSessionsEffect(): Effect.Effect<BrowserSession[] | null> {
   if (!Bun.which(BIN)) return Effect.succeed(null);
-  return runEffect([BIN, "status", "--json"], { timeoutMs: 5000 }).pipe(
+  return run([BIN, "status", "--json"], { timeoutMs: 5000 }).pipe(
     Effect.map((res) => {
       if (res.exitCode !== 0) return null;
       let parsed: StatusJson;
@@ -160,7 +160,7 @@ function deleteSessionsEffect(ids: readonly string[]): Effect.Effect<string[]> {
   return Effect.forEach(
     ids,
     (id) =>
-      runEffect([BIN, "session", "delete", id], { timeoutMs: 10_000 }).pipe(
+      run([BIN, "session", "delete", id], { timeoutMs: 10_000 }).pipe(
         Effect.map((res) => {
           if (res.exitCode === 0) return id;
           log.debug("browser session delete failed", {
@@ -201,7 +201,7 @@ export type BrowserCleanup = {
  * the browser's own tabs on that port for the ones browser-control has
  * lost its grip on.
  */
-export function closeWorktreeBrowserSessionsEffect(
+export function closeWorktreeBrowserSessions(
   slug: string,
   devPort?: number | null,
 ): Effect.Effect<BrowserCleanup> {
@@ -213,11 +213,11 @@ export function closeWorktreeBrowserSessionsEffect(
   );
 }
 
-export function closeWorktreeBrowserSessions(
+export function closeWorktreeBrowserSessionsPromise(
   slug: string,
   devPort?: number | null,
 ): Promise<BrowserCleanup> {
-  return Effect.runPromise(closeWorktreeBrowserSessionsEffect(slug, devPort));
+  return Effect.runPromise(closeWorktreeBrowserSessions(slug, devPort));
 }
 
 /**
@@ -227,18 +227,18 @@ export function closeWorktreeBrowserSessions(
  * touch the worktree's other sessions: an agent's reference tabs, a PR
  * page, anything it opened that has nothing to do with the server.
  */
-export function closeDevServerBrowserSessionsEffect(
+export function closeDevServerBrowserSessions(
   slug: string,
   devPort: number,
 ): Effect.Effect<BrowserCleanup> {
   return closeBrowserTabs(slug, devPort, (s) => urlOnDevPort(s.pageUrl, devPort));
 }
 
-export function closeDevServerBrowserSessions(
+export function closeDevServerBrowserSessionsPromise(
   slug: string,
   devPort: number,
 ): Promise<BrowserCleanup> {
-  return Effect.runPromise(closeDevServerBrowserSessionsEffect(slug, devPort));
+  return Effect.runPromise(closeDevServerBrowserSessions(slug, devPort));
 }
 
 /**
@@ -299,7 +299,7 @@ const CHROMIUM_APPS = [
 
 /** Running Chromium apps, by the name AppleScript addresses them with. */
 function runningChromiumAppsEffect(): Effect.Effect<string[]> {
-  return runEffect(["ps", "-Aco", "command"], { timeoutMs: 5000 }).pipe(
+  return run(["ps", "-Aco", "command"], { timeoutMs: 5000 }).pipe(
     Effect.map((res) => {
       if (res.exitCode !== 0) return [];
       const running = new Set(res.stdout.split("\n").map((l) => l.trim()));
@@ -354,7 +354,7 @@ end tell`;
   // per-tab round trip, so a browser with a few hundred tabs open is the
   // realistic way to time out — and timing out here silently skips the
   // whole app. Affordable because the apps run concurrently.
-  return runEffect(["osascript", "-"], {
+  return run(["osascript", "-"], {
     input: script,
     timeoutMs: 15_000,
   }).pipe(
@@ -411,7 +411,7 @@ tell application ${asQuote(app)}
   end repeat
 end tell
 return closedCount`;
-  return runEffect(["osascript", "-"], { input: script, timeoutMs: 5000 }).pipe(
+  return run(["osascript", "-"], { input: script, timeoutMs: 5000 }).pipe(
     Effect.map((res) => {
       if (res.exitCode !== 0) {
         log.debug("browser tab close failed", {

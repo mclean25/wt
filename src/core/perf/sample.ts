@@ -23,7 +23,7 @@ import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { Data, Effect } from "effect";
 
 import { createLogger } from "../logger.ts";
-import { runEffect } from "../proc.ts";
+import { run } from "../proc.ts";
 import { TMUX_SOCKET } from "../tmux.ts";
 import { causeMessage } from "../errors.ts";
 
@@ -174,7 +174,7 @@ function readLinesEffect(
   cmd: string[],
   signal?: AbortSignal,
 ): Effect.Effect<string[] | null> {
-  return runEffect(cmd, { timeoutMs: HELPER_TIMEOUT_MS, signal }).pipe(
+  return run(cmd, { timeoutMs: HELPER_TIMEOUT_MS, signal }).pipe(
     Effect.map(({ stdout, exitCode }) => {
       if (exitCode !== 0) {
         log.debug("perf helper failed", { cmd: cmd[0], exitCode });
@@ -355,7 +355,7 @@ export function isOrphanedWtInstance(
 function launchdOwnedWtPidsEffect(
   signal?: AbortSignal,
 ): Effect.Effect<Set<number>> {
-  return runEffect(["launchctl", "list"], { timeoutMs: 5_000, signal }).pipe(
+  return run(["launchctl", "list"], { timeoutMs: 5_000, signal }).pipe(
     Effect.map((result) => {
       const out = new Set<number>();
       if (result.exitCode !== 0) return out;
@@ -607,7 +607,7 @@ function assemblePerfSnapshot(
   };
 }
 
-export function samplePerfEffect(
+export function samplePerf(
   signal?: AbortSignal,
   opts?: SamplePerfOpts,
 ): Effect.Effect<PerfSnapshot, PerfSampleError> {
@@ -638,10 +638,10 @@ export function samplePerfEffect(
 }
 
 /** Promise adapter for TanStack queries and the CLI. */
-export const samplePerf = (
+export const samplePerfPromise = (
   signal?: AbortSignal,
   opts?: SamplePerfOpts,
-): Promise<PerfSnapshot> => Effect.runPromise(samplePerfEffect(signal, opts));
+): Promise<PerfSnapshot> => Effect.runPromise(samplePerf(signal, opts));
 
 // ── Report ─────────────────────────────────────────────────────────────
 

@@ -28,7 +28,7 @@ import {
   readManagerReportsFrom,
   type ManagerReport,
 } from "../../core/manager.ts";
-import { makeDebounced } from "../../core/repo-watch.ts";
+import { makeDebouncedPromise } from "../../core/repo-watch.ts";
 import { closeSilent } from "../../core/tail-util.ts";
 
 const log = createLogger("manager");
@@ -69,7 +69,7 @@ export function useManagerReports(): void {
       offset = nextOffset;
       for (const r of reports.slice(-MAX_SURFACED_PER_DRAIN)) surfaceReport(r);
     };
-    const debounced = makeDebounced(drain, 150);
+    const debounced = makeDebouncedPromise(drain, 150);
     // Watch the spool's parent dir: the file may not exist yet, and the
     // dir (a dedicated `manager/` subdir, not the busy cache root) only
     // sees report traffic. Filename can be null on some macOS event

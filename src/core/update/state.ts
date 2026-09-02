@@ -4,9 +4,9 @@
  */
 import { Effect } from "effect";
 import {
-  gitOkEffect,
+  gitOk,
   logSafe,
-  runInEffect,
+  runIn,
   WT_REPO_ROOT,
 } from "./exec.ts";
 import type { UpdateMemory } from "./memory.ts";
@@ -26,13 +26,13 @@ export type RepoUpdateState = {
 };
 
 /** Null when the source tree isn't a git checkout (or git is missing). */
-export const repoUpdateStateEffect: Effect.Effect<RepoUpdateState | null> =
+export const repoUpdateState: Effect.Effect<RepoUpdateState | null> =
   Effect.gen(function* () {
-    const headSha = yield* gitOkEffect(["rev-parse", "HEAD"]);
+    const headSha = yield* gitOk(["rev-parse", "HEAD"]);
     if (headSha === null) return null;
-    const status = yield* gitOkEffect(["status", "--porcelain"]);
+    const status = yield* gitOk(["status", "--porcelain"]);
     const dirty = status !== null && status.length > 0;
-    const upstream = yield* gitOkEffect([
+    const upstream = yield* gitOk([
       "rev-parse",
       "--abbrev-ref",
       "@{u}",
@@ -48,14 +48,14 @@ export const repoUpdateStateEffect: Effect.Effect<RepoUpdateState | null> =
       };
     }
     const counts =
-      (yield* gitOkEffect([
+      (yield* gitOk([
         "rev-list",
         "--left-right",
         "--count",
         "@{u}...HEAD",
       ])) ?? "0 0";
     const [behindRaw, aheadRaw] = counts.split(/\s+/);
-    const remoteSha = (yield* gitOkEffect(["rev-parse", "@{u}"])) ?? "";
+    const remoteSha = (yield* gitOk(["rev-parse", "@{u}"])) ?? "";
     return {
       dirty,
       upstream,
@@ -67,7 +67,7 @@ export const repoUpdateStateEffect: Effect.Effect<RepoUpdateState | null> =
   });
 
 /** One bounded fetch of the clone's default remote. False on failure (offline, auth). */
-export const fetchWtOriginEffect: Effect.Effect<boolean> = runInEffect(
+export const fetchWtOrigin: Effect.Effect<boolean> = runIn(
   ["git", "fetch", "--quiet"],
   { cwd: WT_REPO_ROOT, timeoutMs: 20_000 },
 ).pipe(
@@ -98,10 +98,10 @@ export type PendingCommit = { sha: string; subject: string };
 const CONTROL_RE = /[\x00-\x1f\x7f]/g;
 
 /** Commits an update would bring in (`HEAD..<ref>`, default @{u}), newest first. */
-export const pendingCommitsEffect = (
+export const pendingCommits = (
   ref = "@{u}",
 ): Effect.Effect<PendingCommit[]> =>
-  gitOkEffect(["log", "--format=%H %s", `HEAD..${ref}`]).pipe(
+  gitOk(["log", "--format=%H %s", `HEAD..${ref}`]).pipe(
     Effect.map((out) =>
       out
         ? out
@@ -184,8 +184,8 @@ export function selectOffer(args: {
  * path to verify, and a false positive only adds an informational
  * line).
  */
-export const listRunningWtInstancesEffect: Effect.Effect<number[]> =
-  runInEffect(["ps", "-axo", "pid=,command="], {
+export const listRunningWtInstances: Effect.Effect<number[]> =
+  runIn(["ps", "-axo", "pid=,command="], {
     cwd: WT_REPO_ROOT,
     timeoutMs: 10_000,
   }).pipe(

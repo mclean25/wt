@@ -12,7 +12,7 @@ import {
   resolveIssueId,
 } from "../../core/issue-tracker.ts";
 import { Data, Effect } from "effect";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 import {
   readWtState,
   setSlugGithubIssue,
@@ -100,7 +100,7 @@ export function run(argv: string[]): Effect.Effect<number, IssueCommandError> {
       console.error(red(invalid));
       return 2;
     }
-    const wts = (yield* commandPromise("list worktrees", listWorktrees)).filter(
+    const wts = (yield* commandPromise("list worktrees", listWorktreesPromise)).filter(
       (w) => !w.isMain,
     );
     const wt = wts.find(

@@ -15,7 +15,7 @@
  */
 import { agentIdentity } from "../../core/agent-identity.ts";
 import { config } from "../../core/config.ts";
-import { baseTipSha, revParse } from "../../core/git.ts";
+import { baseTipShaPromise, revParsePromise } from "../../core/git.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Worktree } from "../../core/types.ts";
 import {
@@ -29,7 +29,7 @@ import {
   type WorkState,
   type WorkStatusRecord,
 } from "../../core/work-status.ts";
-import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
+import { listWorktreesPromise, worktreeAtCwd } from "../../core/worktree.ts";
 import {
   readWtState,
   recentlyRemovedWorktrees,
@@ -904,7 +904,7 @@ export function run(argv: string[]): Effect.Effect<number, StatusCommandError> {
     }
 
     const wts = (yield* tryCommand("list worktrees", () =>
-      listWorktrees(),
+      listWorktreesPromise(),
     )).filter((w) => !w.isMain);
     const state = yield* commandIo("read wt state", () => readWtState());
 
@@ -915,12 +915,12 @@ export function run(argv: string[]): Effect.Effect<number, StatusCommandError> {
           Effect.all(
             {
               headSha: tryCommand(`resolve HEAD for ${w.slug}`, () =>
-                revParse("HEAD", w.path),
+                revParsePromise("HEAD", w.path),
               ),
               // Same helper as the write path, so both sides share one
               // reference frame. Computed anywhere else they would disagree.
               baseSha: tryCommand(`resolve base for ${w.slug}`, () =>
-                baseTipSha(state.slugs[w.slug]?.baseBranch ?? null),
+                baseTipShaPromise(state.slugs[w.slug]?.baseBranch ?? null),
               ),
             },
             { concurrency: "unbounded" },
@@ -1047,7 +1047,7 @@ export function run(argv: string[]): Effect.Effect<number, StatusCommandError> {
       // row-only anchor would keep a verdict valid across exactly the
       // event that voids it.
       const sha = yield* tryCommand(`resolve HEAD for ${target.slug}`, () =>
-        revParse("HEAD", target.path),
+        revParsePromise("HEAD", target.path),
       );
       if (!sha) {
         console.error(red(`could not resolve HEAD for ${target.slug}`));
@@ -1055,7 +1055,7 @@ export function run(argv: string[]): Effect.Effect<number, StatusCommandError> {
       }
       const baseBranch = state.slugs[target.slug]?.baseBranch ?? null;
       const baseSha = yield* tryCommand(`resolve base for ${target.slug}`, () =>
-        baseTipSha(baseBranch),
+        baseTipShaPromise(baseBranch),
       );
       const by = agentIdentity();
       yield* commandIo("set examined verdict", () =>
@@ -1227,7 +1227,7 @@ export function run(argv: string[]): Effect.Effect<number, StatusCommandError> {
 
     if (args.kind === "show") {
       const headSha = yield* tryCommand(`resolve HEAD for ${target.slug}`, () =>
-        revParse("HEAD", target.path),
+        revParsePromise("HEAD", target.path),
       );
       console.log(
         describe(target.slug, state.slugs[target.slug]?.work, headSha),
@@ -1280,7 +1280,7 @@ export function run(argv: string[]): Effect.Effect<number, StatusCommandError> {
     const by = agentIdentity();
     if (by) record.by = by;
     const sha = yield* tryCommand(`resolve HEAD for ${target.slug}`, () =>
-      revParse("HEAD", target.path),
+      revParsePromise("HEAD", target.path),
     );
     if (sha) record.sha = sha;
     const wrote = yield* commandIo("set work status", () =>

@@ -4,9 +4,9 @@
  */
 import { Data, Effect } from "effect";
 
-import { hideFrontmostTerminalEffect } from "./zed.ts";
+import { hideFrontmostTerminal } from "./zed.ts";
 import { config } from "./config.ts";
-import { runEffect } from "./proc.ts";
+import { run } from "./proc.ts";
 
 export class MacosCommandError extends Data.TaggedError("MacosCommandError")<{
   readonly operation: "open" | "pbcopy";
@@ -37,12 +37,12 @@ export function openUrlCommand(
 }
 
 /** Fire-and-forget `open <url>`. The macOS `open` binary returns immediately. */
-export function openUrl(url: string): void {
-  Effect.runFork(openUrlEffect(url).pipe(Effect.catch(() => Effect.void)));
+export function openUrlPromise(url: string): void {
+  Effect.runFork(openUrl(url).pipe(Effect.catch(() => Effect.void)));
 }
 
-export function openUrlEffect(url: string): Effect.Effect<void, MacosCommandError> {
-  return runEffect(openUrlCommand(url)).pipe(
+export function openUrl(url: string): Effect.Effect<void, MacosCommandError> {
+  return run(openUrlCommand(url)).pipe(
     Effect.flatMap((result) =>
       result.exitCode === 0
         ? Effect.void
@@ -72,31 +72,31 @@ export function openUrlEffect(url: string): Effect.Effect<void, MacosCommandErro
  * and hidden. (Matters since the hide became async; `openInZed` already
  * sequences its own hide internally.)
  */
-export function openUrlHidingTerminalEffect(
+export function openUrlHidingTerminal(
   url: string,
 ): Effect.Effect<void, MacosCommandError> {
-  return hideFrontmostTerminalEffect().pipe(
-    Effect.andThen(openUrlEffect(url)),
+  return hideFrontmostTerminal().pipe(
+    Effect.andThen(openUrl(url)),
   );
 }
 
-export function openUrlHidingTerminal(url: string): Promise<void> {
+export function openUrlHidingTerminalPromise(url: string): Promise<void> {
   return Effect.runPromise(
-    openUrlHidingTerminalEffect(url).pipe(Effect.catch(() => Effect.void)),
+    openUrlHidingTerminal(url).pipe(Effect.catch(() => Effect.void)),
   );
 }
 
 /** Write to the macOS clipboard via pbcopy. Fire-and-forget. */
-export function writeClipboard(text: string): void {
+export function writeClipboardPromise(text: string): void {
   Effect.runFork(
-    writeClipboardEffect(text).pipe(Effect.catch(() => Effect.void)),
+    writeClipboard(text).pipe(Effect.catch(() => Effect.void)),
   );
 }
 
-export function writeClipboardEffect(
+export function writeClipboard(
   text: string,
 ): Effect.Effect<void, MacosCommandError> {
-  return runEffect(["pbcopy"], { input: text }).pipe(
+  return run(["pbcopy"], { input: text }).pipe(
     Effect.flatMap((result) =>
       result.exitCode === 0
         ? Effect.void

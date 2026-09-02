@@ -19,9 +19,9 @@ import { Clock, Data, Duration, Effect, Exit, Queue, Ref, Scope, Semaphore } fro
 
 import { buildSha, currentSourceSha } from "../build-id.ts";
 import { config, type GithubEventsConfig } from "../config.ts";
-import { fetchGithubEffect, type GithubData } from "../github.ts";
-import { createLogger, flushLoggerEffect } from "../logger.ts";
-import { fetchOriginEffect, listWorktreesEffect } from "../worktree.ts";
+import { fetchGithub, type GithubData } from "../github.ts";
+import { createLogger, flushLogger } from "../logger.ts";
+import { fetchOrigin, listWorktrees } from "../worktree.ts";
 
 import {
   ensureEventsDir,
@@ -254,16 +254,16 @@ const trySync = <A>(operation: string, evaluate: () => A) => Effect.try({
 function productionDependencies(): DaemonDependencies {
   return {
     ensureEventsDir,
-    currentBranches: () => listWorktreesEffect().pipe(
+    currentBranches: () => listWorktrees().pipe(
       Effect.map((wts) => wts.filter((w) => !w.isMain && w.branch).map((w) => w.branch as string)),
       Effect.mapError((cause) => new DaemonOperationError({ operation: "list worktrees", cause })),
     ),
-    fetchOrigin: fetchOriginEffect().pipe(
+    fetchOrigin: fetchOrigin().pipe(
       Effect.mapError((cause) => new DaemonOperationError({ operation: "fetch origin", cause })),
     ),
     // The native Effect, not its Promise twin: a scope close must reach the
     // in-flight `gh` subprocess, and a `runPromise` island would hide it.
-    fetchGithub: (branches) => fetchGithubEffect([...branches]).pipe(
+    fetchGithub: (branches) => fetchGithub([...branches]).pipe(
       Effect.mapError((cause) => new DaemonOperationError({ operation: "fetch GitHub", cause })),
     ),
     writeSnapshot,
@@ -377,7 +377,7 @@ export const makeDaemonCore = (
       });
       const current = yield* Ref.get(state);
       yield* trySync("write daemon state", () => dependencies.writeState(current));
-      yield* flushLoggerEffect;
+      yield* flushLogger;
       return yield* dependencies.exitForUpgrade;
     }
     const startedAt = yield* Clock.currentTimeMillis;

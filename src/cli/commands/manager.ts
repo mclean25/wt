@@ -120,7 +120,7 @@ export function run(argv: string[]): Effect.Effect<number, ManagerCommandError> 
       });
       const modules = yield* loadManagerSessionModules;
       const res = yield* modules.messaging
-        .sendSessionMessageEffect({
+        .sendSessionMessage({
           slug: MANAGER_SLUG,
           cwd: modules.config.paths.mainClone,
           harnessId: modules.primary.readPrimaryHarness(),
@@ -168,7 +168,7 @@ export function run(argv: string[]): Effect.Effect<number, ManagerCommandError> 
       catch: (cause) => new ManagerCommandError({ operation: "attach", cause }),
     });
     const modules = yield* loadManagerSessionModules;
-    const result = yield* modules.tmux.attachOrCreateEffect({
+    const result = yield* modules.tmux.attachOrCreate({
       slug: MANAGER_SLUG,
       cwd: modules.config.paths.mainClone,
       kind: modules.primary.readPrimaryHarness(),

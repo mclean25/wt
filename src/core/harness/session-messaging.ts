@@ -39,11 +39,11 @@
  */
 import { agentIdentity } from "../agent-identity.ts";
 import { Data, Effect } from "effect";
-import { withAsyncFileLockEffect } from "../locks.ts";
+import { withAsyncFileLock } from "../locks.ts";
 import { createLogger } from "../logger.ts";
 import {
-  injectClaudeFallbackEffect,
-  injectIntoSessionEffect,
+  injectClaudeFallback,
+  injectIntoSession,
   type InjectResult,
 } from "../tmux/inject.ts";
 import {
@@ -197,8 +197,8 @@ const defaults: Dependencies = {
   terminal: (target, signal) =>
     Effect.runPromise(
       target.harnessId === "claude"
-        ? injectClaudeFallbackEffect(target)
-        : injectIntoSessionEffect({ ...target, harnessId: target.harnessId }),
+        ? injectClaudeFallback(target)
+        : injectIntoSession({ ...target, harnessId: target.harnessId }),
       signal ? { signal } : undefined,
     ),
   landed: injectedPromptLanded,
@@ -208,7 +208,7 @@ const defaults: Dependencies = {
     Effect.runPromise(Effect.sleep(ms), signal ? { signal } : undefined),
   lock: (key, body, signal) =>
     Effect.runPromise(
-      withAsyncFileLockEffect(
+      withAsyncFileLock(
         key,
         Effect.tryPromise({
           try: body,
@@ -267,7 +267,7 @@ export function fallbackAdvice(cause: FallbackCause): string {
   }
 }
 
-export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
+export function createSessionMessengerPromise(overrides: Partial<Dependencies> = {}) {
   const deps: Dependencies = { ...defaults, ...overrides };
   /** One attention line per session per failure kind per process. */
   const warned = new Set<string>();
@@ -435,7 +435,7 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     const tmuxName = claudeTmuxName(target.slug, target.managedName ?? null);
     const delivery = sendToClaudeEffect({ ...target, text });
     if (!overrides.lock) {
-      return yield* withAsyncFileLockEffect(`__claude_send__${tmuxName}`, delivery).pipe(
+      return yield* withAsyncFileLock(`__claude_send__${tmuxName}`, delivery).pipe(
         Effect.mapError((cause) =>
           new SessionMessagingOperationError({ operation: "session lock", cause })),
       );
@@ -458,10 +458,10 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
   return send;
 }
 
-export const sendSessionMessage = createSessionMessenger();
+export const sendSessionMessagePromise = createSessionMessengerPromise();
 
-export function createSessionMessengerEffect(overrides: Partial<Dependencies> = {}) {
-  const send = createSessionMessenger(overrides);
+export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
+  const send = createSessionMessengerPromise(overrides);
   return (target: SessionMessageTarget): Effect.Effect<SessionMessageResult, SessionMessagingError> =>
     send.effect(target).pipe(
       Effect.mapError((error) =>
@@ -469,6 +469,6 @@ export function createSessionMessengerEffect(overrides: Partial<Dependencies> = 
     );
 }
 
-export const sendSessionMessageEffect = createSessionMessengerEffect();
+export const sendSessionMessage = createSessionMessenger();
 
 export type { InjectResult };

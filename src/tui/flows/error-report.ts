@@ -13,7 +13,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { Data, Effect } from "effect";
 
 import type { HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
+import { sendSessionMessagePromise } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
 import {
   buildErrorInvestigationPrompt,
@@ -76,7 +76,7 @@ export function makeErrorFlows(ctx: ErrorFlowCtx): {
         // Same tmux session `,` attaches to. The prompt lands in the
         // conversation the user is about to enter.
         try: () =>
-          sendSessionMessage({
+          sendSessionMessagePromise({
             slug: WT_SOURCE_SLOT.slug,
             cwd: WT_SOURCE_SLOT.path,
             harnessId: primaryHarness,

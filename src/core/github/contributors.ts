@@ -2,9 +2,9 @@ import { Clock, Effect } from "effect";
 
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { runEffect } from "../proc.ts";
+import { run } from "../proc.ts";
 import type { Contributor } from "../types.ts";
-import { hasGhEffect, repoSlugEffect } from "./gh-cli.ts";
+import { hasGh, repoSlug } from "./gh-cli.ts";
 
 const log = createLogger("[gh]");
 
@@ -28,7 +28,7 @@ function fetchActiveCommitAuthorsEffect(
   const since = new Date(now - CONTRIB_RECENCY_MS).toISOString();
   const authors = new Set<string>();
   for (let page = 1; page <= ACTIVE_AUTHORS_MAX_PAGES; page++) {
-    const r = yield* runEffect(
+    const r = yield* run(
       [
         "gh",
         "api",
@@ -79,16 +79,16 @@ function fetchActiveCommitAuthorsEffect(
  * the recency check fails (but contributors succeeded), we return
  * the unfiltered contributors so the picker isn't empty.
  */
-export function fetchRepoContributorsEffect(
+export function fetchRepoContributors(
   signal?: AbortSignal,
 ): Effect.Effect<Contributor[]> {
   return Effect.gen(function* () {
-  if (!(yield* hasGhEffect())) return [];
-  const slug = yield* repoSlugEffect();
+  if (!(yield* hasGh())) return [];
+  const slug = yield* repoSlug();
   if (!slug) return [];
   const now = yield* Clock.currentTimeMillis;
   const [contribRes, activeAuthors] = yield* Effect.all([
-    runEffect(["gh", "api", `repos/${slug}/contributors?per_page=100`], {
+    run(["gh", "api", `repos/${slug}/contributors?per_page=100`], {
       cwd: config.paths.mainClone,
       timeoutMs: 15_000,
       signal,
@@ -133,8 +133,8 @@ export function fetchRepoContributorsEffect(
   });
 }
 
-export function fetchRepoContributors(
+export function fetchRepoContributorsPromise(
   signal?: AbortSignal,
 ): Promise<Contributor[]> {
-  return Effect.runPromise(fetchRepoContributorsEffect(signal));
+  return Effect.runPromise(fetchRepoContributors(signal));
 }

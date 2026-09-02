@@ -12,7 +12,7 @@ import { createLogger } from "../../core/logger.ts";
 import { issueUrlForSlug } from "../../core/issue-tracker.ts";
 import type { RemovedWorktree } from "../../core/wtstate.ts";
 import { isPlainLetter } from "../app-helpers.ts";
-import { openUrlHidingTerminal } from "../../core/macos.ts";
+import { openUrlHidingTerminalPromise } from "../../core/macos.ts";
 import type { Modal } from "../modal-state.ts";
 import { theme } from "../theme.ts";
 import { Data, Effect } from "effect";
@@ -142,7 +142,7 @@ export function handleRemovedViewKey(
     }
     Effect.runFork(
       Effect.tryPromise({
-        try: () => openUrlHidingTerminal(url),
+        try: () => openUrlHidingTerminalPromise(url),
         catch: (cause) => new RemovedViewError({ cause }),
       }).pipe(
         Effect.catch((error) =>

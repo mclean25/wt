@@ -86,8 +86,8 @@ function mainEffect() {
         );
         return yield* commandStep("run version command", () => command.run(rest));
       }
-      const { dispatchEffect } = yield* step("load CLI dispatcher", () => import("./cli/index.ts"));
-      return yield* dispatchEffect(argv).pipe(
+      const { dispatch } = yield* step("load CLI dispatcher", () => import("./cli/index.ts"));
+      return yield* dispatch(argv).pipe(
         Effect.mapError((cause) => new MainStepError({ step: "dispatch CLI", cause })),
       );
     }
@@ -95,8 +95,8 @@ function mainEffect() {
     // No args + non-TTY → fall back to `ls` (matches the old Python tool's
     // behavior for piped/scripted use).
     if (!process.stdout.isTTY) {
-      const { dispatchEffect } = yield* step("load CLI dispatcher", () => import("./cli/index.ts"));
-      return yield* dispatchEffect(["ls"]).pipe(
+      const { dispatch } = yield* step("load CLI dispatcher", () => import("./cli/index.ts"));
+      return yield* dispatch(["ls"]).pipe(
         Effect.mapError((cause) => new MainStepError({ step: "dispatch ls", cause })),
       );
     }
@@ -116,8 +116,8 @@ function mainEffect() {
   // in machine-global skills memory and would consume the human's own
   // prompt for that version).
     if (config.skills.startupCheck && process.env.WT_SKILLS !== "off") {
-      const { startupSkillsPromptEffect } = yield* step("load skills startup check", () => import("./cli/skills-sync.ts"));
-      yield* startupSkillsPromptEffect().pipe(
+      const { startupSkillsPrompt } = yield* step("load skills startup check", () => import("./cli/skills-sync.ts"));
+      yield* startupSkillsPrompt().pipe(
         Effect.mapError((cause) => new MainStepError({ step: "run skills startup check", cause })),
       );
     }
@@ -127,8 +127,8 @@ function mainEffect() {
   // TUI imports would come from the new checkout — never run the mix.
   // WT_UPDATE=off is the per-run kill switch (probe harness arms it).
     if (config.update.startupCheck && process.env.WT_UPDATE !== "off") {
-      const { startupUpdatePromptEffect } = yield* step("load update startup check", () => import("./cli/commands/update.ts"));
-      if ((yield* startupUpdatePromptEffect().pipe(
+      const { startupUpdatePrompt } = yield* step("load update startup check", () => import("./cli/commands/update.ts"));
+      if ((yield* startupUpdatePrompt().pipe(
         Effect.mapError((cause) => new MainStepError({ step: "run update startup check", cause })),
       )) === "updated") {
         const { spawnFreshWt } = yield* step("load fresh wt launcher", () => import("./core/update.ts"));
@@ -142,19 +142,19 @@ function mainEffect() {
   // crash, kill) — offer a rollback before trying again. Runs after
   // the update prompt so a just-landed fix wins over rolling back.
     if (process.env.WT_UPDATE !== "off") {
-      const { maybeOfferStaleBootRollbackEffect } = yield* step("load stale boot rollback", () => import("./cli/commands/rollback.ts"));
-      yield* maybeOfferStaleBootRollbackEffect().pipe(
+      const { maybeOfferStaleBootRollback } = yield* step("load stale boot rollback", () => import("./cli/commands/rollback.ts"));
+      yield* maybeOfferStaleBootRollback().pipe(
         Effect.mapError((cause) => new MainStepError({ step: "run stale boot rollback", cause })),
       );
-      const { armBootSentinelEffect } = yield* step("load boot sentinel", () => import("./core/update.ts"));
-      yield* armBootSentinelEffect();
+      const { armBootSentinel } = yield* step("load boot sentinel", () => import("./core/update.ts"));
+      yield* armBootSentinel();
     }
-    const { setWezTermTabTitleEffect } = yield* step("load WezTerm integration", () => import("./core/wezterm.ts"));
-    yield* setWezTermTabTitleEffect("wt", config.paths.weztermCli).pipe(
+    const { setWezTermTabTitle } = yield* step("load WezTerm integration", () => import("./core/wezterm.ts"));
+    yield* setWezTermTabTitle("wt", config.paths.weztermCli).pipe(
       Effect.catch(() => Effect.void),
     );
-    const { runTuiEffect } = yield* step("load TUI", () => import("./tui/runtime.tsx"));
-    yield* runTuiEffect.pipe(
+    const { runTui } = yield* step("load TUI", () => import("./tui/runtime.tsx"));
+    yield* runTui.pipe(
       Effect.mapError((cause) => new MainStepError({ step: "run TUI", cause })),
     );
     if (process.env.WT_UPDATE !== "off") {
@@ -182,7 +182,7 @@ const program = mainEffect().pipe(
         import("./cli/commands/rollback.ts"),
       ).pipe(Effect.option);
       if (rollback._tag === "Some") {
-        yield* rollback.value.maybeOfferCrashRollbackEffect();
+        yield* rollback.value.maybeOfferCrashRollback();
       }
       return 1;
     }),
@@ -197,7 +197,7 @@ const program = mainEffect().pipe(
   // command's exit code.
   Effect.ensuring(
     step("load logger", () => import("./core/logger.ts")).pipe(
-      Effect.flatMap(({ flushLoggerEffect }) => flushLoggerEffect),
+      Effect.flatMap(({ flushLogger }) => flushLogger),
       Effect.catch(() => Effect.void),
     ),
   ),

@@ -1,9 +1,9 @@
 import { Data, Effect } from "effect";
 
-import { effectiveBaseOrTrunkEffect } from "../../core/git.ts";
+import { effectiveBaseOrTrunk } from "../../core/git.ts";
 import { HARNESSES, type HarnessId } from "../../core/harness/index.ts";
-import { attachOrCreate, type SessionShortcut } from "../../core/tmux.ts";
-import { listWorktreesEffect } from "../../core/worktree.ts";
+import { attachOrCreatePromise, type SessionShortcut } from "../../core/tmux.ts";
+import { listWorktrees } from "../../core/worktree.ts";
 import { readWtState } from "../../core/wtstate.ts";
 
 const TARGETS = new Set<SessionShortcut>(["shell", "diff", "harness"]);
@@ -28,19 +28,19 @@ export function run(argv: string[]): Effect.Effect<number, SessionAttachError> {
       console.error(`unknown harness: ${rawHarness}`);
       return 2;
     }
-    const worktree = (yield* listWorktreesEffect()).find((wt) => !wt.isMain && wt.slug === slug);
+    const worktree = (yield* listWorktrees()).find((wt) => !wt.isMain && wt.slug === slug);
     if (!worktree) {
       console.error(`remote worktree not found: ${slug}`);
       return 1;
     }
     const recordedBase = readWtState().slugs[slug]?.baseBranch;
-    const diffBase = yield* effectiveBaseOrTrunkEffect(worktree.path, recordedBase);
+    const diffBase = yield* effectiveBaseOrTrunk(worktree.path, recordedBase);
 
     let target = rawTarget as SessionShortcut;
     for (;;) {
       const kind = target === "harness" ? harnessId : target;
       const result = yield* Effect.tryPromise({
-        try: () => attachOrCreate({ slug, cwd: worktree.path, kind, base: diffBase }),
+        try: () => attachOrCreatePromise({ slug, cwd: worktree.path, kind, base: diffBase }),
         catch: (cause) => new SessionAttachError({ cause }),
       });
       if (result.kind === "switch") {

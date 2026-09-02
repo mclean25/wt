@@ -8,7 +8,7 @@ import {
 } from "../../core/harness/index.ts";
 import {
   type ClaudeSessionEntry,
-  listSessions as listTmuxSessions,
+  listSessionsPromise as listTmuxSessions,
 } from "../../core/tmux.ts";
 
 export type { ClaudeSessionEntry };

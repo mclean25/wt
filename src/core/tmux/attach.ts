@@ -7,13 +7,13 @@ import { Data, Effect } from "effect";
 import { config } from "../config.ts";
 import { getHarness, type Harness, type HarnessId } from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
-import { runEffect, terminateSubprocessEffect } from "../proc.ts";
+import { run, terminateSubprocess } from "../proc.ts";
 import { shellLogPath } from "../shell-tail.ts";
-import { killServerEffect, resolveDiffCommand } from "./admin.ts";
+import { killServer, resolveDiffCommand } from "./admin.ts";
 import { writeConfig } from "./config.ts";
 import {
   capturesInnerStderr,
-  prepareInspectorSocketEffect,
+  prepareInspectorSocket,
   wrapInnerArgs,
 } from "./inner-process.ts";
 import {
@@ -25,7 +25,7 @@ import {
   shQuote,
   TMUX_SOCKET,
 } from "./naming.ts";
-import { listAllSessionsRawEffect } from "./process.ts";
+import { listAllSessionsRaw } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
@@ -65,7 +65,7 @@ function runAttachedClientEffect(
       },
       catch: (cause) => new AttachOperationError({ message: "tmux attach wait failed", cause }),
     }),
-    (proc) => terminateSubprocessEffect(proc),
+    (proc) => terminateSubprocess(proc),
   );
 }
 
@@ -232,7 +232,7 @@ export function buildInnerArgs(params: {
  * this call — this function makes no assumptions about who owns the
  * terminal before/after.
  */
-export function attachOrCreateEffect(opts: {
+export function attachOrCreate(opts: {
   slug: string;
   cwd: string;
   kind: Exclude<SessionKind, "action" | "dev">;
@@ -271,14 +271,14 @@ export function attachOrCreateEffect(opts: {
 }
 
 /** Promise boundary for terminal/CLI callers. */
-export function attachOrCreate(
-  opts: Parameters<typeof attachOrCreateEffect>[0],
+export function attachOrCreatePromise(
+  opts: Parameters<typeof attachOrCreate>[0],
 ): Promise<AttachResult> {
-  return Effect.runPromise(attachOrCreateEffect(opts));
+  return Effect.runPromise(attachOrCreate(opts));
 }
 
 function attachOrCreateEffectInternal(
-  opts: Parameters<typeof attachOrCreateEffect>[0],
+  opts: Parameters<typeof attachOrCreate>[0],
 ): Effect.Effect<AttachResult, AttachOperationError> {
  return Effect.gen(function* () {
   const {
@@ -307,15 +307,15 @@ function attachOrCreateEffectInternal(
     // empty-server path; otherwise apply what tmux can hot-reload via
     // `source-file` and accept that server-start-only settings (e.g.
     // `default-terminal`) lag until the next organic restart.
-    const liveSessions = yield* listAllSessionsRawEffect();
+    const liveSessions = yield* listAllSessionsRaw();
     if (liveSessions.size === 0) {
       log.info("config changed, killing server before attach (no live sessions)", {
         slug,
         kind,
       });
-      yield* killServerEffect;
+      yield* killServer;
     } else {
-      const sourceResult = yield* runEffect(["tmux", "-L", TMUX_SOCKET, "source-file", configPath], {
+      const sourceResult = yield* run(["tmux", "-L", TMUX_SOCKET, "source-file", configPath], {
         cwd: tmuxClientCwd(),
       });
       const sourceCode = sourceResult.exitCode;
@@ -398,7 +398,7 @@ function attachOrCreateEffectInternal(
     // `>` not `>>` so a destroy-and-recreate of the same slug doesn't
     // seed the new tail with the prior session's lines.
     const pipePaneArgs = ["pipe-pane", "-o", "-t", name, `cat > ${quotedLog}`];
-    const alreadyRunning = (yield* listAllSessionsRawEffect()).has(name);
+    const alreadyRunning = (yield* listAllSessionsRaw()).has(name);
     const setupArgs = alreadyRunning
       ? ["tmux", "-L", TMUX_SOCKET, "-f", configPath, ...pipePaneArgs]
       : [
@@ -417,7 +417,7 @@ function attachOrCreateEffectInternal(
           ";",
           ...pipePaneArgs,
         ];
-    const setupResult = yield* runEffect(setupArgs, { cwd: tmuxClientCwd() });
+    const setupResult = yield* run(setupArgs, { cwd: tmuxClientCwd() });
     const setupCode = setupResult.exitCode;
     const setupErr = setupResult.stderr;
     if (setupCode !== 0) {
@@ -438,7 +438,7 @@ function attachOrCreateEffectInternal(
   // this option to make the owning key detach while the other F-keys request
   // an in-place switch. Set it on every attach so sessions created by older
   // wt versions are upgraded automatically.
-  yield* runEffect([
+  yield* run([
       "tmux",
       "-L",
       TMUX_SOCKET,
@@ -454,7 +454,7 @@ function attachOrCreateEffectInternal(
   // Only clears a socket left behind by a DEAD session of this name —
   // `new-session -A` may be about to attach to a live one, whose socket
   // is in use. See `prepareInspectorSocket`.
-  yield* prepareInspectorSocketEffect(kind, name);
+  yield* prepareInspectorSocket(kind, name);
   const clientArgs = [
         "tmux",
         "-L",
@@ -499,7 +499,7 @@ function attachOrCreateEffectInternal(
   // program exit). Distinguish by re-querying the raw set: if the
   // session still exists, the user detached; if not, the inner program
   // exited and tmux cleaned up.
-  const sessions = yield* listAllSessionsRawEffect();
+  const sessions = yield* listAllSessionsRaw();
   const stillRunning = sessions.has(name);
   if (stillRunning) {
     const target = sessionSwitchTarget(code);

@@ -2,13 +2,13 @@ import { existsSync } from "node:fs";
 import { Data, Effect } from "effect";
 
 import { config } from "./config.ts";
-import { devServerStatus, type DevServerStatus } from "./dev-server.ts";
+import { devServerStatusPromise, type DevServerStatus } from "./dev-server.ts";
 import { githubIssueUrl, issueUrlForId, resolveIssueId } from "./issue-tracker.ts";
 import { isOurStageDeployed } from "./stage-safety.ts";
 import { StatusKind, type Status, type Worktree } from "./types.ts";
 import { parseWorkStatus, type WorkStatusRecord } from "./work-status.ts";
 import { readWtState } from "./wtstate.ts";
-import { listWorktreesEffect, pushCountsEffect, worktreeStatusEffect } from "./worktree.ts";
+import { listWorktrees, pushCounts, worktreeStatus } from "./worktree.ts";
 import { WORKER_PROTOCOL_VERSION } from "./worker-info.ts";
 import { causeMessage } from "./errors.ts";
 
@@ -58,21 +58,21 @@ export class WorktreeSnapshotError extends Data.TaggedError("WorktreeSnapshotErr
 }
 
 /** Collect the authoritative execution state once for CLI and SSH consumers. */
-export function collectWorktreeSnapshotsEffect(
+export function collectWorktreeSnapshots(
   discovered?: readonly Worktree[],
 ): Effect.Effect<WorktreeSnapshot[], WorktreeSnapshotError> {
   return Effect.gen(function* () {
   const states = readWtState().slugs;
-  const rows = (discovered ?? (yield* listWorktreesEffect().pipe(
+  const rows = (discovered ?? (yield* listWorktrees().pipe(
     Effect.mapError((cause) => new WorktreeSnapshotError({ operation: "discover", cause })),
   ))).filter((worktree) => !worktree.isMain);
   return yield* Effect.all(
     rows.map((worktree) => Effect.gen(function* () {
       const [status, push, dev] = yield* Effect.all([
-        worktreeStatusEffect(worktree),
-        pushCountsEffect(worktree.path),
+        worktreeStatus(worktree),
+        pushCounts(worktree.path),
         Effect.tryPromise({
-          try: () => devServerStatus(worktree.slug, { path: worktree.path }),
+          try: () => devServerStatusPromise(worktree.slug, { path: worktree.path }),
           catch: (cause) => new WorktreeSnapshotError({ slug: worktree.slug, operation: "dev", cause }),
         }),
       ], { concurrency: "unbounded" }).pipe(
@@ -109,19 +109,19 @@ export function collectWorktreeSnapshotsEffect(
   });
 }
 
-export const collectWorktreeSnapshots = (
+export const collectWorktreeSnapshotsPromise = (
   discovered?: readonly Worktree[],
-): Promise<WorktreeSnapshot[]> => Effect.runPromise(collectWorktreeSnapshotsEffect(discovered));
+): Promise<WorktreeSnapshot[]> => Effect.runPromise(collectWorktreeSnapshots(discovered));
 
-export function collectWorkerSnapshotEffect(): Effect.Effect<WorkerSnapshot, WorktreeSnapshotError> {
-  return collectWorktreeSnapshotsEffect().pipe(Effect.map((worktrees) => ({
+export function collectWorkerSnapshot(): Effect.Effect<WorkerSnapshot, WorktreeSnapshotError> {
+  return collectWorktreeSnapshots().pipe(Effect.map((worktrees) => ({
     protocol: WORKER_PROTOCOL_VERSION,
     worktrees,
   })));
 }
 
-export const collectWorkerSnapshot = (): Promise<WorkerSnapshot> =>
-  Effect.runPromise(collectWorkerSnapshotEffect());
+export const collectWorkerSnapshotPromise = (): Promise<WorkerSnapshot> =>
+  Effect.runPromise(collectWorkerSnapshot());
 
 function parseJsonPayload(raw: string): unknown {
   try {

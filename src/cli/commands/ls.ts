@@ -1,5 +1,5 @@
 import { config } from "../../core/config.ts";
-import { fetchPrsEffect } from "../../core/github.ts";
+import { fetchPrs } from "../../core/github.ts";
 import { verifyStepsHeadline, workAge } from "../../core/work-status.ts";
 import {
   isMergedRemoval,
@@ -11,9 +11,9 @@ import {
 } from "../../core/wtstate.ts";
 import type { Worktree } from "../../core/types.ts";
 import {
-  fetchOrigin,
-  listWorktrees,
-  worktreeStatus,
+  fetchOriginPromise,
+  listWorktreesPromise,
+  worktreeStatusPromise,
 } from "../../core/worktree.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { dim, red, yellow } from "../colors.ts";
@@ -24,7 +24,7 @@ import {
   renderStatusCell,
   renderTable,
 } from "../render.ts";
-import { collectWorktreeSnapshots } from "../../core/worktree-snapshot.ts";
+import { collectWorktreeSnapshotsPromise } from "../../core/worktree-snapshot.ts";
 import { Data, Effect } from "effect";
 
 export class LsCommandError extends Data.TaggedError("LsCommandError")<{
@@ -78,7 +78,7 @@ export function run(argv: string[]): Effect.Effect<number, LsCommandError> {
       return 2;
     }
     const jsonOut = argv.includes("--json");
-    const all = yield* tryCommand("list worktrees", () => listWorktrees());
+    const all = yield* tryCommand("list worktrees", () => listWorktreesPromise());
     const rows = all.filter((w) => !w.isMain);
     // Recently-destroyed rows (≤48h, from the existing removed history)
     // ride every output shape so "everything merged" is distinguishable
@@ -93,7 +93,7 @@ export function run(argv: string[]): Effect.Effect<number, LsCommandError> {
         readWtState(),
       )).slugs;
       const snapshots = yield* tryCommand("collect worktree snapshots", () =>
-        collectWorktreeSnapshots(rows),
+        collectWorktreeSnapshotsPromise(rows),
       );
       const payload = snapshots.map((snapshot) => ({
         slug: snapshot.slug,
@@ -188,12 +188,12 @@ export function run(argv: string[]): Effect.Effect<number, LsCommandError> {
     // Parallel: PR fetch, origin fetch, status checks. Status needs fresh
     // refs, so finish the fetch before checking statuses.
     const [prs] = yield* Effect.all(
-      [fetchPrsEffect(), tryCommand("fetch origin", () => fetchOrigin())],
+      [fetchPrs(), tryCommand("fetch origin", () => fetchOriginPromise())],
       { concurrency: "unbounded" },
     );
     const statuses = yield* Effect.all(
       rows.map((w) =>
-        tryCommand(`read status for ${w.slug}`, () => worktreeStatus(w)),
+        tryCommand(`read status for ${w.slug}`, () => worktreeStatusPromise(w)),
       ),
       { concurrency: 8 },
     );

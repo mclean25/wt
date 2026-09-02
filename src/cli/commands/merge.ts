@@ -17,11 +17,11 @@
  * does is put a CLI in front of it.
  */
 import {
-  disableAutoMerge,
-  enableAutoMerge,
-  viewPrInfo,
+  disableAutoMergePromise,
+  enableAutoMergePromise,
+  viewPrInfoPromise,
 } from "../../core/github.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 import { agentIdentity } from "../../core/agent-identity.ts";
 import { hasHelpFlag } from "../args.ts";
 import { dim, green, red, yellow } from "../colors.ts";
@@ -67,7 +67,7 @@ function resolveTarget(
 > {
   return Effect.gen(function* () {
     const wts = (yield* tryCommand("list worktrees", () =>
-      listWorktrees(),
+      listWorktreesPromise(),
     )).filter((w) => !w.isMain);
     if (slugOrBranch) {
       const wt = wts.find(
@@ -119,7 +119,7 @@ export function run(argv: string[]): Effect.Effect<number, MergeCommandError> {
     }
 
     const pr = yield* tryCommand("read pull request", () =>
-      viewPrInfo(target.branch),
+      viewPrInfoPromise(target.branch),
     );
     if (!pr) {
       console.error(red(`no PR for ${target.branch}`));
@@ -133,7 +133,7 @@ export function run(argv: string[]): Effect.Effect<number, MergeCommandError> {
 
     if (cancel) {
       const res = yield* tryCommand("disable merge when ready", () =>
-        disableAutoMerge(pr.number, {
+        disableAutoMergePromise(pr.number, {
           prId: pr.id,
           baseRefName: pr.baseRefName,
         }),
@@ -159,7 +159,7 @@ export function run(argv: string[]): Effect.Effect<number, MergeCommandError> {
     }
 
     const res = yield* tryCommand("enable merge when ready", () =>
-      enableAutoMerge(pr.id, {
+      enableAutoMergePromise(pr.id, {
         baseRefName: pr.baseRefName,
         headRefOid: pr.headRefOid,
       }),

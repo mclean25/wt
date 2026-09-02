@@ -5,7 +5,7 @@ import { TestClock } from "effect/testing";
 import type { GhActionResult } from "../../core/github/types.ts";
 import {
   autoMergeRetryPending,
-  autoMergeRetryEffect,
+  autoMergeRetry,
   cancelAutoMergeRetry,
   RETRY_LIMIT_MS,
   startAutoMergeRetry,
@@ -26,7 +26,7 @@ describe("startAutoMergeRetry", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
-          autoMergeRetryEffect(
+          autoMergeRetry(
             async () => (++calls < 3 ? gap : { ok: true }),
             {
               onArmed: () => void armed++,
@@ -55,7 +55,7 @@ describe("startAutoMergeRetry", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
-          autoMergeRetryEffect(
+          autoMergeRetry(
             async () => {
               calls++;
               return hard;
@@ -82,7 +82,7 @@ describe("startAutoMergeRetry", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
-          autoMergeRetryEffect(
+          autoMergeRetry(
             async () => gap,
             {
               onArmed: () => {},

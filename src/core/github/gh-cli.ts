@@ -2,7 +2,7 @@ import { Effect } from "effect";
 
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { runEffect } from "../proc.ts";
+import { run } from "../proc.ts";
 
 const log = createLogger("[gh]");
 
@@ -11,9 +11,9 @@ const log = createLogger("[gh]");
 // would pin "no gh" for the whole session even after the user installs it;
 // re-probing in gh-absent mode is cheap (everything gh-backed is off anyway).
 let _hasGh: boolean | undefined;
-export function hasGhEffect(): Effect.Effect<boolean> {
+export function hasGh(): Effect.Effect<boolean> {
   if (_hasGh) return Effect.succeed(true);
-  return runEffect(["which", "gh"]).pipe(
+  return run(["which", "gh"]).pipe(
     Effect.map((r) => {
       const found = r.exitCode === 0 && r.stdout.trim().length > 0;
       if (found) _hasGh = true;
@@ -23,17 +23,17 @@ export function hasGhEffect(): Effect.Effect<boolean> {
   );
 }
 
-export function hasGh(): Promise<boolean> {
-  return Effect.runPromise(hasGhEffect());
+export function hasGhPromise(): Promise<boolean> {
+  return Effect.runPromise(hasGh());
 }
 
 // Cache the resolved `owner/name` — it never changes for a given clone.
 // Same positive-only rule as `hasGh`: a transient failure (gh not yet
 // authed at startup) shouldn't pin null for the whole session.
 let _repoSlug: string | null | undefined;
-export function repoSlugEffect(): Effect.Effect<string | null> {
+export function repoSlug(): Effect.Effect<string | null> {
   if (_repoSlug != null) return Effect.succeed(_repoSlug);
-  return runEffect(["gh", "repo", "view", "--json", "nameWithOwner"], {
+  return run(["gh", "repo", "view", "--json", "nameWithOwner"], {
     cwd: config.paths.mainClone,
     timeoutMs: 5_000,
   }).pipe(
@@ -54,8 +54,8 @@ export function repoSlugEffect(): Effect.Effect<string | null> {
   );
 }
 
-export function repoSlug(): Promise<string | null> {
-  return Effect.runPromise(repoSlugEffect());
+export function repoSlugPromise(): Promise<string | null> {
+  return Effect.runPromise(repoSlug());
 }
 
 /**
@@ -65,13 +65,13 @@ export function repoSlug(): Promise<string | null> {
  * can't review your own PR).
  */
 let _authedLogin: string | null | undefined;
-export function fetchAuthenticatedLoginEffect(): Effect.Effect<string | null> {
+export function fetchAuthenticatedLogin(): Effect.Effect<string | null> {
   // Positive-only memo (see `hasGh`): a failed probe (not yet authed)
   // re-tries on the next call instead of pinning null all session.
   if (_authedLogin != null) return Effect.succeed(_authedLogin);
   return Effect.gen(function* () {
-    if (!(yield* hasGhEffect())) return null;
-    const r = yield* runEffect(["gh", "api", "user", "--jq", ".login"], {
+    if (!(yield* hasGh())) return null;
+    const r = yield* run(["gh", "api", "user", "--jq", ".login"], {
       cwd: config.paths.mainClone,
       timeoutMs: 5_000,
     }).pipe(Effect.catch(() => Effect.succeed(null)));
@@ -87,6 +87,6 @@ export function fetchAuthenticatedLoginEffect(): Effect.Effect<string | null> {
   });
 }
 
-export function fetchAuthenticatedLogin(): Promise<string | null> {
-  return Effect.runPromise(fetchAuthenticatedLoginEffect());
+export function fetchAuthenticatedLoginPromise(): Promise<string | null> {
+  return Effect.runPromise(fetchAuthenticatedLogin());
 }

@@ -55,8 +55,8 @@ import type { makeGithubPrFlows } from "../flows/github-pr.ts";
 import { REVIEW_SECTION } from "../flows/new-worktree.ts";
 import type { makeSectionFlows } from "../flows/sections.ts";
 import type { makeSessionFlows } from "../flows/sessions.ts";
-import { openUrlHidingTerminalEffect } from "../../core/macos.ts";
-import { openInEditor } from "../../core/editor.ts";
+import { openUrlHidingTerminal } from "../../core/macos.ts";
+import { openInEditorPromise } from "../../core/editor.ts";
 import {
   isSyntheticLiveSessionId,
   type useHarnessSessions,
@@ -875,7 +875,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           );
           return;
         }
-        Effect.runFork(openUrlHidingTerminalEffect(url).pipe(Effect.ignore));
+        Effect.runFork(openUrlHidingTerminal(url).pipe(Effect.ignore));
         modelLog.event.info(
           selectedWorktree.githubIssue
             ? `opened gh issue #${selectedWorktree.githubIssue}`
@@ -891,7 +891,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           );
           return;
         }
-        Effect.runFork(openUrlHidingTerminalEffect(url).pipe(Effect.ignore));
+        Effect.runFork(openUrlHidingTerminal(url).pipe(Effect.ignore));
         modelLog.event.info("opened issue");
         return;
       }
@@ -1025,7 +1025,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     const rowLog = createLogger(current.wt.slug);
     if (isPlainLetter(k, "o")) {
       Effect.runFork(
-        keyPromise("editor open", () => openInEditor(current.wt.path)).pipe(
+        keyPromise("editor open", () => openInEditorPromise(current.wt.path)).pipe(
           Effect.tap(() => Effect.sync(() => rowLog.event.info("opened in the editor"))),
           Effect.catch((error) => Effect.sync(() => {
             const cause = error.cause;
@@ -1047,13 +1047,13 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           rowLog.event.warn("no stage domain configured");
           return;
         }
-        Effect.runFork(openUrlHidingTerminalEffect(url).pipe(Effect.ignore));
+        Effect.runFork(openUrlHidingTerminal(url).pipe(Effect.ignore));
         rowLog.event.info(`opened ${current.wt.stage}`);
         return;
       }
       const dev = current.fields.dev.data;
       if (dev?.running && dev.url) {
-        Effect.runFork(openUrlHidingTerminalEffect(dev.url).pipe(Effect.ignore));
+        Effect.runFork(openUrlHidingTerminal(dev.url).pipe(Effect.ignore));
         rowLog.event.info(`opened dev server (${dev.url})`);
         return;
       }

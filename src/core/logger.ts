@@ -145,7 +145,7 @@ export function setToastSink(fn: ToastSink | null): void {
 }
 
 /** Await every queued write before a CLI or daemon exits. */
-export const flushLoggerEffect = Effect.suspend(() => {
+export const flushLogger = Effect.suspend(() => {
   const queue = ensureLoggerWorker();
   return Effect.gen(function* () {
     const done = yield* Deferred.make<void>();

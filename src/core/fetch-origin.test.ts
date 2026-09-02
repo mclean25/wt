@@ -123,7 +123,7 @@ test("keep_fresh CREATES a local head the clone never had, and advances it", asy
   runWithConfig(
     root,
     cfg,
-    `const m = await import(${WORKTREE_MOD}); await m.fetchOrigin();`,
+    `const m = await import(${WORKTREE_MOD}); await m.fetchOriginPromise();`,
   );
 
   // The named branch is created and current...
@@ -150,7 +150,7 @@ test("keep_fresh refuses to touch a local head that has DIVERGED", async () => {
   runWithConfig(
     root,
     cfg,
-    `const m = await import(${WORKTREE_MOD}); await m.fetchOrigin();`,
+    `const m = await import(${WORKTREE_MOD}); await m.fetchOriginPromise();`,
   );
 
   // Fast-forward only. This runs unattended every few minutes; the one
@@ -200,8 +200,8 @@ test("a branch with no commits of its own counts 0 ahead through a stale clone r
     root,
     cfg,
     `const m = await import(${WORKTREE_MOD});
-     const s = await m.syncState(${JSON.stringify(wt)});
-     const p = await m.pushCounts(${JSON.stringify(wt)});
+     const s = await m.syncStatePromise(${JSON.stringify(wt)});
+     const p = await m.pushCountsPromise(${JSON.stringify(wt)});
      console.log(JSON.stringify({ ahead: s.main.ahead, behind: s.main.behind, unpushed: p.unpushed }));`,
   );
   expect(JSON.parse(out.trim())).toEqual({ ahead: 0, behind: 0, unpushed: 0 });
@@ -221,7 +221,7 @@ test("a branch with no commits of its own counts 0 ahead through a stale clone r
     `const g = await import(${GIT_MOD});
      const { Effect } = await import(${EFFECT_MOD});
      const base = await Effect.runPromise(g.freshBaseRevEffect(${JSON.stringify(wt)}, "origin/staging"));
-     console.log(JSON.stringify(await Effect.runPromise(g.firstCommitSubjectEffect(${JSON.stringify(wt)}, base))));`,
+     console.log(JSON.stringify(await Effect.runPromise(g.firstCommitSubject(${JSON.stringify(wt)}, base))));`,
   );
   expect(JSON.parse(title.trim())).toBeNull();
 });
@@ -267,9 +267,9 @@ test("the BARE trunk name normalizes to the remote ref, not a frozen local branc
     cfg,
     `const g = await import(${GIT_MOD});
      const { Effect } = await import(${EFFECT_MOD});
-     const eff = await g.effectiveBaseOrTrunk(${JSON.stringify(wt)}, "staging");
+     const eff = await g.effectiveBaseOrTrunkPromise(${JSON.stringify(wt)}, "staging");
      const base = await Effect.runPromise(g.freshBaseRevEffect(${JSON.stringify(wt)}, eff));
-     const title = await Effect.runPromise(g.firstCommitSubjectEffect(${JSON.stringify(wt)}, base));
+     const title = await Effect.runPromise(g.firstCommitSubject(${JSON.stringify(wt)}, base));
      console.log(JSON.stringify({ eff, title }));`,
   );
   expect(JSON.parse(out.trim())).toEqual({ eff: "origin/staging", title: null });
@@ -319,7 +319,7 @@ test("fetchOrigin advances a lagging checkout's own trunk ref", async () => {
   runWithConfig(
     root,
     cfg,
-    `const m = await import(${WORKTREE_MOD}); await m.fetchOrigin();`,
+    `const m = await import(${WORKTREE_MOD}); await m.fetchOriginPromise();`,
   );
 
   const tip = git(main, ["rev-parse", "origin/staging"]);
@@ -350,7 +350,7 @@ test("fetchOrigin never REWINDS a checkout that fetched for itself", async () =>
   runWithConfig(
     root,
     cfg,
-    `const m = await import(${WORKTREE_MOD}); await m.fetchOrigin();`,
+    `const m = await import(${WORKTREE_MOD}); await m.fetchOriginPromise();`,
   );
 
   expect(git(wt, ["rev-parse", "origin/staging"])).toBe(ahead);

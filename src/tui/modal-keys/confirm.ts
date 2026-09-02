@@ -1,7 +1,7 @@
 import type { KeyEvent } from "@opentui/core";
 
 import { actionRegistry } from "../../core/actions.ts";
-import { killDiffSession, killShellSession } from "../../core/tmux.ts";
+import { killDiffSessionPromise, killShellSessionPromise } from "../../core/tmux.ts";
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleYesNoKey } from "./list-picker.ts";
@@ -51,7 +51,7 @@ export function handleKillSessionConfirmKey(
     onConfirm: () => {
       const { slug } = modal;
       setModal(null);
-      const kill = sessionKind === "diff" ? killDiffSession : killShellSession;
+      const kill = sessionKind === "diff" ? killDiffSessionPromise : killShellSessionPromise;
       Effect.runFork(
         confirmPromise(() => kill(slug)).pipe(
           Effect.tap(() =>

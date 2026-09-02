@@ -7,11 +7,11 @@ import { claudeTmuxName } from "../../core/harness/claude/harness.ts";
 import { claudeInjectSelftest, inspectorSocketExists, inspectorSocketPath } from "../../core/harness/claude/inject.ts";
 import { wtSessionUuid } from "../../core/harness/claude/jsonl.ts";
 import { claudeSessions } from "../../core/harness/claude/sessions.ts";
-import { fallbackAdvice, sendSessionMessageEffect } from "../../core/harness/session-messaging.ts";
+import { fallbackAdvice, sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { ensureManagerClaudeName, MANAGER_CLAUDE_NAME, MANAGER_SLUG } from "../../core/manager.ts";
 import { dirSlug } from "../../core/stage.ts";
-import { listSessions, WT_SOURCE_SLUG } from "../../core/tmux.ts";
-import { listWorktreesEffect } from "../../core/worktree.ts";
+import { listSessionsPromise, WT_SOURCE_SLUG } from "../../core/tmux.ts";
+import { listWorktrees } from "../../core/worktree.ts";
 import { verifyStepsHeadline, workAge } from "../../core/work-status.ts";
 import { isMergedRemoval, readWtState, verificationOwedAtRemoval } from "../../core/wtstate.ts";
 import type { Worktree } from "../../core/types.ts";
@@ -88,7 +88,7 @@ const commandPromise = <A>(
 /** Resolve a slug-or-branch argument to a live (non-main) worktree. */
 function findWorktree(slugOrBranch: string): Effect.Effect<Worktree | null, ClaudeCommandError> {
   const slug = slugOrBranch.includes("/") ? dirSlug(slugOrBranch) : slugOrBranch;
-  return listWorktreesEffect().pipe(
+  return listWorktrees().pipe(
     Effect.map((wts) => wts.filter((w) => !w.isMain).find((w) => w.slug === slug) ?? null),
     Effect.mapError((cause) => new ClaudeCommandError({ operation: "sessions", cause })),
   );
@@ -161,7 +161,7 @@ function send(slugOrBranch: string, textArgs: string[]): Effect.Effect<number, C
     // Through the shared choke point, which owns the transport ladder and
     // stamps the sending agent. Agents reach for `wt claude send` exactly
     // as often as the TUI does; neither picks a transport.
-    const res = yield* sendSessionMessageEffect({
+    const res = yield* sendSessionMessage({
       slug,
       cwd: slot ? slot.cwd : wt!.path,
       harnessId: "claude",
@@ -211,7 +211,7 @@ function send(slugOrBranch: string, textArgs: string[]): Effect.Effect<number, C
  */
 function selftest(slugOrBranch: string | undefined): Effect.Effect<number, ClaudeCommandError> {
   return Effect.gen(function* () {
-    const sessions = yield* commandPromise("sessions", listSessions);
+    const sessions = yield* commandPromise("sessions", listSessionsPromise);
     const wanted = slugOrBranch ? (slugOrBranch.includes("/") ? dirSlug(slugOrBranch) : slugOrBranch) : null;
     const entries = [...sessions.claude]
       .filter((e) => wanted === null || e.slug === wanted)
@@ -259,10 +259,10 @@ function selftest(slugOrBranch: string | undefined): Effect.Effect<number, Claud
 
 function ls(json: boolean): Effect.Effect<number, ClaudeCommandError> {
   return Effect.gen(function* () {
-    const sessions = yield* commandPromise("sessions", listSessions);
+    const sessions = yield* commandPromise("sessions", listSessionsPromise);
     const entries = [...sessions.claude].sort((a, b) => a.slug.localeCompare(b.slug));
     if (json) {
-      const wts = (yield* listWorktreesEffect()).filter((w) => !w.isMain);
+      const wts = (yield* listWorktrees()).filter((w) => !w.isMain);
       const cwdBySlug = new Map<string, string>(wts.map((w) => [w.slug, w.path]));
       for (const [slug, t] of Object.entries(SLOT_TARGETS)) {
         if (!cwdBySlug.has(slug)) cwdBySlug.set(slug, t.cwd);

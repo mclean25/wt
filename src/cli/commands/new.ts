@@ -1,13 +1,13 @@
 import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
-import { createWorktree, parseInputEffect } from "../../core/lifecycle.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { createWorktreePromise, parseInput } from "../../core/lifecycle.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 import { setSlugGithubIssue } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
-import { isInteractive, pickIndexEffect } from "../prompt.ts";
-import { openInEditor } from "../../core/editor.ts";
+import { isInteractive, pickIndex } from "../prompt.ts";
+import { openInEditorPromise } from "../../core/editor.ts";
 
 const USAGE =
   "usage: wt new <id [title…]|url|branch|slug> [--slug s] [--gh n] [--attach] [--any] [--base ref] [--no-open] [--no-install]";
@@ -102,7 +102,7 @@ function causeMessage(cause: unknown): string {
 
 function openBestEffort(path: string): Effect.Effect<void, never> {
   return Effect.tryPromise({
-    try: () => openInEditor(path),
+    try: () => openInEditorPromise(path),
     catch: (cause) => new EditorOpenError({ path, cause }),
   }).pipe(
     Effect.catchTag("EditorOpenError", (error) =>
@@ -128,13 +128,13 @@ export function run(argv: string[]): Effect.Effect<number, NewCommandError> {
     }
 
     const parsedBranch = yield* Effect.result(
-      parseInputEffect(parsed.raw, {
+      parseInput(parsed.raw, {
         slugHint: parsed.slug,
         anyAuthor: parsed.any,
         attach: parsed.attach,
         promptForChoice: isInteractive()
           ? (id, branches) =>
-              pickIndexEffect(branches, `Multiple branches for ${id}:`).pipe(
+              pickIndex(branches, `Multiple branches for ${id}:`).pipe(
                 Effect.map((idx) => (idx === null ? null : branches[idx]!)),
               )
           : undefined,
@@ -149,7 +149,7 @@ export function run(argv: string[]): Effect.Effect<number, NewCommandError> {
     // Short-circuit if the branch already has a worktree.
     const existing = (yield* commandPromise(
       "list worktrees",
-      listWorktrees,
+      listWorktreesPromise,
     )).find((w) => !w.isMain && w.branch === branch);
     if (existing) {
       console.log(yellow(`Worktree already exists for ${branch}`));
@@ -166,7 +166,7 @@ export function run(argv: string[]): Effect.Effect<number, NewCommandError> {
     }
 
     const result = yield* commandPromise("create worktree", () =>
-      createWorktree(branch, {
+      createWorktreePromise(branch, {
         runInstall: parsed.install,
         base: parsed.base,
         onLog: (line) => console.log(dim(line)),

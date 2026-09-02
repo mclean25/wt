@@ -11,24 +11,24 @@
  * "computing" and never retried here — the caller re-runs after a few
  * seconds if it cares (the query itself is what triggers the compute).
  */
-import { branchIsGone, branchIsMerged, revParse } from "../../core/git.ts";
+import { branchIsGonePromise, branchIsMergedPromise, revParsePromise } from "../../core/git.ts";
 import { config } from "../../core/config.ts";
 import {
-  fetchGithubEffect,
-  hasGh,
+  fetchGithub,
+  hasGhPromise,
   pickPrForWorktree,
-  repoSlug,
+  repoSlugPromise,
 } from "../../core/github.ts";
 import { readRegistry } from "../../core/harness/claude/registry.ts";
 import { edgeIsStaleBySha, type MergeEdge } from "../../core/merge-edges.ts";
-import { listSessions } from "../../core/tmux.ts";
+import { listSessionsPromise } from "../../core/tmux.ts";
 import type {
   MergeableState,
   MergeStateStatus,
   PullRequest,
   Worktree,
 } from "../../core/types.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 import {
   verifyStepsHeadline,
   workAge,
@@ -165,16 +165,16 @@ function fetchFleetPrs(
   branches: string[],
 ): Effect.Effect<{ prs: Map<string, PullRequest>; note: string | null }> {
   return Effect.gen(function* () {
-    if (!(yield* tryCommand("check gh availability", () => hasGh()))) {
+    if (!(yield* tryCommand("check gh availability", () => hasGhPromise()))) {
       return { prs: new Map(), note: "gh CLI not installed — PR data omitted" };
     }
-    if (!(yield* tryCommand("resolve GitHub repository", () => repoSlug()))) {
+    if (!(yield* tryCommand("resolve GitHub repository", () => repoSlugPromise()))) {
       return {
         prs: new Map(),
         note: "GitHub repo unresolvable (gh not authenticated, or no GitHub remote) — PR data omitted",
       };
     }
-    const github = yield* fetchGithubEffect(branches);
+    const github = yield* fetchGithub(branches);
     return { prs: github.prs, note: null };
   }).pipe(
     Effect.catch((error) =>
@@ -329,7 +329,7 @@ export function run(argv: string[]): Effect.Effect<number, FleetCommandError> {
     const json = argv.includes("--json");
 
     const wts = (yield* tryCommand("list worktrees", () =>
-      listWorktrees(),
+      listWorktreesPromise(),
     )).filter((w) => !w.isMain);
     const wtState = yield* commandIo("read wt state", () => readWtState());
     const slugStates = wtState.slugs;
@@ -344,11 +344,11 @@ export function run(argv: string[]): Effect.Effect<number, FleetCommandError> {
     const [{ prs, note }, sessions, heads, landedFlags] = yield* Effect.all(
       [
         fetchFleetPrs(branches),
-        tryCommand("list sessions", () => listSessions()),
+        tryCommand("list sessions", () => listSessionsPromise()),
         Effect.all(
           wts.map((w) =>
             tryCommand(`resolve HEAD for ${w.slug}`, () =>
-              revParse("HEAD", w.path),
+              revParsePromise("HEAD", w.path),
             ),
           ),
           { concurrency: 8 },
@@ -357,7 +357,7 @@ export function run(argv: string[]): Effect.Effect<number, FleetCommandError> {
           wts.map((w) =>
             w.branch
               ? tryCommand(`check merge state for ${w.slug}`, () =>
-                  branchIsMerged({
+                  branchIsMergedPromise({
                     slug: w.slug,
                     branch: w.branch,
                     path: w.path,
@@ -367,7 +367,7 @@ export function run(argv: string[]): Effect.Effect<number, FleetCommandError> {
                     merged
                       ? Effect.succeed(true)
                       : tryCommand(`check branch existence for ${w.slug}`, () =>
-                          branchIsGone(w.branch, w.path),
+                          branchIsGonePromise(w.branch, w.path),
                         ),
                   ),
                 )

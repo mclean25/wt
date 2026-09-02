@@ -10,7 +10,7 @@ export function isInteractive(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
-export function askEffect(question: string): Effect.Effect<string, PromptError> {
+export function ask(question: string): Effect.Effect<string, PromptError> {
   return Effect.acquireUseRelease(
     Effect.sync(() =>
       createInterface({ input: process.stdin, output: process.stdout }),
@@ -24,12 +24,12 @@ export function askEffect(question: string): Effect.Effect<string, PromptError> 
   );
 }
 
-export function confirmEffect(
+export function confirm(
   question: string,
   defaultYes = false,
 ): Effect.Effect<boolean, PromptError> {
   const suffix = defaultYes ? " [Y/n] " : " [y/N] ";
-  return askEffect(question + suffix).pipe(
+  return ask(question + suffix).pipe(
     Effect.map((raw) => {
       const answer = raw.toLowerCase();
       if (!answer) return defaultYes;
@@ -38,7 +38,7 @@ export function confirmEffect(
   );
 }
 
-export function pickIndexEffect(
+export function pickIndex(
   items: readonly string[],
   title: string,
 ): Effect.Effect<number | null, PromptError> {
@@ -48,7 +48,7 @@ export function pickIndexEffect(
       console.log(title);
       items.forEach((item, index) => console.log(`  ${index + 1}. ${item}`));
     });
-    const raw = yield* askEffect(
+    const raw = yield* ask(
       `Pick 1-${items.length} (empty to cancel): `,
     );
     if (!raw) return null;

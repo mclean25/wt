@@ -12,7 +12,7 @@ import {
   type LiveSessionDesc,
 } from "../../core/harness/claude/tail.ts";
 import { shellTailRegistry } from "../../core/shell-tail.ts";
-import { diffCommandUsesBase, killDiffSession } from "../../core/tmux.ts";
+import { diffCommandUsesBase, killDiffSessionPromise } from "../../core/tmux.ts";
 import { resolveDiffBase } from "../app-helpers.ts";
 import { SESSION_SLOTS } from "../sessions/slots.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
@@ -95,7 +95,7 @@ export function useSessionTailReconcile({
       log.event.info(`diff base changed (${prev} -> ${next}); killing diff session`);
       Effect.runFork(
         Effect.tryPromise({
-          try: () => killDiffSession(slug),
+          try: () => killDiffSessionPromise(slug),
           catch: (cause) => new DiffSessionRefreshError({ slug, cause }),
         }).pipe(
           Effect.andThen(

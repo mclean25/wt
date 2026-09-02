@@ -31,7 +31,7 @@ import { Effect } from "effect";
 
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { runEffect } from "../proc.ts";
+import { run } from "../proc.ts";
 import { TMUX_SOCKET } from "./naming.ts";
 
 const log = createLogger("[action-tmux]");
@@ -141,7 +141,7 @@ export function actionSessionName(slug: string): string {
  * would break tmux-aware tools the user may have wired into a shell
  * action.
  */
-export function startActionSessionEffect(opts: {
+export function startActionSession(opts: {
   slug: string;
   cwd: string;
   runDir: string;
@@ -150,7 +150,7 @@ export function startActionSessionEffect(opts: {
   const { slug, cwd, runDir, argv } = opts;
   const wrapper = ensureWrapper();
   const name = actionSessionName(slug);
-  return runEffect([
+  return run([
     "tmux",
     "-L",
     TMUX_SOCKET,
@@ -175,13 +175,13 @@ export function startActionSessionEffect(opts: {
   );
 }
 
-export const startActionSession = (opts: {
+export const startActionSessionPromise = (opts: {
   slug: string;
   cwd: string;
   runDir: string;
   argv: readonly string[];
 }): Promise<{ ok: true } | { ok: false; reason: string }> =>
-  Effect.runPromise(startActionSessionEffect(opts));
+  Effect.runPromise(startActionSession(opts));
 
 /**
  * Kill one slug's action session. Idempotent — silently no-ops when
@@ -196,8 +196,8 @@ export const startActionSession = (opts: {
  * immediately; the awaited resolution then guarantees the session name
  * is freed so a follow-up `start()` for the same slug can reclaim it.
  */
-export function killActionSessionEffect(slug: string): Effect.Effect<void> {
-  return runEffect([
+export function killActionSession(slug: string): Effect.Effect<void> {
+  return run([
     "tmux",
     "-L",
     TMUX_SOCKET,
@@ -207,5 +207,5 @@ export function killActionSessionEffect(slug: string): Effect.Effect<void> {
   ]).pipe(Effect.ignore);
 }
 
-export const killActionSession = (slug: string): Promise<void> =>
-  Effect.runPromise(killActionSessionEffect(slug));
+export const killActionSessionPromise = (slug: string): Promise<void> =>
+  Effect.runPromise(killActionSession(slug));

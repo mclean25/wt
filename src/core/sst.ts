@@ -1,7 +1,7 @@
 import { config, requireSst } from "./config.ts";
 import { Data, Effect } from "effect";
 import { createLogger } from "./logger.ts";
-import { runEffect } from "./proc.ts";
+import { run } from "./proc.ts";
 import type { SstStage } from "./types.ts";
 import { causeMessage } from "./errors.ts";
 
@@ -21,19 +21,19 @@ class SstStateParseError extends Data.TaggedError("SstStateParseError")<{
  * configured — callers are expected to gate on `config.sst` first
  * (see `cli/commands/stages.ts` for the user-facing message).
  */
-export function awsS3Effect(args: readonly string[]) {
+export function awsS3(args: readonly string[]) {
   const sst = requireSst();
-  return runEffect(["aws", "s3", ...args, "--profile", sst.awsProfile]).pipe(
+  return run(["aws", "s3", ...args, "--profile", sst.awsProfile]).pipe(
     Effect.map((r) => ({ stdout: r.stdout, ok: r.exitCode === 0 })),
   );
 }
-export const awsS3 = (args: string[]) => Effect.runPromise(awsS3Effect(args));
+export const awsS3Promise = (args: string[]) => Effect.runPromise(awsS3(args));
 
 /** List stages from the SST state bucket. Returns null on failure. */
-export function listSstStagesEffect() {
+export function listSstStages() {
   const sst = requireSst();
   return Effect.gen(function* () {
-    const r = yield* awsS3Effect(["ls", `s3://${sst.stateBucket}/${sst.statePrefix}`]);
+    const r = yield* awsS3(["ls", `s3://${sst.stateBucket}/${sst.statePrefix}`]);
     if (!r.ok) return null;
     const stages: SstStage[] = [];
     for (const line of r.stdout.split("\n")) {
@@ -55,7 +55,7 @@ export function listSstStagesEffect() {
     return stages;
   });
 }
-export const listSstStages = (): Promise<SstStage[] | null> => Effect.runPromise(listSstStagesEffect());
+export const listSstStagesPromise = (): Promise<SstStage[] | null> => Effect.runPromise(listSstStages());
 
 /**
  * True if the stage's state file lists any resources. `sst remove`
@@ -65,7 +65,7 @@ export const listSstStages = (): Promise<SstStage[] | null> => Effect.runPromise
 function stageHasResourcesEffect(name: string) {
   const sst = requireSst();
   return Effect.gen(function* () {
-    const r = yield* awsS3Effect([
+    const r = yield* awsS3([
       "cp",
       `s3://${sst.stateBucket}/${sst.statePrefix}${name}.json`,
       "-",
@@ -85,7 +85,7 @@ function stageHasResourcesEffect(name: string) {
   });
 }
 
-export function categorizeStagesEffect(
+export function categorizeStages(
   stages: SstStage[],
   worktreeStages: Set<string>,
 ) {
@@ -107,8 +107,8 @@ export function categorizeStagesEffect(
     return { live, orphaned };
   });
 }
-export const categorizeStages = (stages: SstStage[], worktreeStages: Set<string>) =>
-  Effect.runPromise(categorizeStagesEffect(stages, worktreeStages));
+export const categorizeStagesPromise = (stages: SstStage[], worktreeStages: Set<string>) =>
+  Effect.runPromise(categorizeStages(stages, worktreeStages));
 
 export function humanSize(n: number): string {
   if (n < 1024) return `${n} B`;

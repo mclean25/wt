@@ -10,7 +10,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { Data, Effect } from "effect";
 
 import type { HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
+import { sendSessionMessagePromise } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
 import { buildPerfInvestigationPrompt, type PerfSnapshot } from "../../core/perf.ts";
 import type { Modal } from "../modal-state.ts";
@@ -87,7 +87,7 @@ export function makePerfFlows(ctx: PerfFlowCtx): {
     Effect.runFork(
       Effect.tryPromise({
         try: () =>
-          sendSessionMessage({
+          sendSessionMessagePromise({
             slug: WT_SOURCE_SLOT.slug,
             cwd: WT_SOURCE_SLOT.path,
             harnessId: primaryHarness,

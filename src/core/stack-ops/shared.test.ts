@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Fiber } from "effect";
 
 import type { LockHandle } from "../locks.ts";
-import { withLockHandlesEffect } from "./shared.ts";
+import { withLockHandles } from "./shared.ts";
 
 function handle(onRelease: () => void): LockHandle {
   return {
@@ -13,13 +13,13 @@ function handle(onRelease: () => void): LockHandle {
   };
 }
 
-describe("withLockHandlesEffect", () => {
+describe("withLockHandles", () => {
   test("releases every lock when interrupted", async () => {
     let releases = 0;
     await Effect.runPromise(
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
-          withLockHandlesEffect(
+          withLockHandles(
             [handle(() => releases++), handle(() => releases++)],
             Effect.never,
           ),
@@ -35,7 +35,7 @@ describe("withLockHandlesEffect", () => {
   test("releases locks after success", async () => {
     let releases = 0;
     const value = await Effect.runPromise(
-      withLockHandlesEffect([handle(() => releases++)], Effect.succeed(42)),
+      withLockHandles([handle(() => releases++)], Effect.succeed(42)),
     );
 
     expect(value).toBe(42);

@@ -1,8 +1,8 @@
 import { Data, Effect } from "effect";
 
-import { removeWorktree } from "../../core/lifecycle.ts";
-import { killAllSessionsFor } from "../../core/tmux.ts";
-import { listWorktrees } from "../../core/worktree.ts";
+import { removeWorktreePromise } from "../../core/lifecycle.ts";
+import { killAllSessionsForPromise } from "../../core/tmux.ts";
+import { listWorktreesPromise } from "../../core/worktree.ts";
 
 type Parsed = {
   slug: string;
@@ -67,7 +67,7 @@ export function run(
       return 2;
     }
 
-    const wt = (yield* commandPromise("list worktrees", listWorktrees)).find(
+    const wt = (yield* commandPromise("list worktrees", listWorktreesPromise)).find(
       (w) => w.slug === parsed.slug,
     );
     if (!wt) {
@@ -79,7 +79,7 @@ export function run(
         `stage=${parsed.destroyStage} branch=${parsed.deleteBranch}`,
     );
     const result = yield* commandPromise("remove worktree", () =>
-      removeWorktree(wt, {
+      removeWorktreePromise(wt, {
         force: parsed.force,
         destroyStage: parsed.destroyStage,
         deleteBranch: parsed.deleteBranch,
@@ -92,7 +92,7 @@ export function run(
       return 1;
     }
     yield* commandPromise("kill removed worktree sessions", () =>
-      killAllSessionsFor(wt.slug),
+      killAllSessionsForPromise(wt.slug),
     );
     console.log(`✓ ${result.message}`);
     if (result.destroyedStage) console.log(`✓ destroyed stage ${wt.stage}`);

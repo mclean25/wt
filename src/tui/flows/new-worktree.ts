@@ -6,9 +6,9 @@
  */
 import { config } from "../../core/config.ts";
 import { Data, Effect, Fiber } from "effect";
-import { createWorktree, parseInput } from "../../core/lifecycle.ts";
+import { createWorktreePromise, parseInputPromise } from "../../core/lifecycle.ts";
 import { createLogger } from "../../core/logger.ts";
-import { runRemoteWt } from "../../core/remote.ts";
+import { runRemoteWtPromise } from "../../core/remote.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import { setSlugGithubIssue, type RemovedWorktree } from "../../core/wtstate.ts";
 import { parseNewInput } from "../app-helpers.ts";
@@ -71,7 +71,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     if (parsed.base) newLog.event.info(`base: ${parsed.base}`);
     let branch: string;
     try {
-      branch = await parseInput(parsed.input, {
+      branch = await parseInputPromise(parsed.input, {
         anyAuthor: parsed.anyAuthor,
         attach: parsed.attach,
         promptForChoice: (id, branches) =>
@@ -93,7 +93,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       return false;
     }
     newLog.event.info(`branch = ${branch}`);
-    const result = await createWorktree(branch, {
+    const result = await createWorktreePromise(branch, {
       onPhase: (p) => newLog.event.info(`phase: ${p}`),
       onLog: (line) => newLog.event.dim(line),
       runInstall: true,
@@ -170,7 +170,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     );
     let code: number;
     try {
-      code = await runRemoteWt(remote, args, {
+      code = await runRemoteWtPromise(remote, args, {
         onLine: (line) => remoteLog.event.dim(line),
       });
     } catch (err) {
@@ -215,7 +215,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
   async function doCheckoutReview(branch: string): Promise<void> {
     const log = createLogger("[review]");
     log.event.info(`creating review worktree for ${branch}`);
-    const result = await createWorktree(branch, {
+    const result = await createWorktreePromise(branch, {
       onPhase: (p) => log.event.info(`phase: ${p}`),
       onLog: (line) => log.event.dim(line),
       runInstall: true,
@@ -240,7 +240,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
   async function doRestoreRemoved(entry: RemovedWorktree): Promise<void> {
     const log = createLogger("[restore]");
     log.event.info(`restoring ${entry.slug} (${entry.branch})`);
-    const result = await createWorktree(entry.branch, {
+    const result = await createWorktreePromise(entry.branch, {
       onPhase: (p) => log.event.info(`phase: ${p}`),
       onLog: (line) => log.event.dim(line),
       runInstall: true,

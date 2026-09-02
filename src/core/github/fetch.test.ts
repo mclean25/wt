@@ -4,8 +4,8 @@ import { Cause, Effect } from "effect";
 import {
   buildQuery,
   chunkBranches,
-  fetchChunkEffect,
-  fetchChunksEffect,
+  fetchChunk,
+  fetchChunks,
   GithubRateLimitError,
   GithubTransientError,
   isTransientFailure,
@@ -164,7 +164,7 @@ describe("Effect chunk execution", () => {
     let started = false;
     const controller = new AbortController();
     const result = Effect.runPromiseExit(
-      fetchChunkEffect("owner", "repo", ["branch"], false, () =>
+      fetchChunk("owner", "repo", ["branch"], false, () =>
         Effect.callback((_resume, signal) => {
           started = true;
           signal.addEventListener("abort", () => {});
@@ -184,7 +184,7 @@ describe("Effect chunk execution", () => {
   test("retries a transient chunk and then succeeds", async () => {
     let calls = 0;
     const data = await Effect.runPromise(
-      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+      fetchChunk("owner", "repo", ["branch"], false, () => {
         calls += 1;
         return Effect.succeed(
           calls < 2 ? res({ stderr: "gh: HTTP 502" }) : emptyGraphql(1),
@@ -198,7 +198,7 @@ describe("Effect chunk execution", () => {
   test("never retries a rate limit", async () => {
     let calls = 0;
     const exit = await Effect.runPromiseExit(
-      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+      fetchChunk("owner", "repo", ["branch"], false, () => {
         calls += 1;
         return Effect.succeed(
           res({ stderr: "API rate limit exceeded for user" }),
@@ -215,7 +215,7 @@ describe("Effect chunk execution", () => {
   test("a truncated success body is transient and retried", async () => {
     let calls = 0;
     const exit = await Effect.runPromiseExit(
-      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+      fetchChunk("owner", "repo", ["branch"], false, () => {
         calls += 1;
         return Effect.succeed({ stdout: '{"data":', stderr: "", exitCode: 0 });
       }),
@@ -230,7 +230,7 @@ describe("Effect chunk execution", () => {
   test("partial GraphQL data with errors fails the whole chunk", async () => {
     let calls = 0;
     const exit = await Effect.runPromiseExit(
-      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+      fetchChunk("owner", "repo", ["branch"], false, () => {
         calls += 1;
         return Effect.succeed({
           stdout: JSON.stringify({
@@ -249,7 +249,7 @@ describe("Effect chunk execution", () => {
   test("a transient GraphQL error response is retried", async () => {
     let calls = 0;
     const data = await Effect.runPromise(
-      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+      fetchChunk("owner", "repo", ["branch"], false, () => {
         calls += 1;
         return Effect.succeed(
           calls === 1
@@ -271,7 +271,7 @@ describe("Effect chunk execution", () => {
   test("one failed chunk fails the whole batch and merge queue rides only the first", async () => {
     const seen: string[][] = [];
     const exit = await Effect.runPromiseExit(
-      fetchChunksEffect("owner", "repo", [["a"], ["b"]], (args) => {
+      fetchChunks("owner", "repo", [["a"], ["b"]], (args) => {
         seen.push([...args]);
         const branch = args.find((arg) => arg.startsWith("b0="));
         return branch === "b0=b"

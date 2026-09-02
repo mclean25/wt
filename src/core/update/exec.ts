@@ -47,7 +47,7 @@ const processFailureResult = (error: UpdateProcessError): RunResult => ({
 });
 
 /** Config-free, scoped process runner used by the updater and rollback path. */
-export function runInEffect(
+export function runIn(
   argv: string[],
   opts: { cwd: string; timeoutMs?: number },
 ): Effect.Effect<RunResult, UpdateProcessError> {
@@ -116,20 +116,20 @@ export function runInEffect(
 }
 
 /** Non-failing process result for command flows where exitCode is the contract. */
-export function runInResultEffect(
+export function runInResult(
   argv: string[],
   opts: { cwd: string; timeoutMs?: number },
 ): Effect.Effect<RunResult> {
-  return runInEffect(argv, opts).pipe(
+  return runIn(argv, opts).pipe(
     Effect.catch((error) => Effect.succeed(processFailureResult(error))),
   );
 }
 
-export function gitOkEffect(
+export function gitOk(
   args: string[],
   timeoutMs = 10_000,
 ): Effect.Effect<string | null, never> {
-  return runInEffect(["git", ...args], {
+  return runIn(["git", ...args], {
     cwd: WT_REPO_ROOT,
     timeoutMs,
   }).pipe(
@@ -209,16 +209,16 @@ export type EventsDaemonRestartResult =
  * the immediate TUI re-exec avoids. No plist means the daemon was never
  * installed, so there is nothing to do.
  */
-export function restartEventsDaemonAfterUpdateEffect(
+export function restartEventsDaemonAfterUpdate(
   deps: {
     plist?: string;
-    run?: typeof runInResultEffect;
+    run?: typeof runInResult;
   } = {},
 ): Effect.Effect<EventsDaemonRestartResult> {
   return Effect.suspend(() => {
     const plist = deps.plist ?? join(homedir(), "Library", "LaunchAgents", "com.wt.events.plist");
     if (!existsSync(plist)) return Effect.succeed({ status: "not-installed" });
-    return (deps.run ?? runInResultEffect)(
+    return (deps.run ?? runInResult)(
       [join(WT_REPO_ROOT, "bin", "wt"), "events", "restart"],
       { cwd: WT_REPO_ROOT, timeoutMs: 30_000 },
     ).pipe(Effect.map((result): EventsDaemonRestartResult => {
@@ -276,7 +276,7 @@ const acquireUpdateGitLockOnce = (): Effect.Effect<() => void, UpdateLockBusy> =
     }
   });
 
-export const acquireUpdateGitLockEffect: Effect.Effect<(() => void) | null> =
+export const acquireUpdateGitLock: Effect.Effect<(() => void) | null> =
   acquireUpdateGitLockOnce().pipe(
     Effect.retry(
       Schedule.max([
@@ -288,9 +288,9 @@ export const acquireUpdateGitLockEffect: Effect.Effect<(() => void) | null> =
   );
 
 /** Scoped lock ownership. Scope close releases on success, failure, or interruption. */
-export const updateGitLockEffect: Effect.Effect<boolean, never, Scope.Scope> =
+export const updateGitLock: Effect.Effect<boolean, never, Scope.Scope> =
   Effect.acquireRelease(
-    acquireUpdateGitLockEffect,
+    acquireUpdateGitLock,
     (release) => release ? Effect.sync(release) : Effect.void,
   ).pipe(Effect.map((release) => release !== null));
 

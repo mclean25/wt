@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Exit, Fiber } from "effect";
 
-import { runInEffect } from "./exec.ts";
+import { runIn } from "./exec.ts";
 
-describe("runInEffect lifecycle", () => {
+describe("runIn lifecycle", () => {
   test("timeout fails with a typed timeout error and reaps the child", async () => {
-    const exit = await Effect.runPromise(Effect.exit(runInEffect(
+    const exit = await Effect.runPromise(Effect.exit(runIn(
       [process.execPath, "-e", "setInterval(() => {}, 1000)"],
       { cwd: process.cwd(), timeoutMs: 25 },
     )));
@@ -18,7 +18,7 @@ describe("runInEffect lifecycle", () => {
 
   test("interruption waits for subprocess finalization", async () => {
     await Effect.runPromise(Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(runInEffect(
+      const fiber = yield* Effect.forkChild(runIn(
         [process.execPath, "-e", "setInterval(() => {}, 1000)"],
         { cwd: process.cwd() },
       ));
@@ -33,7 +33,7 @@ describe("runInEffect lifecycle", () => {
     const started = Date.now();
     const exit = await Effect.runPromise(
       Effect.exit(
-        runInEffect(["sh", "-c", "sleep 30 &"], {
+        runIn(["sh", "-c", "sleep 30 &"], {
           cwd: process.cwd(),
           timeoutMs: 25,
         }),

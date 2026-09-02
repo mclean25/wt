@@ -4,18 +4,18 @@ import { join } from "node:path";
 import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
-import { branchIsMergedEffect, gitQuietEffect } from "../../core/git.ts";
-import { fetchPrsEffect } from "../../core/github.ts";
+import { branchIsMerged, gitQuiet } from "../../core/git.ts";
+import { fetchPrs } from "../../core/github.ts";
 import { claudeTmuxName } from "../../core/harness/claude/harness.ts";
 import { claudeInjectSelftest, shimDir, staleShims } from "../../core/harness/claude/inject.ts";
 import { humanAge, lockAge, lockLabel, lockStatus } from "../../core/locks.ts";
-import { runEffect, type RunResult } from "../../core/proc.ts";
+import { run as runProcess, type RunResult } from "../../core/proc.ts";
 import { buildReports, detectTargets, readSkillsMemory, reportIsActionable } from "../../core/skills.ts";
 import { computeStage } from "../../core/stage.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
-import { listSessionsEffect } from "../../core/tmux/admin.ts";
+import { listSessions } from "../../core/tmux/admin.ts";
 import type { Check, CheckStatus, Worktree } from "../../core/types.ts";
-import { listWorktreesEffect, worktreeAtCwd } from "../../core/worktree.ts";
+import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import { readWtState } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
@@ -54,8 +54,8 @@ function mkCheck(name: string, status: CheckStatus, message: string, detail: str
   return { name, status, message, detail };
 }
 
-function procEffect(argv: readonly string[], opts: Parameters<typeof runEffect>[1] = {}): Effect.Effect<RunResult, DoctorCommandError> {
-  return runEffect(argv, opts).pipe(Effect.mapError((cause) => new DoctorCommandError({ cause })));
+function procEffect(argv: readonly string[], opts: Parameters<typeof runProcess>[1] = {}): Effect.Effect<RunResult, DoctorCommandError> {
+  return runProcess(argv, opts).pipe(Effect.mapError((cause) => new DoctorCommandError({ cause })));
 }
 
 function syncEffect<A>(f: () => A): Effect.Effect<A, DoctorCommandError> {
@@ -92,7 +92,7 @@ function checkSync(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
       const branchR = yield* procEffect(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wt.path });
       const branch = branchR.stdout.trim();
       if (branch && branch !== "HEAD") {
-        const hasRemote = yield* gitQuietEffect(["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], wt.path).pipe(
+        const hasRemote = yield* gitQuiet(["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], wt.path).pipe(
           Effect.mapError((cause) => new DoctorCommandError({ cause })),
         );
         if (hasRemote) {
@@ -340,7 +340,7 @@ function checkMerged(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
   return Effect.gen(function* () {
     if (!wt.branch) return mkCheck("merged", "info", "no branch");
     const trunk = `origin/${config.branch.base}`;
-    const merged = yield* branchIsMergedEffect({ slug: wt.slug, branch: wt.branch, path: wt.path }).pipe(
+    const merged = yield* branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path }).pipe(
       Effect.mapError((cause) => new DoctorCommandError({ cause })),
     );
     if (merged) return mkCheck("merged", "info", `contained in last-fetched ${trunk}`);
@@ -418,7 +418,7 @@ function checkSkillsFreshness(): Effect.Effect<Check, DoctorCommandError> {
  */
 function checkMessageTransport(): Effect.Effect<Check, DoctorCommandError> {
   return Effect.gen(function* () {
-    const entries = [...(yield* listSessionsEffect()).claude];
+    const entries = [...(yield* listSessions()).claude];
     if (entries.length === 0) return mkCheck("messaging", "ok", "no live claude sessions");
     const names = entries.map((e) => claudeTmuxName(e.slug, e.name));
     // Probe every session, not a representative one: a socket FILE
@@ -636,7 +636,7 @@ function reportSummary(wts: Worktree[], jsonOut: boolean): Effect.Effect<void, D
   return Effect.gen(function* () {
   const skipPrs = jsonOut;
   const [prs, mainCheck, skillsCheck, pathCheck, msgCheck, allChecks] = yield* Effect.all([
-    skipPrs ? Effect.succeed(new Map()) : fetchPrsEffect().pipe(Effect.mapError((cause) => new DoctorCommandError({ cause }))),
+    skipPrs ? Effect.succeed(new Map()) : fetchPrs().pipe(Effect.mapError((cause) => new DoctorCommandError({ cause }))),
     jsonOut ? Effect.succeed(null) : checkMainClone(),
     jsonOut ? Effect.succeed(null) : checkSkillsFreshness(),
     jsonOut ? Effect.succeed(null) : checkWtOnPath(),
@@ -710,7 +710,7 @@ function runEffectProgram(argv: string[]): Effect.Effect<number, DoctorCommandEr
     console.error(red(parsed.error));
     return 2;
   }
-  const wtsAll = (yield* listWorktreesEffect().pipe(Effect.mapError((cause) => new DoctorCommandError({ cause })))).filter((w) => !w.isMain);
+  const wtsAll = (yield* listWorktrees().pipe(Effect.mapError((cause) => new DoctorCommandError({ cause })))).filter((w) => !w.isMain);
   if (wtsAll.length === 0) {
     console.log(dim("No worktrees."));
     return 0;

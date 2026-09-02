@@ -4,9 +4,9 @@ import { Data, Effect } from "effect";
 import { config } from "../../core/config.ts";
 import { snapshotForBranches } from "../../core/events/store.ts";
 import {
-  fetchGithubEffect,
-  fetchRepoContributors,
-  fetchReviewRequests,
+  fetchGithub,
+  fetchRepoContributorsPromise,
+  fetchReviewRequestsPromise,
   type ReviewRequestPr,
 } from "../../core/github.ts";
 import type {
@@ -87,7 +87,7 @@ export const githubQuery = (branches: readonly string[]) =>
             const snap = snapshotForBranches(branches);
             if (snap) return snap;
           }
-          const { prs, mergeQueue } = yield* fetchGithubEffect([...branches]);
+          const { prs, mergeQueue } = yield* fetchGithub([...branches]);
           return {
             prs: Object.fromEntries(prs),
             mergeQueue: Object.fromEntries(mergeQueue),
@@ -127,7 +127,7 @@ export const reviewRequestsQuery = () =>
     queryFn: ({ signal }): Promise<ReviewRequestPr[]> =>
       queryPromise(
         promiseEffect("fetch review requests", () =>
-          fetchReviewRequests(signal),
+          fetchReviewRequestsPromise(signal),
         ),
         signal,
       ),
@@ -161,7 +161,7 @@ export const contributorsQuery = () =>
     queryFn: ({ signal }): Promise<Contributor[]> =>
       queryPromise(
         promiseEffect("fetch contributors", () =>
-          fetchRepoContributors(signal),
+          fetchRepoContributorsPromise(signal),
         ),
         signal,
       ),

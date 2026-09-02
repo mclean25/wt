@@ -48,7 +48,7 @@ export function cwdOsc7(cwd: string, host = hostname()): string {
   return `\x1b]7;${url.href}\x1b\\`;
 }
 
-export function handoffTerminalEffect<A, E, R>(
+export function handoffTerminal<A, E, R>(
   renderer: CliRenderer,
   cwd: string,
   effect: Effect.Effect<A, E, R>,
@@ -79,11 +79,11 @@ export function handoffTerminalEffect<A, E, R>(
 }
 
 /** Compatibility adapter for callback-shaped renderer consumers. */
-export const handoffTerminal = <T>(
+export const handoffTerminalPromise = <T>(
   renderer: CliRenderer,
   cwd: string,
   fn: () => Promise<T>,
-): Promise<T> => Effect.runPromise(handoffTerminalEffect(
+): Promise<T> => Effect.runPromise(handoffTerminal(
   renderer,
   cwd,
   Effect.tryPromise(fn),

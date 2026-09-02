@@ -15,7 +15,7 @@ import type { CliRenderer } from "@opentui/core";
 import { Effect } from "effect";
 
 import {
-  enterWorktreeSessionEffect,
+  enterWorktreeSession,
   type HarnessRoute,
   type WorktreeSessionResult,
 } from "./worktree.ts";
@@ -37,14 +37,14 @@ export type EnterDiffSessionOptions = {
   harness: HarnessRoute;
 };
 
-export function enterDiffSessionEffect(opts: EnterDiffSessionOptions) {
+export function enterDiffSession(opts: EnterDiffSessionOptions) {
   const { base, ...rest } = opts;
-  return enterWorktreeSessionEffect({
+  return enterWorktreeSession({
     ...rest,
     initial: "diff",
     diffBase: base,
   });
 }
 
-export const enterDiffSession = (opts: EnterDiffSessionOptions): Promise<DiffResult> =>
-  Effect.runPromise(enterDiffSessionEffect(opts));
+export const enterDiffSessionPromise = (opts: EnterDiffSessionOptions): Promise<DiffResult> =>
+  Effect.runPromise(enterDiffSession(opts));

@@ -1,9 +1,9 @@
 import { Duration, Effect } from "effect";
 
-import { killActionSessionEffect } from "./action-sessions.ts";
+import { killActionSession } from "./action-sessions.ts";
 import type { HarnessId } from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
-import { runEffect } from "../proc.ts";
+import { run } from "../proc.ts";
 import {
   bareSlug,
   CLAUDE_NAMED_SEP,
@@ -11,7 +11,7 @@ import {
   SUFFIX,
   TMUX_SOCKET,
 } from "./naming.ts";
-import { killByNameEffect, listAllSessionsRawEffect } from "./process.ts";
+import { killByName, listAllSessionsRaw } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
@@ -19,8 +19,8 @@ const log = createLogger("[tmux]");
  * Kill the entire wt tmux server (every session). Idempotent — exits
  * 0 when no server is running, after warning to stderr we discard.
  */
-export const killServerEffect = runEffect(["tmux", "-L", TMUX_SOCKET, "kill-server"]).pipe(Effect.ignore);
-export const killServer = (): Promise<void> => Effect.runPromise(killServerEffect);
+export const killServer = run(["tmux", "-L", TMUX_SOCKET, "kill-server"]).pipe(Effect.ignore);
+export const killServerPromise = (): Promise<void> => Effect.runPromise(killServer);
 
 /**
  * Kill one worktree's primary claude session. Idempotent — silently
@@ -30,37 +30,37 @@ export const killServer = (): Promise<void> => Effect.runPromise(killServerEffec
  * `killShellSession` for those, or `killAllSessionsFor` to drop
  * every kind at once.
  */
-export const killSessionEffect = (slug: string) => killByNameEffect(sessionName(slug, "claude"));
-export const killSession = (slug: string): Promise<void> => Effect.runPromise(killSessionEffect(slug));
+export const killSession = (slug: string) => killByName(sessionName(slug, "claude"));
+export const killSessionPromise = (slug: string): Promise<void> => Effect.runPromise(killSession(slug));
 
 /** Kill one worktree's named (non-primary) claude session. Idempotent. */
-export function killClaudeNamedSessionEffect(
+export function killClaudeNamedSession(
   slug: string,
   claudeName: string,
 ): Effect.Effect<void> {
-  return killByNameEffect(sessionName(slug, "claude", claudeName));
+  return killByName(sessionName(slug, "claude", claudeName));
 }
-export const killClaudeNamedSession = (slug: string, claudeName: string): Promise<void> =>
-  Effect.runPromise(killClaudeNamedSessionEffect(slug, claudeName));
+export const killClaudeNamedSessionPromise = (slug: string, claudeName: string): Promise<void> =>
+  Effect.runPromise(killClaudeNamedSession(slug, claudeName));
 
 /**
  * Kill one worktree's harness session by id. For Claude with a non-null
  * managedName, kills the named session; otherwise kills the primary
  * tmux slot for that harness on that slug. Idempotent.
  */
-export function killHarnessSession(
+export function killHarnessSessionPromise(
   slug: string,
   harnessId: HarnessId,
   managedName: string | null = null,
 ): Promise<void> {
-  return Effect.runPromise(killHarnessSessionEffect(slug, harnessId, managedName));
+  return Effect.runPromise(killHarnessSession(slug, harnessId, managedName));
 }
 
-export const killHarnessSessionEffect = (
+export const killHarnessSession = (
   slug: string,
   harnessId: HarnessId,
   managedName: string | null = null,
-) => killByNameEffect(sessionName(slug, harnessId, managedName));
+) => killByName(sessionName(slug, harnessId, managedName));
 
 /** Whether closing this harness may send its exit gesture through the pane. */
 export function closeHarnessUsesPaneInput(harnessId: HarnessId): boolean {
@@ -75,7 +75,7 @@ export function closeHarnessUsesPaneInput(harnessId: HarnessId): boolean {
  * That path is best-effort because a harness with text in its input box
  * may ignore EOF. Missing sessions are harmless on both paths.
  */
-export function closeHarnessSessionGracefullyEffect(
+export function closeHarnessSessionGracefully(
   slug: string,
   harnessId: HarnessId,
   managedName: string | null = null,
@@ -84,14 +84,14 @@ export function closeHarnessSessionGracefullyEffect(
   // avoids colliding with partially typed human input; Claude persists
   // its conversation independently of the terminal process lifetime.
   if (!closeHarnessUsesPaneInput(harnessId)) {
-    return killHarnessSessionEffect(slug, harnessId, managedName);
+    return killHarnessSession(slug, harnessId, managedName);
   }
   const name = sessionName(slug, harnessId, managedName);
   // `=${name}` alone is a valid SESSION target (kill-session) but
   // send-keys resolves a PANE target, where the bare exact-match form
   // errors with "can't find pane". The trailing `:` makes it
   // exact-session + active-window, which pane resolution accepts.
-  const send = () => runEffect(["tmux", "-L", TMUX_SOCKET, "send-keys", "-t", `=${name}:`, "C-d"]).pipe(Effect.ignore);
+  const send = () => run(["tmux", "-L", TMUX_SOCKET, "send-keys", "-t", `=${name}:`, "C-d"]).pipe(Effect.ignore);
   // A beat between the two presses lets a harness render any exit
   // confirmation before the second key arrives.
   return send().pipe(
@@ -100,19 +100,19 @@ export function closeHarnessSessionGracefullyEffect(
   );
 }
 
-export const closeHarnessSessionGracefully = (
+export const closeHarnessSessionGracefullyPromise = (
   slug: string,
   harnessId: HarnessId,
   managedName: string | null = null,
-): Promise<void> => Effect.runPromise(closeHarnessSessionGracefullyEffect(slug, harnessId, managedName));
+): Promise<void> => Effect.runPromise(closeHarnessSessionGracefully(slug, harnessId, managedName));
 
 /** Kill one worktree's diff session. Idempotent. */
-export const killDiffSessionEffect = (slug: string) => killByNameEffect(sessionName(slug, "diff"));
-export const killDiffSession = (slug: string): Promise<void> => Effect.runPromise(killDiffSessionEffect(slug));
+export const killDiffSession = (slug: string) => killByName(sessionName(slug, "diff"));
+export const killDiffSessionPromise = (slug: string): Promise<void> => Effect.runPromise(killDiffSession(slug));
 
 /** Kill one worktree's shell session. Idempotent. */
-export const killShellSessionEffect = (slug: string) => killByNameEffect(sessionName(slug, "shell"));
-export const killShellSession = (slug: string): Promise<void> => Effect.runPromise(killShellSessionEffect(slug));
+export const killShellSession = (slug: string) => killByName(sessionName(slug, "shell"));
+export const killShellSessionPromise = (slug: string): Promise<void> => Effect.runPromise(killShellSession(slug));
 
 // Action session kills go through `core/tmux/action-sessions.ts` —
 // `killAllSessionsFor` below imports the sync helper there. Keeping a
@@ -124,23 +124,23 @@ export const killShellSession = (slug: string): Promise<void> => Effect.runPromi
  * named claude, diff, shell, action). Used by destroy paths so none
  * linger with cwd inside a half-deleted worktree.
  */
-export function killAllSessionsForEffect(slug: string): Effect.Effect<void> {
+export function killAllSessionsFor(slug: string): Effect.Effect<void> {
   // List once and pick out any session whose bareSlug matches —
   // covers primary, named claudes, diff, shell, and action without
   // hardcoding the named-claude list. The action kill goes via
   // action-sessions.ts (now async like the rest).
   return Effect.gen(function* () {
-    const all = yield* listAllSessionsRawEffect();
+    const all = yield* listAllSessionsRaw();
     const ours = [...all].filter((n) => bareSlug(n) === slug);
     yield* Effect.all([
-      ...ours.map((n) => killByNameEffect(n)),
-      killActionSessionEffect(slug),
+      ...ours.map((n) => killByName(n)),
+      killActionSession(slug),
     ], { concurrency: "unbounded", discard: true });
   });
 }
 
-export const killAllSessionsFor = (slug: string): Promise<void> =>
-  Effect.runPromise(killAllSessionsForEffect(slug));
+export const killAllSessionsForPromise = (slug: string): Promise<void> =>
+  Effect.runPromise(killAllSessionsFor(slug));
 
 const BASE_PLACEHOLDER = "{{base}}";
 
@@ -255,20 +255,20 @@ export function classifySessions(names: Iterable<string>): SessionClassification
  * stderr; we map that to empty sets rather than throwing — it's the
  * steady state when no worktree has been entered yet.
  */
-export function listSessionsEffect(): Effect.Effect<
+export function listSessions(): Effect.Effect<
   SessionClassification & {
     /** Raw set of every live tmux session name. Used by harness impls
      *  to compute `isLive` without a second `list-sessions` call. */
     all: Set<string>;
   }
 > {
-  return listAllSessionsRawEffect().pipe(
+  return listAllSessionsRaw().pipe(
     Effect.map((all) => ({ ...classifySessions(all), all })),
   );
 }
 
-export const listSessions = (): Promise<SessionClassification & { all: Set<string> }> =>
-  Effect.runPromise(listSessionsEffect());
+export const listSessionsPromise = (): Promise<SessionClassification & { all: Set<string> }> =>
+  Effect.runPromise(listSessions());
 
 /**
  * Reconcile sessions against a live slug set. Kills any session of
@@ -291,20 +291,20 @@ export function orphanedSessions(
   return [...sessions].filter((s) => !liveSlugs.has(bareSlug(s)));
 }
 
-export function reapOrphanedSessionsEffect(
+export function reapOrphanedSessions(
   liveSlugs: ReadonlySet<string>,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-    const sessions = yield* listAllSessionsRawEffect();
+    const sessions = yield* listAllSessionsRaw();
     const orphans = orphanedSessions(sessions, liveSlugs);
     if (orphans.length === 0) return;
     log.info(`reaping ${orphans.length} orphaned tmux session(s)`, { orphans });
-    yield* Effect.all(orphans.map(killByNameEffect), {
+    yield* Effect.all(orphans.map(killByName), {
       concurrency: "unbounded",
       discard: true,
     });
   });
 }
 
-export const reapOrphanedSessions = (liveSlugs: ReadonlySet<string>): Promise<void> =>
-  Effect.runPromise(reapOrphanedSessionsEffect(liveSlugs));
+export const reapOrphanedSessionsPromise = (liveSlugs: ReadonlySet<string>): Promise<void> =>
+  Effect.runPromise(reapOrphanedSessions(liveSlugs));

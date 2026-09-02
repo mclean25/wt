@@ -8,22 +8,22 @@
  * rollback). Semantics doc: docs/updates.md.
  */
 export {
-  acquireUpdateGitLockEffect,
-  gitOkEffect,
+  acquireUpdateGitLock,
+  gitOk,
   gitSync,
   logSafe,
-  runInEffect,
-  runInResultEffect,
-  restartEventsDaemonAfterUpdateEffect,
+  runIn,
+  runInResult,
+  restartEventsDaemonAfterUpdate,
   shortSha,
   spawnFreshWt,
   WT_REPO_ROOT,
   wtVersion,
-  updateGitLockEffect,
+  updateGitLock,
 } from "./update/exec.ts";
 export type { EventsDaemonRestartResult } from "./update/exec.ts";
 export {
-  armBootSentinelEffect,
+  armBootSentinel,
   completeBootSentinel,
   emptyUpdateMemory,
   parseUpdateMemory,
@@ -34,10 +34,10 @@ export {
 } from "./update/memory.ts";
 export type { UpdateJournalEntry, UpdateMemory } from "./update/memory.ts";
 export {
-  fetchWtOriginEffect,
-  listRunningWtInstancesEffect,
-  pendingCommitsEffect,
-  repoUpdateStateEffect,
+  fetchWtOrigin,
+  listRunningWtInstances,
+  pendingCommits,
+  repoUpdateState,
   selectOffer,
   startupCheckGate,
   UPDATE_CHECK_INTERVAL_MS,
@@ -45,13 +45,13 @@ export {
 export type { OfferDecision, PendingCommit, RepoUpdateState, StartupGate } from "./update/state.ts";
 export {
   classifyCheckRuns,
-  findNewestEligibleEffect,
-  originGithubRepoEffect,
+  findNewestEligible,
+  originGithubRepo,
 } from "./update/green.ts";
 export type { CheckStatus, GateResult } from "./update/green.ts";
 export {
-  applyWtUpdateEffect,
-  performRollbackEffect,
-  smokeCheckoutEffect,
+  applyWtUpdate,
+  performRollback,
+  smokeCheckout,
 } from "./update/apply.ts";
 export type { ApplyDependencies, ApplyResult } from "./update/apply.ts";

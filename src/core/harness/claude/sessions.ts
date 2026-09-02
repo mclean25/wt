@@ -17,10 +17,10 @@ import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { Data, Effect } from "effect";
 
-import { withAsyncFileLockEffect } from "../../locks.ts";
-import { killHarnessSessionEffect } from "../../tmux/admin.ts";
-import { startHarnessSessionDetachedEffect } from "../../tmux/lifecycle.ts";
-import { capturePaneEffect } from "../../tmux/process.ts";
+import { withAsyncFileLock } from "../../locks.ts";
+import { killHarnessSession } from "../../tmux/admin.ts";
+import { startHarnessSessionDetached } from "../../tmux/lifecycle.ts";
+import { capturePane } from "../../tmux/process.ts";
 import { wtSessionUuid } from "./jsonl.ts";
 import { claudeTmuxName } from "./harness.ts";
 import { readRegistry, type RegistryStatus } from "./registry.ts";
@@ -113,7 +113,7 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
         try: () => overrides.startDetached!(target.slug, target.cwd, "claude", managedName),
         catch: (cause) => fail("start", cause),
       })
-    : startHarnessSessionDetachedEffect(
+    : startHarnessSessionDetached(
         target.slug,
         target.cwd,
         "claude",
@@ -126,7 +126,7 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
           try: () => overrides.kill!(target.slug, "claude", managedName),
           catch: (cause) => fail("stop", cause),
         })
-      : killHarnessSessionEffect(target.slug, "claude", managedName).pipe(
+      : killHarnessSession(target.slug, "claude", managedName).pipe(
           Effect.mapError((cause) => fail("stop", cause)),
         );
 
@@ -135,7 +135,7 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
         try: () => overrides.peekPane!(tmuxName),
         catch: (cause) => fail("pane", cause),
       })
-    : capturePaneEffect(tmuxName).pipe(
+    : capturePane(tmuxName).pipe(
         Effect.mapError((cause) => fail("pane", cause)),
       );
 
@@ -314,7 +314,7 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
 
   function startEffect(target: ClaudeSessionTarget) {
     const identity = targetIdentity(target);
-    return withAsyncFileLockEffect(
+    return withAsyncFileLock(
       `__claude_session__${identity.tmuxName}`,
       Effect.gen(function* () {
         const existing = yield* Effect.try({
@@ -341,7 +341,7 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     target: ClaudeSessionTarget,
   ) {
     const identity = targetIdentity(target);
-    return withAsyncFileLockEffect(
+    return withAsyncFileLock(
       `__claude_session__${identity.tmuxName}`,
       Effect.gen(function* () {
         const existing = yield* Effect.try({
@@ -360,7 +360,7 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
 
   function stopEffect(target: ClaudeSessionTarget) {
     const identity = targetIdentity(target);
-    return withAsyncFileLockEffect(
+    return withAsyncFileLock(
       `__claude_session__${identity.tmuxName}`,
       killEffect(target, target.managedName ?? null),
     );

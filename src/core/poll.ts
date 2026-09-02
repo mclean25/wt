@@ -28,7 +28,7 @@ export class PollCheckError extends Data.TaggedError("PollCheckError")<{
 }> {}
 
 /** Effect-native polling loop. Clock is injectable, so tests never use real timers. */
-export function pollUntilEffect(opts: PollUntilOptions): Effect.Effect<boolean, PollCheckError> {
+export function pollUntil(opts: PollUntilOptions): Effect.Effect<boolean, PollCheckError> {
   return Effect.gen(function* () {
     const startedAt = yield* Clock.currentTimeMillis;
     const deadline = startedAt + opts.budgetMs;
@@ -44,7 +44,7 @@ export function pollUntilEffect(opts: PollUntilOptions): Effect.Effect<boolean, 
   });
 }
 
-export async function pollUntil(opts: {
+export async function pollUntilPromise(opts: {
   /** Cheap, synchronous, side-effect-free. Called immediately, then per tick. */
   check(): boolean;
   budgetMs: number;
@@ -55,7 +55,7 @@ export async function pollUntil(opts: {
 }): Promise<boolean> {
   if (!opts.now && !opts.sleep) {
     return Effect.runPromise(
-      pollUntilEffect(opts),
+      pollUntil(opts),
       opts.signal ? { signal: opts.signal } : undefined,
     );
   }

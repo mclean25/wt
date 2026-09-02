@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Exit } from "effect";
 
-import { cwdOsc7, handoffTerminalEffect } from "./renderer-handoff.ts";
+import { cwdOsc7, handoffTerminal } from "./renderer-handoff.ts";
 
 describe("cwdOsc7", () => {
   test("reports the pane cwd as an encoded file URL", () => {
@@ -22,7 +22,7 @@ test("failure resumes the renderer and restores terminal ownership", async () =>
   process.stdout.write = (() => true) as typeof process.stdout.write;
   process.kill = (() => true) as typeof process.kill;
   try {
-    const exit = await Effect.runPromiseExit(handoffTerminalEffect(
+    const exit = await Effect.runPromiseExit(handoffTerminal(
       renderer as never,
       "/tmp",
       Effect.fail("handoff failed"),

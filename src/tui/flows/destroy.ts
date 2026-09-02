@@ -18,14 +18,14 @@ import {
 } from "../../core/worktree-target.ts";
 import type { PullRequest } from "../../core/types.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
-import { spawnBackgroundRemove } from "../../core/lifecycle.ts";
+import { sendSessionMessagePromise } from "../../core/harness/session-messaging.ts";
+import { spawnBackgroundRemovePromise } from "../../core/lifecycle.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
-import { runRemoteWt } from "../../core/remote.ts";
+import { runRemoteWtPromise } from "../../core/remote.ts";
 import { removeShellLog } from "../../core/shell-tail.ts";
-import { rebaseStack, STACK_BUSY } from "../../core/stack-ops.ts";
-import { killAllSessionsFor } from "../../core/tmux.ts";
+import { rebaseStackPromise, STACK_BUSY } from "../../core/stack-ops.ts";
+import { killAllSessionsForPromise } from "../../core/tmux.ts";
 import {
   recordRemovedWorktrees,
   type RemovedWorktree,
@@ -189,7 +189,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     try {
       void actionRegistry.kill(remoteWorktreeActionKey(remote.host, slug));
       await optimisticRemoveRemoteWorktree(remote, slug, async () => {
-        const code = await runRemoteWt(remote, args, {
+        const code = await runRemoteWtPromise(remote, args, {
           onLine: (line) => log.event.dim(line),
         });
         if (code !== 0) throw new Error(`remove failed (exit ${code})`);
@@ -273,7 +273,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // idempotent and fast (just SIGHUPs the tmux session daemons).
     // Awaited so spawnBackgroundRemove only starts once they're gone.
     try {
-      await killAllSessionsFor(slug);
+      await killAllSessionsForPromise(slug);
       void refreshTmuxSessions();
     } catch (err) {
       log.warn("kill session before remove failed", {
@@ -286,7 +286,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // startup reap would catch it eventually, but cleaning up at the
     // source keeps the cache dir tidy without waiting for a restart.
     removeShellLog(slug);
-    spawnBackgroundRemove(slug, {
+    spawnBackgroundRemovePromise(slug, {
       force,
       destroyStage: row.fields.deploy.data ?? false,
       deleteBranch: true,
@@ -426,7 +426,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       Effect.forEach(
         candidates,
         (row) =>
-          Effect.tryPromise(() => killAllSessionsFor(row.wt.slug)).pipe(
+          Effect.tryPromise(() => killAllSessionsForPromise(row.wt.slug)).pipe(
             Effect.catch(() => Effect.void),
           ),
         { concurrency: "unbounded", discard: true },
@@ -436,7 +436,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     for (const row of candidates) {
       archive(row.wt.slug);
       removeShellLog(row.wt.slug);
-      spawnBackgroundRemove(row.wt.slug, {
+      spawnBackgroundRemovePromise(row.wt.slug, {
         force: false,
         destroyStage: row.fields.deploy.data ?? false,
         deleteBranch: true,
@@ -560,7 +560,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       : "";
     const text = `${skill}\n\nwt's restack engine just bailed on this worktree: ${detail}.${backup} Resolve the conflict and finish the restack.`;
     log.event.info(`conflict — sending ${skill} to ${harness.label} session`);
-    void sendSessionMessage({
+    void sendSessionMessagePromise({
       slug,
       cwd: row.wt.path,
       harnessId: primaryHarness,
@@ -623,7 +623,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     let outcome: "clean" | "failed" | "busy" = "failed";
     appLog.event.info(`restack ${stackId}: fetch + reconcile + replay`);
     try {
-      const res = await rebaseStack(stackId, {}, (line) =>
+      const res = await rebaseStackPromise(stackId, {}, (line) =>
         appLog.event.dim(`restack ${stackId}: ${line}`),
       );
       if (res.ok) {

@@ -2,16 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import { devServerLogPollEffect } from "./useDevServerLog.ts";
+import { devServerLogPoll } from "./useDevServerLog.ts";
 
-describe("devServerLogPollEffect", () => {
+describe("devServerLogPoll", () => {
   test("a rejected read does not stop later polls", async () => {
     let reads = 0;
     const outputs: Array<string | null> = [];
     await Effect.runPromise(
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
-          devServerLogPollEffect(
+          devServerLogPoll(
             () =>
               ++reads === 1
                 ? Promise.reject(new Error("temporary"))

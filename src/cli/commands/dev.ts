@@ -6,24 +6,24 @@ import {
   DEV_QUEUE_FIRST,
   DEV_WAIT_DEFAULT_TIMEOUT_MS,
   DevSlotFullError,
-  devServerLogsEffect,
-  devServerStatusEffect,
-  devSlotReportEffect,
+  devServerLogs,
+  devServerStatus,
+  devSlotReport,
   DEV_READY_DEFAULT_TIMEOUT_MS,
-  devHealthEffect,
+  devHealth,
   readDevCrashLog,
   readDevWaiters,
   DevResetStopFailedError,
-  resetDevServerEffect,
+  resetDevServer,
   setDevWaiterPriority,
-  startDevServerEffect,
-  stopDevServerEffect,
-  waitForDevReadyEffect,
-  waitForDevSlotEffect,
+  startDevServer,
+  stopDevServer,
+  waitForDevReady,
+  waitForDevSlot,
   type DevSlotHolder,
 } from "../../core/dev-server.ts";
 import type { Worktree } from "../../core/types.ts";
-import { listWorktreesEffect, worktreeAtCwd } from "../../core/worktree.ts";
+import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
 import { agentIdentity } from "../../core/agent-identity.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
@@ -67,7 +67,7 @@ const USAGE =
 
 /** The target worktree: explicit slug arg, else the one containing cwd. */
 function resolveWorktree(slugArg: string | undefined) {
-  return listWorktreesEffect().pipe(Effect.map((all) => {
+  return listWorktrees().pipe(Effect.map((all) => {
     const worktrees = all.filter((w) => !w.isMain);
     return slugArg ? worktrees.find((w) => w.slug === slugArg) ?? null : worktreeAtCwd(worktrees);
   }));
@@ -118,7 +118,7 @@ function runStart(wt: Worktree, argv: readonly string[]) {
 
   if (wait) {
     let announced = false;
-    const got = yield* waitForDevSlotEffect(wt.slug, {
+    const got = yield* waitForDevSlot(wt.slug, {
       timeoutMs,
       onWait: ({ rank, holders, waited }) => {
         // First tick names who has the slots; after that just the
@@ -142,11 +142,11 @@ function runStart(wt: Worktree, argv: readonly string[]) {
   // afterwards there is nothing left to compare against. This is the
   // moment the reader is paying attention, and it is the moment they
   // have historically had no reason to suspect anything.
-  const priorStale = rebuild ? false : (yield* devServerStatusEffect(wt.slug, { path: wt.path })).rebasedSince;
+  const priorStale = rebuild ? false : (yield* devServerStatus(wt.slug, { path: wt.path })).rebasedSince;
   const operation = Effect.gen(function* () {
     const { port, url, adopted } = rebuild
-      ? yield* resetDevServerEffect(wt, (line) => console.error(dim(`  ${line}`)))
-      : yield* startDevServerEffect(wt);
+      ? yield* resetDevServer(wt, (line) => console.error(dim(`  ${line}`)))
+      : yield* startDevServer(wt);
     if (priorStale) {
       // wt does not know what a volume is, but it knows this slug last
       // ran a server on a commit that is no longer in the history —
@@ -188,7 +188,7 @@ function runStart(wt: Worktree, argv: readonly string[]) {
       console.log(dim("  `wt dev status` asks now, `wt dev logs` shows the boot"));
       return 0;
     }
-    const outcome = yield* waitForDevReadyEffect(wt, {
+    const outcome = yield* waitForDevReady(wt, {
       timeoutMs: timeoutMs,
       onTick: ({ waited, state }) => {
         if (state === "checking") {
@@ -338,7 +338,7 @@ function printQueue(json: boolean): number {
 
 function runStatusAll(json: boolean) {
   return Effect.gen(function* () {
-  const report = yield* devSlotReportEffect();
+  const report = yield* devSlotReport();
   const now = Date.now();
   if (json) {
     console.log(
@@ -407,11 +407,11 @@ function runStatusAll(json: boolean) {
 
 function runStatusOne(wt: Worktree, json: boolean) {
   return Effect.gen(function* () {
-  const st = yield* devServerStatusEffect(wt.slug, { path: wt.path });
+  const st = yield* devServerStatus(wt.slug, { path: wt.path });
   // Only worth asking a running server, and only here: this is the
   // on-demand surface, where a slow-but-exact answer is the point. It
   // never rides a poll.
-  const health = st.running ? yield* devHealthEffect(wt) : null;
+  const health = st.running ? yield* devHealth(wt) : null;
   const now = Date.now();
   if (json) {
     console.log(JSON.stringify({ slug: wt.slug, ...st, health }, null, 2));
@@ -559,7 +559,7 @@ function runEffectProgram(argv: string[]) {
       // reaches for, and they will not find it under `start`.
       return yield* runStart(wt, [...argv, "--rebuild"]);
     case "stop": {
-      yield* stopDevServerEffect(wt);
+      yield* stopDevServer(wt);
       console.log(green(`✓ dev server stopped for ${cyan(wt.slug)}`));
       return 0;
     }
@@ -567,7 +567,7 @@ function runEffectProgram(argv: string[]) {
       return yield* runStatusOne(wt, json);
     case "logs": {
       // The tmux pane (alive or remained-on-exit) IS the log store.
-      const output = yield* devServerLogsEffect(wt.slug);
+      const output = yield* devServerLogs(wt.slug);
       if (output !== null) {
         console.log(output);
         return 0;

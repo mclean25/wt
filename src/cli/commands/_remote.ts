@@ -39,10 +39,10 @@ export function run(argv: string[]): Effect.Effect<number, Error> {
         return 1;
       }
     }
-    const { dispatchEffect } = yield* Effect.tryPromise({
+    const { dispatch } = yield* Effect.tryPromise({
       try: () => import("../index.ts"),
       catch: (cause) => new RemoteCommandError({ operation: "load dispatcher", cause }),
     });
-    return yield* dispatchEffect(decoded);
+    return yield* dispatch(decoded);
   });
 }

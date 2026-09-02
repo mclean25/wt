@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Cause, Effect, Exit, Fiber } from "effect";
 
 import {
+  createSessionMessengerPromise,
   createSessionMessenger,
-  createSessionMessengerEffect,
   fallbackAdvice,
   senderTag,
   stampSender,
@@ -166,7 +166,7 @@ describe("the claude transport ladder", () => {
 
   test("an injectable session is submitted into, never typed at", async () => {
     const fake = fakes();
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send(target)).toMatchObject({ ok: true, transport: "inspector" });
     expect(fake.calls.deliver).toBe(1);
@@ -179,7 +179,7 @@ describe("the claude transport ladder", () => {
     // injections each restore their own captured draft on a timer, and
     // the later timer wins.
     const fake = fakes();
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     await send(target);
 
@@ -189,7 +189,7 @@ describe("the claude transport ladder", () => {
   test("no socket at all falls back to typing, and says why", async () => {
     // The session predates this wt, or a human started it by hand.
     const fake = fakes({ deliverFails: "absent" });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send(target)).toMatchObject({
       ok: true,
@@ -202,7 +202,7 @@ describe("the claude transport ladder", () => {
 
   test("a stale socket falls back to typing, with restart advice", async () => {
     const fake = fakes({ deliverFails: "stale" });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send(target)).toMatchObject({
       ok: true,
@@ -214,7 +214,7 @@ describe("the claude transport ladder", () => {
 
   test("a prompt UI that never mounts is typed at, blaming the anchors", async () => {
     const fake = fakes({ deliverFails: "not-ready" });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send(target)).toMatchObject({
       ok: true,
@@ -250,7 +250,7 @@ describe("the claude transport ladder", () => {
     // WT_INSPECT=off degrades every send here by choice. Nothing about
     // the TARGET is wrong, and nothing about it needs fixing.
     const fake = fakes();
-    const send = createSessionMessenger({ ...fake.deps, inspectorEnabled: () => false });
+    const send = createSessionMessengerPromise({ ...fake.deps, inspectorEnabled: () => false });
 
     const res = await send(target);
     expect(res).toMatchObject({
@@ -267,7 +267,7 @@ describe("the claude transport ladder", () => {
     // The submit key would answer whatever dialog is up — deciding a
     // permission on the human's behalf.
     const fake = fakes({ status: "waiting", waitingFor: "permission prompt" });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     const res = await send(target);
     expect(res).toMatchObject({ ok: false });
@@ -285,7 +285,7 @@ describe("the claude transport ladder", () => {
       status: "idle",
       becomes: { status: "waiting", waitingFor: "permission prompt" },
     });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     const res = await send(target);
     expect(res).toMatchObject({ ok: false });
@@ -297,7 +297,7 @@ describe("the claude transport ladder", () => {
     // The call carrying onSubmit is already on the wire; closing our end
     // doesn't cancel it, so typing the same text would double-submit.
     const fake = fakes({ deliverFails: "submitted-unknown", landed: true });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send(target)).toMatchObject({ ok: true, transport: "inspector", delivered: true });
     expect(fake.calls.terminal).toBe(0);
@@ -305,7 +305,7 @@ describe("the claude transport ladder", () => {
 
   test("an unacknowledged submit that never lands fails loudly about the duplicate risk", async () => {
     const fake = fakes({ deliverFails: "submitted-unknown", landed: false });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     const res = await send(target);
     expect(res).toMatchObject({ ok: false });
@@ -315,7 +315,7 @@ describe("the claude transport ladder", () => {
 
   test("WT_INSPECT=off forces typing without probing anything", async () => {
     const fake = fakes();
-    const send = createSessionMessenger({ ...fake.deps, inspectorEnabled: () => false });
+    const send = createSessionMessengerPromise({ ...fake.deps, inspectorEnabled: () => false });
 
     expect(await send(target)).toMatchObject({ ok: true, transport: "terminal" });
     expect(fake.calls.deliver).toBe(0);
@@ -326,7 +326,7 @@ describe("the claude transport ladder", () => {
     // A fleet-wide nudge across a degraded session must not produce a
     // wall of identical attention lines.
     const fake = fakes({ deliverFails: "absent" });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     await send(target);
     await send(target);
@@ -337,7 +337,7 @@ describe("the claude transport ladder", () => {
 
   test("a cold start gets the longer readiness budget, and says it cold-started", async () => {
     const fake = fakes({ coldStarted: true });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send(target)).toMatchObject({ ok: true, coldStarted: true });
     expect(fake.readyBudget()).toBe(20_000);
@@ -345,7 +345,7 @@ describe("the claude transport ladder", () => {
 
   test("a warm session gets the short budget", async () => {
     const fake = fakes();
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     await send(target);
 
@@ -354,7 +354,7 @@ describe("the claude transport ladder", () => {
 
   test("when the pane is gone too, the failure is reported, not papered over", async () => {
     const fake = fakes({ deliverFails: "absent", terminalFails: true });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     const res = await send(target);
     expect(res).toMatchObject({ ok: false });
@@ -366,7 +366,7 @@ describe("the claude transport ladder", () => {
     // transcript won't show it until that turn ends — which can be many
     // minutes. Reporting it lost would be a lie the caller acts on.
     const fake = fakes({ status: "busy", landed: false });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send(target)).toMatchObject({ transport: "inspector", delivered: true });
   });
@@ -376,14 +376,14 @@ describe("the claude transport ladder", () => {
     // wt doesn't know yet. Assuming it means idle would report a real
     // queued message as lost the first time Claude adds one.
     const fake = fakes({ status: "unknown", landed: false });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send(target)).toMatchObject({ delivered: true });
   });
 
   test("an idle session that never records the prompt really did lose it", async () => {
     const fake = fakes({ status: "idle", landed: false });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send(target)).toMatchObject({ transport: "inspector", delivered: false });
   });
@@ -393,7 +393,7 @@ describe("the claude transport ladder", () => {
     // submitted text, so the transcript can never witness it. Reporting
     // it as a failure made a working `/context` look broken.
     const fake = fakes({ landed: false });
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send({ ...target, text: "/context" })).toMatchObject({
       ok: true,
@@ -405,7 +405,7 @@ describe("the claude transport ladder", () => {
   test("a dollar-prefixed harness command is also left executable", async () => {
     process.env.WT_AGENT = "wt";
     const fake = fakes();
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     await send({ ...target, harnessId: "codex", text: "$start" });
 
@@ -414,7 +414,7 @@ describe("the claude transport ladder", () => {
 
   test("an empty message is refused before any transport is touched", async () => {
     const fake = fakes();
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send({ ...target, text: "   " })).toMatchObject({ ok: false });
     expect(fake.calls.deliver).toBe(0);
@@ -423,7 +423,7 @@ describe("the claude transport ladder", () => {
 
   test("other harnesses go straight to their pane", async () => {
     const fake = fakes();
-    const send = createSessionMessenger(fake.deps);
+    const send = createSessionMessengerPromise(fake.deps);
 
     expect(await send({ ...target, harnessId: "codex" })).toMatchObject({
       ok: true,
@@ -437,7 +437,7 @@ describe("the claude transport ladder", () => {
   test("interrupting Effect delivery aborts the inspector without terminal fallback", async () => {
     const fake = fakes();
     let entered = false;
-    const send = createSessionMessengerEffect({
+    const send = createSessionMessenger({
       ...fake.deps,
       deliver: (_name, _text, opts) => new Promise((_resolve, reject) => {
         entered = true;
@@ -457,7 +457,7 @@ describe("the claude transport ladder", () => {
   test("interrupting transcript confirmation stops polling and never falls back", async () => {
     const fake = fakes({ landed: false });
     let sleeping = false;
-    const send = createSessionMessengerEffect({
+    const send = createSessionMessenger({
       ...fake.deps,
       sleep: (_ms, signal) =>
         new Promise<void>((_resolve, reject) => {

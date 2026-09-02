@@ -6,7 +6,7 @@
 import { Effect } from "effect";
 import { config } from "../config.ts";
 import { buildStackIndex, type ChainMember } from "../stack-layout.ts";
-import { listWorktreesEffect } from "../worktree.ts";
+import { listWorktrees } from "../worktree.ts";
 import { readWtState } from "../wtstate.ts";
 
 export type ChainStep = {
@@ -41,10 +41,10 @@ export type RestackChain = {
  * when one exists, else onto trunk — so every worktree is restackable.
  * Returns null only when the branch has no live worktree.
  */
-export function resolveChainEffect(branch: string) {
+export function resolveChain(branch: string) {
   return Effect.gen(function* () {
   const state = readWtState();
-  const worktrees = (yield* listWorktreesEffect()).filter(
+  const worktrees = (yield* listWorktrees()).filter(
     (w) => !w.isMain && w.branch,
   );
   const members: ChainMember[] = worktrees.map((w) => ({
@@ -113,6 +113,6 @@ export function resolveChainEffect(branch: string) {
   });
 }
 
-export function resolveChain(branch: string): Promise<RestackChain | null> {
-  return Effect.runPromise(resolveChainEffect(branch));
+export function resolveChainPromise(branch: string): Promise<RestackChain | null> {
+  return Effect.runPromise(resolveChain(branch));
 }

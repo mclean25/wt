@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 
-import { regenRulesyncEffect } from "./apply.ts";
+import { regenRulesync } from "./apply.ts";
 
-test("regenRulesyncEffect records one failed root and continues in order", async () => {
+test("regenRulesync records one failed root and continues in order", async () => {
   const missing = `wt-missing-rulesync-${process.pid}-${performance.now()}`;
-  const results = await Effect.runPromise(regenRulesyncEffect([
+  const results = await Effect.runPromise(regenRulesync([
     {
       root: process.cwd(),
       skillsDir: "",

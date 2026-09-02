@@ -4,13 +4,13 @@ import { queryOptions } from "@tanstack/react-query";
 import { Data, Effect } from "effect";
 
 import {
-  summarizeDiff,
-  summarizeStack,
+  summarizeDiffPromise,
+  summarizeStackPromise,
   type AiSummary,
 } from "../../core/ai.ts";
 import { config } from "../../core/config.ts";
 import type { DiffContext } from "../../core/diff/index.ts";
-import { buildDiffContextViaPool } from "../../core/diff/pool.ts";
+import { buildDiffContextViaPoolPromise } from "../../core/diff/pool.ts";
 import type { Worktree } from "../../core/types.ts";
 import { createLogger } from "../../core/logger.ts";
 import { pluralize } from "../../core/text.ts";
@@ -64,7 +64,7 @@ export const wtDiffContextQuery = (
     queryFn: ({ signal }): Promise<DiffContext | null> =>
       queryPromise(
         promiseEffect("build diff context", () =>
-          buildDiffContextViaPool(wt.path, base, signal),
+          buildDiffContextViaPoolPromise(wt.path, base, signal),
         ),
         signal,
       ),
@@ -128,7 +128,7 @@ export const aiSummaryQuery = (
           );
           const start = Date.now();
           return yield* promiseEffect("summarize diff", () =>
-            summarizeDiff(ctx.prompt, signal),
+            summarizeDiffPromise(ctx.prompt, signal),
           ).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
@@ -243,7 +243,7 @@ export const stackTitleQuery = (
           );
           const start = Date.now();
           return yield* promiseEffect("summarize stack", () =>
-            summarizeStack(members, signal),
+            summarizeStackPromise(members, signal),
           ).pipe(
             Effect.tap((title) =>
               Effect.sync(() => {

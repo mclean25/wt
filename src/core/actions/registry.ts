@@ -78,10 +78,10 @@ import {
   worktreeActionKey,
   type WorktreeTarget,
 } from "../worktree-target.ts";
-import { listSessionsEffect } from "../tmux/admin.ts";
+import { listSessions } from "../tmux/admin.ts";
 import {
-  killActionSessionEffect as killActionTmuxSessionEffect,
-  startActionSessionEffect,
+  killActionSession as killActionTmuxSessionEffect,
+  startActionSession,
 } from "../tmux/action-sessions.ts";
 import { CUSTOM_ACTION_ID, MAX_RETAINED_RUNS, RECENT_WINDOW_MS } from "./builtins.ts";
 import {
@@ -405,7 +405,7 @@ class ActionRegistry {
       return { ok: false, reason: `write meta: ${msg}` };
     }
 
-    const spawnResult = yield* startActionSessionEffect({
+    const spawnResult = yield* startActionSession({
       slug,
       cwd: opts.execution?.cwd ?? cwd,
       runDir,
@@ -724,7 +724,7 @@ class ActionRegistry {
     const keep = candidates.slice(0, MAX_RETAINED_RUNS);
     if (keep.length === 0) return;
 
-    const sessions = yield* listSessionsEffect();
+    const sessions = yield* listSessions();
     const liveActionSlugs = sessions.action;
 
     let restored = 0;

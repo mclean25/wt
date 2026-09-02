@@ -2,8 +2,8 @@ import { Data, Effect } from "effect";
 
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { runEffect } from "../proc.ts";
-import { hasGhEffect } from "./gh-cli.ts";
+import { run } from "../proc.ts";
+import { hasGh } from "./gh-cli.ts";
 import { openPrChecks, rollupChecks } from "./parse.ts";
 import type { RawCheck } from "./types.ts";
 import type { ReviewRequestPr } from "./types.ts";
@@ -100,12 +100,12 @@ type GqlReviewRequestResponse = {
   data?: { search?: { nodes?: Array<GqlReviewRequestNode | null> } };
 };
 
-export function fetchReviewRequestsEffect(
+export function fetchReviewRequests(
   signal?: AbortSignal,
 ): Effect.Effect<ReviewRequestPr[], ReviewRequestsError> {
   return Effect.gen(function* () {
-  if (!(yield* hasGhEffect())) return [];
-  const r = yield* runEffect(
+  if (!(yield* hasGh())) return [];
+  const r = yield* run(
     ["gh", "api", "graphql", "-f", `query=${REVIEW_REQUESTS_QUERY}`],
     { cwd: config.paths.mainClone, timeoutMs: 15_000, signal },
   ).pipe(
@@ -195,8 +195,8 @@ export function fetchReviewRequestsEffect(
   });
 }
 
-export function fetchReviewRequests(
+export function fetchReviewRequestsPromise(
   signal?: AbortSignal,
 ): Promise<ReviewRequestPr[]> {
-  return Effect.runPromise(fetchReviewRequestsEffect(signal));
+  return Effect.runPromise(fetchReviewRequests(signal));
 }

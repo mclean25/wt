@@ -3,7 +3,7 @@ import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
 import {
-  codexEventPollingEffect,
+  codexEventPolling,
   type CodexEventsWorker,
 } from "./events.ts";
 import type { CodexEventsWorkerMessage } from "./events-protocol.ts";
@@ -22,7 +22,7 @@ test("polling interruption stops and joins the worker", async () => {
   } as unknown as CodexEventsWorker;
 
   await Effect.runPromise(Effect.gen(function* () {
-    const fiber = yield* Effect.forkChild(codexEventPollingEffect(
+    const fiber = yield* Effect.forkChild(codexEventPolling(
       () => [],
       undefined,
       { workerFactory: () => worker, intervalMs: 100 },

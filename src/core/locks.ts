@@ -206,7 +206,7 @@ export class AsyncLockError extends Data.TaggedError("AsyncLockError")<{
   readonly cause?: unknown;
 }> {}
 
-export function withAsyncFileLockEffect<A, E, R>(
+export function withAsyncFileLock<A, E, R>(
   name: string,
   effect: Effect.Effect<A, E, R>,
   opts: { pollMs?: number; timeoutMs?: number } = {},
@@ -272,14 +272,14 @@ export function withAsyncFileLockEffect<A, E, R>(
  * story (fd close releases). `timeoutMs` bounds a wedged holder;
  * generous by default since holders are short (seconds).
  */
-export async function withAsyncFileLock<T>(
+export async function withAsyncFileLockPromise<T>(
   name: string,
   fn: () => Promise<T>,
   opts: { pollMs?: number; timeoutMs?: number } = {},
 ): Promise<T> {
   try {
     return await Effect.runPromise(
-      withAsyncFileLockEffect(
+      withAsyncFileLock(
         name,
         Effect.tryPromise({
           try: fn,

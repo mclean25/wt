@@ -17,7 +17,7 @@ import { buildSha, sameBuild } from "../../core/build-id.ts";
 import { config } from "../../core/config.ts";
 import { resolveWebhookSecret, runDaemonForeground } from "../../core/events/daemon.ts";
 import { EVENTS_DIR, ensureEventsDir, isProcessAlive, readSnapshot, readState } from "../../core/events/store.ts";
-import { runEffect as shEffect } from "../../core/proc.ts";
+import { run as shEffect } from "../../core/proc.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 
@@ -271,7 +271,7 @@ type RestartLaunchdDeps = {
 
 class DaemonNotReady extends Data.TaggedError("DaemonNotReady") {}
 
-export function waitForRestartedDaemonEffect(
+export function waitForRestartedDaemon(
   previousPid: number | null,
   ready: () => boolean = () => {
     const state = readState();
@@ -292,14 +292,14 @@ export function waitForRestartedDaemonEffect(
   );
 }
 
-export function restartLaunchdAgentEffect(deps: RestartLaunchdDeps = {}): Effect.Effect<number> {
+export function restartLaunchdAgent(deps: RestartLaunchdDeps = {}): Effect.Effect<number> {
   return Effect.gen(function* () {
     const control = deps.control ?? launchctlEffect;
     const previousPid = readState()?.pid ?? null;
     yield* control("unload", { ignoreFailure: true });
     const loaded = yield* control("load");
     if (loaded !== 0) return loaded;
-    const running = yield* (deps.waitUntilRunning ?? waitForRestartedDaemonEffect)(previousPid);
+    const running = yield* (deps.waitUntilRunning ?? waitForRestartedDaemon)(previousPid);
     if (running) return 0;
     console.error(red("events daemon did not become ready within 10s after restart"));
     return 1;
@@ -437,7 +437,7 @@ export function run(argv: string[]): Effect.Effect<number, EventsCommandError> {
     case "stop":
       return launchctlEffect("unload");
     case "restart":
-      return requireEventsConfigured() ? restartLaunchdAgentEffect() : Effect.succeed(1);
+      return requireEventsConfigured() ? restartLaunchdAgent() : Effect.succeed(1);
     case "secret":
       return Effect.sync(cmdSecret);
     case undefined:

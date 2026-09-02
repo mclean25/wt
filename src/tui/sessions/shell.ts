@@ -12,7 +12,7 @@ import type { CliRenderer } from "@opentui/core";
 import { Effect } from "effect";
 
 import {
-  enterWorktreeSessionEffect,
+  enterWorktreeSession,
   type HarnessRoute,
   type WorktreeSessionResult,
 } from "./worktree.ts";
@@ -27,8 +27,8 @@ export type EnterShellSessionOptions = {
   harness: HarnessRoute;
 };
 
-export const enterShellSessionEffect = (opts: EnterShellSessionOptions) =>
-  enterWorktreeSessionEffect({ ...opts, initial: "shell" });
+export const enterShellSession = (opts: EnterShellSessionOptions) =>
+  enterWorktreeSession({ ...opts, initial: "shell" });
 
-export const enterShellSession = (opts: EnterShellSessionOptions): Promise<ShellResult> =>
-  Effect.runPromise(enterShellSessionEffect(opts));
+export const enterShellSessionPromise = (opts: EnterShellSessionOptions): Promise<ShellResult> =>
+  Effect.runPromise(enterShellSession(opts));

@@ -21,14 +21,14 @@ import {
 import { dirname, join } from "node:path";
 import { Data, Effect } from "effect";
 
-import { runEffect } from "../proc.ts";
+import { run } from "../proc.ts";
 import type { UnitReport } from "./report.ts";
 import type { RulesyncInfo } from "./targets.ts";
 import { unitSourcePath } from "./registry.ts";
 import { spliceInstructionsBlock, stampContent } from "./template.ts";
 
 /** Write one unit at its report's target. Throws on failure. */
-export function applyReport(report: UnitReport): void {
+export function applyReportPromise(report: UnitReport): void {
   if (report.unit.kind === "skill") {
     applySkill(report);
   } else {
@@ -42,9 +42,9 @@ export class SkillApplyError extends Data.TaggedError("SkillApplyError")<{
 }> {}
 
 /** Effect-native write path for scoped command composition. */
-export const applyReportEffect = (report: UnitReport): Effect.Effect<void, SkillApplyError> =>
+export const applyReport = (report: UnitReport): Effect.Effect<void, SkillApplyError> =>
   Effect.try({
-    try: () => applyReport(report),
+    try: () => applyReportPromise(report),
     catch: (cause) => new SkillApplyError({ unit: report.unit.name, cause }),
   });
 
@@ -116,12 +116,12 @@ export function touchedRulesyncRoots(applied: UnitReport[]): RulesyncInfo[] {
 export type RegenResult = { root: string; ok: boolean; output: string };
 
 /** Run each root's regenerate command; the sources are already durable, so a failure is reported, not fatal. */
-export function regenRulesyncEffect(roots: RulesyncInfo[]): Effect.Effect<RegenResult[]> {
+export function regenRulesync(roots: RulesyncInfo[]): Effect.Effect<RegenResult[]> {
   return Effect.forEach(roots, (rs) =>
     // Bun.spawn throws synchronously when the binary itself is
     // missing (ENOENT on bash/npx) — that must degrade to a per-root
     // failure like any non-zero exit, not abort the remaining roots.
-    runEffect(rs.regen, { cwd: rs.root, timeoutMs: 180_000 }).pipe(
+    run(rs.regen, { cwd: rs.root, timeoutMs: 180_000 }).pipe(
       Effect.map((r) => ({
         root: rs.root,
         ok: r.exitCode === 0,
@@ -138,5 +138,5 @@ export function regenRulesyncEffect(roots: RulesyncInfo[]): Effect.Effect<RegenR
 }
 
 /** Promise adapter for the existing CLI command boundary. */
-export const regenRulesync = (roots: RulesyncInfo[]): Promise<RegenResult[]> =>
-  Effect.runPromise(regenRulesyncEffect(roots));
+export const regenRulesyncPromise = (roots: RulesyncInfo[]): Promise<RegenResult[]> =>
+  Effect.runPromise(regenRulesync(roots));

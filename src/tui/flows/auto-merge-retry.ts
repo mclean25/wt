@@ -93,7 +93,7 @@ class AutoMergeAttemptError extends Data.TaggedError("AutoMergeAttemptError")<{
   readonly cause: unknown;
 }> {}
 
-export function autoMergeRetryEffect(
+export function autoMergeRetry(
   attempt: () => Promise<GhActionResult>,
   cb: RetryCallbacks,
   opts: { everyMs?: number; now?: () => number } = {},
@@ -160,7 +160,7 @@ export function startAutoMergeRetry(
       if (isCurrent()) cb.onGaveUp();
     },
   };
-  const program = autoMergeRetryEffect(attempt, guarded, opts).pipe(
+  const program = autoMergeRetry(attempt, guarded, opts).pipe(
     Effect.ensuring(
       Effect.sync(() => {
         if (isCurrent()) pending.delete(prNumber);

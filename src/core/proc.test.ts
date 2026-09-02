@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Fiber } from "effect";
 
-import { run, runEffect, runStreamingEffect, terminateSubprocessEffect } from "./proc.ts";
+import { runPromise, run, runStreaming, terminateSubprocess } from "./proc.ts";
 
-test("terminateSubprocessEffect escalates and joins a child that ignores SIGTERM", async () => {
+test("terminateSubprocess escalates and joins a child that ignores SIGTERM", async () => {
   const signals: Array<number | NodeJS.Signals | undefined> = [];
   let resolveExit!: (code: number) => void;
   const exited = new Promise<number>((resolve) => {
@@ -24,7 +24,7 @@ test("terminateSubprocessEffect escalates and joins a child that ignores SIGTERM
     },
   };
 
-  await Effect.runPromise(terminateSubprocessEffect(proc, 5));
+  await Effect.runPromise(terminateSubprocess(proc, 5));
 
   expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
   expect(proc.exitCode).toBe(137);
@@ -43,7 +43,7 @@ const waitUntilEffect = (
   });
 
 const holderEffect = (marker: string) =>
-  runEffect(["sh", "-c", 'echo $$ > "$WT_PROC_MARKER"; exec sleep 30'], {
+  run(["sh", "-c", 'echo $$ > "$WT_PROC_MARKER"; exec sleep 30'], {
     cwd: "/",
     env: { WT_PROC_MARKER: marker },
   });
@@ -57,7 +57,7 @@ const processIsAlive = (pid: number): boolean => {
   }
 };
 
-describe("runEffect interruption", () => {
+describe("run interruption", () => {
   test("removes a cancelled queued run before it can spawn", async () => {
     const dir = mkdtempSync(join(tmpdir(), "wt-proc-queued-cancel-"));
     try {
@@ -79,7 +79,7 @@ describe("runEffect interruption", () => {
 
             const queuedMarker = join(dir, "queued-spawned");
             const queued = yield* Effect.forkChild(
-              runEffect(["sh", "-c", 'echo spawned > "$WT_PROC_MARKER"'], {
+              run(["sh", "-c", 'echo spawned > "$WT_PROC_MARKER"'], {
                 cwd: "/",
                 env: { WT_PROC_MARKER: queuedMarker },
               }),
@@ -122,7 +122,7 @@ describe("runEffect interruption", () => {
 
             const probeMarker = join(dir, "permit-reused");
             const probe = yield* Effect.forkChild(
-              runEffect(["sh", "-c", 'echo reused > "$WT_PROC_MARKER"'], {
+              run(["sh", "-c", 'echo reused > "$WT_PROC_MARKER"'], {
                 cwd: "/",
                 env: { WT_PROC_MARKER: probeMarker },
               }),
@@ -149,7 +149,7 @@ describe("runEffect interruption", () => {
     const marker = join(dir, "pid");
     try {
       const fiber = Effect.runFork(
-        runEffect(
+        run(
           [
             "sh",
             "-c",
@@ -172,11 +172,11 @@ describe("runEffect interruption", () => {
   }, 5_000);
 });
 
-describe("runStreamingEffect killAfterMs", () => {
+describe("runStreaming killAfterMs", () => {
   test("kills a hung child and reports the timeout on the line stream", async () => {
     const lines: string[] = [];
     const started = Date.now();
-    const exit = await Effect.runPromise(runStreamingEffect(["sleep", "30"], {
+    const exit = await Effect.runPromise(runStreaming(["sleep", "30"], {
       onLine: (line) => lines.push(line),
       killAfterMs: 300,
     }));
@@ -190,7 +190,7 @@ describe("runStreamingEffect killAfterMs", () => {
 
   test("a child finishing inside the bound is untouched", async () => {
     const lines: string[] = [];
-    const exit = await Effect.runPromise(runStreamingEffect(["echo", "done"], {
+    const exit = await Effect.runPromise(runStreaming(["echo", "done"], {
       onLine: (line) => lines.push(line),
       killAfterMs: 30_000,
     }));
@@ -207,7 +207,7 @@ describe("runStreamingEffect killAfterMs", () => {
   // against lsof and gets flaky when the box is loaded.
   test("omitting killAfterMs leaves the child unbounded", async () => {
     const lines: string[] = [];
-    const exit = await Effect.runPromise(runStreamingEffect(["sh", "-c", "sleep 0.4; echo slow"], {
+    const exit = await Effect.runPromise(runStreaming(["sh", "-c", "sleep 0.4; echo slow"], {
       onLine: (line) => lines.push(line),
     }));
     expect(exit).toBe(0);
@@ -217,7 +217,7 @@ describe("runStreamingEffect killAfterMs", () => {
   test("killAfterMs reaps background descendants holding output pipes", async () => {
     const started = Date.now();
     await Effect.runPromise(
-      runStreamingEffect(["sh", "-c", "sleep 30 &"], {
+      runStreaming(["sh", "-c", "sleep 30 &"], {
         killAfterMs: 100,
       }),
     );
@@ -239,11 +239,11 @@ describe("runStreamingEffect killAfterMs", () => {
 // never created — and `Bun.spawn` fails on a bad cwd before it ever
 // reaches the binary, so all three of these failed in under a
 // millisecond with exit -1 and no flag set. Note the asymmetry that
-// makes it easy to walk into: `runStreamingEffect`, tested directly above,
+// makes it easy to walk into: `runStreaming`, tested directly above,
 // leaves cwd undefined and inherits the process's.
 describe("run timedOut", () => {
   test("a spawn failure is returned instead of rejecting", async () => {
-    const result = await run(["echo", "never-spawned"], {
+    const result = await runPromise(["echo", "never-spawned"], {
       cwd: "/definitely/missing/wt-proc-cwd",
     });
     expect(result.exitCode).toBe(-1);
@@ -253,7 +253,7 @@ describe("run timedOut", () => {
   test("an external abort is returned instead of rejecting", async () => {
     const controller = new AbortController();
     controller.abort();
-    const result = await run(["sleep", "30"], {
+    const result = await runPromise(["sleep", "30"], {
       cwd: "/",
       signal: controller.signal,
     });
@@ -266,7 +266,7 @@ describe("run timedOut", () => {
     const marker = join(dir, "started");
     const controller = new AbortController();
     try {
-      const resultPromise = run(
+      const resultPromise = runPromise(
         [
           "sh",
           "-c",
@@ -295,7 +295,7 @@ describe("run timedOut", () => {
     const marker = join(dir, "started");
     const controller = new AbortController();
     try {
-      const resultPromise = run(
+      const resultPromise = runPromise(
         [
           "sh",
           "-c",
@@ -326,7 +326,7 @@ describe("run timedOut", () => {
     // and the drain blocks until the child exits on its own. lsof, the
     // real caller, does not fork — and buffers, so its stdout is empty
     // here for the same reason this one's is.
-    const r = await run(["sleep", "5"], { cwd: "/", timeoutMs: 200 });
+    const r = await runPromise(["sleep", "5"], { cwd: "/", timeoutMs: 200 });
     expect(r.timedOut).toBe(true);
     expect(r.exitCode).not.toBe(0);
     // The trap in one line: indistinguishable from a completed scan of
@@ -336,7 +336,7 @@ describe("run timedOut", () => {
 
   test("a timeout reaps background descendants holding captured pipes", async () => {
     const started = Date.now();
-    const result = await run(["sh", "-c", "sleep 30 &"], {
+    const result = await runPromise(["sh", "-c", "sleep 30 &"], {
       cwd: "/",
       timeoutMs: 100,
     });
@@ -345,14 +345,14 @@ describe("run timedOut", () => {
   }, 5_000);
 
   test("a command that finishes inside its budget is not flagged", async () => {
-    const r = await run(["echo", "hi"], { cwd: "/", timeoutMs: 30_000 });
+    const r = await runPromise(["echo", "hi"], { cwd: "/", timeoutMs: 30_000 });
     expect(r.timedOut).toBe(false);
     expect(r.exitCode).toBe(0);
     expect(r.stdout.trim()).toBe("hi");
   });
 
   test("no budget at all leaves the flag off", async () => {
-    const r = await run(["echo", "hi"], { cwd: "/" });
+    const r = await runPromise(["echo", "hi"], { cwd: "/" });
     expect(r.timedOut).toBe(false);
   });
 });

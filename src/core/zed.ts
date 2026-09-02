@@ -1,11 +1,11 @@
 import { Effect } from "effect";
 
-import { runEffect } from "./proc.ts";
+import { run } from "./proc.ts";
 
 import {
-  findZedWindowForPathEffect,
-  focusYabaiWindowEffect,
-  spawnZedAndTrackEffect,
+  findZedWindowForPath,
+  focusYabaiWindow,
+  spawnZedAndTrack,
 } from "./zed-windows.ts";
 
 /**
@@ -30,8 +30,8 @@ import {
  * (its actual process name) rather than `WezTerm`, so both spellings
  * are checked alongside `wezterm` itself.
  */
-export function hideFrontmostTerminalEffect(): Effect.Effect<void> {
-  return runEffect([
+export function hideFrontmostTerminal(): Effect.Effect<void> {
+  return run([
       "osascript",
       "-e", 'tell application "System Events"',
       "-e", "set p to first application process whose frontmost is true",
@@ -46,8 +46,8 @@ export function hideFrontmostTerminalEffect(): Effect.Effect<void> {
     );
 }
 
-export function hideFrontmostTerminal(): Promise<void> {
-  return Effect.runPromise(hideFrontmostTerminalEffect());
+export function hideFrontmostTerminalPromise(): Promise<void> {
+  return Effect.runPromise(hideFrontmostTerminal());
 }
 
 /**
@@ -63,15 +63,15 @@ export function hideFrontmostTerminal(): Promise<void> {
  * exits right after and a background tracking poll wouldn't survive
  * `process.exit`.
  */
-export function openInZedEffect(path: string) {
+export function openInZed(path: string) {
   return Effect.gen(function* () {
-    yield* hideFrontmostTerminalEffect();
-    const existing = yield* findZedWindowForPathEffect(path);
-    if (existing !== null && (yield* focusYabaiWindowEffect(existing))) return;
-    yield* spawnZedAndTrackEffect(path);
+    yield* hideFrontmostTerminal();
+    const existing = yield* findZedWindowForPath(path);
+    if (existing !== null && (yield* focusYabaiWindow(existing))) return;
+    yield* spawnZedAndTrack(path);
   });
 }
 
-export function openInZed(path: string): Promise<void> {
-  return Effect.runPromise(openInZedEffect(path));
+export function openInZedPromise(path: string): Promise<void> {
+  return Effect.runPromise(openInZed(path));
 }

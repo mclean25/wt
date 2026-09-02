@@ -5,7 +5,7 @@
  */
 import { expect, test } from "bun:test";
 
-import { resolveAnchor } from "./stack-ops.ts";
+import { resolveAnchorPromise } from "./stack-ops.ts";
 import { git, trackedTmpDirs } from "./test-fixtures.ts";
 
 const { tmp } = trackedTmpDirs();
@@ -26,7 +26,7 @@ test("resolveAnchor uses the live merge-base when a branch was rebased onto newe
   git(dir, ["checkout", "-q", "-b", "c"]); // c built on the advanced parent tip
   git(dir, ["commit", "-q", "--allow-empty", "-m", "C"]);
 
-  const anchor = await resolveAnchor({ branch: "c", baseSha: p1 }, "p", dir);
+  const anchor = await resolveAnchorPromise({ branch: "c", baseSha: p1 }, "p", dir);
   expect(anchor).toBe(p2); // the true fork point, so only C replays
   expect(anchor).not.toBe(p1); // not the stale stored anchor
 });
@@ -48,7 +48,7 @@ test("resolveAnchor keeps baseSha when the live merge-base is older (squash-merg
   git(dir, ["checkout", "-q", "-b", "released", "main"]);
   git(dir, ["commit", "-q", "--allow-empty", "-m", "squash of p"]);
 
-  const anchor = await resolveAnchor({ branch: "c", baseSha: p1 }, "released", dir);
+  const anchor = await resolveAnchorPromise({ branch: "c", baseSha: p1 }, "released", dir);
   expect(anchor).toBe(p1); // squash-safe anchor preserved
   expect(anchor).not.toBe(m0);
 });

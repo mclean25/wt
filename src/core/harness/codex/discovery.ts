@@ -211,7 +211,7 @@ export function discoverCodexSessionsInWorker(
   return discoveryClient.discover(slug, wtPath, signal);
 }
 
-export function discoverCodexSessionsEffect(slug: string, wtPath: string) {
+export function discoverCodexSessions(slug: string, wtPath: string) {
   return Effect.tryPromise({
     try: (signal) => discoveryClient.discover(slug, wtPath, signal),
     catch: (cause) => new CodexDiscoveryError({ cause }),

@@ -12,8 +12,8 @@ import {
 } from "../../core/harness/index.ts";
 import { sessionOutputId } from "../../core/outputs.ts";
 import {
-  closeHarnessSessionGracefully,
-  killHarnessSession,
+  closeHarnessSessionGracefullyPromise,
+  killHarnessSessionPromise,
 } from "../../core/tmux.ts";
 import { isBareShiftedKey } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
@@ -146,7 +146,7 @@ export function handleClaudeSessionsPickerKey(
         setModal(null);
         Effect.runFork(
           Effect.gen(function* () {
-            yield* modalPromise(() => killHarnessSession(slug, harnessId));
+            yield* modalPromise(() => killHarnessSessionPromise(slug, harnessId));
             yield* Effect.all(
               [
                 modalPromise(refreshTmuxSessions),
@@ -192,7 +192,7 @@ export function handleClaudeSessionsPickerKey(
       logInfo(`closing ${getHarness(e.harnessId).label} session on ${slug}`);
       Effect.runFork(
         modalPromise(() =>
-          closeHarnessSessionGracefully(
+          closeHarnessSessionGracefullyPromise(
             slug,
             e.harnessId,
             e.extras.managedName,
