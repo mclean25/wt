@@ -61,6 +61,10 @@ async function tick() { await new Promise((r) => setTimeout(r, 0)); }
 function runScenario(body: string): unknown {
   const script = `${PRELUDE}\n${body}\n`;
   const r = Bun.spawnSync([process.execPath, "-e", script], {
+    // The suite's hermetic config arrives via the preload's `WT_CONFIG`
+    // mutation of `process.env`; spread it so the child sees the mutated
+    // value rather than the environment bun was launched with.
+    env: { ...process.env },
     stdout: "pipe",
     stderr: "pipe",
   });
