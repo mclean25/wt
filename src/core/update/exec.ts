@@ -4,7 +4,7 @@
  * crash-rollback path (main.ts catch → cli/commands/rollback.ts) has
  * to work when `core/config.ts` is exactly what the broken update
  * can't load — so no imports of config, proc, locks, or logger (all of
- * which pull the config chain in at module init). `runIn` is a local
+ * which pull the config chain in at module init). `runInEffect` is a local
  * copy of proc.ts's `run` minus config defaults and signal plumbing;
  * `logSafe` is a best-effort lazy logger that silently no-ops when the
  * logging chain itself can't load.
@@ -12,55 +12,132 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { constants as osConstants, homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { Data, Duration, Effect, Option, Schedule, Scope } from "effect";
 
 /** Repo root of the wt source tree (this file is `<root>/src/core/update/exec.ts`). */
 export const WT_REPO_ROOT: string = resolve(import.meta.dir, "..", "..", "..");
 
 export type RunResult = { stdout: string; stderr: string; exitCode: number };
 
-/** Spawn, capture, never throw. Missing binaries / timeouts → exitCode < 0. */
-export async function runIn(
-  argv: string[],
-  opts: { cwd: string; timeoutMs?: number },
-): Promise<RunResult> {
-  let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
+export class UpdateProcessError extends Data.TaggedError("UpdateProcessError")<{
+  readonly argv: readonly string[];
+  readonly operation: "spawn" | "read" | "timeout";
+  readonly cause?: unknown;
+}> {}
+
+function killUpdateProcessGroup(
+  proc: Bun.Subprocess<"ignore", "pipe", "pipe">,
+): void {
   try {
-    proc = Bun.spawn(argv, {
-      cwd: opts.cwd,
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  } catch (err) {
-    return {
-      stdout: "",
-      stderr: err instanceof Error ? err.message : String(err),
-      exitCode: -1,
-    };
-  }
-  let timer: Timer | undefined;
-  if (opts.timeoutMs) {
-    // Known gap: this SIGKILLs only the direct child, not its process
-    // group — a timed-out `bun install`'s own children survive. Bun's
-    // spawn API exposes no detached/setsid control to close it.
-    timer = setTimeout(() => proc.kill("SIGKILL"), opts.timeoutMs);
-  }
-  try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    return { stdout, stderr, exitCode };
-  } finally {
-    if (timer) clearTimeout(timer);
+    process.kill(-proc.pid, "SIGKILL");
+  } catch {
+    if (proc.exitCode === null) proc.kill("SIGKILL");
   }
 }
 
-/** Run git in the source clone; trimmed stdout, or null on any failure. */
-export async function gitOk(args: string[], timeoutMs = 10_000): Promise<string | null> {
-  const r = await runIn(["git", ...args], { cwd: WT_REPO_ROOT, timeoutMs });
-  return r.exitCode === 0 ? r.stdout.trim() : null;
+const processFailureResult = (error: UpdateProcessError): RunResult => ({
+  stdout: "",
+  stderr:
+    error.operation === "timeout"
+      ? `timed out: ${error.argv.join(" ")}`
+      : error.cause instanceof Error
+        ? error.cause.message
+        : String(error.cause ?? error.operation),
+  exitCode: error.operation === "timeout" ? -2 : -1,
+});
+
+/** Config-free, scoped process runner used by the updater and rollback path. */
+export function runInEffect(
+  argv: string[],
+  opts: { cwd: string; timeoutMs?: number },
+): Effect.Effect<RunResult, UpdateProcessError> {
+  return Effect.acquireUseRelease(
+    Effect.try({
+      try: () => {
+        const proc = Bun.spawn(argv, {
+          cwd: opts.cwd,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+          detached: true,
+        });
+        return {
+          proc,
+          stdout: new Response(proc.stdout).text(),
+          stderr: new Response(proc.stderr).text(),
+          exited: proc.exited,
+        };
+      },
+      catch: (cause) =>
+        new UpdateProcessError({ argv, operation: "spawn", cause }),
+    }),
+    (running) => {
+      const capture = Effect.tryPromise({
+        try: async () => {
+          const [stdout, stderr, exitCode] = await Promise.all([
+            running.stdout,
+            running.stderr,
+            running.exited,
+          ]);
+          return { stdout, stderr, exitCode };
+        },
+        catch: (cause) =>
+          new UpdateProcessError({ argv, operation: "read", cause }),
+      });
+      if (!opts.timeoutMs) return capture;
+      return capture.pipe(
+        Effect.timeoutOption(Duration.millis(opts.timeoutMs)),
+        Effect.flatMap(
+          Option.match({
+            onSome: Effect.succeed,
+            onNone: () =>
+              Effect.zipRight(
+                Effect.sync(() => killUpdateProcessGroup(running.proc)),
+                Effect.fail(
+                  new UpdateProcessError({ argv, operation: "timeout" }),
+                ),
+              ),
+          }),
+        ),
+      );
+    },
+    (running) =>
+      Effect.promise(async () => {
+        if (running.proc.exitCode === null) {
+          killUpdateProcessGroup(running.proc);
+        }
+        await Promise.allSettled([
+          running.stdout,
+          running.stderr,
+          running.exited,
+        ]);
+      }),
+  );
+}
+
+/** Non-failing process result for command flows where exitCode is the contract. */
+export function runInResultEffect(
+  argv: string[],
+  opts: { cwd: string; timeoutMs?: number },
+): Effect.Effect<RunResult> {
+  return runInEffect(argv, opts).pipe(
+    Effect.catchAll((error) => Effect.succeed(processFailureResult(error))),
+  );
+}
+
+export function gitOkEffect(
+  args: string[],
+  timeoutMs = 10_000,
+): Effect.Effect<string | null, never> {
+  return runInEffect(["git", ...args], {
+    cwd: WT_REPO_ROOT,
+    timeoutMs,
+  }).pipe(
+    Effect.map((result) =>
+      result.exitCode === 0 ? result.stdout.trim() : null,
+    ),
+    Effect.orElseSucceed(() => null),
+  );
 }
 
 export function gitSync(args: string[]): string | null {
@@ -132,24 +209,89 @@ export type EventsDaemonRestartResult =
  * the immediate TUI re-exec avoids. No plist means the daemon was never
  * installed, so there is nothing to do.
  */
-export async function restartEventsDaemonAfterUpdate(
+export function restartEventsDaemonAfterUpdateEffect(
   deps: {
     plist?: string;
-    run?: typeof runIn;
+    run?: typeof runInResultEffect;
   } = {},
-): Promise<EventsDaemonRestartResult> {
-  const plist = deps.plist ?? join(homedir(), "Library", "LaunchAgents", "com.wt.events.plist");
-  if (!existsSync(plist)) return { status: "not-installed" };
-  const result = await (deps.run ?? runIn)([join(WT_REPO_ROOT, "bin", "wt"), "events", "restart"], {
-    cwd: WT_REPO_ROOT,
-    timeoutMs: 30_000,
+): Effect.Effect<EventsDaemonRestartResult> {
+  return Effect.suspend(() => {
+    const plist = deps.plist ?? join(homedir(), "Library", "LaunchAgents", "com.wt.events.plist");
+    if (!existsSync(plist)) return Effect.succeed({ status: "not-installed" });
+    return (deps.run ?? runInResultEffect)(
+      [join(WT_REPO_ROOT, "bin", "wt"), "events", "restart"],
+      { cwd: WT_REPO_ROOT, timeoutMs: 30_000 },
+    ).pipe(Effect.map((result): EventsDaemonRestartResult => {
+      if (result.exitCode === 0) return { status: "restarted" };
+      const detail = result.stderr.trim().split("\n").at(-1) || `exit ${result.exitCode}`;
+      return { status: "failed", detail };
+    }));
   });
-  if (result.exitCode === 0) return { status: "restarted" };
-  const detail = result.stderr.trim().split("\n").at(-1) || `exit ${result.exitCode}`;
-  return { status: "failed", detail };
 }
 
 const GIT_LOCK_DIR = join(homedir(), ".cache", "wt", "update-git.lock");
+
+class UpdateLockBusy extends Data.TaggedError("UpdateLockBusy") {}
+
+const releaseUpdateGitLock = (): void => {
+  try {
+    rmSync(GIT_LOCK_DIR, { recursive: true, force: true });
+  } catch {
+    // Staleness detection reclaims a lock whose release was interrupted.
+  }
+};
+
+const acquireUpdateGitLockOnce = (): Effect.Effect<() => void, UpdateLockBusy> =>
+  Effect.suspend(() => {
+    try {
+      mkdirSync(GIT_LOCK_DIR, { recursive: false });
+      writeFileSync(join(GIT_LOCK_DIR, "pid"), String(process.pid));
+      return Effect.succeed(releaseUpdateGitLock);
+    } catch {
+      let stale = false;
+      try {
+        const pid = parseInt(
+          readFileSync(join(GIT_LOCK_DIR, "pid"), "utf8"),
+          10,
+        );
+        let alive = false;
+        if (Number.isFinite(pid) && pid > 0) {
+          try {
+            process.kill(pid, 0);
+            alive = true;
+          } catch (error) {
+            alive = (error as NodeJS.ErrnoException).code === "EPERM";
+          }
+        }
+        stale = !alive || Date.now() - statSync(GIT_LOCK_DIR).mtimeMs > 15 * 60_000;
+      } catch {
+        try {
+          stale = Date.now() - statSync(GIT_LOCK_DIR).mtimeMs > 60_000;
+        } catch {
+          stale = false;
+        }
+      }
+      if (stale) releaseUpdateGitLock();
+      return Effect.fail(new UpdateLockBusy());
+    }
+  });
+
+export const acquireUpdateGitLockEffect: Effect.Effect<(() => void) | null> =
+  acquireUpdateGitLockOnce().pipe(
+    Effect.retry(
+      Schedule.spaced(Duration.millis(200)).pipe(
+        Schedule.intersect(Schedule.recurs(9)),
+      ),
+    ),
+    Effect.orElseSucceed(() => null),
+  );
+
+/** Scoped lock ownership. Scope close releases on success, failure, or interruption. */
+export const updateGitLockEffect: Effect.Effect<boolean, never, Scope.Scope> =
+  Effect.acquireRelease(
+    acquireUpdateGitLockEffect,
+    (release) => release ? Effect.sync(release) : Effect.void,
+  ).pipe(Effect.map((release) => release !== null));
 
 /**
  * Cross-process mutual exclusion for the destructive git operations
@@ -161,56 +303,6 @@ const GIT_LOCK_DIR = join(homedir(), ".cache", "wt", "update-git.lock");
  * install` for minutes, and "another update is in progress, retry" is
  * a better answer than a silent multi-minute block.
  */
-export async function acquireUpdateGitLock(): Promise<(() => void) | null> {
-  for (let attempt = 0; attempt < 10; attempt++) {
-    try {
-      mkdirSync(GIT_LOCK_DIR, { recursive: false });
-      writeFileSync(join(GIT_LOCK_DIR, "pid"), String(process.pid));
-      return () => {
-        try {
-          rmSync(GIT_LOCK_DIR, { recursive: true, force: true });
-        } catch {
-          // Releasing best-effort; staleness detection reclaims it.
-        }
-      };
-    } catch {
-      let stale = false;
-      try {
-        const pid = parseInt(readFileSync(join(GIT_LOCK_DIR, "pid"), "utf8"), 10);
-        let alive = false;
-        if (Number.isFinite(pid) && pid > 0) {
-          try {
-            process.kill(pid, 0);
-            alive = true;
-          } catch (err) {
-            alive = (err as NodeJS.ErrnoException).code === "EPERM";
-          }
-        }
-        const age = Date.now() - statSync(GIT_LOCK_DIR).mtimeMs;
-        stale = !alive || age > 15 * 60_000;
-      } catch {
-        // Half-created lock (mkdir landed, pid write didn't): only the
-        // age test applies, and statSync failing means it's gone.
-        try {
-          stale = Date.now() - statSync(GIT_LOCK_DIR).mtimeMs > 60_000;
-        } catch {
-          stale = false;
-        }
-      }
-      if (stale) {
-        try {
-          rmSync(GIT_LOCK_DIR, { recursive: true, force: true });
-        } catch {
-          // Someone else reclaimed it first — loop and retry.
-        }
-        continue;
-      }
-      await new Promise((r) => setTimeout(r, 200));
-    }
-  }
-  return null;
-}
-
 /** Display form of a full sha. */
 export function shortSha(sha: string): string {
   return sha.slice(0, 7);

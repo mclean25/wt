@@ -5,6 +5,7 @@
  * closures see fresh setters.
  */
 import { config } from "../../core/config.ts";
+import { Data, Effect, Fiber } from "effect";
 import { createWorktree, parseInput } from "../../core/lifecycle.ts";
 import { createLogger } from "../../core/logger.ts";
 import { runRemoteWt } from "../../core/remote.ts";
@@ -20,6 +21,10 @@ import {
 import { theme } from "../theme.ts";
 
 const newLog = createLogger("[new]");
+
+class RemoteInventoryRefreshError extends Data.TaggedError(
+  "RemoteInventoryRefreshError",
+)<{ readonly cause: unknown }> {}
 
 /** Section a review-requested PR lands in when checked out via `w`. */
 export const REVIEW_SECTION = "Reviews";
@@ -152,15 +157,17 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     // Probe eagerly during creation so the authoritative row replaces the
     // placeholder as soon as the checkout exists; F10/F11/F12 can then enter
     // it while the remaining init phases continue in the background.
-    let refreshStopped = false;
-    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const pollRemote = async (): Promise<void> => {
-      await refreshRemoteWorktrees().catch(() => undefined);
-      if (!refreshStopped) {
-        refreshTimer = setTimeout(() => void pollRemote(), 1_500);
-      }
-    };
-    void pollRemote();
+    const refreshFiber = Effect.runFork(
+      Effect.forever(
+        Effect.tryPromise({
+          try: refreshRemoteWorktrees,
+          catch: (cause) => new RemoteInventoryRefreshError({ cause }),
+        }).pipe(
+          Effect.ignore,
+          Effect.andThen(Effect.sleep("1500 millis")),
+        ),
+      ),
+    );
     let code: number;
     try {
       code = await runRemoteWt(remote, args, {
@@ -173,8 +180,10 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       setRemoteCreation(null);
       return false;
     } finally {
-      refreshStopped = true;
-      if (refreshTimer) clearTimeout(refreshTimer);
+      // Join the polling fiber before the optimistic row is cleared. A
+      // detached refresh that outlives this flow can otherwise refetch after
+      // teardown and write stale remote-creation state into the next render.
+      await Effect.runPromise(Fiber.interrupt(refreshFiber));
     }
     if (code !== 0) {
       remoteLog.event.err(`create failed (exit ${code})`);

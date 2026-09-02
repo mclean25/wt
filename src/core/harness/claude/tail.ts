@@ -24,6 +24,7 @@
  * a fresh live set.
  */
 import { join } from "node:path";
+import { Effect, Fiber } from "effect";
 
 import {
   type ActionLine,
@@ -74,9 +75,9 @@ const TRIGGER_DEBOUNCE_MS = 3_000;
 const SLUG_CHANGE_DEBOUNCE_MS = 500;
 
 let triggerSink: ((target: RefreshTarget) => void) | null = null;
-const triggerTimers = new Map<RefreshTarget, ReturnType<typeof setTimeout>>();
+const triggerFibers = new Map<RefreshTarget, Fiber.RuntimeFiber<void, never>>();
 let slugChangeSink: ((slug: string) => void) | null = null;
-const slugChangeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const slugChangeFibers = new Map<string, Fiber.RuntimeFiber<void, never>>();
 
 /**
  * Register the refresh-trigger sink. The TUI runtime wires this to the
@@ -90,8 +91,8 @@ export function setSessionTriggerSink(
 ): void {
   triggerSink = fn;
   if (!fn) {
-    for (const t of triggerTimers.values()) clearTimeout(t);
-    triggerTimers.clear();
+    for (const fiber of triggerFibers.values()) Effect.runFork(Fiber.interrupt(fiber));
+    triggerFibers.clear();
   }
 }
 
@@ -108,8 +109,8 @@ export function setSessionSlugChangeSink(
 ): void {
   slugChangeSink = fn;
   if (!fn) {
-    for (const t of slugChangeTimers.values()) clearTimeout(t);
-    slugChangeTimers.clear();
+    for (const fiber of slugChangeFibers.values()) Effect.runFork(Fiber.interrupt(fiber));
+    slugChangeFibers.clear();
   }
 }
 
@@ -119,28 +120,32 @@ export function setSessionSlugChangeSink(
  * last trigger.
  */
 function scheduleTrigger(target: RefreshTarget): void {
-  const existing = triggerTimers.get(target);
-  if (existing) clearTimeout(existing);
-  triggerTimers.set(
+  const existing = triggerFibers.get(target);
+  if (existing) Effect.runFork(Fiber.interrupt(existing));
+  triggerFibers.set(
     target,
-    setTimeout(() => {
-      triggerTimers.delete(target);
-      log.debug("refresh trigger fired", { target });
-      triggerSink?.(target);
-    }, TRIGGER_DEBOUNCE_MS),
+    Effect.runFork(Effect.sleep(TRIGGER_DEBOUNCE_MS).pipe(
+      Effect.andThen(Effect.sync(() => {
+        triggerFibers.delete(target);
+        log.debug("refresh trigger fired", { target });
+        triggerSink?.(target);
+      })),
+    )),
   );
 }
 
 function scheduleSlugChange(slug: string): void {
   if (!slugChangeSink) return;
-  const existing = slugChangeTimers.get(slug);
-  if (existing) clearTimeout(existing);
-  slugChangeTimers.set(
+  const existing = slugChangeFibers.get(slug);
+  if (existing) Effect.runFork(Fiber.interrupt(existing));
+  slugChangeFibers.set(
     slug,
-    setTimeout(() => {
-      slugChangeTimers.delete(slug);
-      slugChangeSink?.(slug);
-    }, SLUG_CHANGE_DEBOUNCE_MS),
+    Effect.runFork(Effect.sleep(SLUG_CHANGE_DEBOUNCE_MS).pipe(
+      Effect.andThen(Effect.sync(() => {
+        slugChangeFibers.delete(slug);
+        slugChangeSink?.(slug);
+      })),
+    )),
   );
 }
 
@@ -270,10 +275,10 @@ class SessionTailRegistry {
     // produced them, and a late fire would invalidate queries on a
     // torn-down client. Both maps, symmetrically: the runtime also nulls
     // the sinks on shutdown, but stopAll shouldn't depend on that.
-    for (const t of triggerTimers.values()) clearTimeout(t);
-    triggerTimers.clear();
-    for (const t of slugChangeTimers.values()) clearTimeout(t);
-    slugChangeTimers.clear();
+    for (const fiber of triggerFibers.values()) Effect.runFork(Fiber.interrupt(fiber));
+    triggerFibers.clear();
+    for (const fiber of slugChangeFibers.values()) Effect.runFork(Fiber.interrupt(fiber));
+    slugChangeFibers.clear();
   }
 
   /**

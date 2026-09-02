@@ -15,7 +15,9 @@
  * scheduled digest that fails during a GitHub outage — can't veto an
  * update.
  */
-import { gitOk, logSafe } from "./exec.ts";
+import { Data, Effect } from "effect";
+
+import { gitOkEffect, logSafe } from "./exec.ts";
 
 /** Check-run names that gate updates: the ci.yml job (and its typecheck-only predecessor). */
 export const GATE_CHECK_NAMES: ReadonlySet<string> = new Set(["ci", "typecheck"]);
@@ -28,14 +30,20 @@ const API_TIMEOUT_MS = 5_000;
 export type CheckStatus = "green" | "red" | "pending" | "unknown";
 
 /** `owner/repo` of the clone's GitHub origin, or null (gate disabled). */
-export async function originGithubRepo(): Promise<{ owner: string; repo: string } | null> {
-  const url = await gitOk(["remote", "get-url", "origin"]);
-  if (!url) return null;
-  // https://github.com/o/r(.git) | git@github.com:o/r(.git) | ssh aliases like github-personal:o/r
-  const m = url.match(/github(?:\.com)?[^:/]*[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?$/);
-  if (!m?.[1] || !m[2]) return null;
-  return { owner: m[1], repo: m[2] };
-}
+export const originGithubRepoEffect: Effect.Effect<{
+  owner: string;
+  repo: string;
+} | null> = gitOkEffect(["remote", "get-url", "origin"]).pipe(
+  Effect.map((url) => {
+    if (!url) return null;
+    const match = url.match(
+      /github(?:\.com)?[^:/]*[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?$/,
+    );
+    return match?.[1] && match[2]
+      ? { owner: match[1], repo: match[2] }
+      : null;
+  }),
+);
 
 /**
  * Classify a check-runs API payload for one commit. Pure — the shape
@@ -75,32 +83,54 @@ export function classifyCheckRuns(payload: unknown): CheckStatus {
   return pending ? "pending" : "green";
 }
 
-async function fetchCheckStatus(
+class CheckFetchError extends Data.TaggedError("CheckFetchError")<{
+  readonly sha: string;
+  readonly cause: unknown;
+}> {}
+
+function fetchCheckStatusEffect(
   owner: string,
   repo: string,
   sha: string,
   fetchImpl: typeof fetch,
-): Promise<CheckStatus> {
-  try {
-    const res = await fetchImpl(
-      `https://api.github.com/repos/${owner}/${repo}/commits/${sha}/check-runs?per_page=100`,
-      {
-        headers: {
-          Accept: "application/vnd.github+json",
-          "User-Agent": "wt-updater",
+): Effect.Effect<CheckStatus> {
+  return Effect.tryPromise({
+    try: (signal) =>
+      fetchImpl(
+        `https://api.github.com/repos/${owner}/${repo}/commits/${sha}/check-runs?per_page=100`,
+        {
+          headers: {
+            Accept: "application/vnd.github+json",
+            "User-Agent": "wt-updater",
+          },
+          signal,
         },
-        signal: AbortSignal.timeout(API_TIMEOUT_MS),
-      },
-    );
-    if (!res.ok) {
-      logSafe("warn", `check-runs API ${res.status} for ${sha} — gate falling open`);
-      return "unknown";
-    }
-    return classifyCheckRuns(await res.json());
-  } catch (err) {
-    logSafe("warn", `check-runs fetch failed for ${sha}: ${err instanceof Error ? err.message : String(err)}`);
-    return "unknown";
-  }
+      ),
+    catch: (cause) => new CheckFetchError({ sha, cause }),
+  }).pipe(
+    Effect.timeout(`${API_TIMEOUT_MS} millis`),
+    Effect.flatMap((response) => {
+      if (!response.ok) {
+        return Effect.sync(() => {
+          logSafe(
+            "warn",
+            `check-runs API ${response.status} for ${sha} — gate falling open`,
+          );
+          return "unknown" as const;
+        });
+      }
+      return Effect.tryPromise({
+        try: () => response.json(),
+        catch: (cause) => new CheckFetchError({ sha, cause }),
+      }).pipe(Effect.map(classifyCheckRuns));
+    }),
+    Effect.catchAll((error) =>
+      Effect.sync(() => {
+        logSafe("warn", `check-runs fetch failed for ${sha}: ${String(error)}`);
+        return "unknown" as const;
+      }),
+    ),
+  );
 }
 
 export type GateResult = {
@@ -118,18 +148,31 @@ export type GateResult = {
  * red and pending are skipped. Stops at the first eligible hit, so the
  * common case costs one API call.
  */
-export async function findNewestEligible(
+export function findNewestEligibleEffect(
   candidates: string[],
   fetchImpl: typeof fetch = fetch,
-): Promise<GateResult> {
-  if (candidates.length === 0) return { target: null, checked: [], gated: false };
-  const origin = await originGithubRepo();
-  if (!origin) return { target: candidates[0] ?? null, checked: [], gated: false };
-  const checked: { sha: string; status: CheckStatus }[] = [];
-  for (const sha of candidates.slice(0, MAX_LOOKUPS)) {
-    const status = await fetchCheckStatus(origin.owner, origin.repo, sha, fetchImpl);
-    checked.push({ sha, status });
-    if (status === "green" || status === "unknown") return { target: sha, checked, gated: true };
-  }
-  return { target: null, checked, gated: true };
+): Effect.Effect<GateResult> {
+  return Effect.gen(function* () {
+    if (candidates.length === 0) {
+      return { target: null, checked: [], gated: false };
+    }
+    const origin = yield* originGithubRepoEffect;
+    if (!origin) {
+      return { target: candidates[0] ?? null, checked: [], gated: false };
+    }
+    const checked: { sha: string; status: CheckStatus }[] = [];
+    for (const sha of candidates.slice(0, MAX_LOOKUPS)) {
+      const status = yield* fetchCheckStatusEffect(
+        origin.owner,
+        origin.repo,
+        sha,
+        fetchImpl,
+      );
+      checked.push({ sha, status });
+      if (status === "green" || status === "unknown") {
+        return { target: sha, checked, gated: true };
+      }
+    }
+    return { target: null, checked, gated: true };
+  });
 }

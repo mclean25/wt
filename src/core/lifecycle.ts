@@ -1,4 +1,11 @@
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, normalize } from "node:path";
 
 import { clearArchived } from "./archive.ts";
@@ -15,23 +22,42 @@ import {
   setSlugBase,
 } from "./wtstate.ts";
 import { getBackend, getBackendForPath } from "./backend.ts";
+import { createGitWorktreeEffect, removeGitWorktreeEffect } from "./backend/git.ts";
+import { createRiftWorktreeEffect, removeRiftWorktreeEffect } from "./backend/rift.ts";
 import { closeWorktreeBrowserSessions } from "./browser.ts";
 import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { clearDevServerFiles } from "./dev-server.ts";
 import { resolveInstallCommand } from "./install.ts";
-import { branchExists, git, gitQuiet, gitRun, originBranchExists, revParse } from "./git.ts";
+import {
+  branchExistsEffect,
+  gitEffect,
+  gitQuietEffect,
+  gitRunEffect,
+  originBranchExistsEffect,
+  revParseEffect,
+} from "./git.ts";
 import { ISSUE_ID_RE, ISSUE_URL_RE } from "./issue-tracker.ts";
-import { lockLabel, lockStatus, tryAcquireLock } from "./locks.ts";
-import { runStreaming } from "./proc.ts";
+import {
+  lockLabel,
+  lockStatus,
+  tryAcquireLock,
+  type LockHandle,
+} from "./locks.ts";
+import { runStreamingEffect } from "./proc.ts";
 import { reapWorktreeListeners } from "./reaper.ts";
-import { resolveTeardownCommand, runTeardownCommand } from "./teardown.ts";
+import { resolveTeardownCommand, TEARDOWN_TIMEOUT_MS } from "./teardown.ts";
 import { RESERVED_SESSION_SLUGS } from "./tmux/naming.ts";
 import { computeStage, dirSlug, slugify } from "./stage.ts";
-import { adjectives, animals, uniqueNamesGenerator } from "unique-names-generator";
+import {
+  adjectives,
+  animals,
+  uniqueNamesGenerator,
+} from "unique-names-generator";
+import { Cause, Data, Effect, Schedule } from "effect";
 import { safeStage } from "./stage-safety.ts";
 import type { Worktree } from "./types.ts";
-import { fetchOrigin } from "./worktree.ts";
+import { fetchOriginEffect } from "./worktree.ts";
 
 /**
  * How long `removeWorktree` waits out a transient lock holder before
@@ -44,9 +70,61 @@ const LOCK_ACQUIRE_WAIT_MS = 8000;
 
 const log = createLogger("[lifecycle]");
 
+const causeMessage = (cause: Cause.Cause<unknown>): string => {
+  const error = Cause.squash(cause);
+  return error instanceof Error ? error.message : String(error);
+};
+
 export type CreateResult =
   | { ok: true; path: string; branch: string; stage: string; slug: string }
   | { ok: false; reason: string };
+
+export class LifecycleError extends Data.TaggedError("LifecycleError")<{
+  readonly operation: "create" | "remove";
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+class BranchLookupError extends Data.TaggedError("BranchLookupError")<{
+  readonly cause: unknown;
+}> {}
+
+const lifecyclePromise = <A>(
+  operation: "create" | "remove",
+  run: (signal: AbortSignal) => Promise<A>,
+): Effect.Effect<A, LifecycleError> => Effect.tryPromise({
+  try: run,
+  catch: (cause) => new LifecycleError({
+    operation,
+    message: cause instanceof Error ? cause.message : String(cause),
+    cause,
+  }),
+});
+
+const runDestroyCommandEffect = (opts: {
+  command: string;
+  cwd: string;
+  slug: string;
+  onLog?: (line: string) => void;
+}): Effect.Effect<boolean> => {
+  opts.onLog?.(`destroy_command: ${opts.command}`);
+  return runStreamingEffect([process.env.SHELL || "bash", "-lc", opts.command], {
+    cwd: opts.cwd,
+    onLine: (line) => opts.onLog?.(line),
+    killAfterMs: TEARDOWN_TIMEOUT_MS,
+  }).pipe(
+    Effect.map((exit) => {
+      if (exit === 0) return true;
+      opts.onLog?.(`destroy_command failed (exit ${exit}) — continuing`);
+      log.warn("destroy_command failed", { slug: opts.slug, exit });
+      return false;
+    }),
+    Effect.catchAll((error) => Effect.sync(() => {
+      opts.onLog?.(`destroy_command errored: ${error.message} — continuing`);
+      return false;
+    })),
+  );
+};
 
 /**
  * Return branches matching `<prefix>/<issue-id>(-|$)`. When `anyAuthor`
@@ -55,36 +133,36 @@ export type CreateResult =
  * and local `X` collapse to a single entry (local preferred implicitly
  * — `git branch -a` lists locals before remotes in typical output).
  */
-export async function findBranchesForIssue(
+export function findBranchesForIssueEffect(
   issueLower: string,
   opts: { anyAuthor?: boolean } = {},
-): Promise<string[]> {
-  const out = await git(["branch", "-a", "--format=%(refname:short)"]).catch(
-    () => "",
-  );
-  // In strict mode we only accept `<michael>/<id>-...`. With anyAuthor
-  // we relax to "id appears at a word boundary anywhere in the branch
-  // name" — this catches non-standard layouts like
-  // `worktree-david+eng-4959-...` that don't use `/` as the separator.
-  // The picker modal handles false positives gracefully.
-  const pattern = opts.anyAuthor
-    ? new RegExp(
-        `(?:^|[^a-z0-9])${escapeRegex(issueLower)}(?:-|$)`,
-        "i",
-      )
-    : new RegExp(
-        `^(?:origin/)?${escapeRegex(config.branch.prefix)}/${escapeRegex(issueLower)}(?:-|$)`,
-      );
-  const seen = new Set<string>();
-  const branches: string[] = [];
-  for (const raw of out.split("\n")) {
-    if (!pattern.test(raw)) continue;
-    const normalized = raw.replace(/^origin\//, "");
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    branches.push(normalized);
-  }
-  return branches;
+): Effect.Effect<string[]> {
+  return Effect.gen(function* () {
+    const out = yield* gitEffect(["branch", "-a", "--format=%(refname:short)"]).pipe(
+      Effect.mapError((cause) => new BranchLookupError({ cause })),
+      Effect.orElseSucceed(() => ""),
+    );
+    // In strict mode we only accept `<michael>/<id>-...`. With anyAuthor
+    // we relax to "id appears at a word boundary anywhere in the branch
+    // name". This catches non-standard layouts like
+    // `worktree-david+eng-4959-...` that don't use `/` as the separator.
+    // The picker modal handles false positives gracefully.
+    const pattern = opts.anyAuthor
+      ? new RegExp(`(?:^|[^a-z0-9])${escapeRegex(issueLower)}(?:-|$)`, "i")
+      : new RegExp(
+          `^(?:origin/)?${escapeRegex(config.branch.prefix)}/${escapeRegex(issueLower)}(?:-|$)`,
+        );
+    const seen = new Set<string>();
+    const branches: string[] = [];
+    for (const raw of out.split("\n")) {
+      if (!pattern.test(raw)) continue;
+      const normalized = raw.replace(/^origin\//, "");
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      branches.push(normalized);
+    }
+    return branches;
+  });
 }
 
 function escapeRegex(s: string): string {
@@ -96,20 +174,34 @@ function escapeRegex(s: string): string {
  * retried until the resulting branch is free. ~29k combos; if all five
  * draws collide something is deeply wrong, so give up loudly.
  */
-async function randomFreeSuffix(idLower: string): Promise<string> {
-  for (let i = 0; i < 5; i++) {
-    const suffix = uniqueNamesGenerator({
-      dictionaries: [adjectives, animals],
-      separator: "-",
-      length: 2,
-      style: "lowerCase",
-    });
-    if (!(await branchExists(`${config.branch.prefix}/${idLower}-${suffix}`))) {
-      return suffix;
+function randomFreeSuffixEffect(
+  idLower: string,
+): Effect.Effect<string, ParseInputError> {
+  return Effect.gen(function* () {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const suffix = uniqueNamesGenerator({
+        dictionaries: [adjectives, animals],
+        separator: "-",
+        length: 2,
+        style: "lowerCase",
+      });
+      const exists = yield* branchExistsEffect(`${config.branch.prefix}/${idLower}-${suffix}`).pipe(
+        Effect.mapError((cause) => new ParseInputError({ message: "failed to inspect branches", cause })),
+      );
+      if (!exists) {
+        return suffix;
+      }
     }
-  }
-  throw new Error(`couldn't find a free random slug for ${idLower} (tried 5)`);
+    return yield* new ParseInputError({
+      message: `couldn't find a free random slug for ${idLower} (tried 5)`,
+    });
+  });
 }
+
+export class ParseInputError extends Data.TaggedError("ParseInputError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
 export type ParseInputOptions = {
   slugHint?: string;
@@ -130,81 +222,113 @@ export type ParseInputOptions = {
    * across authors). If omitted and there are multiple matches,
    * parseInput throws.
    */
-  promptForChoice?: (id: string, branches: string[]) => Promise<string | null>;
+  promptForChoice?: (
+    id: string,
+    branches: string[],
+  ) => Effect.Effect<string | null, unknown> | Promise<string | null>;
 };
 
-export async function parseInput(
+const parseInputFailure = (
+  message: string,
+): Effect.Effect<never, ParseInputError> =>
+  Effect.fail(new ParseInputError({ message }));
+
+export function parseInputEffect(
+  raw: string,
+  opts: ParseInputOptions = {},
+): Effect.Effect<string, ParseInputError> {
+  return Effect.gen(function* () {
+    raw = raw.trim();
+    if (!raw) return yield* parseInputFailure("empty input");
+
+    // "<ID> [title words…]" is a leading issue id, optionally followed by
+    // pasted title text that becomes the slug. There is no tracker API.
+    const tokens = raw.split(/\s+/);
+    const urlMatch = ISSUE_URL_RE.exec(tokens[0]!);
+    if (urlMatch && urlMatch[1]) tokens[0] = urlMatch[1].toUpperCase();
+    if (ISSUE_ID_RE.test(tokens[0]!)) {
+      const id = tokens[0]!.toUpperCase();
+      const idLower = id.toLowerCase();
+      if (opts.attach) {
+        const found = yield* findBranchesForIssueEffect(idLower, {
+          anyAuthor: opts.anyAuthor,
+        });
+        if (found.length === 1) return found[0]!;
+        if (found.length > 1) {
+          if (opts.promptForChoice) {
+            const pending = opts.promptForChoice(id, found);
+            const picked = yield* Effect.isEffect(pending)
+              ? pending.pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ParseInputError({
+                        message: `failed to choose a branch for ${id}`,
+                        cause,
+                      }),
+                  ),
+                )
+              : Effect.tryPromise({
+                  try: () => pending,
+                  catch: (cause) =>
+                    new ParseInputError({
+                      message: `failed to choose a branch for ${id}`,
+                      cause,
+                    }),
+                });
+            if (!picked) {
+              return yield* parseInputFailure(`no branch chosen for ${id}`);
+            }
+            return picked;
+          }
+          return yield* parseInputFailure(
+            `Multiple branches for ${id}: ${found.join(", ")}. Pass the branch explicitly.`,
+          );
+        }
+        return yield* parseInputFailure(
+          opts.anyAuthor
+            ? `No existing branch for ${id} to attach to.`
+            : `No ${config.branch.prefix}/ branch for ${id} to attach to. ` +
+                `Add --any to search every author's branches.`,
+        );
+      }
+      const required = config.issueTracker?.prefix;
+      const prefix = idLower.slice(0, idLower.indexOf("-"));
+      if (required && prefix !== required) {
+        return yield* parseInputFailure(
+          `${id} can't lead a worktree ([issue_tracker] prefix = "${required}"). ` +
+            `Use \`wt new ${required.toUpperCase()}-NNNN …${prefix === "gh" ? ` --gh ${id.slice(3)}` : ""}\`, ` +
+            `an issue-less slug, or --attach for an existing branch.`,
+        );
+      }
+      const slug = slugify(opts.slugHint ?? tokens.slice(1).join(" "));
+      if (slug) {
+        return `${config.branch.prefix}/${idLower}-${slug}`;
+      }
+      return `${config.branch.prefix}/${idLower}-${yield* randomFreeSuffixEffect(idLower)}`;
+    }
+
+    // Branch-shaped input (single token with a `/`) passes through as-is.
+    if (tokens.length === 1 && raw.includes("/")) return raw;
+    // Exact-match escape hatch for non-standard branch names.
+    if (
+      tokens.length === 1 &&
+      (yield* branchExistsEffect(raw).pipe(
+        Effect.mapError((cause) => new ParseInputError({ message: "failed to inspect branches", cause })),
+      ))
+    ) {
+      return raw;
+    }
+    // Anything else slugifies into a fresh `<prefix>/<slug>` branch.
+    return `${config.branch.prefix}/${slugify(raw)}`;
+  });
+}
+
+/** Promise boundary for React/TUI callers while their callback is modal-based. */
+export function parseInput(
   raw: string,
   opts: ParseInputOptions = {},
 ): Promise<string> {
-  raw = raw.trim();
-  if (!raw) throw new Error("empty input");
-
-  // "<ID> [title words…]" — a leading issue id, optionally followed by
-  // pasted title text that becomes the slug. There is no tracker API:
-  // the id (and title, when the user pastes one) is all wt ever gets.
-  // A leading tracker URL reduces to its id first, so "URL note" and
-  // "ID note" behave identically.
-  const tokens = raw.split(/\s+/);
-  const urlMatch = ISSUE_URL_RE.exec(tokens[0]!);
-  if (urlMatch && urlMatch[1]) tokens[0] = urlMatch[1].toUpperCase();
-  if (ISSUE_ID_RE.test(tokens[0]!)) {
-    const id = tokens[0]!.toUpperCase();
-    const idLower = id.toLowerCase();
-    if (opts.attach) {
-      const found = await findBranchesForIssue(idLower, { anyAuthor: opts.anyAuthor });
-      if (found.length === 1) return found[0]!;
-      if (found.length > 1) {
-        if (opts.promptForChoice) {
-          const picked = await opts.promptForChoice(id, found);
-          if (!picked) throw new Error(`no branch chosen for ${id}`);
-          return picked;
-        }
-        throw new Error(
-          `Multiple branches for ${id}: ${found.join(", ")}. Pass the branch explicitly.`,
-        );
-      }
-      throw new Error(
-        opts.anyAuthor
-          ? `No existing branch for ${id} to attach to.`
-          : `No ${config.branch.prefix}/ branch for ${id} to attach to. ` +
-            `Add --any to search every author's branches.`,
-      );
-    }
-    // Minting a new branch: the primary id must carry the configured
-    // tracker prefix. A GitHub issue is a SECONDARY id (`--gh <n>`),
-    // never a worktree's identity.
-    const required = config.issueTracker?.prefix;
-    const prefix = idLower.slice(0, idLower.indexOf("-"));
-    if (required && prefix !== required) {
-      throw new Error(
-        `${id} can't lead a worktree ([issue_tracker] prefix = "${required}"). ` +
-          `Use \`wt new ${required.toUpperCase()}-NNNN …${prefix === "gh" ? ` --gh ${id.slice(3)}` : ""}\`, ` +
-          `an issue-less slug, or --attach for an existing branch.`,
-      );
-    }
-    // An explicit slug (--slug, which wins, or inline title words)
-    // names the branch; a bare id gets a random readable suffix
-    // (`coz-1234-cozy-elephant`) so repeat entries never collide and
-    // no bare `coz-1234` branch exists to shadow later lookups.
-    // Slugified-to-nothing text (e.g. "!!!") counts as bare.
-    const slug = slugify(opts.slugHint ?? tokens.slice(1).join(" "));
-    if (slug) {
-      return `${config.branch.prefix}/${idLower}-${slug}`;
-    }
-    return `${config.branch.prefix}/${idLower}-${await randomFreeSuffix(idLower)}`;
-  }
-
-  // Branch-shaped input (single token with a `/`) passes through as-is.
-  if (tokens.length === 1 && raw.includes("/")) return raw;
-  // Exact-match escape hatch: if the raw input names a real branch
-  // (local or origin), attach to it instead of minting a fresh
-  // `michael/<slug>`. Covers non-standard names without a `/`
-  // separator (e.g. `worktree-david+eng-4959-...`).
-  if (tokens.length === 1 && (await branchExists(raw))) return raw;
-  // Anything else — including multiple words ("fix the calendar") —
-  // slugifies into a fresh `<prefix>/<slug>` branch.
-  return `${config.branch.prefix}/${slugify(raw)}`;
+  return Effect.runPromise(parseInputEffect(raw, opts));
 }
 
 export type CreateOptions = {
@@ -219,10 +343,12 @@ export type CreateOptions = {
   base?: string;
 };
 
-export async function createWorktree(
+function createWorktreeProgram(
   branch: string,
-  opts: CreateOptions = {},
-): Promise<CreateResult> {
+  opts: CreateOptions,
+  handle: LockHandle,
+) {
+  return Effect.gen(function* () {
   const slug = dirSlug(branch);
   const path = join(config.paths.worktreeRoot, slug);
   const stage = computeStage(slug);
@@ -234,18 +360,11 @@ export async function createWorktree(
     return {
       ok: false,
       reason: `"${slug}" is a reserved session name (${RESERVED_SESSION_SLUGS.join(", ")}) — pick different title words`,
-    };
+    } as const;
   }
 
   if (existsSync(path)) {
-    return { ok: false, reason: `Path already exists: ${path}` };
-  }
-
-  mkdirSync(config.paths.worktreeRoot, { recursive: true });
-
-  const handle = tryAcquireLock(slug, "init", { phase: "preparing" });
-  if (!handle) {
-    return { ok: false, reason: `Another wt process is busy with ${slug}` };
+    return { ok: false, reason: `Path already exists: ${path}` } as const;
   }
 
   // Reset any stale archive / repository-state entry left over from a prior
@@ -257,22 +376,23 @@ export async function createWorktree(
   // the row "un-archive" mid-destroy and flash back into the active
   // list. Clearing here, paired with the lock guarantee that no
   // destroy is in flight, is the race-free counterpart.
-  clearArchived(slug);
-  clearSlugState(slug);
-  clearRemovedWorktree(slug);
-  clearClaudeNames(slug);
-  clearCodexNames(slug);
-  clearOpencodeNames(slug);
-  clearDevServerFiles(slug);
+  yield* Effect.uninterruptible(Effect.sync(() => {
+    clearArchived(slug);
+    clearSlugState(slug);
+    clearRemovedWorktree(slug);
+    clearClaudeNames(slug);
+    clearCodexNames(slug);
+    clearOpencodeNames(slug);
+    clearDevServerFiles(slug);
+  }));
 
-  try {
     const backend = getBackend(config.backend.kind);
 
     opts.onPhase?.("fetching origin");
-    await fetchOrigin();
+    yield* fetchOriginEffect();
 
     handle.phase(`creating worktree (${backend.id})`);
-    const existing = await branchExists(branch);
+    const existing = yield* branchExistsEffect(branch);
     if (existing && opts.base) {
       opts.onLog?.(`note: --base ignored, ${branch} already exists`);
     }
@@ -281,7 +401,9 @@ export async function createWorktree(
     // the branch; wt does the upstream/fork-base wiring below (agnostic —
     // it runs git inside the new checkout, which holds for both a linked
     // worktree and an independent rift clone).
-    const baseRef = existing ? null : opts.base ?? `origin/${config.branch.base}`;
+    const baseRef = existing
+      ? null
+      : (opts.base ?? `origin/${config.branch.base}`);
     // When the base is a sibling branch (a stacked parent, i.e. not an
     // `origin/` ref), point the backend at that parent's worktree — the
     // rift backend fetches the base commits from it, since an independent
@@ -292,7 +414,7 @@ export async function createWorktree(
       const cand = join(config.paths.worktreeRoot, dirSlug(baseRef));
       if (existsSync(cand)) baseSourcePath = cand;
     }
-    await backend.create({
+    const backendInput = {
       path,
       branch,
       slug,
@@ -300,14 +422,20 @@ export async function createWorktree(
       baseSourcePath,
       mainClone: config.paths.mainClone,
       onLog: opts.onLog,
-    });
+    };
+    yield* backend.id === "rift"
+      ? createRiftWorktreeEffect(backendInput)
+      : createGitWorktreeEffect(backendInput);
 
     if (existing) {
       if (
-        (await originBranchExists(branch, path)) &&
-        !(await gitQuiet(["rev-parse", "--abbrev-ref", "@{u}"], path))
+        (yield* originBranchExistsEffect(branch, path)) &&
+        !(yield* gitQuietEffect(["rev-parse", "--abbrev-ref", "@{u}"], path))
       ) {
-        await gitQuiet(["branch", "--set-upstream-to", `origin/${branch}`], path);
+        yield* gitQuietEffect(
+          ["branch", "--set-upstream-to", `origin/${branch}`],
+          path,
+        );
       }
     } else if (baseRef) {
       // Remember the fork base. This record IS the stack primitive: it
@@ -327,8 +455,9 @@ export async function createWorktree(
       // parent" (`stack-layout.ts`, `stack-ops/chain.ts`), so recording
       // it changes no grouping; it just gives the guard its anchor.
       const baseBranch = baseRef.replace(/^origin\//, "");
-      const sha = await revParse("HEAD", path);
-      setSlugBase(slug, { branch: baseBranch, sha: sha ?? undefined });
+      const sha = yield* revParseEffect("HEAD", path);
+      yield* Effect.uninterruptible(Effect.sync(() =>
+        setSlugBase(slug, { branch: baseBranch, sha: sha ?? undefined })));
       if (baseBranch !== config.branch.base) {
         opts.onLog?.(`recorded fork base ${baseBranch}`);
       }
@@ -349,13 +478,18 @@ export async function createWorktree(
     // the trunk default only when nothing set a value already (it may
     // carry deliberate config from a previous life).
     const ghMergeBase = existing
-      ? (await gitRun(["config", `branch.${branch}.gh-merge-base`], path))
+      ? (yield* gitRunEffect(["config", `branch.${branch}.gh-merge-base`], path))
           .exitCode === 0
         ? null
         : config.branch.base
       : (baseRef ?? "").replace(/^origin\//, "") || config.branch.base;
     if (ghMergeBase) {
-      if (await gitQuiet(["config", `branch.${branch}.gh-merge-base`, ghMergeBase], path)) {
+      if (
+        yield* gitQuietEffect(
+          ["config", `branch.${branch}.gh-merge-base`, ghMergeBase],
+          path,
+        )
+      ) {
         opts.onLog?.(`gh merge base → ${ghMergeBase}`);
       }
     }
@@ -422,7 +556,7 @@ export async function createWorktree(
       } else {
         handle.phase(install.label);
         opts.onLog?.(`${install.label}...`);
-        const code = await runStreaming(install.argv, {
+        const code = yield* runStreamingEffect(install.argv, {
           cwd: path,
           onLine: (line) => opts.onLog?.(line),
         });
@@ -431,24 +565,83 @@ export async function createWorktree(
         }
       }
     }
-  } catch (err) {
-    // Backend and setup failures THROW (the rift backend rolls back its
-    // partial clone first). Fold them into the `ok: false` contract so
-    // every caller's existing failure path (CLI stderr, TUI toast +
-    // attention line) surfaces the reason — an escaped rejection here
-    // used to leave the flashed-and-vanished row with no explanation.
-    // The reason string carries only the message; keep the stack in the
-    // daily log or an unexpected TypeError here is unroot-causeable.
-    log.error(err instanceof Error ? err : String(err), { slug });
-    return {
-      ok: false,
-      reason: err instanceof Error ? err.message : String(err),
-    };
-  } finally {
-    handle.release();
-  }
+  return { ok: true, path, branch, stage, slug } as const;
+  });
+}
 
-  return { ok: true, path, branch, stage, slug };
+export function createWorktreeEffect(
+  branch: string,
+  opts: CreateOptions = {},
+): Effect.Effect<Extract<CreateResult, { ok: true }>, LifecycleError> {
+  const slug = dirSlug(branch);
+  const path = join(config.paths.worktreeRoot, slug);
+  if (RESERVED_SESSION_SLUGS.includes(slug)) {
+    return Effect.fail(
+      new LifecycleError({
+        operation: "create",
+        message: `"${slug}" is a reserved session name (${RESERVED_SESSION_SLUGS.join(", ")}) — pick different title words`,
+      }),
+    );
+  }
+  if (existsSync(path)) {
+    return Effect.fail(
+      new LifecycleError({
+        operation: "create",
+        message: `Path already exists: ${path}`,
+      }),
+    );
+  }
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* Effect.acquireRelease(
+        Effect.try({
+          try: () => {
+            mkdirSync(config.paths.worktreeRoot, { recursive: true });
+            const acquired = tryAcquireLock(slug, "init", {
+              phase: "preparing",
+            });
+            if (!acquired)
+              throw new Error(`Another wt process is busy with ${slug}`);
+            return acquired;
+          },
+          catch: (cause) =>
+            new LifecycleError({
+              operation: "create",
+              message: cause instanceof Error ? cause.message : String(cause),
+              cause,
+            }),
+        }),
+        (acquired) => Effect.sync(() => acquired.release()),
+      );
+      const result = yield* createWorktreeProgram(branch, opts, handle).pipe(
+        Effect.catchAllCause((cause) => {
+          const detail = causeMessage(cause);
+          log.error(detail, { slug });
+          return Effect.fail(new LifecycleError({ operation: "create", message: detail, cause }));
+        }),
+      );
+      if (!result.ok) {
+        return yield* new LifecycleError({
+          operation: "create",
+          message: result.reason,
+        });
+      }
+      return result;
+    }),
+  );
+}
+
+export function createWorktree(
+  branch: string,
+  opts: CreateOptions = {},
+): Promise<CreateResult> {
+  return Effect.runPromise(
+    createWorktreeEffect(branch, opts).pipe(
+      Effect.catchTag("LifecycleError", (error) =>
+        Effect.succeed({ ok: false as const, reason: error.message }),
+      ),
+    ),
+  );
 }
 
 export type RemoveOptions = {
@@ -470,10 +663,12 @@ export type RemoveResult = {
  * Foreground remove. Assumes caller already confirmed dirty-prompts
  * and resolved the destroyStage / deleteBranch decisions.
  */
-export async function removeWorktree(
+function removeWorktreeProgram(
   wt: Worktree,
-  opts: RemoveOptions = {},
-): Promise<RemoveResult> {
+  opts: RemoveOptions,
+  handle: LockHandle,
+) {
+  return Effect.gen(function* () {
   const { force = false, destroyStage = false, deleteBranch = false } = opts;
 
   // Acquire the per-slug lock, retrying briefly rather than failing on the
@@ -487,30 +682,9 @@ export async function removeWorktree(
   // teardown about to run for seconds shouldn't abort over a sub-second
   // race, so wait out a transient holder. Bounded so a genuinely long-held
   // lock (another destroy, a replay of this very worktree) still fails.
-  let handle = tryAcquireLock(wt.slug, "remove", { phase: "preparing" });
-  if (!handle) {
-    const deadline = Date.now() + LOCK_ACQUIRE_WAIT_MS;
-    while (!handle && Date.now() < deadline) {
-      await Bun.sleep(150 + Math.floor(Math.random() * 150));
-      handle = tryAcquireLock(wt.slug, "remove", { phase: "preparing" });
-    }
-  }
-  if (!handle) {
-    const existing = lockStatus(wt.slug);
-    return {
-      ok: false,
-      message: existing
-        ? `${wt.slug} is busy: ${lockLabel(existing)}`
-        : `could not lock ${wt.slug}`,
-      destroyedStage: false,
-      deletedBranch: false,
-    };
-  }
-
   let effectiveForce = force;
   let destroyedStage = false;
   let deletedBranch = false;
-  try {
     if (destroyStage) {
       // Central safety gate. `safe.stage` is the pinned `.sst/stage`,
       // accepted only when it carries the personal prefix — so the
@@ -525,7 +699,7 @@ export async function removeWorktree(
         opts.onPhase?.("sst remove");
         handle.phase("sst remove");
         opts.onLog?.(`pnpm sst remove --stage ${safe.stage}`);
-        const sstExit = await runStreaming(
+        const sstExit = yield* runStreamingEffect(
           ["pnpm", "sst", "remove", "--stage", safe.stage],
           {
             cwd: wt.path,
@@ -551,16 +725,18 @@ export async function removeWorktree(
     // listening socket plus a cwd inside the worktree, and a docker
     // container has neither (the host port belongs to the daemon), so
     // nothing about a container is reachable through the process tree.
-    const destroyCommand = resolveTeardownCommand(config.lifecycle.destroyCommand, {
-      path: wt.path,
-      slug: wt.slug,
-      port: readWtState().slugs[wt.slug]?.devPort ?? null,
-    });
+    const destroyCommand = resolveTeardownCommand(
+      config.lifecycle.destroyCommand,
+      {
+        path: wt.path,
+        slug: wt.slug,
+        port: readWtState().slugs[wt.slug]?.devPort ?? null,
+      },
+    );
     if (destroyCommand) {
       opts.onPhase?.("destroy command");
       handle.phase("destroy command");
-      const tornDown = await runTeardownCommand({
-        label: "destroy_command",
+      const tornDown = yield* runDestroyCommandEffect({
         command: destroyCommand,
         cwd: wt.path,
         slug: wt.slug,
@@ -594,9 +770,11 @@ export async function removeWorktree(
     // restart, while a closed tab's state is gone for good. wt-managed
     // sessions are already dead by now (callers run killAllSessionsFor
     // first), so this only ever sees processes wt doesn't manage.
-    const reaped = await reapWorktreeListeners(wt.path);
+    const reaped = yield* lifecyclePromise("remove", () => reapWorktreeListeners(wt.path));
     for (const p of reaped) {
-      opts.onLog?.(`reaped ${p.command} (pid ${p.pid}, port ${p.ports.join(", ") || "?"})`);
+      opts.onLog?.(
+        `reaped ${p.command} (pid ${p.pid}, port ${p.ports.join(", ") || "?"})`,
+      );
     }
 
     // Dispatch on the checkout's ACTUAL backend (derived from disk), not
@@ -606,13 +784,16 @@ export async function removeWorktree(
     const backend = getBackendForPath(wt.path);
     opts.onPhase?.(`worktree remove (${backend.id})`);
     handle.phase(`worktree remove (${backend.id})`);
-    const removed = await backend.remove({
+    const backendInput = {
       path: wt.path,
       slug: wt.slug,
       force: effectiveForce,
       mainClone: config.paths.mainClone,
       onLog: opts.onLog,
-    });
+    };
+    const removed = yield* backend.id === "rift"
+      ? removeRiftWorktreeEffect(backendInput)
+      : removeGitWorktreeEffect(backendInput);
     if (!removed.ok) {
       return {
         ok: false,
@@ -626,15 +807,17 @@ export async function removeWorktree(
     // bailed above leaves a worktree the user is still working in, and
     // closing its tabs would be pure loss. Best-effort and silent when
     // there was nothing to close, which is the common case.
-    const browser = await closeWorktreeBrowserSessions(
+    const browser = yield* lifecyclePromise("remove", () => closeWorktreeBrowserSessions(
       wt.slug,
       readWtState().slugs[wt.slug]?.devPort ?? null,
-    );
+    ));
     if (browser.sessions.length > 0) {
       opts.onLog?.(`closed browser session ${browser.sessions.join(", ")}`);
     }
     if (browser.tabs > 0) {
-      opts.onLog?.(`closed ${browser.tabs} browser tab${browser.tabs === 1 ? "" : "s"}`);
+      opts.onLog?.(
+        `closed ${browser.tabs} browser tab${browser.tabs === 1 ? "" : "s"}`,
+      );
     }
 
     if (wt.branch && backend.id === "rift") {
@@ -648,9 +831,9 @@ export async function removeWorktree(
       // returns false for a rift branch, since it's not in the main
       // clone — keying on the backend here makes this independent of it.)
       deletedBranch = true;
-    } else if (deleteBranch && wt.branch && (await branchExists(wt.branch))) {
+    } else if (deleteBranch && wt.branch && (yield* branchExistsEffect(wt.branch))) {
       handle.phase("deleting branch");
-      if (await gitQuiet(["branch", "-D", wt.branch])) {
+      if (yield* gitQuietEffect(["branch", "-D", wt.branch])) {
         deletedBranch = true;
       }
     }
@@ -663,7 +846,11 @@ export async function removeWorktree(
     // the dependents squash-safely instead of re-applying the landed
     // parent's commits.
     if (deletedBranch && wt.branch) {
-      const reparented = reparentBaseReferences(wt.branch, config.branch.base, wt.slug);
+      const reparented = reparentBaseReferences(
+        wt.branch,
+        config.branch.base,
+        wt.slug,
+      );
       if (reparented.length > 0) {
         opts.onLog?.(
           `reparented fork base on ${reparented.join(", ")} (was the deleted ${wt.branch})`,
@@ -699,15 +886,22 @@ export async function removeWorktree(
     // the CLI paths that never went through the TUI. Best-effort — a
     // durable-state IO failure must not fail an already-completed remove.
     if (wt.branch) {
-      try {
-        recordRemovedWorktrees([
-          { slug: wt.slug, branch: wt.branch, removedAt: new Date().toISOString() },
-        ]);
-      } catch (err) {
-        opts.onLog?.(
-          `could not record removed-worktree entry: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+      yield* Effect.uninterruptible(Effect.try({
+        try: () => recordRemovedWorktrees([
+          {
+            slug: wt.slug,
+            branch: wt.branch,
+            removedAt: new Date().toISOString(),
+          },
+        ]),
+        catch: (cause) => new LifecycleError({
+          operation: "remove",
+          message: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+      }).pipe(Effect.catchAll((err) => Effect.sync(() => opts.onLog?.(
+        `could not record removed-worktree entry: ${err instanceof Error ? err.message : String(err)}`,
+      )))));
     }
 
     return {
@@ -716,9 +910,84 @@ export async function removeWorktree(
       destroyedStage,
       deletedBranch,
     };
-  } finally {
-    handle.release();
-  }
+  });
+}
+
+const removeLockSchedule = Schedule.spaced(150).pipe(
+  Schedule.jittered,
+  Schedule.upTo(LOCK_ACQUIRE_WAIT_MS),
+);
+
+export function removeWorktreeEffect(
+  wt: Worktree,
+  opts: RemoveOptions = {},
+): Effect.Effect<RemoveResult, LifecycleError> {
+  const acquire = Effect.suspend(() => {
+    const handle = tryAcquireLock(wt.slug, "remove", { phase: "preparing" });
+    return handle
+      ? Effect.succeed(handle)
+      : Effect.fail(
+          new LifecycleError({
+            operation: "remove",
+            message: `${wt.slug} is busy`,
+          }),
+        );
+  }).pipe(
+    Effect.retry({
+      schedule: removeLockSchedule,
+      while: (error) => error.operation === "remove",
+    }),
+    Effect.mapError((error) => {
+      const existing = lockStatus(wt.slug);
+      return new LifecycleError({
+        operation: "remove",
+        message: existing
+          ? `${wt.slug} is busy: ${lockLabel(existing)}`
+          : `could not lock ${wt.slug}`,
+        cause: error,
+      });
+    }),
+  );
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* Effect.acquireRelease(acquire, (acquired) =>
+        Effect.sync(() => acquired.release()),
+      );
+      const result = yield* removeWorktreeProgram(wt, opts, handle).pipe(
+        Effect.catchAllCause((cause) => Effect.fail(new LifecycleError({
+          operation: "remove",
+          message: causeMessage(cause),
+          cause,
+        }))),
+      );
+      if (!result.ok) {
+        return yield* new LifecycleError({
+          operation: "remove",
+          message: result.message,
+        });
+      }
+      return result;
+    }),
+  );
+}
+
+export function removeWorktree(
+  wt: Worktree,
+  opts: RemoveOptions = {},
+): Promise<RemoveResult> {
+  return Effect.runPromise(
+    removeWorktreeEffect(wt, opts).pipe(
+      Effect.catchTag("LifecycleError", (error) =>
+        Effect.succeed({
+          ok: false,
+          message: error.message,
+          destroyedStage: false,
+          deletedBranch: false,
+        }),
+      ),
+    ),
+  );
 }
 
 /**
@@ -738,11 +1007,14 @@ export async function removeWorktree(
  * one that silently stranded work. This mirrors why actions run under tmux
  * (`core/tmux/action-sessions.ts`): destroy work must outlive the TUI.
  */
-export function spawnBackgroundRemove(slug: string, opts: {
-  force: boolean;
-  destroyStage: boolean;
-  deleteBranch: boolean;
-}): string {
+export function spawnBackgroundRemove(
+  slug: string,
+  opts: {
+    force: boolean;
+    destroyStage: boolean;
+    deleteBranch: boolean;
+  },
+): string {
   mkdirSync(config.paths.logDir, { recursive: true });
   const logPath = join(
     config.paths.logDir,

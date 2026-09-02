@@ -9,6 +9,7 @@
  * non-crashed → crashed transition is narrated once.
  */
 import { useEffect, useRef } from "react";
+import { Data, Effect, Fiber } from "effect";
 
 import {
   devServerCrashSummary,
@@ -24,6 +25,10 @@ type DevServerEventRow = {
   archived: boolean;
   dev: { crashed: boolean };
 };
+
+class DevServerEventReadError extends Data.TaggedError(
+  "DevServerEventReadError",
+)<{ readonly key: string; readonly cause: unknown }> {}
 
 /** Update the seen-state map and return crash transitions in this pass. */
 export function newDevServerCrashes(
@@ -57,25 +62,42 @@ export function useDevServerEvents(rows: readonly WorktreeModel[]): void {
     const keys = newDevServerCrashes(rows, seenRef.current);
     if (keys.length === 0) return;
     const byKey = new Map(rows.map((row) => [row.key, row]));
-    void Promise.all(
-      keys.map(async (key) => {
-        const row = byKey.get(key);
-        if (!row) return null;
-        const output = await readWorktreeDevLogs(row.target).catch(() => null);
-        return {
-          key,
-          summary: output === null ? null : devServerCrashSummary(output),
-        };
-      }),
-    ).then((events) => {
-      for (const event of events) {
-        if (!event) continue;
-        createLogger(worktreeLedgerLabel(event.key)).attention.err(
-          event.summary
-            ? `dev server crashed — ${event.summary} · wt dev logs`
-            : "dev server crashed — see wt dev logs",
-        );
-      }
-    });
+    const fiber = Effect.runFork(
+      Effect.forEach(
+        keys,
+        (key) => {
+          const row = byKey.get(key);
+          if (!row) return Effect.succeed(null);
+          return Effect.tryPromise({
+            try: () => readWorktreeDevLogs(row.target),
+            catch: (cause) => new DevServerEventReadError({ key, cause }),
+          }).pipe(
+            Effect.map((output) => ({
+              key,
+              summary:
+                output === null ? null : devServerCrashSummary(output),
+            })),
+            Effect.orElseSucceed(() => ({ key, summary: null })),
+          );
+        },
+        { concurrency: "unbounded" },
+      ).pipe(
+        Effect.tap((events) =>
+          Effect.sync(() => {
+            for (const event of events) {
+              if (!event) continue;
+              createLogger(worktreeLedgerLabel(event.key)).attention.err(
+                event.summary
+                  ? `dev server crashed — ${event.summary} · wt dev logs`
+                  : "dev server crashed — see wt dev logs",
+              );
+            }
+          }),
+        ),
+      ),
+    );
+    return () => {
+      Effect.runFork(Fiber.interrupt(fiber));
+    };
   }, [rows]);
 }

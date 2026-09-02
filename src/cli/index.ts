@@ -1,3 +1,5 @@
+import { Data, Effect } from "effect";
+
 const HELP = `usage: wt <command> [options]
 
 commands:
@@ -33,8 +35,20 @@ commands:
 
 Run \`wt <command> --help\` for per-command options where available.`;
 
-type Runner = (argv: string[]) => Promise<number>;
+type Runner = (argv: string[]) => Effect.Effect<number, Error>;
 type Loader = () => Promise<{ run: Runner }>;
+
+export class CommandLoadError extends Data.TaggedError("CommandLoadError")<{
+  readonly command: string;
+  readonly cause: unknown;
+}> {}
+
+export class CommandRunError extends Data.TaggedError("CommandRunError")<{
+  readonly command: string;
+  readonly cause: unknown;
+}> {}
+
+export type DispatchError = CommandLoadError | CommandRunError;
 
 /**
  * One lazy loader per command, so running `wt <cmd>` imports that
@@ -88,20 +102,42 @@ const RUNNERS: Record<string, Loader> = {
   "_claude-hook": () => import("./commands/_claude-hook.ts"),
 };
 
-export async function dispatch(argv: string[]): Promise<number> {
+/**
+ * Effect-native command dispatcher. Dynamic imports remain per command so a
+ * broken leaf cannot take down unrelated recovery/status commands.
+ *
+ */
+export function dispatchEffect(argv: string[]): Effect.Effect<number, DispatchError> {
   const [cmd, ...rest] = argv;
   if (cmd === "--help" || cmd === "-h") {
-    console.log(HELP);
-    return 0;
+    return Effect.sync(() => {
+      console.log(HELP);
+      return 0;
+    });
   }
-  if (cmd === "--version" || cmd === "-v") {
-    return (await import("./commands/version.ts")).run(rest);
+  const command = cmd === "--version" || cmd === "-v" ? "version" : cmd;
+  const load = command ? RUNNERS[command] : undefined;
+  if (!command || !load) {
+    return Effect.sync(() => {
+      console.error(`unknown command: ${cmd ?? ""}\n`);
+      console.error(HELP);
+      return 2;
+    });
   }
-  const load = cmd ? RUNNERS[cmd] : undefined;
-  if (!load) {
-    console.error(`unknown command: ${cmd ?? ""}\n`);
-    console.error(HELP);
-    return 2;
-  }
-  return (await load()).run(rest);
+  return Effect.tryPromise({
+    try: load,
+    catch: (cause) => new CommandLoadError({ command, cause }),
+  }).pipe(
+    Effect.flatMap(({ run }) => {
+      let result: Effect.Effect<number, Error>;
+      try {
+        result = run(rest);
+      } catch (cause) {
+        return Effect.fail(new CommandRunError({ command, cause }));
+      }
+      return result.pipe(
+        Effect.mapError((cause) => new CommandRunError({ command, cause })),
+      );
+    }),
+  );
 }

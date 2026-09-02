@@ -25,6 +25,7 @@
  * the norm on a repo.
  */
 import { useEffect, useRef, useState } from "react";
+import { Data, Effect, Fiber } from "effect";
 
 import { fetchAuthenticatedLogin } from "../../core/github.ts";
 import { createLogger } from "../../core/logger.ts";
@@ -41,6 +42,10 @@ const BODY_CHARS = 100;
  * while wt was down); the normal case is one comment.
  */
 const MAX_INDIVIDUAL_LINES = 3;
+
+class AuthenticatedLoginError extends Data.TaggedError(
+  "AuthenticatedLoginError",
+)<{ readonly cause: unknown }> {}
 
 /** Markdown/newlines collapsed to one scannable line. */
 function flatten(body: string): string {
@@ -100,15 +105,22 @@ export function usePrCommentEvents(
 
   useEffect(() => {
     if (me !== null || !githubData) return;
-    let cancelled = false;
     // Retried on each github pass while unresolved: the source memoizes
     // only successes, so a probe that ran before `gh` was usable
     // resolves on a later one.
-    void fetchAuthenticatedLogin().then((login) => {
-      if (!cancelled && login) setMe(login);
-    });
+    const fiber = Effect.runFork(
+      Effect.tryPromise({
+        try: fetchAuthenticatedLogin,
+        catch: (cause) => new AuthenticatedLoginError({ cause }),
+      }).pipe(
+        Effect.tap((login) =>
+          login ? Effect.sync(() => setMe(login)) : Effect.void,
+        ),
+        Effect.catchAll(() => Effect.void),
+      ),
+    );
     return () => {
-      cancelled = true;
+      Effect.runFork(Fiber.interrupt(fiber));
     };
   }, [me, githubData]);
 

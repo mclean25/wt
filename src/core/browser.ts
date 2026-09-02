@@ -50,8 +50,10 @@
  * isn't installed, the relay isn't running, the agent never browsed, no
  * Chromium browser is open.
  */
+import { Effect } from "effect";
+
 import { createLogger } from "./logger.ts";
-import { run } from "./proc.ts";
+import { runEffect } from "./proc.ts";
 
 const log = createLogger("[browser]");
 
@@ -126,35 +128,57 @@ type StatusJson = {
  * spin up browser infrastructure just to discover there was nothing to
  * clean up.
  */
-async function liveSessions(): Promise<BrowserSession[] | null> {
-  if (!Bun.which(BIN)) return null;
-  const res = await run([BIN, "status", "--json"], { timeoutMs: 5000 });
-  if (res.exitCode !== 0) return null;
-  let parsed: StatusJson;
-  try {
-    parsed = JSON.parse(res.stdout) as StatusJson;
-  } catch {
-    return null;
-  }
-  if (parsed.relay?.running !== true) return null;
-  const sessions = parsed.extension?.sessions ?? [];
-  return sessions
-    .filter((s): s is { id: string; pageUrl?: unknown } => typeof s.id === "string")
-    .map((s) => ({
-      id: s.id,
-      pageUrl: typeof s.pageUrl === "string" ? s.pageUrl : null,
-    }));
+function liveSessionsEffect(): Effect.Effect<BrowserSession[] | null> {
+  if (!Bun.which(BIN)) return Effect.succeed(null);
+  return runEffect([BIN, "status", "--json"], { timeoutMs: 5000 }).pipe(
+    Effect.map((res) => {
+      if (res.exitCode !== 0) return null;
+      let parsed: StatusJson;
+      try {
+        parsed = JSON.parse(res.stdout) as StatusJson;
+      } catch {
+        return null;
+      }
+      if (parsed.relay?.running !== true) return null;
+      const sessions = parsed.extension?.sessions ?? [];
+      return sessions
+        .filter(
+          (s): s is { id: string; pageUrl?: unknown } =>
+            typeof s.id === "string",
+        )
+        .map((s) => ({
+          id: s.id,
+          pageUrl: typeof s.pageUrl === "string" ? s.pageUrl : null,
+        }));
+    }),
+    Effect.catchAll(() => Effect.succeed(null)),
+  );
 }
 
 /** Delete the given sessions, returning the ids that actually went. */
-async function deleteSessions(ids: readonly string[]): Promise<string[]> {
-  const closed: string[] = [];
-  for (const id of ids) {
-    const res = await run([BIN, "session", "delete", id], { timeoutMs: 10_000 });
-    if (res.exitCode === 0) closed.push(id);
-    else log.debug("browser session delete failed", { id, stderr: res.stderr.trim() });
-  }
-  return closed;
+function deleteSessionsEffect(ids: readonly string[]): Effect.Effect<string[]> {
+  return Effect.forEach(
+    ids,
+    (id) =>
+      runEffect([BIN, "session", "delete", id], { timeoutMs: 10_000 }).pipe(
+        Effect.map((res) => {
+          if (res.exitCode === 0) return id;
+          log.debug("browser session delete failed", {
+            id,
+            stderr: res.stderr.trim(),
+          });
+          return null;
+        }),
+        Effect.catchAll((error) => {
+          log.debug("browser session delete failed", {
+            id,
+            stderr: error.message,
+          });
+          return Effect.succeed(null);
+        }),
+      ),
+    { concurrency: 4 },
+  ).pipe(Effect.map((ids) => ids.filter((id): id is string => id !== null)));
 }
 
 /**
@@ -177,16 +201,23 @@ export type BrowserCleanup = {
  * the browser's own tabs on that port for the ones browser-control has
  * lost its grip on.
  */
-export async function closeWorktreeBrowserSessions(
+export function closeWorktreeBrowserSessionsEffect(
   slug: string,
   devPort?: number | null,
-): Promise<BrowserCleanup> {
+): Effect.Effect<BrowserCleanup> {
   return closeBrowserTabs(
     slug,
     devPort ?? null,
     (s) =>
       ownsBrowserSession(slug, s.id) || (devPort != null && urlOnDevPort(s.pageUrl, devPort)),
   );
+}
+
+export function closeWorktreeBrowserSessions(
+  slug: string,
+  devPort?: number | null,
+): Promise<BrowserCleanup> {
+  return Effect.runPromise(closeWorktreeBrowserSessionsEffect(slug, devPort));
 }
 
 /**
@@ -196,11 +227,18 @@ export async function closeWorktreeBrowserSessions(
  * touch the worktree's other sessions: an agent's reference tabs, a PR
  * page, anything it opened that has nothing to do with the server.
  */
-export async function closeDevServerBrowserSessions(
+export function closeDevServerBrowserSessionsEffect(
+  slug: string,
+  devPort: number,
+): Effect.Effect<BrowserCleanup> {
+  return closeBrowserTabs(slug, devPort, (s) => urlOnDevPort(s.pageUrl, devPort));
+}
+
+export function closeDevServerBrowserSessions(
   slug: string,
   devPort: number,
 ): Promise<BrowserCleanup> {
-  return closeBrowserTabs(slug, devPort, (s) => urlOnDevPort(s.pageUrl, devPort));
+  return Effect.runPromise(closeDevServerBrowserSessionsEffect(slug, devPort));
 }
 
 /**
@@ -209,28 +247,22 @@ export async function closeDevServerBrowserSessions(
  * target, which keeps the sweep's job down to the ones it lost — and
  * leaves the session record cleaned up either way.
  */
-async function closeBrowserTabs(
+function closeBrowserTabs(
   slug: string,
   devPort: number | null,
   owned: (session: BrowserSession) => boolean,
-): Promise<BrowserCleanup> {
-  let sessions: string[] = [];
-  try {
-    const live = await liveSessions();
-    if (live !== null) {
-      sessions = await deleteSessions(live.filter(owned).map((s) => s.id));
+): Effect.Effect<BrowserCleanup> {
+  return Effect.gen(function* () {
+    const live = yield* liveSessionsEffect();
+    const sessions = live === null
+      ? []
+      : yield* deleteSessionsEffect(live.filter(owned).map((s) => s.id));
+    const tabs = devPort === null ? 0 : yield* closeTabsOnPortEffect(devPort);
+    if (sessions.length > 0 || tabs > 0) {
+      log.info("closed browser sessions", { slug, sessions, tabs });
     }
-  } catch (err) {
-    log.debug("browser session cleanup skipped", {
-      slug,
-      err: err instanceof Error ? err.message : String(err),
-    });
-  }
-  const tabs = devPort === null ? 0 : await closeTabsOnPort(devPort);
-  if (sessions.length > 0 || tabs > 0) {
-    log.info("closed browser sessions", { slug, sessions, tabs });
-  }
-  return { sessions, tabs };
+    return { sessions, tabs };
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -266,11 +298,15 @@ const CHROMIUM_APPS = [
 ] as const;
 
 /** Running Chromium apps, by the name AppleScript addresses them with. */
-async function runningChromiumApps(): Promise<string[]> {
-  const res = await run(["ps", "-Aco", "command"], { timeoutMs: 5000 });
-  if (res.exitCode !== 0) return [];
-  const running = new Set(res.stdout.split("\n").map((l) => l.trim()));
-  return CHROMIUM_APPS.filter((app) => running.has(app));
+function runningChromiumAppsEffect(): Effect.Effect<string[]> {
+  return runEffect(["ps", "-Aco", "command"], { timeoutMs: 5000 }).pipe(
+    Effect.map((res) => {
+      if (res.exitCode !== 0) return [];
+      const running = new Set(res.stdout.split("\n").map((l) => l.trim()));
+      return CHROMIUM_APPS.filter((app) => running.has(app));
+    }),
+    Effect.catchAll(() => Effect.succeed([])),
+  );
 }
 
 /** Escape for embedding in an AppleScript string literal. */
@@ -304,7 +340,7 @@ function warnIfUnauthorized(app: string, stderr: string): void {
  * unit-tested — instead of a second copy written in AppleScript that
  * nothing checks.
  */
-async function tabUrls(app: string): Promise<string[]> {
+function tabUrlsEffect(app: string): Effect.Effect<string[]> {
   const script = `tell application ${asQuote(app)}
   set out to ""
   repeat with w in windows
@@ -318,13 +354,26 @@ end tell`;
   // per-tab round trip, so a browser with a few hundred tabs open is the
   // realistic way to time out — and timing out here silently skips the
   // whole app. Affordable because the apps run concurrently.
-  const res = await run(["osascript", "-"], { input: script, timeoutMs: 15_000 });
-  if (res.exitCode !== 0) {
-    warnIfUnauthorized(app, res.stderr);
-    log.debug("browser tab list failed", { app, stderr: res.stderr.trim() });
-    return [];
-  }
-  return res.stdout.split("\n").filter((u) => u.length > 0);
+  return runEffect(["osascript", "-"], {
+    input: script,
+    timeoutMs: 15_000,
+  }).pipe(
+    Effect.map((res) => {
+      if (res.exitCode !== 0) {
+        warnIfUnauthorized(app, res.stderr);
+        log.debug("browser tab list failed", {
+          app,
+          stderr: res.stderr.trim(),
+        });
+        return [];
+      }
+      return res.stdout.split("\n").filter((u) => u.length > 0);
+    }),
+    Effect.catchAll((error) => {
+      log.debug("browser tab list failed", { app, stderr: error.message });
+      return Effect.succeed([]);
+    }),
+  );
 }
 
 /**
@@ -342,7 +391,10 @@ end tell`;
  * failure the caller swallows. A dev-server tab in its own window is an
  * ordinary shape, so that's the common case, not the exotic one.
  */
-async function closeTabsWithUrls(app: string, urls: readonly string[]): Promise<number> {
+function closeTabsWithUrlsEffect(
+  app: string,
+  urls: readonly string[],
+): Effect.Effect<number> {
   const list = urls.map(asQuote).join(", ");
   const script = `set doomed to {${list}}
 set closedCount to 0
@@ -359,12 +411,22 @@ tell application ${asQuote(app)}
   end repeat
 end tell
 return closedCount`;
-  const res = await run(["osascript", "-"], { input: script, timeoutMs: 5000 });
-  if (res.exitCode !== 0) {
-    log.debug("browser tab close failed", { app, stderr: res.stderr.trim() });
-    return 0;
-  }
-  return Number.parseInt(res.stdout.trim(), 10) || 0;
+  return runEffect(["osascript", "-"], { input: script, timeoutMs: 5000 }).pipe(
+    Effect.map((res) => {
+      if (res.exitCode !== 0) {
+        log.debug("browser tab close failed", {
+          app,
+          stderr: res.stderr.trim(),
+        });
+        return 0;
+      }
+      return Number.parseInt(res.stdout.trim(), 10) || 0;
+    }),
+    Effect.catchAll((error) => {
+      log.debug("browser tab close failed", { app, stderr: error.message });
+      return Effect.succeed(0);
+    }),
+  );
 }
 
 /**
@@ -379,15 +441,25 @@ return closedCount`;
  * with the rest, because the symptom otherwise is tabs quietly piling
  * up with nothing anywhere saying why.
  */
-async function closeTabsOnPort(port: number): Promise<number> {
+function closeTabsOnPortEffect(port: number): Effect.Effect<number> {
   // Per app, concurrently: the apps are independent, and this is awaited
   // by a destroy the human is watching. Serially, someone running Chrome
   // + Brave + Arc pays each one's timeout in turn.
-  const perApp = await Promise.all(
-    (await runningChromiumApps()).map(async (app) => {
-      const doomed = (await tabUrls(app)).filter((u) => urlOnDevPort(u, port));
-      return doomed.length === 0 ? 0 : await closeTabsWithUrls(app, doomed);
-    }),
-  );
-  return perApp.reduce((a, b) => a + b, 0);
+  return Effect.gen(function* () {
+    const apps = yield* runningChromiumAppsEffect();
+    const perApp = yield* Effect.forEach(
+      apps,
+      (app) =>
+        Effect.gen(function* () {
+          const doomed = (yield* tabUrlsEffect(app)).filter((u) =>
+            urlOnDevPort(u, port),
+          );
+          return doomed.length === 0
+            ? 0
+            : yield* closeTabsWithUrlsEffect(app, doomed);
+        }),
+      { concurrency: 4 },
+    );
+    return perApp.reduce((a, b) => a + b, 0);
+  });
 }

@@ -1,9 +1,15 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { Clock, Data, Effect } from "effect";
 
 import { config } from "./config.ts";
-import { run } from "./proc.ts";
+import { runEffect } from "./proc.ts";
+
+export class ZedWindowError extends Data.TaggedError("ZedWindowError")<{
+  readonly operation: string;
+  readonly cause: unknown;
+}> {}
 
 /**
  * Zed 0.20x changed `zed <path>` to reuse the current window instead of
@@ -45,44 +51,56 @@ function writeCache(cache: CacheFile): void {
   writeFileSync(CACHE_FILE, `${JSON.stringify(cache, null, 2)}\n`);
 }
 
-async function yabaiQueryAllWindows(): Promise<YabaiWindow[] | null> {
-  const r = await run(["yabai", "-m", "query", "--windows"]);
-  if (r.exitCode !== 0) return null;
-  try {
-    const parsed = JSON.parse(r.stdout) as YabaiWindow[];
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+function yabaiQueryAllWindowsEffect(): Effect.Effect<YabaiWindow[] | null> {
+  return runEffect(["yabai", "-m", "query", "--windows"]).pipe(
+    Effect.map((r) => {
+      if (r.exitCode !== 0) return null;
+      try {
+        const parsed = JSON.parse(r.stdout) as YabaiWindow[];
+        return Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }),
+    Effect.catchAll(() => Effect.succeed(null)),
+  );
 }
 
-async function zedWindowIds(): Promise<Set<number>> {
-  const all = await yabaiQueryAllWindows();
-  if (!all) return new Set();
-  return new Set(all.filter((w) => w.app === "Zed").map((w) => w.id));
+function zedWindowIdsEffect(): Effect.Effect<Set<number>> {
+  return yabaiQueryAllWindowsEffect().pipe(
+    Effect.map((all) =>
+      new Set((all ?? []).filter((w) => w.app === "Zed").map((w) => w.id)),
+    ),
+  );
 }
 
-async function yabaiWindowExists(id: number): Promise<boolean> {
-  const r = await run([
+function yabaiWindowExistsEffect(id: number): Effect.Effect<boolean> {
+  return runEffect([
     "yabai",
     "-m",
     "query",
     "--windows",
     "--window",
     String(id),
-  ]);
-  if (r.exitCode !== 0) return false;
-  try {
-    const w = JSON.parse(r.stdout) as YabaiWindow;
-    return w?.app === "Zed";
-  } catch {
-    return false;
-  }
+  ]).pipe(
+    Effect.map((r) => {
+      if (r.exitCode !== 0) return false;
+      try {
+        const w = JSON.parse(r.stdout) as YabaiWindow;
+        return w?.app === "Zed";
+      } catch {
+        return false;
+      }
+    }),
+    Effect.catchAll(() => Effect.succeed(false)),
+  );
 }
 
-async function yabaiFocus(id: number): Promise<boolean> {
-  const r = await run(["yabai", "-m", "window", "--focus", String(id)]);
-  return r.exitCode === 0;
+function yabaiFocusEffect(id: number): Effect.Effect<boolean> {
+  return runEffect(["yabai", "-m", "window", "--focus", String(id)]).pipe(
+    Effect.map((r) => r.exitCode === 0),
+    Effect.catchAll(() => Effect.succeed(false)),
+  );
 }
 
 /**
@@ -90,18 +108,80 @@ async function yabaiFocus(id: number): Promise<boolean> {
  * known and still alive. Prunes the cache on miss so stale entries
  * don't accumulate.
  */
-export async function findZedWindowForPath(path: string): Promise<number | null> {
-  const cache = readCache();
-  const entry = cache.byPath[path];
-  if (!entry) return null;
-  if (await yabaiWindowExists(entry.windowId)) return entry.windowId;
-  delete cache.byPath[path];
-  writeCache(cache);
-  return null;
+export function findZedWindowForPathEffect(
+  path: string,
+): Effect.Effect<number | null, ZedWindowError> {
+  return Effect.gen(function* () {
+    const cache = readCache();
+    const entry = cache.byPath[path];
+    if (!entry) return null;
+    if (yield* yabaiWindowExistsEffect(entry.windowId)) return entry.windowId;
+    delete cache.byPath[path];
+    yield* Effect.try({
+      try: () => writeCache(cache),
+      catch: (cause) => new ZedWindowError({ operation: "prune cache", cause }),
+    });
+    return null;
+  });
 }
 
-export async function focusYabaiWindow(id: number): Promise<boolean> {
-  return yabaiFocus(id);
+export function findZedWindowForPath(path: string): Promise<number | null> {
+  return Effect.runPromise(findZedWindowForPathEffect(path));
+}
+
+export function focusYabaiWindowEffect(id: number): Effect.Effect<boolean> {
+  return yabaiFocusEffect(id);
+}
+
+export function focusYabaiWindow(id: number): Promise<boolean> {
+  return Effect.runPromise(focusYabaiWindowEffect(id));
+}
+
+export function waitForNewZedWindowEffect(
+  beforeIds: ReadonlySet<number>,
+  query: () => Effect.Effect<Set<number>> = zedWindowIdsEffect,
+  options: { intervalMs?: number; timeoutMs?: number } = {},
+): Effect.Effect<number | null> {
+  const intervalMs = options.intervalMs ?? 150;
+  const timeoutMs = options.timeoutMs ?? 3000;
+  return Effect.gen(function* () {
+    const startedAt = yield* Clock.currentTimeMillis;
+    while ((yield* Clock.currentTimeMillis) - startedAt < timeoutMs) {
+      yield* Effect.sleep(intervalMs);
+      const now = yield* query();
+      for (const id of now) if (!beforeIds.has(id)) return id;
+    }
+    return null;
+  });
+}
+
+function spawnZedEffect(path: string): Effect.Effect<void, ZedWindowError> {
+  return Effect.async<void, ZedWindowError>((resume) => {
+    let child: ReturnType<typeof spawn>;
+    let settled = false;
+    try {
+      child = spawn("zed", ["-n", path], { stdio: "ignore", detached: true });
+    } catch (cause) {
+      resume(Effect.fail(new ZedWindowError({ operation: "spawn", cause })));
+      return;
+    }
+    const onSpawn = () => {
+      settled = true;
+      child.unref();
+      resume(Effect.void);
+    };
+    const onError = (cause: unknown) => {
+      settled = true;
+      resume(Effect.fail(new ZedWindowError({ operation: "spawn", cause })));
+    };
+    child.once("spawn", onSpawn);
+    child.once("error", onError);
+    return Effect.sync(() => {
+      child.removeListener("spawn", onSpawn);
+      child.removeListener("error", onError);
+      if (!settled) child.kill();
+    });
+  });
 }
 
 /**
@@ -109,49 +189,31 @@ export async function focusYabaiWindow(id: number): Promise<boolean> {
  * window appears (one not present in `beforeIds`). Records the id in
  * the cache so the next lookup for this path focuses it.
  *
- * Returns once we either find the new window id or give up. Uses
- * `child_process.spawn` so the caller can stay sync-ish; the tracking
- * work runs in a microtask-ish poll loop via `setTimeout`.
+ * Returns once we either find the new window id or give up. The detached
+ * launch waits for Node's definitive spawn/error event, and the tracking
+ * poll uses Effect's clock so interruption and tests are deterministic.
  */
-export async function spawnZedAndTrack(path: string): Promise<void> {
-  const beforeIds = await zedWindowIds();
-  const child = spawn("zed", ["-n", path], {
-    stdio: "ignore",
-    detached: true,
+export function spawnZedAndTrackEffect(
+  path: string,
+): Effect.Effect<void, ZedWindowError> {
+  return Effect.gen(function* () {
+    const beforeIds = yield* zedWindowIdsEffect();
+    yield* spawnZedEffect(path);
+    const id = yield* waitForNewZedWindowEffect(beforeIds);
+    if (id === null) return;
+    const now = yield* Clock.currentTimeMillis;
+    const cache = readCache();
+    cache.byPath[path] = {
+      windowId: id,
+      lastSeen: new Date(now).toISOString(),
+    };
+    yield* Effect.try({
+      try: () => writeCache(cache),
+      catch: (cause) => new ZedWindowError({ operation: "write cache", cause }),
+    });
   });
-  // A missing `zed` binary surfaces as an async 'error' event; with no
-  // listener that's an uncaught exception that kills the whole process
-  // (Node/Bun special-case unhandled 'error'). Convert it to a rejection
-  // the caller's catch can report.
-  let spawnError: Error | null = null;
-  child.once("error", (err) => {
-    spawnError = err instanceof Error ? err : new Error(String(err));
-  });
-  child.unref();
-  // The error event lands within a tick or two of spawn; give it one
-  // poll interval before concluding the spawn took.
-  await new Promise((r) => setTimeout(r, 30));
-  if (spawnError !== null) {
-    throw new Error(`zed failed to launch: ${(spawnError as Error).message}`);
-  }
+}
 
-  // Zed needs ~100–500ms to register the new window with the AX tree.
-  // Poll for up to ~3s, then give up — worst case the user gets no
-  // tracking for this open and we retry next time.
-  const deadline = Date.now() + 3000;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 150));
-    const now = await zedWindowIds();
-    for (const id of now) {
-      if (!beforeIds.has(id)) {
-        const cache = readCache();
-        cache.byPath[path] = {
-          windowId: id,
-          lastSeen: new Date().toISOString(),
-        };
-        writeCache(cache);
-        return;
-      }
-    }
-  }
+export function spawnZedAndTrack(path: string): Promise<void> {
+  return Effect.runPromise(spawnZedAndTrackEffect(path));
 }

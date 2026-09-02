@@ -15,12 +15,13 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { Clock, Data, Duration, Effect, Exit, Queue, Ref, Runtime, Scope } from "effect";
 
 import { buildSha, currentSourceSha } from "../build-id.ts";
 import { config, type GithubEventsConfig } from "../config.ts";
 import { fetchGithub } from "../github.ts";
-import { createLogger, flushLog } from "../logger.ts";
-import { fetchOrigin, listWorktrees } from "../worktree.ts";
+import { createLogger, flushLoggerEffect } from "../logger.ts";
+import { fetchOriginEffect, listWorktreesEffect } from "../worktree.ts";
 
 import {
   ensureEventsDir,
@@ -209,242 +210,291 @@ export function nextFetchAt(
   return earliest;
 }
 
-type Daemon = {
-  stop: () => void;
+export class DaemonOperationError extends Data.TaggedError("DaemonOperationError")<{
+  readonly operation: string;
+  readonly cause: unknown;
+}> {}
+
+type GithubResult = Awaited<ReturnType<typeof fetchGithub>>;
+type Delivery = {
+  readonly event: string;
+  readonly branches: readonly string[] | null;
+  readonly receivedAt: number;
 };
 
-/** Start the server + fetch loop. Returns a stop handle; does not block. */
-export function startDaemon(events: GithubEventsConfig, secret: string): Daemon {
-  ensureEventsDir();
+export type DaemonDependencies = {
+  readonly ensureEventsDir: () => void;
+  readonly currentBranches: () => Effect.Effect<readonly string[], DaemonOperationError>;
+  readonly fetchOrigin: Effect.Effect<void, DaemonOperationError>;
+  readonly fetchGithub: (branches: readonly string[]) => Effect.Effect<GithubResult, DaemonOperationError>;
+  readonly writeSnapshot: typeof writeSnapshot;
+  readonly touchMarker: typeof touchMarker;
+  readonly writeState: typeof writeState;
+  readonly sourceMoved: () => boolean;
+  readonly exitForUpgrade: Effect.Effect<never>;
+};
 
-  const state: EventsState = {
+export type DaemonCore = {
+  readonly accept: (event: string, body: string) => Effect.Effect<void, DaemonOperationError>;
+  readonly state: Effect.Effect<EventsState>;
+};
+
+type Daemon = { readonly stop: () => Promise<void> };
+
+function errorMessage(error: unknown): string {
+  if (error instanceof DaemonOperationError) return errorMessage(error.cause);
+  return error instanceof Error ? error.message : String(error);
+}
+
+const trySync = <A>(operation: string, evaluate: () => A) => Effect.try({
+  try: evaluate,
+  catch: (cause) => new DaemonOperationError({ operation, cause }),
+});
+
+const tryPromise = <A>(operation: string, evaluate: () => PromiseLike<A>) => Effect.tryPromise({
+  try: evaluate,
+  catch: (cause) => new DaemonOperationError({ operation, cause }),
+});
+
+function productionDependencies(): DaemonDependencies {
+  return {
+    ensureEventsDir,
+    currentBranches: () => listWorktreesEffect().pipe(
+      Effect.map((wts) => wts.filter((w) => !w.isMain && w.branch).map((w) => w.branch as string)),
+      Effect.mapError((cause) => new DaemonOperationError({ operation: "list worktrees", cause })),
+    ),
+    fetchOrigin: fetchOriginEffect().pipe(
+      Effect.mapError((cause) => new DaemonOperationError({ operation: "fetch origin", cause })),
+    ),
+    fetchGithub: (branches) => tryPromise("fetch GitHub", () => fetchGithub([...branches])),
+    writeSnapshot,
+    touchMarker,
+    writeState,
+    sourceMoved: () => {
+      const started = buildSha();
+      if (started === null) return false;
+      const now = currentSourceSha();
+      return now !== null && now !== started;
+    },
+    exitForUpgrade: Effect.sync((): void => { process.exit(0); }).pipe(Effect.andThen(Effect.never)),
+  };
+}
+
+/** Scoped engine: all timers and workers are child fibers joined on close. */
+export const makeDaemonCore = (
+  events: GithubEventsConfig,
+  dependencies: DaemonDependencies,
+): Effect.Effect<DaemonCore, DaemonOperationError, Scope.Scope> => Effect.gen(function* () {
+  const initialState: EventsState = {
     pid: process.pid,
     port: events.port,
-    startedAt: Date.now(),
+    startedAt: yield* Clock.currentTimeMillis,
     lastEventAt: null,
     lastFetchAt: null,
     eventCount: 0,
     lastError: null,
   };
-  writeState(state);
+  yield* trySync("create events directory", dependencies.ensureEventsDir);
+  yield* trySync("write daemon state", () => dependencies.writeState(initialState));
 
-  let localBranches = new Set<string>();
-  let localBranchesAt = 0;
-  async function currentBranches(): Promise<string[]> {
-    const wts = await listWorktrees();
-    return wts
-      .filter((w) => !w.isMain && w.branch)
-      .map((w) => w.branch as string);
-  }
-  async function getLocalBranches(): Promise<Set<string>> {
-    if (localBranches.size > 0 && Date.now() - localBranchesAt < LOCAL_BRANCHES_TTL_MS) {
-      return localBranches;
-    }
-    localBranches = new Set(await currentBranches());
-    localBranchesAt = Date.now();
-    return localBranches;
-  }
-
-  let fetchTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Firing time of `fetchTimer`, so `nextFetchAt` can leave it be. */
-  let pendingAt: number | null = null;
-  /** Start (not finish) of the most recent fetch; the floor measures from it. */
-  let lastFetchStartedAt = 0;
-  let fetching = false;
-  let refetchQueued = false;
-
-  /**
-   * Has the source clone moved since this process loaded its modules?
-   *
-   * Checked per fetch rather than on a timer: a fetch is the only thing
-   * this daemon does that anyone else reads, so it is exactly where a
-   * wrong build costs something. Null on either side means "cannot
-   * tell" (wt is not a git checkout) and never triggers an exit — a
-   * daemon that restarted itself on an unanswerable question would loop.
-   */
-  function sourceMoved(): boolean {
-    const started = buildSha();
-    if (started === null) return false;
-    const now = currentSourceSha();
-    return now !== null && now !== started;
-  }
-
-  async function runFetch(): Promise<void> {
-    if (fetching) {
-      // A burst landed mid-fetch; remember to run once more so the final
-      // state always wins.
-      refetchQueued = true;
-      return;
-    }
-    if (sourceMoved()) {
-      // Stand down rather than serve a snapshot the TUI will refuse.
-      // launchd has KeepAlive, so exiting IS the upgrade: the agent comes
-      // straight back on the new code. Nothing is lost — the delivery
-      // that woke us re-arrives as the restarted daemon's warm-up fetch,
-      // and a missed one only costs the staleTime backstop.
-      log.info("wt source moved under a running daemon — exiting so launchd restarts it", {
-        startedFrom: buildSha(),
-        now: currentSourceSha(),
+  const state = yield* Ref.make(initialState);
+  const stateLock = yield* Effect.makeSemaphore(1);
+  const updateState = (update: (current: EventsState) => EventsState) => stateLock.withPermits(1)(
+    Effect.gen(function* () {
+      const next = yield* Ref.modify(state, (current) => {
+        const updated = update(current);
+        return [updated, updated] as const;
       });
-      writeState(state);
-      // Log writes are chained async, so exiting on the next line drops
-      // the notice above — leaving a pid change with a clean gap in the
-      // log and nothing at all to say the exit was deliberate.
-      await flushLog();
-      process.exit(0);
-    }
-    fetching = true;
-    const startedAt = Date.now();
-    // Null on the warm-up fetch, which has no predecessor to measure from.
-    const sinceLast = lastFetchStartedAt === 0 ? null : startedAt - lastFetchStartedAt;
-    lastFetchStartedAt = startedAt;
-    try {
-      try {
-        await fetchOrigin();
-      } catch (err) {
-        log.warn("origin refresh after webhook failed", {
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
-      const branches = await currentBranches();
-      localBranches = new Set(branches);
-      localBranchesAt = Date.now();
-      const { prs, mergeQueue } = await fetchGithub(branches);
-      writeSnapshot({
-        updatedAt: Date.now(),
-        branches,
-        prs: Object.fromEntries(prs),
-        mergeQueue: Object.fromEntries(mergeQueue),
-        // What the TUI checks before serving this instead of fetching
-        // itself. The snapshot is parsed data, so it carries THIS
-        // build's rules; a reader on a newer build must not render them.
-        writerSha: buildSha(),
-      });
-      touchMarker(Date.now());
-      state.lastFetchAt = Date.now();
-      state.lastError = null;
-      writeState(state);
-      // `sinceLastMs` makes the cadence auditable straight from the log —
-      // it is what the floor governs, and what a burn-rate question asks.
-      log.info("refetched after webhook", {
-        branches: branches.length,
-        prs: prs.size,
-        sinceLastMs: sinceLast,
-      });
-    } catch (err) {
-      state.lastError = err instanceof Error ? err.message : String(err);
-      writeState(state);
-      log.error("webhook refetch failed", { err: state.lastError });
-    } finally {
-      fetching = false;
-      if (refetchQueued) {
-        refetchQueued = false;
-        // Through the scheduler, not straight back into `runFetch`: the
-        // trailing re-run is exactly the path that used to bypass every
-        // rate constraint and turn a delivery stream into back-to-back
-        // full refetches.
-        scheduleFetch();
-      }
-    }
-  }
+      yield* trySync("write daemon state", () => dependencies.writeState(next));
+      return next;
+    }),
+  );
 
-  function scheduleFetch(): void {
-    const now = Date.now();
-    const at = nextFetchAt(now, lastFetchStartedAt, pendingAt);
-    if (at === null) return;
-    if (fetchTimer) clearTimeout(fetchTimer);
-    pendingAt = at;
-    fetchTimer = setTimeout(
-      () => {
-        fetchTimer = null;
-        pendingAt = null;
-        void runFetch();
-      },
-      Math.max(0, at - now),
-    );
-  }
+  const localBranches = yield* Ref.make<{ readonly branches: ReadonlySet<string>; readonly at: number }>({
+    branches: new Set(), at: 0,
+  });
+  const lastFetchStartedAt = yield* Ref.make(0);
+  const deliveries = yield* Queue.dropping<Delivery>(64);
+  const scheduleSignals = yield* Queue.dropping<void>(1);
+  const fetchRequests = yield* Queue.dropping<void>(1);
 
-  async function handleDelivery(event: string, body: string): Promise<void> {
-    let payload: unknown;
-    try {
-      payload = JSON.parse(body);
-    } catch {
-      log.warn("webhook body not JSON", { event });
-      return;
-    }
-    const branches = extractBranches(event, payload);
-    if (branches) {
-      try {
-        const local = await getLocalBranches();
-        if (!branches.some((b) => local.has(b))) {
-          log.debug("ignored event for non-local branch", { event, branches });
-          return;
-        }
-      } catch (err) {
-        // Couldn't resolve the local branch set (transient git trouble,
-        // e.g. an index lock mid-rebase). Don't drop the delivery on a
-        // fire-and-forget path — fall through to a refetch. The module's
-        // invariant: more fetches, never missed updates.
-        log.warn("local-branch check failed; refetching anyway", {
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    state.eventCount++;
-    state.lastEventAt = Date.now();
-    writeState(state);
-    scheduleFetch();
-  }
-
-  const server = Bun.serve({
-    port: events.port,
-    hostname: events.host,
-    maxRequestBodySize: MAX_BODY_BYTES,
-    async fetch(req): Promise<Response> {
-      const url = new URL(req.url);
-      if (req.method === "GET" && url.pathname === "/health") {
-        return Response.json({ ok: true, port: events.port, eventCount: state.eventCount });
-      }
-      if (req.method !== "POST" || url.pathname !== "/webhook") {
-        return new Response("not found", { status: 404 });
-      }
-      // Early reject oversized bodies (the `maxRequestBodySize` above is the
-      // backstop for chunked / no-Content-Length requests).
-      const len = Number(req.headers.get("content-length") ?? 0);
-      if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
-        return new Response("payload too large", { status: 413 });
-      }
-      const body = await req.text();
-      if (!verifySignature(body, req.headers.get("x-hub-signature-256"), secret)) {
-        log.warn("webhook signature rejected", {
-          delivery: req.headers.get("x-github-delivery"),
-        });
-        return new Response("invalid signature", { status: 401 });
-      }
-      const event = req.headers.get("x-github-event") ?? "";
-      // GitHub pings the endpoint once on creation — ack it so the webhook
-      // shows green in the UI.
-      if (event === "ping") return Response.json({ ok: true });
-      if (RELEVANT_EVENTS.has(event)) {
-        // Don't make GitHub wait on our fetch — ack immediately, process async.
-        void handleDelivery(event, body);
-      }
-      return Response.json({ ok: true });
-    },
+  const getLocalBranches = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const cached = yield* Ref.get(localBranches);
+    if (cached.branches.size > 0 && now - cached.at < LOCAL_BRANCHES_TTL_MS) return cached.branches;
+    const branches = yield* dependencies.currentBranches();
+    const next = { branches: new Set(branches), at: now };
+    yield* Ref.set(localBranches, next);
+    return next.branches;
   });
 
-  log.info("events daemon listening", { host: events.host, port: events.port });
-  // Warm the snapshot immediately so a TUI opened right after start has data.
-  void runFetch();
+  const processDelivery = ({ event, branches, receivedAt }: Delivery) => Effect.gen(function* () {
+    if (branches) {
+      const relevant = yield* getLocalBranches.pipe(
+        Effect.map((local) => branches.some((branch) => local.has(branch))),
+        Effect.catchAll((error) => {
+          log.warn("local-branch check failed; refetching anyway", { err: errorMessage(error) });
+          return Effect.succeed(true);
+        }),
+      );
+      if (!relevant) {
+        log.debug("ignored event for non-local branch", { event, branches });
+        return;
+      }
+    }
+    yield* updateState((current) => ({
+      ...current,
+      eventCount: current.eventCount + 1,
+      lastEventAt: receivedAt,
+    }));
+    yield* Queue.offer(scheduleSignals, undefined);
+  });
+
+  const scheduler = (pendingAt: number | null): Effect.Effect<never> => Effect.gen(function* () {
+    if (pendingAt === null) {
+      yield* Queue.take(scheduleSignals);
+      const now = yield* Clock.currentTimeMillis;
+      const lastStarted = yield* Ref.get(lastFetchStartedAt);
+      return yield* scheduler(nextFetchAt(now, lastStarted, null) ?? now);
+    }
+    const now = yield* Clock.currentTimeMillis;
+    const next = yield* Effect.race(
+      Queue.take(scheduleSignals).pipe(Effect.as("signal" as const)),
+      Effect.sleep(Duration.millis(Math.max(0, pendingAt - now))).pipe(Effect.as("fire" as const)),
+    );
+    if (next === "fire") {
+      yield* Queue.offer(fetchRequests, undefined);
+      return yield* scheduler(null);
+    }
+    const signalAt = yield* Clock.currentTimeMillis;
+    const lastStarted = yield* Ref.get(lastFetchStartedAt);
+    return yield* scheduler(nextFetchAt(signalAt, lastStarted, pendingAt) ?? pendingAt);
+  });
+
+  const runFetch = Effect.gen(function* () {
+    if (dependencies.sourceMoved()) {
+      log.info("wt source moved under a running daemon — exiting so launchd restarts it", {
+        startedFrom: buildSha(), now: currentSourceSha(),
+      });
+      const current = yield* Ref.get(state);
+      yield* trySync("write daemon state", () => dependencies.writeState(current));
+      yield* flushLoggerEffect;
+      return yield* dependencies.exitForUpgrade;
+    }
+    const startedAt = yield* Clock.currentTimeMillis;
+    const previousStartedAt = yield* Ref.getAndSet(lastFetchStartedAt, startedAt);
+    const sinceLast = previousStartedAt === 0 ? null : startedAt - previousStartedAt;
+    yield* dependencies.fetchOrigin.pipe(Effect.catchAll((error) => Effect.sync(() => {
+      log.warn("origin refresh after webhook failed", { err: errorMessage(error) });
+    })));
+    const branches = yield* dependencies.currentBranches();
+    yield* Ref.set(localBranches, { branches: new Set(branches), at: yield* Clock.currentTimeMillis });
+    const { prs, mergeQueue } = yield* dependencies.fetchGithub(branches);
+    const committedAt = yield* Clock.currentTimeMillis;
+    yield* Effect.uninterruptible(Effect.gen(function* () {
+      yield* trySync("write GitHub snapshot", () => dependencies.writeSnapshot({
+        updatedAt: committedAt,
+        branches: [...branches],
+        prs: Object.fromEntries(prs),
+        mergeQueue: Object.fromEntries(mergeQueue),
+        writerSha: buildSha(),
+      }));
+      yield* trySync("touch GitHub marker", () => dependencies.touchMarker(committedAt));
+      yield* updateState((current) => ({ ...current, lastFetchAt: committedAt, lastError: null }));
+    }));
+    log.info("refetched after webhook", { branches: branches.length, prs: prs.size, sinceLastMs: sinceLast });
+  }).pipe(Effect.catchAll((error) => Effect.gen(function* () {
+    const message = errorMessage(error);
+    yield* updateState((current) => ({ ...current, lastError: message })).pipe(Effect.catchAll(() => Effect.void));
+    log.error("webhook refetch failed", { err: message });
+  })));
+
+  yield* Effect.forkScoped(Effect.forever(Queue.take(deliveries).pipe(Effect.flatMap(processDelivery))));
+  yield* Effect.forkScoped(scheduler(null));
+  yield* Effect.forkScoped(Effect.forever(Queue.take(fetchRequests).pipe(Effect.andThen(runFetch))));
+  yield* Queue.offer(fetchRequests, undefined);
 
   return {
-    stop: () => {
-      if (fetchTimer) clearTimeout(fetchTimer);
-      fetchTimer = null;
-      pendingAt = null;
-      server.stop(true);
-    },
+    accept: (event, body) => Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const payload = yield* trySync("parse webhook body", () => JSON.parse(body)).pipe(
+        Effect.catchAll(() => {
+          log.warn("webhook body not JSON", { event });
+          return Effect.succeed(null);
+        }),
+      );
+      if (payload === null) return;
+      const accepted = yield* Queue.offer(deliveries, {
+        event,
+        branches: extractBranches(event, payload),
+        receivedAt: now,
+      });
+      // The body has already been reduced to a tiny summary. If even the
+      // bounded summary queue is saturated, conservatively coalesce the
+      // dropped delivery into one fetch signal instead of retaining input.
+      if (!accepted) yield* Queue.offer(scheduleSignals, undefined);
+    }),
+    state: Ref.get(state),
   };
+});
+
+const acquireServer = (
+  events: GithubEventsConfig,
+  secret: string,
+  core: DaemonCore,
+): Effect.Effect<{ stop(force?: boolean): void }, DaemonOperationError, Scope.Scope> => Effect.gen(function* () {
+  const runtime = yield* Effect.runtime<never>();
+  return yield* Effect.acquireRelease(
+    trySync("start webhook server", () => Bun.serve({
+      port: events.port,
+      hostname: events.host,
+      maxRequestBodySize: MAX_BODY_BYTES,
+      async fetch(req): Promise<Response> {
+        const url = new URL(req.url);
+        if (req.method === "GET" && url.pathname === "/health") {
+          const current = await Runtime.runPromise(runtime)(core.state);
+          return Response.json({ ok: true, port: events.port, eventCount: current.eventCount });
+        }
+        if (req.method !== "POST" || url.pathname !== "/webhook") return new Response("not found", { status: 404 });
+        const len = Number(req.headers.get("content-length") ?? 0);
+        if (Number.isFinite(len) && len > MAX_BODY_BYTES) return new Response("payload too large", { status: 413 });
+        const body = await req.text();
+        if (!verifySignature(body, req.headers.get("x-hub-signature-256"), secret)) {
+          log.warn("webhook signature rejected", { delivery: req.headers.get("x-github-delivery") });
+          return new Response("invalid signature", { status: 401 });
+        }
+        const event = req.headers.get("x-github-event") ?? "";
+        if (event === "ping") return Response.json({ ok: true });
+        if (RELEVANT_EVENTS.has(event)) {
+          try {
+            await Runtime.runPromise(runtime)(core.accept(event, body));
+          } catch (error) {
+            log.error("failed to persist webhook delivery", { err: errorMessage(error) });
+            return new Response("failed to accept delivery", { status: 503 });
+          }
+        }
+        return Response.json({ ok: true });
+      },
+    })),
+    (server) => Effect.promise(() => server.stop(true)),
+  );
+});
+
+/** Start the server + fetch loop. Returns a stop handle; does not block. */
+export function startDaemon(events: GithubEventsConfig, secret: string): Daemon {
+  const scope = Effect.runSync(Scope.make());
+  try {
+    Effect.runSync(Effect.gen(function* () {
+      const core = yield* makeDaemonCore(events, productionDependencies());
+      yield* acquireServer(events, secret, core);
+    }).pipe(Scope.extend(scope)));
+  } catch (error) {
+    Effect.runSync(Scope.close(scope, Exit.void));
+    throw error;
+  }
+  log.info("events daemon listening", { host: events.host, port: events.port });
+  let stopping: Promise<void> | null = null;
+  return { stop: () => stopping ??= Effect.runPromise(Scope.close(scope, Exit.void)) };
 }
 
 /**
@@ -490,6 +540,6 @@ export async function runDaemonForeground(): Promise<number> {
     process.on("SIGTERM", shutdown);
     process.on("SIGINT", shutdown);
   });
-  daemon.stop();
+  await daemon.stop();
   return 0;
 }

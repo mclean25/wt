@@ -20,6 +20,8 @@
  * over. Deletable once no session predating the transport change can
  * still be running.
  */
-export async function run(_argv: string[]): Promise<number> {
-  return 0;
+import { Effect } from "effect";
+
+export function run(_argv: string[]): Effect.Effect<number> {
+  return Effect.succeed(0);
 }

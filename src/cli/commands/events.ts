@@ -11,22 +11,22 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { Data, Duration, Effect, Schedule } from "effect";
 
 import { buildSha, sameBuild } from "../../core/build-id.ts";
 import { config } from "../../core/config.ts";
 import { resolveWebhookSecret, runDaemonForeground } from "../../core/events/daemon.ts";
-import {
-  EVENTS_DIR,
-  ensureEventsDir,
-  isProcessAlive,
-  readSnapshot,
-  readState,
-} from "../../core/events/store.ts";
-import { run as sh } from "../../core/proc.ts";
+import { EVENTS_DIR, ensureEventsDir, isProcessAlive, readSnapshot, readState } from "../../core/events/store.ts";
+import { runEffect as shEffect } from "../../core/proc.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 
 const LAUNCHD_LABEL = "com.wt.events";
+
+class EventsCommandError extends Data.TaggedError("EventsCommandError")<{
+  readonly operation: "serve";
+  readonly cause: unknown;
+}> {}
 
 const USAGE = `usage: wt events <subcommand>
 
@@ -105,10 +105,7 @@ function ago(ts: number | null | undefined): string {
 }
 
 function xmlEscape(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function plistContents(): string {
@@ -163,24 +160,34 @@ ${envLines}
 /** Print the values to paste into the repo's GitHub webhook settings. */
 function printWebhookSetup(host: string, port: number, secretLine: string): void {
   console.log(`\n${bold("GitHub webhook settings")} (repo → Settings → Webhooks → Add webhook):`);
-  console.log(`  ${dim("Payload URL")}    https://<your-domain>/webhook   ${dim(`(forward → ${host}:${port}/webhook)`)}`);
+  console.log(
+    `  ${dim("Payload URL")}    https://<your-domain>/webhook   ${dim(`(forward → ${host}:${port}/webhook)`)}`,
+  );
   console.log(`  ${dim("Content type")}   application/json`);
   console.log(`  ${dim("Secret")}         ${secretLine}`);
   console.log(`  ${dim("SSL")}            enabled`);
   console.log(`  ${dim("Events")}         pull_request, pull_request_review,`);
   console.log(`                 pull_request_review_thread, issue_comment, check_suite,`);
   console.log(`                 check_run, status, merge_group, push`);
-  console.log(dim("\nAfter saving, use the webhook's \"Recent Deliveries\" → Redeliver to test."));
+  console.log(dim('\nAfter saving, use the webhook\'s "Recent Deliveries" → Redeliver to test.'));
 }
 
-type SecretInfo = { secret: string; alreadyConfigured: boolean; statusLine: string };
+type SecretInfo = {
+  secret: string;
+  alreadyConfigured: boolean;
+  statusLine: string;
+};
 
 function ensureSecret(): SecretInfo | null {
   const events = config.github.events;
   if (!events) return null;
   const existing = resolveWebhookSecret(events);
   if (existing) {
-    return { secret: existing, alreadyConfigured: true, statusLine: dim("(already configured)") };
+    return {
+      secret: existing,
+      alreadyConfigured: true,
+      statusLine: dim("(already configured)"),
+    };
   }
   const secret = randomBytes(32).toString("hex");
   if (events.secretFile) {
@@ -190,14 +197,14 @@ function ensureSecret(): SecretInfo | null {
     // so the secret is never briefly world-readable.
     writeFileSync(events.secretFile, `${secret}\n`, { mode: 0o600 });
     chmodSync(events.secretFile, 0o600);
-    return { secret, alreadyConfigured: false, statusLine: `${green("written")} ${dim(`→ ${events.secretFile}`)}` };
+    return {
+      secret,
+      alreadyConfigured: false,
+      statusLine: `${green("written")} ${dim(`→ ${events.secretFile}`)}`,
+    };
   }
   // No secret_file configured — print it for the user to wire in manually.
-  console.log(
-    yellow(
-      "\nNo [github.events].secret_file configured. Add this to config.toml under [github.events]:",
-    ),
-  );
+  console.log(yellow("\nNo [github.events].secret_file configured. Add this to config.toml under [github.events]:"));
   console.log(`  secret = "${secret}"`);
   return { secret, alreadyConfigured: false, statusLine: dim("(shown above)") };
 }
@@ -207,42 +214,48 @@ function secretDisplay(info: SecretInfo): string {
   return info.alreadyConfigured ? dim("(your existing secret)") : info.secret;
 }
 
-async function launchctl(
-  action: "load" | "unload",
-  opts: { ignoreFailure?: boolean } = {},
-): Promise<number> {
-  const plist = plistPath();
-  if (!existsSync(plist)) {
-    console.error(red(`no launchd agent at ${plist} — run \`wt events install\` first`));
-    return 1;
-  }
-  // Reconcile before loading, never only at install. Every value in the
-  // plist is derived from the current environment (interpreter, PATH, repo
-  // location), so a stored plist is a snapshot of a machine that may have
-  // moved on — and the failure it produces has no output anywhere to read:
-  // launchd cannot exec, so it writes nothing to either log and reports
-  // exit 78. A source fix cannot heal a plist a previous version wrote;
-  // only a pass that rewrites it can.
-  if (action === "load") {
-    const want = plistContents();
-    if (readFileSafe(plist) !== want) {
-      const before = plistProgram();
-      writeFileSync(plist, want);
-      const stale = before && !existsSync(before) ? ` (its program was gone: ${before})` : "";
-      console.log(`${yellow("↻")} refreshed the launchd agent${stale}`);
+function launchctlEffect(action: "load" | "unload", opts: { ignoreFailure?: boolean } = {}): Effect.Effect<number> {
+  return Effect.gen(function* () {
+    const plist = plistPath();
+    if (!existsSync(plist)) {
+      console.error(red(`no launchd agent at ${plist} — run \`wt events install\` first`));
+      return 1;
     }
-  }
-  const r = await sh(["launchctl", action, "-w", plist]);
-  if (r.stderr.trim() && !(opts.ignoreFailure && r.exitCode !== 0)) {
-    process.stderr.write(r.stderr.endsWith("\n") ? r.stderr : `${r.stderr}\n`);
-  }
-  if (r.exitCode !== 0) {
-    if (opts.ignoreFailure) return 1;
-    console.error(red(`launchctl ${action} failed (exit ${r.exitCode})`));
-    return 1;
-  }
-  console.log(`${green("✓")} ${action === "load" ? "started" : "stopped"} ${LAUNCHD_LABEL}`);
-  return 0;
+    // Reconcile before loading, never only at install. Every value in the
+    // plist is derived from the current environment (interpreter, PATH, repo
+    // location), so a stored plist is a snapshot of a machine that may have
+    // moved on — and the failure it produces has no output anywhere to read:
+    // launchd cannot exec, so it writes nothing to either log and reports
+    // exit 78. A source fix cannot heal a plist a previous version wrote;
+    // only a pass that rewrites it can.
+    if (action === "load") {
+      const want = plistContents();
+      if (readFileSafe(plist) !== want) {
+        const before = plistProgram();
+        writeFileSync(plist, want);
+        const stale = before && !existsSync(before) ? ` (its program was gone: ${before})` : "";
+        console.log(`${yellow("↻")} refreshed the launchd agent${stale}`);
+      }
+    }
+    const r = yield* shEffect(["launchctl", action, "-w", plist]).pipe(
+      Effect.orElseSucceed(() => ({
+        stdout: "",
+        stderr: "",
+        exitCode: 1,
+        timedOut: false,
+      })),
+    );
+    if (r.stderr.trim() && !(opts.ignoreFailure && r.exitCode !== 0)) {
+      process.stderr.write(r.stderr.endsWith("\n") ? r.stderr : `${r.stderr}\n`);
+    }
+    if (r.exitCode !== 0) {
+      if (opts.ignoreFailure) return 1;
+      console.error(red(`launchctl ${action} failed (exit ${r.exitCode})`));
+      return 1;
+    }
+    console.log(`${green("✓")} ${action === "load" ? "started" : "stopped"} ${LAUNCHD_LABEL}`);
+    return 0;
+  });
 }
 
 /**
@@ -252,41 +265,40 @@ async function launchctl(
  * load will fail rather than falsely reporting a restart.
  */
 type RestartLaunchdDeps = {
-  control?: (
-    action: "load" | "unload",
-    opts?: { ignoreFailure?: boolean },
-  ) => Promise<number>;
-  waitUntilRunning?: (previousPid: number | null) => Promise<boolean>;
+  control?: (action: "load" | "unload", opts?: { ignoreFailure?: boolean }) => Effect.Effect<number>;
+  waitUntilRunning?: (previousPid: number | null) => Effect.Effect<boolean>;
 };
 
-async function waitForRestartedDaemon(previousPid: number | null): Promise<boolean> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
+class DaemonNotReady extends Data.TaggedError("DaemonNotReady") {}
+
+export function waitForRestartedDaemonEffect(
+  previousPid: number | null,
+  ready: () => boolean = () => {
     const state = readState();
-    if (
-      state &&
-      state.pid !== previousPid &&
-      isProcessAlive(state.pid)
-    ) {
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  return false;
+    return Boolean(state && state.pid !== previousPid && isProcessAlive(state.pid));
+  },
+): Effect.Effect<boolean> {
+  const probe = Effect.suspend(() => {
+    return ready() ? Effect.succeed(true) : Effect.fail(new DaemonNotReady());
+  });
+  return probe.pipe(
+    Effect.retry(Schedule.spaced(Duration.millis(100)).pipe(Schedule.intersect(Schedule.recurs(99)))),
+    Effect.orElseSucceed(() => false),
+  );
 }
 
-export async function restartLaunchdAgent(
-  deps: RestartLaunchdDeps = {},
-): Promise<number> {
-  const control = deps.control ?? launchctl;
-  const previousPid = readState()?.pid ?? null;
-  await control("unload", { ignoreFailure: true });
-  const loaded = await control("load");
-  if (loaded !== 0) return loaded;
-  const running = await (deps.waitUntilRunning ?? waitForRestartedDaemon)(previousPid);
-  if (running) return 0;
-  console.error(red("events daemon did not become ready within 10s after restart"));
-  return 1;
+export function restartLaunchdAgentEffect(deps: RestartLaunchdDeps = {}): Effect.Effect<number> {
+  return Effect.gen(function* () {
+    const control = deps.control ?? launchctlEffect;
+    const previousPid = readState()?.pid ?? null;
+    yield* control("unload", { ignoreFailure: true });
+    const loaded = yield* control("load");
+    if (loaded !== 0) return loaded;
+    const running = yield* (deps.waitUntilRunning ?? waitForRestartedDaemonEffect)(previousPid);
+    if (running) return 0;
+    console.error(red("events daemon did not become ready within 10s after restart"));
+    return 1;
+  });
 }
 
 function requireEventsConfigured(): boolean {
@@ -318,7 +330,9 @@ function cmdStatus(): number {
     console.log(`  last fetch    ${ago(state.lastFetchAt)}`);
     if (state.lastError) console.log(`  last error    ${red(state.lastError)}`);
   }
-  console.log(`  snapshot      ${snap ? `${Object.keys(snap.prs).length} PRs, written ${ago(snap.updatedAt)}` : dim("none")}`);
+  console.log(
+    `  snapshot      ${snap ? `${Object.keys(snap.prs).length} PRs, written ${ago(snap.updatedAt)}` : dim("none")}`,
+  );
   // The daemon outlives every hot update, and it hands the TUI PARSED
   // data — so "running" and "up to date" are different questions and only
   // the first one used to be answerable here. A daemon on an older build
@@ -328,7 +342,9 @@ function cmdStatus(): number {
   if (snap && !sameBuild(snap.writerSha)) {
     const wrote = snap.writerSha ? snap.writerSha.slice(0, 7) : "unstamped";
     console.log(`  build         ${yellow(`stale (wrote ${wrote}, this build ${(buildSha() ?? "?").slice(0, 7)})`)}`);
-    console.log(dim("                the TUI is ignoring its snapshot and fetching live; it restarts itself on its next fetch"));
+    console.log(
+      dim("                the TUI is ignoring its snapshot and fetching live; it restarts itself on its next fetch"),
+    );
     console.log(dim("                — `wt events restart` does it now"));
   }
   const program = plistProgram();
@@ -352,21 +368,25 @@ function cmdInstall(): number {
   writeFileSync(plist, plistContents());
   console.log(`${green("✓")} launchd agent ${dim("→")} ${plist}`);
   if (secret) printWebhookSetup(events.host, events.port, secretDisplay(secret));
-  console.log(`\nNext: ${cyan("wt events start")} to load the daemon, then forward your domain to ${events.host}:${events.port}.`);
+  console.log(
+    `\nNext: ${cyan("wt events start")} to load the daemon, then forward your domain to ${events.host}:${events.port}.`,
+  );
   return 0;
 }
 
-async function cmdUninstall(): Promise<number> {
-  const plist = plistPath();
-  if (existsSync(plist)) {
-    // Best-effort unload before removing so launchd drops the live job.
-    await sh(["launchctl", "unload", "-w", plist]);
-    rmSync(plist, { force: true });
-    console.log(`${green("✓")} removed ${plist}`);
-  } else {
-    console.log(dim("no launchd agent to remove"));
-  }
-  return 0;
+function cmdUninstallEffect(): Effect.Effect<number> {
+  return Effect.gen(function* () {
+    const plist = plistPath();
+    if (existsSync(plist)) {
+      // Best-effort unload before removing so launchd drops the live job.
+      yield* shEffect(["launchctl", "unload", "-w", plist]).pipe(Effect.ignore);
+      rmSync(plist, { force: true });
+      console.log(`${green("✓")} removed ${plist}`);
+    } else {
+      console.log(dim("no launchd agent to remove"));
+    }
+    return 0;
+  });
 }
 
 function cmdSecret(): number {
@@ -380,35 +400,51 @@ function cmdSecret(): number {
   return 0;
 }
 
-export async function run(argv: string[]): Promise<number> {
-  const [sub] = argv;
+export function run(argv: string[]): Effect.Effect<number, EventsCommandError> {
+  const [sub, ...rest] = argv;
   if (hasHelpFlag(argv)) {
-    console.log(USAGE);
-    return 0;
+    return Effect.sync(() => {
+      console.log(USAGE);
+      return 0;
+    });
+  }
+  if (rest.length > 0) {
+    return Effect.sync(() => {
+      console.error(red(`unexpected argument: ${rest[0]}\n`));
+      console.error(USAGE);
+      return 2;
+    });
   }
   switch (sub) {
     case "serve":
-      return runDaemonForeground();
+      return Effect.tryPromise({
+        try: runDaemonForeground,
+        catch: (cause) => new EventsCommandError({ operation: "serve", cause }),
+      });
     case "status":
-      return cmdStatus();
+      return Effect.sync(cmdStatus);
     case "install":
-      return cmdInstall();
+      return Effect.sync(cmdInstall);
     case "uninstall":
-      return cmdUninstall();
+      return cmdUninstallEffect();
     case "start":
-      return requireEventsConfigured() ? launchctl("load") : 1;
+      return requireEventsConfigured() ? launchctlEffect("load") : Effect.succeed(1);
     case "stop":
-      return launchctl("unload");
+      return launchctlEffect("unload");
     case "restart":
-      return requireEventsConfigured() ? restartLaunchdAgent() : 1;
+      return requireEventsConfigured() ? restartLaunchdAgentEffect() : Effect.succeed(1);
     case "secret":
-      return cmdSecret();
+      return Effect.sync(cmdSecret);
     case undefined:
-      console.log(USAGE);
-      return 2;
+      return Effect.sync(() => {
+        console.log(USAGE);
+        return 2;
+      });
     default:
-      console.error(red(`unknown events subcommand: ${sub}\n`));
-      console.error(USAGE);
-      return 2;
+      return Effect.sync(() => {
+        console.error(red(`unknown events subcommand: ${sub}\n`));
+        console.error(USAGE);
+        return 2;
+      });
   }
 }

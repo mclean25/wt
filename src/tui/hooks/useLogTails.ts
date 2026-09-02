@@ -1,15 +1,20 @@
 import { useEffect, useRef, useState } from "react";
+import { Data, Effect, Fiber } from "effect";
 
 import { createLogger } from "../../core/logger.ts";
 import { latestLogFor } from "../../core/logs.ts";
-import { streamLines } from "../../core/proc.ts";
+import { streamLinesEffect, terminateSubprocessEffect } from "../../core/proc.ts";
 import { StatusKind } from "../../core/types.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
 
 type Tail = {
-  proc: Bun.Subprocess;
-  controller: AbortController;
+  fiber: Fiber.RuntimeFiber<void, never> | null;
+  token: object;
 };
+
+class LogTailSpawnError extends Data.TaggedError("LogTailSpawnError")<{
+  readonly cause: unknown;
+}> {}
 
 /**
  * Tail log files for any worktree currently running a background job.
@@ -19,6 +24,7 @@ type Tail = {
  */
 export function useLogTails(rows: WorktreeRow[]): Set<string> {
   const tails = useRef<Map<string, Tail>>(new Map());
+  const mounted = useRef(true);
   const [active, setActive] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
@@ -32,30 +38,72 @@ export function useLogTails(rows: WorktreeRow[]): Set<string> {
     // Stop tails that are no longer wanted.
     for (const [slug, tail] of tails.current) {
       if (!wanted.has(slug)) {
-        tail.controller.abort();
         tails.current.delete(slug);
+        if (tail.fiber) Effect.runFork(Fiber.interrupt(tail.fiber));
       }
     }
 
     // Start new tails.
     for (const [slug, logPath] of wanted) {
       if (tails.current.has(slug)) continue;
-      const controller = new AbortController();
       const log = createLogger(slug);
-      try {
-        const proc = Bun.spawn(["tail", "-n", "50", "-F", logPath], {
-          stdin: "ignore",
-          stdout: "pipe",
-          stderr: "pipe",
-          signal: controller.signal,
-        });
-        tails.current.set(slug, { proc, controller });
-        log.event.info(`tailing ${logPath}`);
-        void pumpTail(proc, slug);
-      } catch (err) {
-        log.event.err(`tail failed: ${err instanceof Error ? err.message : String(err)}`);
-        log.error(err instanceof Error ? err : String(err));
-      }
+      const token = {};
+      const entry: Tail = { fiber: null, token };
+      tails.current.set(slug, entry);
+      const program = Effect.acquireUseRelease(
+        Effect.try({
+          try: () =>
+            Bun.spawn(["tail", "-n", "50", "-F", logPath], {
+              stdin: "ignore",
+              stdout: "pipe",
+              stderr: "pipe",
+            }),
+          catch: (cause) => new LogTailSpawnError({ cause }),
+        }),
+        (proc) => {
+          const stdout = proc.stdout as
+            | ReadableStream<Uint8Array>
+            | undefined;
+          return Effect.all(
+            [
+              stdout
+                ? streamLinesEffect(stdout, (line) => {
+                    if (line.trim()) log.event.dim(line);
+                  })
+                : Effect.void,
+              Effect.promise(() =>
+                new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+              ),
+              Effect.promise(() => proc.exited),
+            ],
+            { concurrency: "unbounded", discard: true },
+          );
+        },
+        (proc) => terminateSubprocessEffect(proc),
+      ).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => log.event.dim("tail exited; will restart if still busy")),
+        ),
+        Effect.catchAll((error) =>
+          Effect.sync(() => {
+            const cause =
+              "cause" in error ? error.cause : error;
+            const message =
+              cause instanceof Error ? cause.message : String(cause);
+            log.event.err(`tail failed: ${message}`);
+            log.error(cause instanceof Error ? cause : message);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (tails.current.get(slug)?.token !== token) return;
+            tails.current.delete(slug);
+            if (mounted.current) setActive(new Set(tails.current.keys()));
+          }),
+        ),
+      );
+      log.event.info(`tailing ${logPath}`);
+      entry.fiber = Effect.runFork(program);
     }
 
     setActive((prev) => {
@@ -68,23 +116,13 @@ export function useLogTails(rows: WorktreeRow[]): Set<string> {
   // Hard-stop on unmount so the TUI can exit cleanly.
   useEffect(() => {
     return () => {
-      for (const [, tail] of tails.current) tail.controller.abort();
+      mounted.current = false;
+      for (const [, tail] of tails.current) {
+        if (tail.fiber) Effect.runFork(Fiber.interrupt(tail.fiber));
+      }
       tails.current.clear();
     };
   }, []);
 
   return active;
-}
-
-async function pumpTail(proc: Bun.Subprocess, slug: string): Promise<void> {
-  const stdout = proc.stdout as ReadableStream<Uint8Array> | undefined;
-  if (!stdout) return;
-  const log = createLogger(slug);
-  try {
-    await streamLines(stdout, (line) => {
-      if (line.trim()) log.event.dim(line);
-    });
-  } catch {
-    // tail was aborted via AbortController — normal shutdown path.
-  }
 }

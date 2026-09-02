@@ -1,34 +1,25 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
-import { branchIsMerged, gitQuiet } from "../../core/git.ts";
-import { fetchPrs } from "../../core/github.ts";
+import { branchIsMergedEffect, gitQuietEffect } from "../../core/git.ts";
+import { fetchPrsEffect } from "../../core/github.ts";
 import { claudeTmuxName } from "../../core/harness/claude/harness.ts";
 import { claudeInjectSelftest, shimDir, staleShims } from "../../core/harness/claude/inject.ts";
 import { humanAge, lockAge, lockLabel, lockStatus } from "../../core/locks.ts";
-import { run as sh } from "../../core/proc.ts";
-import {
-  buildReports,
-  detectTargets,
-  readSkillsMemory,
-  reportIsActionable,
-} from "../../core/skills.ts";
+import { runEffect, type RunResult } from "../../core/proc.ts";
+import { buildReports, detectTargets, readSkillsMemory, reportIsActionable } from "../../core/skills.ts";
 import { computeStage } from "../../core/stage.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
-import { listSessions } from "../../core/tmux.ts";
+import { listSessionsEffect } from "../../core/tmux/admin.ts";
 import type { Check, CheckStatus, Worktree } from "../../core/types.ts";
-import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
+import { listWorktreesEffect, worktreeAtCwd } from "../../core/worktree.ts";
 import { readWtState } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
-import {
-  renderPrCell,
-  renderSlugCell,
-  renderStageCell,
-  renderTable,
-} from "../render.ts";
+import { renderPrCell, renderSlugCell, renderStageCell, renderTable } from "../render.ts";
 
 const USAGE = `usage: wt doctor [<slug>] [options]
 
@@ -41,7 +32,12 @@ updates.
   --all, -a    force the full summary table
   --json       machine-readable`;
 
-const STATUS_RANK: Record<CheckStatus, number> = { ok: 0, info: 0, warn: 1, err: 2 };
+const STATUS_RANK: Record<CheckStatus, number> = {
+  ok: 0,
+  info: 0,
+  warn: 1,
+  err: 2,
+};
 function worst(statuses: CheckStatus[]): CheckStatus {
   if (statuses.length === 0) return "ok";
   return statuses.reduce((a, b) => (STATUS_RANK[b] > STATUS_RANK[a] ? b : a));
@@ -54,76 +50,69 @@ const MARKERS: Record<CheckStatus, string> = {
   err: red("✗"),
 };
 
-function mkCheck(
-  name: string,
-  status: CheckStatus,
-  message: string,
-  detail: string[] = [],
-): Check {
+function mkCheck(name: string, status: CheckStatus, message: string, detail: string[] = []): Check {
   return { name, status, message, detail };
 }
 
-async function checkWorkingTree(wt: Worktree): Promise<Check> {
-  const r = await sh(["git", "status", "--porcelain"], { cwd: wt.path });
-  if (r.exitCode !== 0) {
-    return mkCheck("working tree", "err", `git status failed: ${r.stderr.trim()}`);
-  }
-  const out = r.stdout;
-  if (!out.trim()) return mkCheck("working tree", "ok", "clean");
-  const lines = out.split("\n").filter(Boolean);
-  return mkCheck(
-    "working tree",
-    "warn",
-    `${lines.length} uncommitted change(s)`,
-    lines.slice(0, 10),
-  );
+function procEffect(argv: readonly string[], opts: Parameters<typeof runEffect>[1] = {}): Effect.Effect<RunResult, DoctorCommandError> {
+  return runEffect(argv, opts).pipe(Effect.mapError((cause) => new DoctorCommandError({ cause })));
 }
 
-async function checkSync(wt: Worktree): Promise<Check> {
-  const r = await sh(
-    ["git", "rev-list", "--left-right", "--count", `origin/${config.branch.base}...HEAD`],
-    { cwd: wt.path },
-  );
-  const trunk = `origin/${config.branch.base}`;
-  if (r.exitCode !== 0) return mkCheck("sync", "warn", `cannot compare to ${trunk}`);
-  const parts = r.stdout.trim().split(/\s+/);
-  const behind = parseInt(parts[0] ?? "0", 10);
-  const ahead = parseInt(parts[1] ?? "0", 10);
-  let unpushed = 0;
-  const upstreamR = await sh(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wt.path });
-  if (upstreamR.exitCode === 0) {
-    const cr = await sh(["git", "rev-list", "--count", "@{u}..HEAD"], { cwd: wt.path });
-    if (cr.exitCode === 0) unpushed = parseInt(cr.stdout.trim(), 10) || 0;
-  } else {
-    // No upstream: fall back to origin/<branch> if present, else ahead-of-main.
-    const branchR = await sh(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wt.path });
-    const branch = branchR.stdout.trim();
-    if (branch && branch !== "HEAD") {
-      const hasRemote = await gitQuiet(
-        ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`],
-        wt.path,
-      );
-      if (hasRemote) {
-        const cr = await sh(["git", "rev-list", "--count", `origin/${branch}..HEAD`], {
-          cwd: wt.path,
-        });
-        if (cr.exitCode === 0) unpushed = parseInt(cr.stdout.trim(), 10) || 0;
-      } else {
-        unpushed = ahead;
+function syncEffect<A>(f: () => A): Effect.Effect<A, DoctorCommandError> {
+  return Effect.try({ try: f, catch: (cause) => new DoctorCommandError({ cause }) });
+}
+
+function promiseEffect<A>(f: () => Promise<A>): Effect.Effect<A, DoctorCommandError> {
+  return Effect.tryPromise({ try: f, catch: (cause) => new DoctorCommandError({ cause }) });
+}
+
+function checkWorkingTree(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
+  return procEffect(["git", "status", "--porcelain"], { cwd: wt.path }).pipe(Effect.map((r) => {
+    if (r.exitCode !== 0) return mkCheck("working tree", "err", `git status failed: ${r.stderr.trim()}`);
+    if (!r.stdout.trim()) return mkCheck("working tree", "ok", "clean");
+    const lines = r.stdout.split("\n").filter(Boolean);
+    return mkCheck("working tree", "warn", `${lines.length} uncommitted change(s)`, lines.slice(0, 10));
+  }));
+}
+
+function checkSync(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
+  return Effect.gen(function* () {
+    const r = yield* procEffect(["git", "rev-list", "--left-right", "--count", `origin/${config.branch.base}...HEAD`], { cwd: wt.path });
+    const trunk = `origin/${config.branch.base}`;
+    if (r.exitCode !== 0) return mkCheck("sync", "warn", `cannot compare to ${trunk}`);
+    const parts = r.stdout.trim().split(/\s+/);
+    const behind = parseInt(parts[0] ?? "0", 10);
+    const ahead = parseInt(parts[1] ?? "0", 10);
+    let unpushed = 0;
+    const upstreamR = yield* procEffect(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wt.path });
+    if (upstreamR.exitCode === 0) {
+      const cr = yield* procEffect(["git", "rev-list", "--count", "@{u}..HEAD"], { cwd: wt.path });
+      if (cr.exitCode === 0) unpushed = parseInt(cr.stdout.trim(), 10) || 0;
+    } else {
+      const branchR = yield* procEffect(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wt.path });
+      const branch = branchR.stdout.trim();
+      if (branch && branch !== "HEAD") {
+        const hasRemote = yield* gitQuietEffect(["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], wt.path).pipe(
+          Effect.mapError((cause) => new DoctorCommandError({ cause })),
+        );
+        if (hasRemote) {
+          const cr = yield* procEffect(["git", "rev-list", "--count", `origin/${branch}..HEAD`], { cwd: wt.path });
+          if (cr.exitCode === 0) unpushed = parseInt(cr.stdout.trim(), 10) || 0;
+        } else unpushed = ahead;
       }
     }
-  }
-
-  const bits: string[] = [];
-  if (ahead) bits.push(`${ahead} ahead of ${trunk}`);
-  if (behind) bits.push(`${behind} behind ${trunk}`);
-  if (unpushed) bits.push(`${unpushed} unpushed`);
-  if (bits.length === 0) return mkCheck("sync", "ok", "up to date");
-  const status: CheckStatus = behind || unpushed ? "warn" : "info";
-  return mkCheck("sync", status, bits.join("; "));
+    const bits: string[] = [];
+    if (ahead) bits.push(`${ahead} ahead of ${trunk}`);
+    if (behind) bits.push(`${behind} behind ${trunk}`);
+    if (unpushed) bits.push(`${unpushed} unpushed`);
+    if (bits.length === 0) return mkCheck("sync", "ok", "up to date");
+    const status: CheckStatus = behind || unpushed ? "warn" : "info";
+    return mkCheck("sync", status, bits.join("; "));
+  });
 }
 
-async function checkSstStage(wt: Worktree): Promise<Check> {
+function checkSstStage(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
+  return syncEffect(() => {
   const stageFile = join(wt.path, ".sst", "stage");
   if (!existsSync(stageFile)) return mkCheck("sst stage", "warn", "no .sst/stage pinned");
   let actual = "";
@@ -135,9 +124,11 @@ async function checkSstStage(wt: Worktree): Promise<Check> {
   const expected = computeStage(wt.slug);
   if (actual === expected) return mkCheck("sst stage", "ok", `pinned to ${actual}`);
   return mkCheck("sst stage", "warn", `stage=${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
+  });
 }
 
-async function checkSstDeploy(wt: Worktree): Promise<Check> {
+function checkSstDeploy(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
+  return syncEffect(() => {
   if (!isOurStageDeployed(wt)) return mkCheck("sst deploy", "info", "not deployed");
   try {
     const st = statSync(join(wt.path, ".sst", "outputs.json"));
@@ -146,8 +137,8 @@ async function checkSstDeploy(wt: Worktree): Promise<Check> {
   } catch {
     return mkCheck("sst deploy", "info", "deployed");
   }
+  });
 }
-
 /**
  * Lockfile → the install command that produced it. Same detection the
  * `[lifecycle] install_command` default uses, so the advice doctor
@@ -195,14 +186,14 @@ function detectPackageManager(path: string): { install: string; store: string | 
  * a linker whose layout makes real directories correct). Absence of an
  * answer is never reported as a clean one.
  */
-export function pnpmPhantomTopLevel(
-  nm: string,
-): { phantoms: string[]; drifted: string[] } | null {
+export function pnpmPhantomTopLevel(nm: string): { phantoms: string[]; drifted: string[] } | null {
   let linker: unknown;
   try {
-    linker = (JSON.parse(readFileSync(join(nm, ".modules.yaml"), "utf8")) as {
-      nodeLinker?: unknown;
-    }).nodeLinker;
+    linker = (
+      JSON.parse(readFileSync(join(nm, ".modules.yaml"), "utf8")) as {
+        nodeLinker?: unknown;
+      }
+    ).nodeLinker;
   } catch {
     // pnpm writes this file on every install and it is JSON-compatible
     // YAML. Unreadable means we cannot establish the layout, so we do
@@ -277,12 +268,12 @@ export function pnpmPhantomTopLevel(
   return { phantoms, drifted };
 }
 
-async function checkNodeModules(wt: Worktree): Promise<Check> {
+function checkNodeModules(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
+  return syncEffect(() => {
   const pm = detectPackageManager(wt.path);
   if (!pm) return mkCheck("node_modules", "info", "no JS package manager");
   const nm = join(wt.path, "node_modules");
-  const missing = !existsSync(nm) ||
-    (pm.store !== null && !existsSync(join(nm, pm.store)));
+  const missing = !existsSync(nm) || (pm.store !== null && !existsSync(join(nm, pm.store)));
   if (missing) {
     return mkCheck("node_modules", "warn", `not installed — run \`${pm.install}\``);
   }
@@ -305,9 +296,11 @@ async function checkNodeModules(wt: Worktree): Promise<Check> {
     );
   }
   return mkCheck("node_modules", "ok", "installed");
+  });
 }
 
-async function checkLock(wt: Worktree): Promise<Check> {
+function checkLock(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
+  return syncEffect(() => {
   const info = lockStatus(wt.slug);
   if (!info) return mkCheck("lock", "ok", "none");
   const label = lockLabel(info);
@@ -315,6 +308,7 @@ async function checkLock(wt: Worktree): Promise<Check> {
   const age = lockAge(info);
   const suffix = age ? `, ${age} ago` : "";
   return mkCheck("lock", "warn", `${label} (pid ${pid}${suffix})`);
+  });
 }
 
 /**
@@ -327,48 +321,50 @@ async function checkLock(wt: Worktree): Promise<Check> {
  * fork base when one exists (stacked PRs target their parent), else
  * `[branch] base`.
  */
-async function checkGhMergeBase(wt: Worktree): Promise<Check> {
-  if (!wt.branch) return mkCheck("gh merge base", "info", "no branch");
-  const expected =
-    readWtState().slugs[wt.slug]?.baseBranch ?? config.branch.base;
-  const r = await sh(["git", "config", `branch.${wt.branch}.gh-merge-base`], {
-    cwd: wt.path,
+function checkGhMergeBase(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
+  return Effect.gen(function* () {
+    if (!wt.branch) return mkCheck("gh merge base", "info", "no branch");
+    const expected = readWtState().slugs[wt.slug]?.baseBranch ?? config.branch.base;
+    const r = yield* procEffect(["git", "config", `branch.${wt.branch}.gh-merge-base`], { cwd: wt.path });
+    const actual = r.exitCode === 0 ? r.stdout.trim() : "";
+    if (actual === expected) return mkCheck("gh merge base", "ok", expected);
+    return mkCheck(
+      "gh merge base", "warn",
+      actual ? `set to ${actual}, expected ${expected}` : `unset — a bare \`gh pr create\` targets the repo default branch`,
+      [`fix: git -C ${wt.path} config branch.${wt.branch}.gh-merge-base ${expected}`],
+    );
   });
-  const actual = r.exitCode === 0 ? r.stdout.trim() : "";
-  if (actual === expected) return mkCheck("gh merge base", "ok", expected);
-  return mkCheck(
-    "gh merge base",
-    "warn",
-    actual
-      ? `set to ${actual}, expected ${expected}`
-      : `unset — a bare \`gh pr create\` targets the repo default branch`,
-    [`fix: git -C ${wt.path} config branch.${wt.branch}.gh-merge-base ${expected}`],
-  );
 }
 
-async function checkMerged(wt: Worktree): Promise<Check> {
-  if (!wt.branch) return mkCheck("merged", "info", "no branch");
-  const trunk = `origin/${config.branch.base}`;
-  if (await branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path }))
-    return mkCheck("merged", "info", `merged into ${trunk}`);
-  return mkCheck("merged", "ok", `not merged into ${trunk}`);
+function checkMerged(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
+  return Effect.gen(function* () {
+    if (!wt.branch) return mkCheck("merged", "info", "no branch");
+    const trunk = `origin/${config.branch.base}`;
+    const merged = yield* branchIsMergedEffect({ slug: wt.slug, branch: wt.branch, path: wt.path }).pipe(
+      Effect.mapError((cause) => new DoctorCommandError({ cause })),
+    );
+    if (merged) return mkCheck("merged", "info", `contained in last-fetched ${trunk}`);
+    return mkCheck("merged", "ok", `not in last-fetched ${trunk}`);
+  });
 }
 
-async function checkPr(wt: Worktree): Promise<Check> {
+function checkPr(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
+  return Effect.gen(function* () {
   if (!wt.branch) return mkCheck("pr", "info", "no branch");
-  const which = await sh(["which", "gh"]);
+  const which = yield* procEffect(["which", "gh"]);
   if (which.exitCode !== 0) return mkCheck("pr", "info", "gh not installed");
-  const r = await sh(
-    ["gh", "pr", "view", wt.branch, "--json", "number,state,isDraft,url,statusCheckRollup"],
-    { cwd: wt.path, timeoutMs: 10_000 },
-  );
+  const r = yield* procEffect(["gh", "pr", "view", wt.branch, "--json", "number,state,isDraft,url,statusCheckRollup"], {
+    cwd: wt.path,
+    timeoutMs: 10_000,
+  });
   if (r.exitCode !== 0) return mkCheck("pr", "info", "no PR");
-  let data: Record<string, unknown>;
-  try {
-    data = JSON.parse(r.stdout);
-  } catch {
-    return mkCheck("pr", "warn", "gh returned non-JSON");
-  }
+  const data = yield* Effect.try({
+    try: () => JSON.parse(r.stdout) as Record<string, unknown>,
+    catch: (cause) => new DoctorCommandError({ cause }),
+  }).pipe(
+    Effect.catchAll(() => Effect.succeed(null)),
+  );
+  if (data === null) return mkCheck("pr", "warn", "gh returned non-JSON");
   const state = (data.state as string) || "UNKNOWN";
   const draft = Boolean(data.isDraft);
   const num = data.number;
@@ -376,9 +372,7 @@ async function checkPr(wt: Worktree): Promise<Check> {
   const failed = checks.filter((c) =>
     ["FAILURE", "CANCELLED", "TIMED_OUT"].includes((c.conclusion ?? "").toUpperCase()),
   );
-  const pending = checks.filter((c) =>
-    ["IN_PROGRESS", "QUEUED"].includes((c.status ?? "").toUpperCase()),
-  );
+  const pending = checks.filter((c) => ["IN_PROGRESS", "QUEUED"].includes((c.status ?? "").toUpperCase()));
   const parts: string[] = [`#${num}`, state.toLowerCase()];
   if (draft && state === "OPEN") parts.push("(draft)");
   if (failed.length) parts.push(`${failed.length} CI failing`);
@@ -389,6 +383,7 @@ async function checkPr(wt: Worktree): Promise<Check> {
   else if (pending.length) status = "info";
   else if (state === "MERGED") status = "ok";
   return mkCheck("pr", status, parts.join(" "));
+  });
 }
 
 /**
@@ -396,20 +391,14 @@ async function checkPr(wt: Worktree): Promise<Check> {
  * current? Pure fs reads; guarded so a skills-system bug can't break
  * doctor's actual job.
  */
-async function checkSkillsFreshness(): Promise<Check> {
-  try {
+function checkSkillsFreshness(): Effect.Effect<Check, DoctorCommandError> {
+  return syncEffect(() => {
     const reports = buildReports(detectTargets(), readSkillsMemory());
     const pending = reports.filter(reportIsActionable);
     if (pending.length === 0) return mkCheck("agent skills", "ok", "up to date");
     const names = [...new Set(pending.map((r) => r.unit.name))];
-    return mkCheck(
-      "agent skills",
-      "warn",
-      `${names.length} pending (${names.join(", ")}) — run \`wt skills sync\``,
-    );
-  } catch {
-    return mkCheck("agent skills", "info", "check skipped (skills system errored)");
-  }
+    return mkCheck("agent skills", "warn", `${names.length} pending (${names.join(", ")}) — run \`wt skills sync\``);
+  }).pipe(Effect.catchAll(() => Effect.succeed(mkCheck("agent skills", "info", "check skipped (skills system errored)"))));
 }
 
 /**
@@ -427,17 +416,21 @@ async function checkSkillsFreshness(): Promise<Check> {
  * One selftest, not one per session: the anchors are a property of the
  * Claude Code build, so the first live session answers for all of them.
  */
-async function checkMessageTransport(): Promise<Check> {
-  try {
-    const entries = [...(await listSessions()).claude];
+function checkMessageTransport(): Effect.Effect<Check, DoctorCommandError> {
+  return Effect.gen(function* () {
+    const entries = [...(yield* listSessionsEffect()).claude];
     if (entries.length === 0) return mkCheck("messaging", "ok", "no live claude sessions");
     const names = entries.map((e) => claudeTmuxName(e.slug, e.name));
     // Probe every session, not a representative one: a socket FILE
     // proves nothing (a restarted session leaves a stale one behind),
     // so reporting "working across N" off a single probe would vouch
     // for sessions never connected to.
-    const probes = await Promise.all(
-      names.map(async (name) => ({ name, probe: await claudeInjectSelftest(name) })),
+    const probes = yield* Effect.all(
+      names.map((name) => promiseEffect(() => claudeInjectSelftest(name).then((probe) => ({
+        name,
+        probe,
+      })))),
+      { concurrency: "unbounded" },
     );
     const bad = probes.filter((p) => !p.probe.ok);
     if (bad.length === 0) {
@@ -481,16 +474,12 @@ async function checkMessageTransport(): Promise<Check> {
       "messaging",
       "warn",
       `${bad.length} of ${names.length} claude sessions are typed at instead (${bad.map((p) => p.name).join(", ")}) — restart them from wt${
-        all ? ", and if a fresh session still fails, the cause is not per-session: check `wt doctor` again after it starts" : ""
+        all
+          ? ", and if a fresh session still fails, the cause is not per-session: check `wt doctor` again after it starts"
+          : ""
       }`,
     );
-  } catch (err) {
-    return mkCheck(
-      "messaging",
-      "info",
-      `check skipped (${err instanceof Error ? err.message : String(err)})`,
-    );
-  }
+  }).pipe(Effect.catchAll((err) => Effect.succeed(mkCheck("messaging", "info", `check skipped (${err instanceof Error ? err.message : String(err)})`))));
 }
 
 /**
@@ -508,7 +497,8 @@ async function checkMessageTransport(): Promise<Check> {
  * `PATH` is resolved manually rather than via `command -v`, because
  * this process's own shell may have the alias and answer misleadingly.
  */
-async function checkWtOnPath(): Promise<Check> {
+function checkWtOnPath(): Effect.Effect<Check, DoctorCommandError> {
+  return syncEffect(() => {
   const launcher = join(import.meta.dir, "..", "..", "..", "bin", "wt");
   const dirs = (process.env.PATH ?? "").split(":").filter(Boolean);
   for (const dir of dirs) {
@@ -521,18 +511,15 @@ async function checkWtOnPath(): Promise<Check> {
       if (real === realpathSync(launcher)) {
         return mkCheck("wt on PATH", "ok", candidate);
       }
-      return mkCheck(
-        "wt on PATH",
-        "warn",
-        `${candidate} resolves to ${real}, not this clone's ${launcher}`,
-      );
+      return mkCheck("wt on PATH", "warn", `${candidate} resolves to ${real}, not this clone's ${launcher}`);
     } catch {
       /* unreadable PATH entry — keep looking */
     }
   }
-  const target = dirs.find((d) => d === join(homedir(), ".local", "bin"))
-    ?? dirs.find((d) => d.startsWith(homedir()))
-    ?? join(homedir(), ".local", "bin");
+  const target =
+    dirs.find((d) => d === join(homedir(), ".local", "bin")) ??
+    dirs.find((d) => d.startsWith(homedir())) ??
+    join(homedir(), ".local", "bin");
   // The message carries the fix because this check renders as a BANNER
   // in the common (summary) path, and banners print one line — detail
   // is only seen in the per-worktree report.
@@ -546,23 +533,20 @@ async function checkWtOnPath(): Promise<Check> {
       "`wt: command not found` and leaves the fleet half-updated.",
     ],
   );
+  });
 }
 
-async function checkMainClone(): Promise<Check> {
+function checkMainClone(): Effect.Effect<Check, DoctorCommandError> {
   const main = config.paths.mainClone;
   const base = config.branch.base;
-  const r = await sh(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], {
+  return procEffect(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], {
     cwd: main,
-  });
-  if (r.exitCode !== 0) {
-    return mkCheck(
-      "main clone",
-      "err",
-      `detached HEAD in ${main} — should be on ${base}`,
-    );
-  }
-  const head = r.stdout.trim();
-  if (head !== base) {
+  }).pipe(Effect.map((r) => {
+    if (r.exitCode !== 0) {
+    return mkCheck("main clone", "err", `detached HEAD in ${main} — should be on ${base}`);
+    }
+    const head = r.stdout.trim();
+    if (head !== base) {
     return mkCheck(
       "main clone",
       "err",
@@ -570,12 +554,13 @@ async function checkMainClone(): Promise<Check> {
         `Move that work into a worktree (\`wt new ${head}\`) and ` +
         `\`git -C ${main} checkout ${base}\`.`,
     );
-  }
-  return mkCheck("main clone", "ok", `on ${base}`);
+    }
+    return mkCheck("main clone", "ok", `on ${base}`);
+  }));
 }
 
-async function runAllChecks(wt: Worktree, includePr: boolean): Promise<Check[]> {
-  const tasks: Promise<Check>[] = [
+function runAllChecks(wt: Worktree, includePr: boolean): Effect.Effect<Check[], DoctorCommandError> {
+  const tasks: Effect.Effect<Check, DoctorCommandError>[] = [
     checkWorkingTree(wt),
     checkSync(wt),
     // Gated on the integration, not merely on `.sst/stage` being
@@ -590,7 +575,7 @@ async function runAllChecks(wt: Worktree, includePr: boolean): Promise<Check[]> 
   ];
   if (includePr) tasks.push(checkPr(wt));
   tasks.push(checkMerged(wt));
-  return Promise.all(tasks);
+  return Effect.all(tasks, { concurrency: "unbounded" });
 }
 
 function currentWorktree(wts: Worktree[]): Worktree | null {
@@ -614,14 +599,15 @@ function renderBanner(c: Check): void {
   console.log(`  ${MARKERS[c.status]}  ${bold(c.name.padEnd(14))} ${c.message}`);
 }
 
-async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
-  const [mainBanner, skillsBanner, pathBanner, msgBanner, checks] = await Promise.all([
-    jsonOut ? Promise.resolve(null) : checkMainClone(),
-    jsonOut ? Promise.resolve(null) : checkSkillsFreshness(),
-    jsonOut ? Promise.resolve(null) : checkWtOnPath(),
-    jsonOut ? Promise.resolve(null) : checkMessageTransport(),
+function reportOne(wt: Worktree, jsonOut: boolean): Effect.Effect<void, DoctorCommandError> {
+  return Effect.gen(function* () {
+  const [mainBanner, skillsBanner, pathBanner, msgBanner, checks] = yield* Effect.all([
+    jsonOut ? Effect.succeed(null) : checkMainClone(),
+    jsonOut ? Effect.succeed(null) : checkSkillsFreshness(),
+    jsonOut ? Effect.succeed(null) : checkWtOnPath(),
+    jsonOut ? Effect.succeed(null) : checkMessageTransport(),
     runAllChecks(wt, true),
-  ]);
+  ], { concurrency: "unbounded" });
   if (jsonOut) {
     console.log(JSON.stringify(wtToDict(wt, checks), null, 2));
     return;
@@ -643,18 +629,20 @@ async function reportOne(wt: Worktree, jsonOut: boolean): Promise<void> {
   // anything when `[deploy.sst]` is configured. Printing it otherwise
   // advertises a preview environment that does not exist.
   if (config.sst) console.log(`     ${dim(`stage: ${wt.stage}`)}`);
+  });
 }
 
-async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
+function reportSummary(wts: Worktree[], jsonOut: boolean): Effect.Effect<void, DoctorCommandError> {
+  return Effect.gen(function* () {
   const skipPrs = jsonOut;
-  const [prs, mainCheck, skillsCheck, pathCheck, msgCheck, allChecks] = await Promise.all([
-    skipPrs ? Promise.resolve(new Map()) : fetchPrs(),
-    jsonOut ? Promise.resolve(null) : checkMainClone(),
-    jsonOut ? Promise.resolve(null) : checkSkillsFreshness(),
-    jsonOut ? Promise.resolve(null) : checkWtOnPath(),
-    jsonOut ? Promise.resolve(null) : checkMessageTransport(),
-    Promise.all(wts.map((w) => runAllChecks(w, false))),
-  ]);
+  const [prs, mainCheck, skillsCheck, pathCheck, msgCheck, allChecks] = yield* Effect.all([
+    skipPrs ? Effect.succeed(new Map()) : fetchPrsEffect().pipe(Effect.mapError((cause) => new DoctorCommandError({ cause }))),
+    jsonOut ? Effect.succeed(null) : checkMainClone(),
+    jsonOut ? Effect.succeed(null) : checkSkillsFreshness(),
+    jsonOut ? Effect.succeed(null) : checkWtOnPath(),
+    jsonOut ? Effect.succeed(null) : checkMessageTransport(),
+    Effect.all(wts.map((w) => runAllChecks(w, false)), { concurrency: "unbounded" }),
+  ], { concurrency: "unbounded" });
   if (jsonOut) {
     const out = wts.map((w, i) => wtToDict(w, allChecks[i]!));
     console.log(JSON.stringify(out, null, 2));
@@ -670,21 +658,28 @@ async function reportSummary(wts: Worktree[], jsonOut: boolean): Promise<void> {
   const table = renderTable(rows, [
     { header: "slug", getter: (r) => renderSlugCell((r as Row).wt) },
     ...(config.sst
-      ? [{ header: "stage", getter: (r: unknown) => renderStageCell((r as Row).wt) }]
+      ? [
+          {
+            header: "stage",
+            getter: (r: unknown) => renderStageCell((r as Row).wt),
+          },
+        ]
       : []),
     { header: "pr", getter: (r) => renderPrCell((r as Row).wt, prs) },
     {
       header: "highlights",
       getter: (r) => {
-        const note = (r as Row).checks.filter(
-          (c) => (c.status === "warn" || c.status === "err") && c.name !== "pr",
-        );
+        const note = (r as Row).checks.filter((c) => (c.status === "warn" || c.status === "err") && c.name !== "pr");
         if (!note.length) return dim("all good");
-        return note.slice(0, 3).map((c) => `${c.name}: ${c.message}`).join(", ");
+        return note
+          .slice(0, 3)
+          .map((c) => `${c.name}: ${c.message}`)
+          .join(", ");
       },
     },
   ]);
   console.log(table);
+  });
 }
 
 type Flags = { slug?: string; all: boolean; json: boolean };
@@ -700,10 +695,12 @@ function parse(argv: string[]): Flags | { error: string } {
     else if (!slug) slug = a;
     else return { error: `unexpected arg: ${a}` };
   }
+  if (all && slug) return { error: "a slug and --all are mutually exclusive" };
   return { slug, all, json };
 }
 
-export async function run(argv: string[]): Promise<number> {
+function runEffectProgram(argv: string[]): Effect.Effect<number, DoctorCommandError> {
+  return Effect.gen(function* () {
   if (hasHelpFlag(argv)) {
     console.log(USAGE);
     return 0;
@@ -713,7 +710,7 @@ export async function run(argv: string[]): Promise<number> {
     console.error(red(parsed.error));
     return 2;
   }
-  const wtsAll = (await listWorktrees()).filter((w) => !w.isMain);
+  const wtsAll = (yield* listWorktreesEffect().pipe(Effect.mapError((cause) => new DoctorCommandError({ cause })))).filter((w) => !w.isMain);
   if (wtsAll.length === 0) {
     console.log(dim("No worktrees."));
     return 0;
@@ -724,14 +721,23 @@ export async function run(argv: string[]): Promise<number> {
       console.error(red(`No worktree with slug: ${parsed.slug}`));
       return 1;
     }
-    await reportOne(target, parsed.json);
+    yield* reportOne(target, parsed.json);
     return 0;
   }
   const here = parsed.all ? null : currentWorktree(wtsAll);
   if (here) {
-    await reportOne(here, parsed.json);
+    yield* reportOne(here, parsed.json);
     return 0;
   }
-  await reportSummary(wtsAll, parsed.json);
+  yield* reportSummary(wtsAll, parsed.json);
   return 0;
+  });
+}
+
+class DoctorCommandError extends Data.TaggedError("DoctorCommandError")<{
+  readonly cause: unknown;
+}> {}
+
+export function run(argv: string[]): Effect.Effect<number, DoctorCommandError> {
+  return runEffectProgram(argv);
 }

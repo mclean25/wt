@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { Duration, Effect, Fiber, TestClock, TestContext } from "effect";
 
-import { plistProgramOf, restartLaunchdAgent } from "./events.ts";
+import { plistProgramOf, restartLaunchdAgentEffect, waitForRestartedDaemonEffect } from "./events.ts";
 
 /**
  * The plist bakes an interpreter path, and on Homebrew that path is
@@ -17,9 +18,7 @@ describe("plistProgramOf", () => {
     `\n  </array>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n`;
 
   test("takes the first argv entry, not a later one", () => {
-    expect(plistProgramOf(wrap(["/Users/me/.wt/bin/wt", "events", "serve"]))).toBe(
-      "/Users/me/.wt/bin/wt",
-    );
+    expect(plistProgramOf(wrap(["/Users/me/.wt/bin/wt", "events", "serve"]))).toBe("/Users/me/.wt/bin/wt");
   });
 
   test("reads the pre-2026-08 shape, whose program is the interpreter", () => {
@@ -47,15 +46,32 @@ describe("plistProgramOf", () => {
 });
 
 describe("restartLaunchdAgent", () => {
+  test("restart readiness polling uses the Effect clock", async () => {
+    let ready = false;
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.fork(waitForRestartedDaemonEffect(null, () => ready));
+        yield* TestClock.adjust(Duration.seconds(9));
+        ready = true;
+        yield* TestClock.adjust(Duration.millis(100));
+        return yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(TestContext.TestContext)),
+    );
+    expect(result).toBe(true);
+  });
+
   test("unloads before loading", async () => {
     const calls: Array<{ action: string; ignoreFailure: boolean }> = [];
-    const exit = await restartLaunchdAgent({
-      control: async (action, opts) => {
-        calls.push({ action, ignoreFailure: opts?.ignoreFailure ?? false });
-        return 0;
-      },
-      waitUntilRunning: async () => true,
-    });
+    const exit = await Effect.runPromise(
+      restartLaunchdAgentEffect({
+        control: (action, opts) =>
+          Effect.sync(() => {
+            calls.push({ action, ignoreFailure: opts?.ignoreFailure ?? false });
+            return 0;
+          }),
+        waitUntilRunning: () => Effect.succeed(true),
+      }),
+    );
     expect(exit).toBe(0);
     expect(calls).toEqual([
       { action: "unload", ignoreFailure: true },
@@ -65,34 +81,42 @@ describe("restartLaunchdAgent", () => {
 
   test("still loads an installed agent that was not running", async () => {
     const calls: string[] = [];
-    const exit = await restartLaunchdAgent({
-      control: async (action) => {
-        calls.push(action);
-        return action === "unload" ? 1 : 0;
-      },
-      waitUntilRunning: async () => true,
-    });
+    const exit = await Effect.runPromise(
+      restartLaunchdAgentEffect({
+        control: (action) =>
+          Effect.sync(() => {
+            calls.push(action);
+            return action === "unload" ? 1 : 0;
+          }),
+        waitUntilRunning: () => Effect.succeed(true),
+      }),
+    );
     expect(exit).toBe(0);
     expect(calls).toEqual(["unload", "load"]);
   });
 
   test("returns the load failure", async () => {
-    const exit = await restartLaunchdAgent({
-      control: async (action) => (action === "load" ? 7 : 0),
-      waitUntilRunning: async () => true,
-    });
+    const exit = await Effect.runPromise(
+      restartLaunchdAgentEffect({
+        control: (action) => Effect.succeed(action === "load" ? 7 : 0),
+        waitUntilRunning: () => Effect.succeed(true),
+      }),
+    );
     expect(exit).toBe(7);
   });
 
   test("fails when launchd loads but no new daemon becomes ready", async () => {
     const seenPreviousPids: Array<number | null> = [];
-    const exit = await restartLaunchdAgent({
-      control: async () => 0,
-      waitUntilRunning: async (previousPid) => {
-        seenPreviousPids.push(previousPid);
-        return false;
-      },
-    });
+    const exit = await Effect.runPromise(
+      restartLaunchdAgentEffect({
+        control: () => Effect.succeed(0),
+        waitUntilRunning: (previousPid) =>
+          Effect.sync(() => {
+            seenPreviousPids.push(previousPid);
+            return false;
+          }),
+      }),
+    );
     expect(exit).toBe(1);
     expect(seenPreviousPids).toHaveLength(1);
   });

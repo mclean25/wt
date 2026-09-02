@@ -531,6 +531,7 @@ export function App({ onExit }: Props) {
     refreshOrigin,
     refreshGithub,
     refreshStack,
+    refreshTmuxSessions,
     refreshRemoteWorktrees: () => remoteWorktreeList.refetch(),
   });
 

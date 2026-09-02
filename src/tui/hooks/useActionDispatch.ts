@@ -13,6 +13,7 @@
  * `state/hooks.ts` for the `affects` contract.
  */
 import { useEffect, useRef } from "react";
+import { Effect } from "effect";
 
 import {
   actionRegistry,
@@ -25,9 +26,9 @@ import {
 import { recordRun as recordHistoryRun } from "../../core/actions.ts";
 import { config } from "../../core/config.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
+import { sendSessionMessageEffect } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
-import { sendWorktreeMessage } from "../../core/worktree-executor.ts";
+import { sendWorktreeMessageEffect } from "../../core/worktree-executor.ts";
 import { StatusKind } from "../../core/types.ts";
 import {
   isRemoteWorktreeTarget,
@@ -60,6 +61,7 @@ export type ActionDispatchOpts = {
   refreshOrigin: () => Promise<void>;
   refreshGithub: () => Promise<void>;
   refreshStack: () => Promise<void>;
+  refreshTmuxSessions: () => Promise<void>;
   refreshRemoteWorktrees: () => Promise<unknown>;
 };
 
@@ -117,6 +119,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     refreshOrigin: opts.refreshOrigin,
     refreshGithub: opts.refreshGithub,
     refreshStack: opts.refreshStack,
+    refreshTmuxSessions: opts.refreshTmuxSessions,
     refreshRemoteWorktrees: opts.refreshRemoteWorktrees,
   });
   helpersRef.current = {
@@ -124,6 +127,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     refreshOrigin: opts.refreshOrigin,
     refreshGithub: opts.refreshGithub,
     refreshStack: opts.refreshStack,
+    refreshTmuxSessions: opts.refreshTmuxSessions,
     refreshRemoteWorktrees: opts.refreshRemoteWorktrees,
   };
   const handledRef = useRef<Set<string>>(new Set());
@@ -148,6 +152,9 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       }
     }
     return actionRegistry.subscribe(() => {
+      const forkRefresh = (operation: () => Promise<unknown>): void => {
+        Effect.runFork(Effect.tryPromise(operation).pipe(Effect.ignore));
+      };
       for (const run of actionRegistry.getSnapshot().values()) {
         if (run.status === "running") continue;
         if (run.endedAt === undefined) continue;
@@ -159,33 +166,41 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           refreshOrigin: ro,
           refreshGithub: rg,
           refreshStack: rs,
+          refreshTmuxSessions: rt,
           refreshRemoteWorktrees: rr,
         } = helpersRef.current;
         const remote = run.worktreeRef?.kind === "remote";
         for (const tag of run.affects) {
           switch (tag) {
             case "git":
-              if (remote) void rr();
+              if (remote) forkRefresh(rr);
               else {
-                void ro();
-                void inv(run.slug);
+                forkRefresh(ro);
+                forkRefresh(() => inv(run.slug));
               }
               // History-rewriting actions (rebase, modify, …) rewrite
               // commits under a fixed explicit parent, so the per-base
               // diff / sync queries need a re-run even though the parent
               // relationship is unchanged. `refreshStack` invalidates
               // those (see its doc in state/hooks.ts).
-              if (!remote) void rs();
+              if (!remote) forkRefresh(rs);
               break;
             case "github":
-              void rg();
+              forkRefresh(rg);
               break;
             case "dev":
               // Dev-server start/stop — refresh the slug's per-worktree
               // fields so the dev row/bolt snap without waiting out the
               // staleTime. Slug-scoped; no cross-worktree state moved.
-              if (remote) void rr();
-              else void inv(run.slug);
+              if (remote) forkRefresh(rr);
+              else {
+                // The dev query key includes the batched tmux answer. Refresh
+                // that source as well as the slug, or an immediate slug
+                // refetch keeps using `sessionExists: false` and renders the
+                // just-started server as stopped until the 5s backstop poll.
+                forkRefresh(rt);
+                forkRefresh(() => inv(run.slug));
+              }
               break;
             default: {
               // Exhaustiveness check — a new EffectTag without a case
@@ -341,13 +356,16 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           `${def.name} → ${label}${location}`,
         );
         ack(`sending ${def.name} to ${label}${location}…`, theme.info, 2000);
-        void sendWorktreeMessage(
+        Effect.runFork(sendWorktreeMessageEffect(
           subject.target,
           primaryHarness,
           body,
           (line) => sessionLog.event.info(line),
-        ).then(
-          (res) => {
+        ).pipe(Effect.match({
+          onFailure: (err) => {
+            sessionLog.event.err(`send failed: ${err.message}`, { toast: true });
+          },
+          onSuccess: (res) => {
             if (res.ok && res.delivered === false) {
               sessionLog.attention.warn(
                 `${label} never received ${def.name} — attach and check its pane`,
@@ -363,11 +381,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
               sessionLog.event.err(`send failed: ${res.reason}`, { toast: true });
             }
           },
-          (err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            sessionLog.event.err(`send failed: ${msg}`, { toast: true });
-          },
-        );
+        })));
         return { launched: true };
       }
 
@@ -381,14 +395,17 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       ensureManagerClaudeName();
       sessionLog.event.info(`${def.name} → ${deliveryTarget.label}`);
       ack(`sending ${def.name} to ${deliveryTarget.label}…`, theme.info, 2000);
-      void sendSessionMessage({
+      Effect.runFork(sendSessionMessageEffect({
         slug: deliveryTarget.slug,
         cwd: deliveryTarget.cwd,
         harnessId: primaryHarness,
         managedName: deliveryTarget.managedName,
         text: deliveryTarget.text,
-      }).then(
-        (res) => {
+      }).pipe(Effect.match({
+        onFailure: (err) => {
+          sessionLog.event.err(`send failed: ${err.message}`, { toast: true });
+        },
+        onSuccess: (res) => {
           if (res.ok && res.delivered === false) {
             // Delivery is verified against the target's own transcript,
             // for EVERY harness including Claude — a dispatch that
@@ -420,19 +437,11 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
             sessionLog.event.err(`send failed: ${res.reason}`, { toast: true });
           }
         },
-        // sendSessionMessage resolves {ok:false} for its own failures,
-        // but the cross-process delivery lock can REJECT on timeout
-        // (withAsyncFileLock) — unhandled, that's a process-level
-        // rejection, not a logged miss.
-        (err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          sessionLog.event.err(`send failed: ${msg}`, { toast: true });
-        },
-      );
+      })));
       return { launched: true };
     }
     const result = def
-      ? await actionRegistry.startForWorktree(
+      ? await Effect.runPromise(actionRegistry.startForWorktreeEffect(
           def,
           subject.target,
           config.paths.mainClone,
@@ -440,14 +449,14 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           vars,
           primaryHarness,
           { autoFireKeys: launchOpts.autoFireKeys },
-        )
-      : await actionRegistry.startCustomForWorktree(
+        ))
+      : await Effect.runPromise(actionRegistry.startCustomForWorktreeEffect(
           subject.target,
           config.paths.mainClone,
           extras,
           vars,
           primaryHarness,
-        );
+        ));
     if (!result.ok) {
       ack(`action: ${result.reason}`, theme.err, 3000);
       return { launched: false, reason: result.reason };
@@ -497,14 +506,17 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     const slotLog = createLogger(slot.slug);
     slotLog.event.info(`${label} → ${slot.label}`);
     toast(`sending ${label} to ${slot.label}…`, theme.info, 2000);
-    void sendSessionMessage({
+    Effect.runFork(sendSessionMessageEffect({
       slug: slot.slug,
       cwd: slot.path,
       harnessId: primaryHarness,
       managedName: slot.claudeName,
       text: body,
-    }).then(
-      (res) => {
+    }).pipe(Effect.match({
+      onFailure: (err) => {
+        slotLog.event.err(`send failed: ${err.message}`, { toast: true });
+      },
+      onSuccess: (res) => {
         if (res.ok && res.delivered === false) {
           // See the row path above: an unverified briefing stays visible.
           slotLog.attention.warn(
@@ -527,13 +539,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           slotLog.event.err(`send failed: ${res.reason}`, { toast: true });
         }
       },
-      // Same rejection leg as the row path above: a slot session is a
-      // multi-writer singleton, so the delivery lock CAN time out.
-      (err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        slotLog.event.err(`send failed: ${msg}`, { toast: true });
-      },
-    );
+    })));
     return { launched: true };
   }
 

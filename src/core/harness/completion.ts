@@ -11,7 +11,8 @@ import type {
   NamingConfig,
   NamingReasoningEffort,
 } from "../config.ts";
-import { run } from "../proc.ts";
+import { Data, Effect } from "effect";
+import { runEffect, type ProcError } from "../proc.ts";
 import { readPrimaryHarness } from "./primary.ts";
 import type { HarnessId } from "./types.ts";
 
@@ -20,6 +21,15 @@ export type HarnessCompletion = {
   argv: string[];
   input?: string;
 };
+
+export class HarnessCompletionError extends Data.TaggedError("HarnessCompletionError")<{
+  readonly harnessId: HarnessId;
+  readonly kind: "transport" | "timeout" | "nonzero" | "empty" | "interrupted";
+  readonly detail: string;
+  readonly cause?: unknown;
+}> {
+  override get message(): string { return this.detail; }
+}
 
 function claudeEffort(
   effort: NamingReasoningEffort,
@@ -104,40 +114,44 @@ export function buildHarnessCompletion(
   }
 }
 
-export async function runHarnessCompletion(
+export function runHarnessCompletionEffect(
   naming: NamingConfig,
   prompt: string,
   cwd: string,
-  signal?: AbortSignal,
-): Promise<string> {
+): Effect.Effect<string, HarnessCompletionError> {
   const completion = buildHarnessCompletion(
     naming,
     readPrimaryHarness(),
     prompt,
     cwd,
   );
-  const result = await run(completion.argv, {
+  return runEffect(completion.argv, {
     cwd,
     ...(completion.input !== undefined ? { input: completion.input } : {}),
     timeoutMs: naming.timeoutMs,
-    signal,
-  });
-  if (signal?.aborted) throw new Error("naming request aborted");
-  if (result.timedOut) {
-    throw new Error(
-      `${completion.harnessId} naming timed out after ${naming.timeoutMs}ms`,
-    );
-  }
-  if (result.exitCode !== 0) {
+  }).pipe(
+    Effect.mapError((cause: ProcError) => new HarnessCompletionError({
+      harnessId: completion.harnessId,
+      kind: cause._tag === "ProcInterruptedError" ? "interrupted" : "transport",
+      detail: cause.message,
+      cause,
+    })),
+    Effect.flatMap((result) => {
+      if (result.timedOut) return Effect.fail(new HarnessCompletionError({
+        harnessId: completion.harnessId, kind: "timeout",
+        detail: `${completion.harnessId} naming timed out after ${naming.timeoutMs}ms`,
+      }));
+      if (result.exitCode !== 0) {
     const detail = (result.stderr.trim() || result.stdout.trim() ||
       `exit ${result.exitCode}`)
       .replace(/\s+/g, " ")
       .slice(0, 300);
-    throw new Error(`${completion.harnessId} naming failed: ${detail}`);
-  }
-  const output = result.stdout.trim();
-  if (!output) {
-    throw new Error(`${completion.harnessId} naming returned no content`);
-  }
-  return output;
+        return Effect.fail(new HarnessCompletionError({ harnessId: completion.harnessId, kind: "nonzero", detail: `${completion.harnessId} naming failed: ${detail}` }));
+      }
+      const output = result.stdout.trim();
+      return output
+        ? Effect.succeed(output)
+        : Effect.fail(new HarnessCompletionError({ harnessId: completion.harnessId, kind: "empty", detail: `${completion.harnessId} naming returned no content` }));
+    }),
+  );
 }

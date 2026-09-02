@@ -27,10 +27,11 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Effect } from "effect";
 
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { run } from "../proc.ts";
+import { runEffect } from "../proc.ts";
 import { TMUX_SOCKET } from "./naming.ts";
 
 const log = createLogger("[action-tmux]");
@@ -140,16 +141,16 @@ export function actionSessionName(slug: string): string {
  * would break tmux-aware tools the user may have wired into a shell
  * action.
  */
-export async function startActionSession(opts: {
+export function startActionSessionEffect(opts: {
   slug: string;
   cwd: string;
   runDir: string;
   argv: readonly string[];
-}): Promise<{ ok: true } | { ok: false; reason: string }> {
+}): Effect.Effect<{ ok: true } | { ok: false; reason: string }> {
   const { slug, cwd, runDir, argv } = opts;
   const wrapper = ensureWrapper();
   const name = actionSessionName(slug);
-  const r = await run([
+  return runEffect([
     "tmux",
     "-L",
     TMUX_SOCKET,
@@ -163,16 +164,24 @@ export async function startActionSession(opts: {
     wrapper,
     runDir,
     ...argv,
-  ]);
-  if (r.exitCode === 0) return { ok: true };
-  const reason = r.stderr.trim() || `tmux new-session exited ${r.exitCode}`;
-  log.warn("startActionSession failed", {
-    slug,
-    code: r.exitCode,
-    reason,
-  });
-  return { ok: false, reason };
+  ]).pipe(
+    Effect.orElseSucceed(() => ({ stdout: "", stderr: "tmux process failed", exitCode: 1, timedOut: false })),
+    Effect.map((r) => {
+      if (r.exitCode === 0) return { ok: true } as const;
+      const reason = r.stderr.trim() || `tmux new-session exited ${r.exitCode}`;
+      log.warn("startActionSession failed", { slug, code: r.exitCode, reason });
+      return { ok: false, reason } as const;
+    }),
+  );
 }
+
+export const startActionSession = (opts: {
+  slug: string;
+  cwd: string;
+  runDir: string;
+  argv: readonly string[];
+}): Promise<{ ok: true } | { ok: false; reason: string }> =>
+  Effect.runPromise(startActionSessionEffect(opts));
 
 /**
  * Kill one slug's action session. Idempotent — silently no-ops when
@@ -187,13 +196,16 @@ export async function startActionSession(opts: {
  * immediately; the awaited resolution then guarantees the session name
  * is freed so a follow-up `start()` for the same slug can reclaim it.
  */
-export async function killActionSession(slug: string): Promise<void> {
-  await run([
+export function killActionSessionEffect(slug: string): Effect.Effect<void> {
+  return runEffect([
     "tmux",
     "-L",
     TMUX_SOCKET,
     "kill-session",
     "-t",
     `=${actionSessionName(slug)}`,
-  ]);
+  ]).pipe(Effect.ignore);
 }
+
+export const killActionSession = (slug: string): Promise<void> =>
+  Effect.runPromise(killActionSessionEffect(slug));

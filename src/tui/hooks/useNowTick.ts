@@ -13,6 +13,8 @@ import { useEffect, useState } from "react";
 export function useNowTick(ms = 30_000): number {
   const [tick, setTick] = useState(0);
   useEffect(() => {
+    // React owns this presentation-only clock and synchronously clears it
+    // when the subscribing pane unmounts; no work survives the component.
     const t = setInterval(() => setTick((v) => v + 1), ms);
     return () => clearInterval(t);
   }, [ms]);

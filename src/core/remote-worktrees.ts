@@ -1,7 +1,9 @@
+import { Data, Effect } from "effect";
+
 import type { RemoteConfig } from "./config.ts";
-import { run } from "./proc.ts";
+import { runEffect } from "./proc.ts";
 import { remoteWtCommand } from "./remote-protocol.ts";
-import { fetchRemoteWorkerInfo } from "./worker-info.ts";
+import { fetchRemoteWorkerInfoEffect } from "./worker-info.ts";
 import {
   parseWorkerSnapshot,
   type WorktreeSnapshot,
@@ -21,6 +23,12 @@ export type RemoteWorktreeSummary = WorktreeSnapshot & {
   hostLabel: string;
   section: string | null;
 };
+
+export class RemoteWorktreesError extends Data.TaggedError("RemoteWorktreesError")<{
+  readonly operation: "handshake" | "snapshot" | "parse";
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
 export function parseRemoteWorkerWorktrees(
   raw: string,
@@ -42,12 +50,19 @@ export function parseRemoteWorkerWorktrees(
 }
 
 /** Read the authoritative execution snapshot from one configured SSH worker. */
-export async function fetchRemoteWorktrees(
+export function fetchRemoteWorktreesEffect(
   remote: RemoteConfig,
   signal?: AbortSignal,
-): Promise<RemoteWorktreeSummary[]> {
-  await fetchRemoteWorkerInfo(remote, signal);
-  const result = await run(
+): Effect.Effect<RemoteWorktreeSummary[], RemoteWorktreesError> {
+  return Effect.gen(function* () {
+  yield* fetchRemoteWorkerInfoEffect(remote).pipe(
+    Effect.mapError((cause) => new RemoteWorktreesError({
+      operation: "handshake",
+      message: `worker handshake failed for ${remote.label}`,
+      cause,
+    })),
+  );
+  const result = yield* runEffect(
     [
       "ssh",
       "-o",
@@ -58,16 +73,34 @@ export async function fetchRemoteWorktrees(
       remoteWtCommand(remote, ["_snapshot"]),
     ],
     { cwd: process.cwd(), timeoutMs: 15_000, signal },
+  ).pipe(
+    Effect.mapError((cause) => new RemoteWorktreesError({
+      operation: "snapshot",
+      message: `snapshot command failed for ${remote.label}`,
+      cause,
+    })),
   );
   if (result.exitCode !== 0) {
-    throw new Error(result.stderr.trim() || result.stdout.trim() || `SSH exited ${result.exitCode}`);
+    return yield* new RemoteWorktreesError({
+      operation: "snapshot",
+      message: result.stderr.trim() || result.stdout.trim() || `SSH exited ${result.exitCode}`,
+    });
   }
-  const rows = parseRemoteWorkerWorktrees(
-    result.stdout,
-    remote.label,
-    remote.host,
-    remote,
-  );
-  reapRemoteLayouts(remote.host, new Set(rows.map((row) => row.slug)));
+  const rows = yield* Effect.try({
+    try: () => parseRemoteWorkerWorktrees(result.stdout, remote.label, remote.host, remote),
+    catch: (cause) => new RemoteWorktreesError({
+      operation: "parse",
+      message: `invalid worker snapshot from ${remote.label}`,
+      cause,
+    }),
+  });
+  yield* Effect.sync(() => reapRemoteLayouts(remote.host, new Set(rows.map((row) => row.slug))));
   return rows;
+  });
 }
+
+export const fetchRemoteWorktrees = (
+  remote: RemoteConfig,
+  signal?: AbortSignal,
+): Promise<RemoteWorktreeSummary[]> =>
+  Effect.runPromise(fetchRemoteWorktreesEffect(remote, signal));

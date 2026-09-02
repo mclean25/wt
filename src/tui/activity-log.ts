@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { Duration, Effect, Fiber } from "effect";
 
 import type { EventChannel, EventKind } from "../core/logger.ts";
 
@@ -30,7 +31,7 @@ class EventLog {
   private attention: readonly WtEvent[] = [];
   private listeners = new Set<Listener>();
   private nextId = 1;
-  private notifyTimer: Timer | null = null;
+  private notifyFiber: Fiber.RuntimeFiber<void, never> | null = null;
   /**
    * Attention "seen" watermark (epoch ms; 0 = never marked). Events at
    * or before it render dim below a `── seen` rule in the attention
@@ -87,11 +88,15 @@ class EventLog {
   };
 
   private scheduleNotify(): void {
-    if (this.notifyTimer !== null) return;
-    this.notifyTimer = setTimeout(() => {
-      this.notifyTimer = null;
-      this.notify();
-    }, 16);
+    if (this.notifyFiber !== null) return;
+    this.notifyFiber = Effect.runFork(
+      Effect.sleep(Duration.millis(16)).pipe(
+        Effect.andThen(Effect.sync(() => {
+          this.notifyFiber = null;
+          this.notify();
+        })),
+      ),
+    );
   }
 
   private notify(): void {

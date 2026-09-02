@@ -8,6 +8,7 @@
  * activity-pane output stay unchanged.
  */
 import { createLogger } from "../../logger.ts";
+import { Effect, Fiber } from "effect";
 
 import type {
   ActiveCodexSlug,
@@ -20,7 +21,11 @@ export type { ActiveCodexSlug };
 const log = createLogger("[codex]");
 const POLL_INTERVAL_MS = 2_500;
 
-function post(worker: Worker, msg: CodexEventsWorkerMessage): void {
+export type CodexEventsWorker = Pick<Worker, "postMessage" | "addEventListener" | "terminate"> & {
+  unref?(): void;
+};
+
+function post(worker: CodexEventsWorker, msg: CodexEventsWorkerMessage): void {
   worker.postMessage(msg);
 }
 
@@ -49,64 +54,76 @@ function emit(result: CodexEventsWorkerResult, onActivity?: () => void): void {
  * @returns A cleanup function that stops the interval and terminates
  *   the worker. Call it during TUI shutdown.
  */
+export function codexEventPollingEffect(
+  getActiveSlugs: () => ReadonlyArray<ActiveCodexSlug>,
+  onActivity?: () => void,
+  options: {
+    workerFactory?: () => CodexEventsWorker;
+    intervalMs?: number;
+  } = {},
+): Effect.Effect<never, never, never> {
+  return Effect.scoped(Effect.gen(function* () {
+    const worker = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        options.workerFactory?.() ??
+        new Worker(new URL("./events-worker.ts", import.meta.url).href)),
+      (worker) => Effect.sync(() => {
+        try { post(worker, { type: "stop" }); } catch { /* terminating below */ }
+        try { worker.terminate(); } catch { /* already gone */ }
+      }),
+    );
+    let disposed = false;
+    let inFlight = false;
+
+    worker.addEventListener("message", (event: MessageEvent) => {
+      inFlight = false;
+      if (disposed) return;
+      emit(event.data as CodexEventsWorkerResult, onActivity);
+    });
+    worker.addEventListener("error", (event) => {
+      inFlight = false;
+      if (disposed) return;
+      log.warn("worker error", { err: event.message });
+    });
+    worker.addEventListener("close", () => {
+      inFlight = false;
+      if (disposed) return;
+      log.warn("worker exited");
+    });
+    worker.unref?.();
+
+    const tick = (): void => {
+      if (disposed || inFlight) return;
+      const active = getActiveSlugs();
+      if (active.length === 0) {
+        post(worker, { type: "poll", active });
+        return;
+      }
+      inFlight = true;
+      post(worker, { type: "poll", active });
+    };
+
+    const tickEffect = Effect.sync(() => {
+      try {
+        tick();
+      } catch (err) {
+        inFlight = false;
+        log.warn("poll tick failed", { err: String(err) });
+      }
+    });
+    yield* Effect.addFinalizer(() => Effect.sync(() => { disposed = true; }));
+    return yield* Effect.sleep(options.intervalMs ?? POLL_INTERVAL_MS).pipe(
+      Effect.andThen(tickEffect),
+      Effect.forever,
+    );
+  }));
+}
+
+/** TUI lifecycle adapter. */
 export function startCodexEventPolling(
   getActiveSlugs: () => ReadonlyArray<ActiveCodexSlug>,
   onActivity?: () => void,
-): () => void {
-  const worker = new Worker(new URL("./events-worker.ts", import.meta.url).href);
-  let disposed = false;
-  let inFlight = false;
-
-  worker.addEventListener("message", (event: MessageEvent) => {
-    inFlight = false;
-    if (disposed) return;
-    emit(event.data as CodexEventsWorkerResult, onActivity);
-  });
-  worker.addEventListener("error", (event) => {
-    inFlight = false;
-    if (disposed) return;
-    log.warn("worker error", { err: event.message });
-  });
-  worker.addEventListener("close", () => {
-    inFlight = false;
-    if (disposed) return;
-    log.warn("worker exited");
-  });
-  // Idle worker should not keep wt alive during shutdown.
-  (worker as Worker & { unref?: () => void }).unref?.();
-
-  const tick = (): void => {
-    if (disposed || inFlight) return;
-    const active = getActiveSlugs();
-    if (active.length === 0) {
-      post(worker, { type: "poll", active });
-      return;
-    }
-    inFlight = true;
-    post(worker, { type: "poll", active });
-  };
-
-  const handle = setInterval(() => {
-    try {
-      tick();
-    } catch (err) {
-      inFlight = false;
-      log.warn("poll tick failed", { err: String(err) });
-    }
-  }, POLL_INTERVAL_MS);
-
-  return () => {
-    disposed = true;
-    clearInterval(handle);
-    try {
-      post(worker, { type: "stop" });
-    } catch {
-      // terminating below
-    }
-    try {
-      worker.terminate();
-    } catch {
-      // already gone
-    }
-  };
+): () => Promise<void> {
+  const fiber = Effect.runFork(codexEventPollingEffect(getActiveSlugs, onActivity));
+  return () => Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.asVoid));
 }

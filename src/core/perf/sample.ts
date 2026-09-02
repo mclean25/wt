@@ -20,9 +20,10 @@
  * `cores * 100`.
  */
 import { cpus, freemem, loadavg, totalmem } from "node:os";
+import { Data, Effect } from "effect";
 
 import { createLogger } from "../logger.ts";
-import { run } from "../proc.ts";
+import { runEffect } from "../proc.ts";
 import { TMUX_SOCKET } from "../tmux.ts";
 
 const log = createLogger("[perf]");
@@ -125,6 +126,10 @@ export type PerfSnapshot = {
   orphans: PerfProc[];
 };
 
+export class PerfSampleError extends Data.TaggedError("PerfSampleError")<{
+  readonly cause: unknown;
+}> {}
+
 // ── Sampling ───────────────────────────────────────────────────────────
 
 /**
@@ -160,21 +165,25 @@ const HELPER_TIMEOUT_MS = 4_000;
  * conflating them renders a broken sampler as a reassuringly idle
  * machine — the exact opposite of the truth it exists to show.
  */
-async function readLines(
+function readLinesEffect(
   cmd: string[],
   signal?: AbortSignal,
-): Promise<string[] | null> {
-  const { stdout, exitCode } = await run(cmd, {
-    timeoutMs: HELPER_TIMEOUT_MS,
-    signal,
-  });
-  // run() never throws: a missing binary or a timeout surfaces as a
-  // negative exit code.
-  if (exitCode !== 0) {
-    log.debug("perf helper failed", { cmd: cmd[0], exitCode });
-    return null;
-  }
-  return stdout.split("\n");
+): Effect.Effect<string[] | null> {
+  return runEffect(cmd, { timeoutMs: HELPER_TIMEOUT_MS, signal }).pipe(
+    Effect.map(({ stdout, exitCode }) => {
+      if (exitCode !== 0) {
+        log.debug("perf helper failed", { cmd: cmd[0], exitCode });
+        return null;
+      }
+      return stdout.split("\n");
+    }),
+    Effect.catchAll((cause) =>
+      Effect.sync(() => {
+        log.debug("perf helper failed", { cmd: cmd[0], cause: String(cause) });
+        return null;
+      }),
+    ),
+  );
 }
 
 /**
@@ -183,40 +192,49 @@ async function readLines(
  * successful-but-empty parse means the output shape wasn't what we
  * expect (a non-macOS `ps`, say) and is treated as failure too.
  */
-async function sampleProcesses(signal?: AbortSignal): Promise<RawProc[]> {
-  const lines = await readLines(
-    ["ps", "-Ao", "pid=,ppid=,pcpu=,rss=,etime=,args="],
-    signal,
-  );
-  if (lines === null) throw new Error("ps failed — cannot sample processes");
-  const rows: RawProc[] = [];
-  for (const line of lines) {
-    const m = PS_LINE.exec(line);
-    if (!m) continue;
-    const command = m[6]!.trim();
-    if (SELF_RE.test(command)) continue;
-    rows.push({
-      pid: Number(m[1]),
-      ppid: Number(m[2]),
-      cpu: Number(m[3]),
-      rssMb: Number(m[4]) / 1024,
-      etime: m[5]!,
-      command,
-    });
-  }
-  if (rows.length === 0) {
-    throw new Error("ps returned no parseable processes");
-  }
-  return rows;
+function sampleProcessesEffect(
+  signal?: AbortSignal,
+): Effect.Effect<RawProc[], PerfSampleError> {
+  return Effect.gen(function* () {
+    const lines = yield* readLinesEffect(
+      ["ps", "-Ao", "pid=,ppid=,pcpu=,rss=,etime=,args="],
+      signal,
+    );
+    if (lines === null) {
+      return yield* new PerfSampleError({
+        cause: new Error("ps failed — cannot sample processes"),
+      });
+    }
+    const rows: RawProc[] = [];
+    for (const line of lines) {
+      const m = PS_LINE.exec(line);
+      if (!m) continue;
+      const command = m[6]!.trim();
+      if (SELF_RE.test(command)) continue;
+      rows.push({
+        pid: Number(m[1]),
+        ppid: Number(m[2]),
+        cpu: Number(m[3]),
+        rssMb: Number(m[4]) / 1024,
+        etime: m[5]!,
+        command,
+      });
+    }
+    if (rows.length === 0) {
+      return yield* new PerfSampleError({
+        cause: new Error("ps returned no parseable processes"),
+      });
+    }
+    return rows;
+  });
 }
 
 /** pane pid → tmux session name, for the wt-private server. Empty when
  *  the server isn't running (no sessions yet, or it was killed) — that
  *  degrades the overlay to "no sessions", which is honest, rather than
  *  failing the whole snapshot. */
-async function tmuxPanePids(signal?: AbortSignal): Promise<Map<number, string>> {
-  const map = new Map<number, string>();
-  const lines = await readLines(
+function tmuxPanePidsEffect(signal?: AbortSignal): Effect.Effect<Map<number, string>> {
+  return readLinesEffect(
     [
       "tmux",
       "-L",
@@ -227,23 +245,30 @@ async function tmuxPanePids(signal?: AbortSignal): Promise<Map<number, string>> 
       "#{session_name}\t#{pane_pid}",
     ],
     signal,
+  ).pipe(
+    Effect.map((lines) => {
+      const map = new Map<number, string>();
+      for (const line of lines ?? []) {
+        const [name, pid] = line.split("\t");
+        if (!name || !pid) continue;
+        const n = Number(pid);
+        if (Number.isFinite(n)) map.set(n, name);
+      }
+      return map;
+    }),
   );
-  for (const line of lines ?? []) {
-    const [name, pid] = line.split("\t");
-    if (!name || !pid) continue;
-    const n = Number(pid);
-    if (Number.isFinite(n)) map.set(n, name);
-  }
-  return map;
 }
 
-async function tmuxServerPid(signal?: AbortSignal): Promise<number | null> {
-  const lines = await readLines(
+function tmuxServerPidEffect(signal?: AbortSignal): Effect.Effect<number | null> {
+  return readLinesEffect(
     ["tmux", "-L", TMUX_SOCKET, "display-message", "-p", "#{pid}"],
     signal,
+  ).pipe(
+    Effect.map((lines) => {
+      const n = Number((lines?.[0] ?? "").trim());
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }),
   );
-  const n = Number((lines?.[0] ?? "").trim());
-  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 // ── Classification ─────────────────────────────────────────────────────
@@ -322,21 +347,25 @@ export function isOrphanedWtInstance(
  * costs a look (and now names the daemon it found), while a hidden one
  * is the leak this whole list exists to surface.
  */
-async function launchdOwnedWtPids(signal?: AbortSignal): Promise<Set<number>> {
-  const out = new Set<number>();
-  try {
-    const r = await run(["launchctl", "list"], { timeoutMs: 5_000, signal });
-    if (r.exitCode !== 0) return out;
-    for (const line of r.stdout.split("\n")) {
-      const [pidField, , label] = line.split("\t");
-      if (!label?.startsWith("com.wt.")) continue;
-      const pid = Number(pidField);
-      if (Number.isInteger(pid) && pid > 0) out.add(pid);
-    }
-  } catch {
-    // launchctl missing (non-macOS) or the sample was aborted.
-  }
-  return out;
+function launchdOwnedWtPidsEffect(
+  signal?: AbortSignal,
+): Effect.Effect<Set<number>> {
+  return runEffect(["launchctl", "list"], { timeoutMs: 5_000, signal }).pipe(
+    Effect.map((result) => {
+      const out = new Set<number>();
+      if (result.exitCode !== 0) return out;
+      for (const line of result.stdout.split("\n")) {
+        const [pidField, , label] = line.split("\t");
+        if (!label?.startsWith("com.wt.")) continue;
+        const pid = Number(pidField);
+        if (Number.isInteger(pid) && pid > 0) out.add(pid);
+      }
+      return out;
+    }),
+    // launchctl missing (non-macOS) or an externally aborted compatibility
+    // call fails toward reporting possible orphans, never hiding them.
+    Effect.catchAll(() => Effect.succeed(new Set<number>())),
+  );
 }
 
 export function classifyProcess(command: string): PerfCategory {
@@ -378,25 +407,27 @@ export function classifyProcess(command: string): PerfCategory {
  * Returns null when `vm_stat` isn't parseable; the caller falls back to
  * the `os` numbers rather than dropping the row.
  */
-async function macMemoryUsedMb(signal?: AbortSignal): Promise<number | null> {
-  const lines = await readLines(["vm_stat"], signal);
-  if (lines === null || lines.length === 0) return null;
-  const pageSize = Number(/page size of (\d+) bytes/.exec(lines[0] ?? "")?.[1]);
-  if (!Number.isFinite(pageSize) || pageSize <= 0) return null;
-  const pagesFor = (label: string): number => {
-    for (const line of lines) {
-      if (!line.startsWith(label)) continue;
-      const n = Number(/(\d+)\./.exec(line)?.[1]);
-      if (Number.isFinite(n)) return n;
-    }
-    return 0;
-  };
-  const pages =
-    pagesFor("Pages active") +
-    pagesFor("Pages wired down") +
-    pagesFor("Pages occupied by compressor");
-  if (pages <= 0) return null;
-  return (pages * pageSize) / 1024 / 1024;
+function macMemoryUsedMbEffect(signal?: AbortSignal): Effect.Effect<number | null> {
+  return readLinesEffect(["vm_stat"], signal).pipe(
+    Effect.map((lines) => {
+      if (lines === null || lines.length === 0) return null;
+      const pageSize = Number(/page size of (\d+) bytes/.exec(lines[0] ?? "")?.[1]);
+      if (!Number.isFinite(pageSize) || pageSize <= 0) return null;
+      const pagesFor = (label: string): number => {
+        for (const line of lines) {
+          if (!line.startsWith(label)) continue;
+          const n = Number(/(\d+)\./.exec(line)?.[1]);
+          if (Number.isFinite(n)) return n;
+        }
+        return 0;
+      };
+      const pages =
+        pagesFor("Pages active") +
+        pagesFor("Pages wired down") +
+        pagesFor("Pages occupied by compressor");
+      return pages <= 0 ? null : (pages * pageSize) / 1024 / 1024;
+    }),
+  );
 }
 
 // ── Assembly ───────────────────────────────────────────────────────────
@@ -480,23 +511,14 @@ export type SamplePerfOpts = {
  * to "no sessions" rather than failing the snapshot, so the overlay
  * still answers the system-level half of the question.
  */
-export async function samplePerf(
-  signal?: AbortSignal,
+function assemblePerfSnapshot(
+  procs: RawProc[],
+  panePids: Map<number, string>,
+  serverPid: number | null,
+  memUsedMb: number | null,
+  ownedPids: Set<number>,
   opts?: SamplePerfOpts,
-): Promise<PerfSnapshot> {
-  // The four run concurrently, so they observe slightly different
-  // instants. A process that exits in that window can be mis-attributed
-  // for exactly one sample (wrong session tag, or landing outside wt's
-  // tree); at a 2s cadence it self-corrects on the next tick, which is
-  // cheaper than serialising the helpers to get a consistent instant.
-  const [procs, panePids, serverPid, memUsedMb, ownedPids] = await Promise.all([
-    sampleProcesses(signal),
-    tmuxPanePids(signal),
-    tmuxServerPid(signal),
-    macMemoryUsedMb(signal),
-    launchdOwnedWtPids(signal),
-  ]);
-
+): PerfSnapshot {
   const kids = childIndex(procs);
 
   // Session attribution first: a pane's whole subtree belongs to it.
@@ -579,6 +601,42 @@ export async function samplePerf(
       .sort((a, b) => b.cpu - a.cpu),
   };
 }
+
+export function samplePerfEffect(
+  signal?: AbortSignal,
+  opts?: SamplePerfOpts,
+): Effect.Effect<PerfSnapshot, PerfSampleError> {
+  // Helpers run concurrently, so they observe slightly different instants.
+  // A process that exits in that window can be mis-attributed for one sample;
+  // the next two-second tick self-corrects without serializing shell-outs.
+  return Effect.all({
+    procs: sampleProcessesEffect(signal),
+    panePids: tmuxPanePidsEffect(signal),
+    serverPid: tmuxServerPidEffect(signal),
+    memUsedMb: macMemoryUsedMbEffect(signal),
+    ownedPids: launchdOwnedWtPidsEffect(signal),
+  }, { concurrency: "unbounded" }).pipe(
+    Effect.map(({ procs, panePids, serverPid, memUsedMb, ownedPids }) =>
+      assemblePerfSnapshot(
+        procs,
+        panePids,
+        serverPid,
+        memUsedMb,
+        ownedPids,
+        opts,
+      ),
+    ),
+    Effect.mapError((cause) =>
+      cause instanceof PerfSampleError ? cause : new PerfSampleError({ cause }),
+    ),
+  );
+}
+
+/** Promise adapter for TanStack queries and the CLI. */
+export const samplePerf = (
+  signal?: AbortSignal,
+  opts?: SamplePerfOpts,
+): Promise<PerfSnapshot> => Effect.runPromise(samplePerfEffect(signal, opts));
 
 // ── Report ─────────────────────────────────────────────────────────────
 

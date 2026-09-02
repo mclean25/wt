@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { theme } from "./theme.ts";
-import { getToast, showToast, toastColor, toastDuration } from "./toast.ts";
+import { attachLoggerToasts, getToast, showToast, toastColor, toastDuration } from "./toast.ts";
 
 const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -24,6 +24,19 @@ describe("toast store", () => {
     expect(getToast()?.text).toBe("second");
     await tick(50);
     expect(getToast()).toBeNull();
+  });
+
+  test("detach rejects late direct toasts until the next TUI attach", () => {
+    const detach = attachLoggerToasts();
+    showToast("before detach", theme.ok, 1_000);
+    detach();
+    showToast("late completion", theme.warn, 1_000);
+    expect(getToast()).toBeNull();
+
+    const detachAgain = attachLoggerToasts();
+    showToast("next run", theme.ok, 1_000);
+    expect(getToast()?.text).toBe("next run");
+    detachAgain();
   });
 });
 

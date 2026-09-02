@@ -5,8 +5,9 @@
  * ref, its expiry timer, and the `p`-consumption check the keyboard
  * dispatcher calls early in normal mode.
  */
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { KeyEvent } from "@opentui/core";
+import { Effect } from "effect";
 
 import { config, type PullRequestTarget } from "../../core/config.ts";
 import {
@@ -16,7 +17,7 @@ import {
 import { createLogger } from "../../core/logger.ts";
 import type { ReviewRequestPr } from "../../state/index.ts";
 import { isPlainLetter } from "../app-helpers.ts";
-import { openUrlHidingTerminal } from "../../core/macos.ts";
+import { openUrlHidingTerminalEffect } from "../../core/macos.ts";
 import type { WorktreeModel } from "../worktree-model.ts";
 
 const PR_TARGET_CHORD_MS = 1_200;
@@ -41,6 +42,14 @@ export function usePrTargetChord(opts: {
     if (pending) clearTimeout(pending.timer);
     pendingPrTargetChordRef.current = null;
   }
+
+  // React owns this chord window. Clear it on unmount so a stale timer
+  // cannot mutate the retired hook instance after the TUI has torn down.
+  useEffect(() => () => {
+    const pending = pendingPrTargetChordRef.current;
+    if (pending) clearTimeout(pending.timer);
+    pendingPrTargetChordRef.current = null;
+  }, []);
 
   function rememberPrTargetChord(target: PullRequestTarget): boolean {
     const pr = selectedPr ?? selectedWorktree?.pr;
@@ -70,7 +79,7 @@ export function usePrTargetChord(opts: {
       ? pullRequestOpenUrlForTarget(url, target)
       : pullRequestOpenUrl(url);
     const label = target ?? config.github.prTarget;
-    void openUrlHidingTerminal(resolved);
+    Effect.runFork(openUrlHidingTerminalEffect(resolved).pipe(Effect.ignore));
     createLogger(logName).event.info(`opened PR #${number} in ${label}`);
   }
 

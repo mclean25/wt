@@ -1,12 +1,18 @@
+import { Data, Effect } from "effect";
+
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { run } from "../proc.ts";
-import { hasGh } from "./gh-cli.ts";
+import { runEffect } from "../proc.ts";
+import { hasGhEffect } from "./gh-cli.ts";
 import { openPrChecks, rollupChecks } from "./parse.ts";
 import type { RawCheck } from "./types.ts";
 import type { ReviewRequestPr } from "./types.ts";
 
 const log = createLogger("[gh]");
+
+export class ReviewRequestsError extends Data.TaggedError("ReviewRequestsError")<{
+  readonly cause: unknown;
+}> {}
 
 /**
  * Pull requests where the authenticated user (or one of their teams)
@@ -94,14 +100,22 @@ type GqlReviewRequestResponse = {
   data?: { search?: { nodes?: Array<GqlReviewRequestNode | null> } };
 };
 
-export async function fetchReviewRequests(
+export function fetchReviewRequestsEffect(
   signal?: AbortSignal,
-): Promise<ReviewRequestPr[]> {
-  if (!(await hasGh())) return [];
-  const r = await run(
+): Effect.Effect<ReviewRequestPr[], ReviewRequestsError> {
+  return Effect.gen(function* () {
+  if (!(yield* hasGhEffect())) return [];
+  const r = yield* runEffect(
     ["gh", "api", "graphql", "-f", `query=${REVIEW_REQUESTS_QUERY}`],
     { cwd: config.paths.mainClone, timeoutMs: 15_000, signal },
+  ).pipe(
+    Effect.catchAll((cause) =>
+      signal?.aborted
+        ? Effect.succeed(null)
+        : Effect.fail(new ReviewRequestsError({ cause })),
+    ),
   );
+  if (r === null) return [];
   if (r.exitCode !== 0) {
     // An aborted signal means the query was cancelled mid-flight (refs
     // churn invalidates this query; `run` SIGTERMs the child → exit
@@ -120,19 +134,26 @@ export async function fetchReviewRequests(
     // Throw rather than return [] — an empty success would blank the
     // review-requests section on a transient blip; a rejection keeps
     // the last good list and marks the query errored.
-    throw new Error(
-      `review-requests fetch failed: ${r.stderr.split("\n")[0]?.trim() || r.stdout.split("\n")[0]?.trim() || `gh exited ${r.exitCode}`}`,
-    );
-  }
-  let parsed: GqlReviewRequestResponse;
-  try {
-    parsed = JSON.parse(r.stdout);
-  } catch (err) {
-    log.error(err instanceof Error ? err : String(err), {
-      stdout: r.stdout.slice(0, 200),
+    return yield* new ReviewRequestsError({
+      cause: new Error(
+        `review-requests fetch failed: ${r.stderr.split("\n")[0]?.trim() || r.stdout.split("\n")[0]?.trim() || `gh exited ${r.exitCode}`}`,
+      ),
     });
-    throw new Error("review-requests fetch failed: unparseable gh output");
   }
+  const parsed = yield* Effect.try({
+    try: () => JSON.parse(r.stdout) as GqlReviewRequestResponse,
+    catch: (cause) => new ReviewRequestsError({ cause }),
+  }).pipe(
+    Effect.tapError((error) => Effect.sync(() => {
+      log.error(
+        error.cause instanceof Error ? error.cause : String(error.cause),
+        { stdout: r.stdout.slice(0, 200) },
+      );
+    })),
+    Effect.mapError(() => new ReviewRequestsError({
+      cause: new Error("review-requests fetch failed: unparseable gh output"),
+    })),
+  );
   const nodes = parsed.data?.search?.nodes ?? [];
   const out: ReviewRequestPr[] = [];
   for (const n of nodes) {
@@ -171,4 +192,11 @@ export async function fetchReviewRequests(
     });
   }
   return out;
+  });
+}
+
+export function fetchReviewRequests(
+  signal?: AbortSignal,
+): Promise<ReviewRequestPr[]> {
+  return Effect.runPromise(fetchReviewRequestsEffect(signal));
 }

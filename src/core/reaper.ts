@@ -24,8 +24,9 @@
  * reap", never a failed destroy.
  */
 import { config } from "./config.ts";
+import { Clock, Effect, Schedule } from "effect";
 import { createLogger } from "./logger.ts";
-import { run } from "./proc.ts";
+import { runEffect } from "./proc.ts";
 
 const log = createLogger("[reaper]");
 
@@ -115,20 +116,25 @@ const LSOF_TIMEOUT_MS = 8000;
  * `attention` is right for it: unknown here means a leak the human will
  * meet later, wearing a bind error that names nothing wt knows.
  */
-async function lsofScan(
+function lsofScanEffect(
   argv: string[],
   label: string,
   wtPath: string,
-): Promise<{ out: string; complete: boolean }> {
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const r = await run(argv, { cwd: "/", timeoutMs: LSOF_TIMEOUT_MS });
-    if (!r.timedOut) return { out: r.stdout, complete: true };
-    log.warn(`lsof ${label} scan exceeded ${LSOF_TIMEOUT_MS}ms`, { attempt, path: wtPath });
-  }
-  log.attention.warn(
-    `could not scan listeners for ${wtPath} — a dev server may still hold its ports`,
+): Effect.Effect<{ out: string; complete: boolean }> {
+  let attempt = 0;
+  return runEffect(argv, { cwd: "/", timeoutMs: LSOF_TIMEOUT_MS }).pipe(
+    Effect.flatMap((r) => {
+      attempt += 1;
+      if (!r.timedOut) return Effect.succeed({ out: r.stdout, complete: true });
+      log.warn(`lsof ${label} scan exceeded ${LSOF_TIMEOUT_MS}ms`, { attempt, path: wtPath });
+      return Effect.fail("timeout" as const);
+    }),
+    Effect.retry(Schedule.recurs(1)),
+    Effect.catchAll(() => Effect.sync(() => {
+      log.attention.warn(`could not scan listeners for ${wtPath} — a dev server may still hold its ports`);
+      return { out: "", complete: false };
+    })),
   );
-  return { out: "", complete: false };
 }
 
 function alive(pid: number): boolean {
@@ -146,15 +152,15 @@ function alive(pid: number): boolean {
  * SIGKILL whatever ignores it. Returns what was reaped, for the
  * destroy log; empty on any failure.
  */
-export async function reapWorktreeListeners(wtPath: string): Promise<ReapedProcess[]> {
-  try {
+export function reapWorktreeListenersEffect(wtPath: string): Effect.Effect<ReapedProcess[]> {
+  return Effect.gen(function* () {
     // A killer keyed on path containment earns paranoia about its root:
     // never sweep from the main clone (a preview server there is the
     // human's), and never from a path short enough to be a mistake.
     if (wtPath === config.paths.mainClone || wtPath.split("/").length < 3) return [];
     if (!Bun.which("lsof")) return [];
 
-    const listeners = await lsofScan(
+    const listeners = yield* lsofScanEffect(
       ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"],
       "listener",
       wtPath,
@@ -169,7 +175,7 @@ export async function reapWorktreeListeners(wtPath: string): Promise<ReapedProce
     );
     if (all.length === 0) return [];
 
-    const cwds = await lsofScan(
+    const cwds = yield* lsofScanEffect(
       ["lsof", "-a", "-p", all.map((p) => p.pid).join(","), "-d", "cwd", "-Fpn"],
       "cwd",
       wtPath,
@@ -183,23 +189,15 @@ export async function reapWorktreeListeners(wtPath: string): Promise<ReapedProce
     if (mine.length === 0) return [];
 
     for (const p of mine) {
-      try {
-        process.kill(p.pid, "SIGTERM");
-      } catch {
-        // Already gone between the scan and now — fine.
-      }
+      yield* Effect.try(() => process.kill(p.pid, "SIGTERM")).pipe(Effect.ignore);
     }
-    const deadline = Date.now() + 2000;
-    while (Date.now() < deadline && mine.some((p) => alive(p.pid))) {
-      await Bun.sleep(100);
+    const deadline = (yield* Clock.currentTimeMillis) + 2000;
+    while ((yield* Clock.currentTimeMillis) < deadline && mine.some((p) => alive(p.pid))) {
+      yield* Effect.sleep(100);
     }
     for (const p of mine) {
       if (alive(p.pid)) {
-        try {
-          process.kill(p.pid, "SIGKILL");
-        } catch {
-          // Raced its own exit; the goal state is reached either way.
-        }
+        yield* Effect.try(() => process.kill(p.pid, "SIGKILL")).pipe(Effect.ignore);
       }
     }
     log.info("reaped worktree listeners", {
@@ -207,11 +205,8 @@ export async function reapWorktreeListeners(wtPath: string): Promise<ReapedProce
       reaped: mine.map((p) => `${p.command}:${p.pid} [${p.ports.join(",")}]`),
     });
     return mine;
-  } catch (err) {
-    log.debug("listener reap skipped", {
-      path: wtPath,
-      err: err instanceof Error ? err.message : String(err),
-    });
-    return [];
-  }
+  });
 }
+
+export const reapWorktreeListeners = (wtPath: string): Promise<ReapedProcess[]> =>
+  Effect.runPromise(reapWorktreeListenersEffect(wtPath));

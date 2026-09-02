@@ -19,6 +19,7 @@
 import { useEffect, useRef } from "react";
 import { mkdirSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname } from "node:path";
+import { Effect, Fiber } from "effect";
 
 import type { DerivedState } from "../../core/harness/status.ts";
 import { createLogger } from "../../core/logger.ts";
@@ -93,12 +94,18 @@ export function useManagerReports(): void {
       // Dir missing until the first report — the poll below promotes
       // delivery; recreating the watcher isn't worth the machinery.
     }
-    const poll = setInterval(drain, REPORTS_POLL_MS);
+    const poll = Effect.runFork(
+      Effect.forever(
+        Effect.sleep(`${REPORTS_POLL_MS} millis`).pipe(
+          Effect.andThen(Effect.sync(drain)),
+        ),
+      ),
+    );
     return () => {
       stopped = true;
       debounced.cancel();
       closeSilent(watcher);
-      clearInterval(poll);
+      Effect.runFork(Fiber.interrupt(poll));
     };
   }, []);
 }

@@ -1,9 +1,10 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { Data, Effect } from "effect";
 
-import { git, gitQuiet } from "../git.ts";
+import { gitEffect, gitQuietEffect } from "../git.ts";
 import { createLogger } from "../logger.ts";
-import { run } from "../proc.ts";
+import { runEffect } from "../proc.ts";
 import type {
   BackendCreateInput,
   BackendRemoveInput,
@@ -12,6 +13,14 @@ import type {
 } from "./types.ts";
 
 const log = createLogger("[backend:rift]");
+
+export class RiftBackendError extends Data.TaggedError("RiftBackendError")<{
+  readonly operation: "resolve" | "init" | "create" | "materialize" | "remove";
+  readonly detail: string;
+  readonly cause?: unknown;
+}> {
+  override get message(): string { return this.detail; }
+}
 
 /** True when the `rift` binary is on the process PATH. */
 function riftAvailable(): boolean {
@@ -34,11 +43,11 @@ let cachedRiftBin: string | null | undefined;
  * un-execable answer; any non-absolute result is discarded for the same
  * reason.
  */
-export async function resolveRiftBin(): Promise<string | null> {
-  if (cachedRiftBin !== undefined) return cachedRiftBin;
+export function resolveRiftBinEffect(): Effect.Effect<string | null> {
+  if (cachedRiftBin !== undefined) return Effect.succeed(cachedRiftBin);
   if (riftAvailable()) {
     cachedRiftBin = "rift";
-    return cachedRiftBin;
+    return Effect.succeed(cachedRiftBin);
   }
   const shell = process.env.SHELL || "/bin/bash";
   const probe =
@@ -46,31 +55,28 @@ export async function resolveRiftBin(): Promise<string | null> {
   // Bounded: a login shell sources the user's full profile, which can
   // legitimately block (an ssh-add prompt, a slow hook) — never let the
   // probe hang a worktree create/remove.
-  const r = await run([shell, "-lc", probe], { timeoutMs: 10_000 }).catch((err) => {
-    log.warn("rift login-shell probe failed", {
-      shell,
-      err: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  });
-  const out = r?.stdout.trim().split("\n").pop()?.trim() ?? "";
-  cachedRiftBin = out.startsWith("/") && existsSync(out) ? out : null;
-  if (cachedRiftBin) {
-    log.info("resolved rift via login shell", { path: cachedRiftBin, shell });
-  }
-  return cachedRiftBin;
+  return runEffect([shell, "-lc", probe], { timeoutMs: 10_000 }).pipe(
+    Effect.tapError((err) => Effect.sync(() => log.warn("rift login-shell probe failed", { shell, err: err.message }))),
+    Effect.option,
+    Effect.map((result) => {
+      const out = result._tag === "Some" ? result.value.stdout.trim().split("\n").pop()?.trim() ?? "" : "";
+      cachedRiftBin = out.startsWith("/") && existsSync(out) ? out : null;
+      if (cachedRiftBin) log.info("resolved rift via login shell", { path: cachedRiftBin, shell });
+      return cachedRiftBin;
+    }),
+  );
 }
 
-async function requireRiftBin(): Promise<string> {
-  const bin = await resolveRiftBin();
-  if (bin) return bin;
-  const shell = process.env.SHELL || "/bin/bash";
-  throw new Error(
+function requireRiftBinEffect(): Effect.Effect<string, RiftBackendError> {
+  return resolveRiftBinEffect().pipe(Effect.flatMap((bin) => {
+    if (bin) return Effect.succeed(bin);
+    const shell = process.env.SHELL || "/bin/bash";
+    return Effect.fail(new RiftBackendError({ operation: "resolve", detail:
     "rift backend selected but the `rift` executable was not found — searched " +
       `PATH (${process.env.PATH ?? "unset"}) and \`${shell} -lc 'command -v rift'\`. ` +
       "Install it (`npm i -g rift-snapshot`) or set `[backend] kind = \"git-worktree\"` " +
-      "in your wt config. (The lookup result is cached; restart wt after installing.)",
-  );
+      "in your wt config. (The lookup result is cached; restart wt after installing.)" }));
+  }));
 }
 
 /** A rift-managed checkout carries a `.rift` marker file at its root. */
@@ -110,24 +116,26 @@ export function listRiftWorktreePaths(worktreeRoot: string): string[] {
  * Done lazily at first create rather than at TUI startup so wt never
  * pays a rift subprocess just to launch.
  */
-async function ensureRiftInit(
+function ensureRiftInitEffect(
   rift: string,
   mainClone: string,
   onLog?: (line: string) => void,
-): Promise<void> {
-  if (isRiftWorktree(mainClone)) return;
-  onLog?.("rift init (registering main clone)");
-  const r = await run([rift, "init", "--here"], { cwd: mainClone });
-  if (r.exitCode !== 0) {
+): Effect.Effect<void, RiftBackendError> {
+  if (isRiftWorktree(mainClone)) return Effect.void;
+  return Effect.sync(() => onLog?.("rift init (registering main clone)")).pipe(
+    Effect.andThen(runEffect([rift, "init", "--here"], { cwd: mainClone })),
+    Effect.flatMap((r) => {
+      if (r.exitCode === 0 || isRiftWorktree(mainClone)) return Effect.void;
     // Two first-ever creates can pass the marker check above before either
     // writes it, then race `rift init` — the loser exits non-zero with a
     // UNIQUE-constraint collision. The desired end state (main clone
     // registered) is already reached by the winner, so tolerate it.
-    if (isRiftWorktree(mainClone)) return;
-    throw new Error(
-      `rift init failed: ${(r.stderr || r.stdout || `exit ${r.exitCode}`).trim()}`,
-    );
-  }
+      return Effect.fail(new RiftBackendError({ operation: "init", detail:
+        `rift init failed: ${(r.stderr || r.stdout || `exit ${r.exitCode}`).trim()}` }));
+    }),
+    Effect.mapError((cause) => cause instanceof RiftBackendError ? cause :
+      new RiftBackendError({ operation: "init", detail: cause.message, cause })),
+  );
 }
 
 /**
@@ -145,13 +153,13 @@ async function ensureRiftInit(
  *    With no owning worktree (trunk/origin base), the ref must resolve in
  *    the clone directly.
  */
-async function materializeBranch(input: {
+function materializeBranchEffect(input: {
   path: string;
   branch: string;
   baseRef: string | null;
   baseSourcePath?: string;
   onLog?: (line: string) => void;
-}): Promise<void> {
+}): Effect.Effect<void, RiftBackendError> {
   const { path, branch, baseRef, baseSourcePath, onLog } = input;
   // --discard-changes: `--copy-all` CoW-copies the main clone's working
   // tree INCLUDING its uncommitted modifications, and a plain switch
@@ -162,40 +170,31 @@ async function materializeBranch(input: {
   // clone's working tree is never touched, so discarding is safe and
   // removes the whole clean-main-clone requirement.
   if (baseRef === null) {
-    onLog?.(`switch to ${branch}`);
-    await git(["switch", "--discard-changes", branch], path);
-    return;
+    return Effect.sync(() => onLog?.(`switch to ${branch}`)).pipe(
+      Effect.andThen(gitEffect(["switch", "--discard-changes", branch], path)),
+      Effect.asVoid,
+      Effect.mapError((cause) => new RiftBackendError({ operation: "materialize", detail: cause.message, cause })),
+    );
   }
 
-  const resolvesInClone = (): Promise<boolean> =>
-    gitQuiet(["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`], path);
-
-  let start = baseRef;
-  if (baseSourcePath) {
-    onLog?.(`fetching base ${baseRef} from ${basename(baseSourcePath)}`);
-    const fetched = await run(
-      ["git", "fetch", "--no-tags", baseSourcePath, `refs/heads/${baseRef}`],
-      { cwd: path },
-    );
-    if (fetched.exitCode === 0) {
-      start = "FETCH_HEAD";
-    } else if (await resolvesInClone()) {
-      onLog?.(`fetch from ${basename(baseSourcePath)} failed; using base ${baseRef} from the clone`);
-      start = baseRef;
-    } else {
-      throw new Error(
-        `could not fetch base ${baseRef} from ${baseSourcePath}: ` +
-          `${(fetched.stderr || fetched.stdout || `exit ${fetched.exitCode}`).trim()}`,
-      );
+  const resolvesInClone = gitQuietEffect(["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`], path);
+  return Effect.gen(function* () {
+    let start = baseRef;
+    if (baseSourcePath) {
+      onLog?.(`fetching base ${baseRef} from ${basename(baseSourcePath)}`);
+      const fetched = yield* runEffect(["git", "fetch", "--no-tags", baseSourcePath, `refs/heads/${baseRef}`], { cwd: path });
+      if (fetched.exitCode === 0) start = "FETCH_HEAD";
+      else if (yield* resolvesInClone) onLog?.(`fetch from ${basename(baseSourcePath)} failed; using base ${baseRef} from the clone`);
+      else return yield* new RiftBackendError({ operation: "materialize", detail:
+        `could not fetch base ${baseRef} from ${baseSourcePath}: ${(fetched.stderr || fetched.stdout || `exit ${fetched.exitCode}`).trim()}` });
+    } else if (!(yield* resolvesInClone)) {
+      return yield* new RiftBackendError({ operation: "materialize", detail:
+        `base ${baseRef} is not in the new checkout and no source worktree was found to fetch it from` });
     }
-  } else if (!(await resolvesInClone())) {
-    throw new Error(
-      `base ${baseRef} is not in the new checkout and no source ` +
-        `worktree was found to fetch it from`,
-    );
-  }
-  onLog?.(`new branch ${branch} off ${baseRef}`);
-  await git(["switch", "--discard-changes", "-c", branch, start], path);
+    onLog?.(`new branch ${branch} off ${baseRef}`);
+    yield* gitEffect(["switch", "--discard-changes", "-c", branch, start], path);
+  }).pipe(Effect.mapError((cause) => cause instanceof RiftBackendError ? cause :
+    new RiftBackendError({ operation: "materialize", detail: cause.message, cause })));
 }
 
 /**
@@ -209,18 +208,16 @@ async function materializeBranch(input: {
  * the branch switch below — a branch-name-sensitive hook sees the main
  * clone's commit, not the target branch (see docs/backends.md).
  */
-export const riftBackend: WorktreeBackend = {
-  id: "rift",
-
-  async create(input: BackendCreateInput): Promise<void> {
+export function createRiftWorktreeEffect(input: BackendCreateInput): Effect.Effect<void, RiftBackendError> {
+  return Effect.gen(function* () {
     const { path, branch, slug, baseRef, baseSourcePath, mainClone, onLog } = input;
-    const rift = await requireRiftBin();
-    await ensureRiftInit(rift, mainClone, onLog);
+    const rift = yield* requireRiftBinEffect();
+    yield* ensureRiftInitEffect(rift, mainClone, onLog);
 
     const into = dirname(path);
     const createArgs = [rift, "create", "--name", slug, "--into", into, "--copy-all"];
     onLog?.(`rift create --copy-all → ${basename(path)}`);
-    let created = await run(createArgs, { cwd: mainClone });
+    let created = yield* runEffect(createArgs, { cwd: mainClone });
     // rift's registry is global and outlives the directory: a checkout
     // deleted out-of-band (a hand `rm -rf`, an aborted create) leaves a
     // record that collides here as "UNIQUE constraint failed: rift.path".
@@ -235,13 +232,12 @@ export const riftBackend: WorktreeBackend = {
       !existsSync(path)
     ) {
       onLog?.("pruning stale rift registry entry, retrying");
-      await run([rift, "gc"], { cwd: mainClone });
-      created = await run(createArgs, { cwd: mainClone });
+      yield* runEffect([rift, "gc"], { cwd: mainClone });
+      created = yield* runEffect(createArgs, { cwd: mainClone });
     }
     if (created.exitCode !== 0) {
-      throw new Error(
-        `rift create failed: ${(created.stderr || created.stdout || `exit ${created.exitCode}`).trim()}`,
-      );
+      return yield* new RiftBackendError({ operation: "create", detail:
+        `rift create failed: ${(created.stderr || created.stdout || `exit ${created.exitCode}`).trim()}` });
     }
     // rift prints the new workspace path to stdout; `--into <root> --name
     // <slug>` places it at exactly `<root>/<slug>` == `path`, but honor
@@ -251,7 +247,7 @@ export const riftBackend: WorktreeBackend = {
       log.warn("rift create path differs from expected", { reported, expected: path });
     }
     if (!existsSync(path)) {
-      throw new Error(`rift create did not produce ${path} (got: ${reported})`);
+      return yield* new RiftBackendError({ operation: "create", detail: `rift create did not produce ${path} (got: ${reported})` });
     }
 
     // The workspace now exists on disk with a `.rift` marker. Materializing
@@ -260,28 +256,30 @@ export const riftBackend: WorktreeBackend = {
     // blank-branch ghost row (detached HEAD, discovery keeps surfacing it),
     // unlike git-worktree where a failed `add` registers nothing. So roll
     // the clone back on any failure to keep create atomic.
-    try {
-      await materializeBranch({ path, branch, baseRef, baseSourcePath, onLog });
-    } catch (err) {
+    yield* materializeBranchEffect({ path, branch, baseRef, baseSourcePath, onLog }).pipe(
+      Effect.onExit((exit) => exit._tag === "Success" ? Effect.void : Effect.gen(function* () {
       onLog?.(`rolling back partial rift checkout ${basename(path)}`);
       // A failed rollback leaves an orphaned checkout + rift registry
       // entry; the next create for this slug then hits a bare "path
       // already exists". Log it so the daily log names the orphan.
-      const rb1 = await run([rift, "remove", path], { cwd: mainClone });
+      const rb1 = yield* runEffect([rift, "remove", path], { cwd: mainClone }).pipe(Effect.orElseSucceed(() => ({ stdout: "", stderr: "rollback spawn failed", exitCode: -1 })));
       if (rb1.exitCode !== 0) {
         log.warn(`rollback rift remove failed for ${path}: ${rb1.stderr.trim() || rb1.exitCode}`);
       }
-      const rb2 = await run([rift, "gc"], { cwd: mainClone });
+      const rb2 = yield* runEffect([rift, "gc"], { cwd: mainClone }).pipe(Effect.orElseSucceed(() => ({ stdout: "", stderr: "rollback spawn failed", exitCode: -1 })));
       if (rb2.exitCode !== 0) {
         log.warn(`rollback rift gc failed: ${rb2.stderr.trim() || rb2.exitCode}`);
       }
-      throw err;
-    }
-  },
+      })),
+    );
+  }).pipe(Effect.mapError((cause) => cause instanceof RiftBackendError ? cause :
+    new RiftBackendError({ operation: "create", detail: cause.message, cause })));
+}
 
-  async remove(input: BackendRemoveInput): Promise<BackendRemoveResult> {
+export function removeRiftWorktreeEffect(input: BackendRemoveInput): Effect.Effect<BackendRemoveResult, RiftBackendError> {
+  return Effect.gen(function* () {
     const { path, force, mainClone, onLog } = input;
-    const rift = await resolveRiftBin();
+    const rift = yield* resolveRiftBinEffect();
     if (!rift) {
       return {
         ok: false,
@@ -295,16 +293,22 @@ export const riftBackend: WorktreeBackend = {
     // rift version that refuses a dirty checkout. Harmless on a clean one.
     const args = force ? [rift, "remove", "--force", path] : [rift, "remove", path];
     onLog?.(`rift remove${force ? " --force" : ""} ${basename(path)}`);
-    const r = await run(args, { cwd: mainClone });
+    const r = yield* runEffect(args, { cwd: mainClone });
     if (r.exitCode !== 0 && existsSync(path)) {
       return { ok: false, message: (r.stderr || r.stdout || "rift remove failed").trim() };
     }
     // `rift remove` only trashes the subtree; reclaim the disk now. gc is
     // best-effort — the checkout is already gone from its path either way.
-    const gc = await run([rift, "gc"], { cwd: mainClone });
+    const gc = yield* runEffect([rift, "gc"], { cwd: mainClone });
     if (gc.exitCode !== 0) {
       onLog?.(`rift gc warning: ${(gc.stderr || gc.stdout || "").trim()}`);
     }
     return { ok: true };
-  },
+  }).pipe(Effect.mapError((cause) => new RiftBackendError({ operation: "remove", detail: cause.message, cause })));
+}
+
+export const riftBackend: WorktreeBackend = {
+  id: "rift",
+  create: (input) => Effect.runPromise(createRiftWorktreeEffect(input)),
+  remove: (input) => Effect.runPromise(removeRiftWorktreeEffect(input)),
 };

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
 import {
@@ -25,6 +26,10 @@ type Args = {
   activeDiffSessions: ReadonlySet<string>;
   refreshTmuxSessions: () => Promise<unknown>;
 };
+
+class DiffSessionRefreshError extends Data.TaggedError(
+  "DiffSessionRefreshError",
+)<{ readonly slug: string; readonly cause: unknown }> {}
 
 export function useSessionTailReconcile({
   rows,
@@ -88,10 +93,26 @@ export function useSessionTailReconcile({
       if (!activeDiffSessions.has(slug)) continue;
       const log = createLogger(slug);
       log.event.info(`diff base changed (${prev} -> ${next}); killing diff session`);
-      void (async () => {
-        await killDiffSession(slug);
-        await refreshTmuxSessions();
-      })();
+      Effect.runFork(
+        Effect.tryPromise({
+          try: () => killDiffSession(slug),
+          catch: (cause) => new DiffSessionRefreshError({ slug, cause }),
+        }).pipe(
+          Effect.andThen(
+            Effect.tryPromise({
+              try: refreshTmuxSessions,
+              catch: (cause) => new DiffSessionRefreshError({ slug, cause }),
+            }),
+          ),
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              log.event.err(
+                `diff session refresh failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
+              );
+            }),
+          ),
+        ),
+      );
     }
     for (const slug of [...lastDiffBase.current.keys()]) {
       if (!seen.has(slug)) lastDiffBase.current.delete(slug);

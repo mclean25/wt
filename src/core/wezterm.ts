@@ -1,3 +1,11 @@
+import { Data, Effect } from "effect";
+
+import { runOkEffect } from "./proc.ts";
+
+export class WezTermError extends Data.TaggedError("WezTermError")<{
+  readonly cause: unknown;
+}> {}
+
 /**
  * WEZTERM_PANE is set by WezTerm for local panes and inherited through
  * multiplexers such as tmux. Unlike TERM_PROGRAM, it also identifies the pane
@@ -15,23 +23,29 @@ export function wezTermCliPath(
 }
 
 /** Set the containing WezTerm tab's explicit title. Failure is non-fatal. */
-export async function setWezTermTabTitle(
+export function setWezTermTabTitleEffect(
+  title: string,
+  configuredCliPath: string | null,
+): Effect.Effect<void, WezTermError> {
+  if (!isRunningInWezTerm()) return Effect.void;
+
+  const wezterm = wezTermCliPath(configuredCliPath);
+  if (!wezterm) return Effect.void;
+
+  return runOkEffect([wezterm, "cli", "set-tab-title", title]).pipe(
+    Effect.mapError((cause) => new WezTermError({ cause })),
+    Effect.asVoid,
+  );
+}
+
+/** Compatibility boundary. Tab naming remains cosmetic and non-fatal. */
+export function setWezTermTabTitle(
   title: string,
   configuredCliPath: string | null,
 ): Promise<void> {
-  if (!isRunningInWezTerm()) return;
-
-  const wezterm = wezTermCliPath(configuredCliPath);
-  if (!wezterm) return;
-
-  try {
-    const proc = Bun.spawn([wezterm, "cli", "set-tab-title", title], {
-      stdin: "ignore",
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    await proc.exited;
-  } catch {
-    // Tab naming is cosmetic and must never prevent wt from starting.
-  }
+  return Effect.runPromise(
+    setWezTermTabTitleEffect(title, configuredCliPath).pipe(
+      Effect.catchAll(() => Effect.void),
+    ),
+  );
 }

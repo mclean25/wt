@@ -13,7 +13,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - run: bun run lint
       - run: bun run typecheck
+      - run: bun run build
       # The suite's config is checked in at test/config.toml and wired
       # through bunfig.toml's preload, so a bare `bun test` runs the same
       # here and on a developer machine. It used to be written inline

@@ -25,6 +25,7 @@
  * is sitting there.
  */
 import { probeSessionNames } from "../tmux/process.ts";
+import { Data, Effect } from "effect";
 import { CLAUDE_NAMED_SEP, sessionName, type SessionKind } from "../tmux/naming.ts";
 
 import { readPrimaryHarness } from "./primary.ts";
@@ -41,6 +42,8 @@ export type HarnessChoice = {
    */
   source: "live" | "primary" | "primary-unknown";
 };
+
+export class LiveTargetError extends Data.TaggedError("LiveTargetError")<{ readonly cause: unknown }> {}
 
 /**
  * Harnesses with a live tmux session for `slug`, in registry order.
@@ -91,12 +94,17 @@ function liveHarnesses(
  * there, since `send` is about to cold-start something and the primary
  * is exactly "what to start".
  */
-export async function resolveWorktreeHarness(
+export function resolveWorktreeHarnessEffect(
   slug: string,
   knownSlugs: ReadonlySet<string>,
-): Promise<HarnessChoice> {
-  return chooseHarness(slug, await probeSessionNames(), knownSlugs, readPrimaryHarness());
+): Effect.Effect<HarnessChoice, LiveTargetError> {
+  return Effect.tryPromise({
+    try: () => probeSessionNames(),
+    catch: (cause) => new LiveTargetError({ cause }),
+  }).pipe(Effect.map((names) => chooseHarness(slug, names, knownSlugs, readPrimaryHarness())));
 }
+export const resolveWorktreeHarness = (slug: string, knownSlugs: ReadonlySet<string>) =>
+  Effect.runPromise(resolveWorktreeHarnessEffect(slug, knownSlugs));
 
 /** The rule itself, with the tmux probe already done — the tested half. */
 export function chooseHarness(

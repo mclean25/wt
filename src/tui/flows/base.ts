@@ -10,6 +10,11 @@ import type { Worktree } from "../../core/types.ts";
 import type { Modal } from "../modal-state.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
+import { Data, Effect } from "effect";
+
+class BaseFlowError extends Data.TaggedError("BaseFlowError")<{
+  cause: unknown;
+}> {}
 
 type BaseFlowsCtx = {
   rows: WorktreeRow[];
@@ -86,16 +91,26 @@ export function makeBaseFlows(ctx: BaseFlowsCtx) {
     setModal(null);
     const row = rows.find((r) => r.wt.slug === slug);
     if (!row) return;
-    setBase(row.wt, item.branch).then(
-      () =>
-        toast(
-          item.branch
-            ? `base → ${item.branch} (record only, no rebase)`
-            : `base cleared — diffing against ${config.branch.base}`,
-          theme.info,
-          2000,
+    Effect.runFork(
+      Effect.tryPromise({
+        try: () => setBase(row.wt, item.branch),
+        catch: (cause) => new BaseFlowError({ cause }),
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() =>
+            toast(
+              item.branch
+                ? `base → ${item.branch} (record only, no rebase)`
+                : `base cleared — diffing against ${config.branch.base}`,
+              theme.info,
+              2000,
+            ),
+          ),
         ),
-      (err) => reportActionError("set base", err),
+        Effect.catchAll((error) =>
+          Effect.sync(() => reportActionError("set base", error.cause)),
+        ),
+      ),
     );
   }
 

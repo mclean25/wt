@@ -18,6 +18,7 @@
  * the exported `openDb()`. It never opens a second handle.
  */
 import type { Statement } from "bun:sqlite";
+import { Cause, Effect, Fiber } from "effect";
 
 import { createLogger } from "../../logger.ts";
 import { prepareTailQuery } from "../../tail-util.ts";
@@ -312,20 +313,8 @@ function emitResponseDone(
 export function startOpencodeEventPolling(
   getActiveSlugs: () => Array<{ slug: string; wtPath: string }>,
   onActivity?: () => void,
-): () => void {
-  const timers = new Set<Timer>();
-  let running = false;
-
-  const schedule = (fn: () => void, delay: number): void => {
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      fn();
-    }, delay);
-    timers.add(timer);
-  };
-
-  const runTick = (): void => {
-    if (running) return;
+): () => Promise<void> {
+  const poll = Effect.gen(function* () {
     const s = ensureStmts();
     if (!s) return;
     const activeSlugs = getActiveSlugs();
@@ -335,36 +324,31 @@ export function startOpencodeEventPolling(
       baselineEstablished = true;
       return;
     }
-    running = true;
-    activeSlugs.forEach(({ slug, wtPath }, i) => {
-      schedule(() => {
-        try {
-          processSlug(s, slug, wtPath, isBaseline, onActivity);
-        } catch (err) {
-          log.warn("opencode event poll error", { slug, err: String(err) });
-        } finally {
-          if (i === activeSlugs.length - 1) {
-            trimSnapshots();
-            baselineEstablished = true;
-            running = false;
+    yield* Effect.forEach(
+      activeSlugs,
+      ({ slug, wtPath }, index) => Effect.gen(function* () {
+        if (index > 0) yield* Effect.sleep(POLL_SLUG_SPACING_MS);
+        yield* Effect.sync(() => {
+          try {
+            processSlug(s, slug, wtPath, isBaseline, onActivity);
+          } catch (err) {
+            log.warn("opencode event poll error", { slug, err: String(err) });
           }
-        }
-      }, i * POLL_SLUG_SPACING_MS);
-    });
-  };
-
-  const timer = setInterval(() => {
-    try {
-      runTick();
-    } catch (err) {
-      log.warn("opencode event tick threw", { err: String(err) });
-      running = false;
-    }
-  }, POLL_INTERVAL_MS);
-
-  return () => {
-    clearInterval(timer);
-    for (const pending of timers) clearTimeout(pending);
-    timers.clear();
-  };
+        });
+      }),
+      { concurrency: 1, discard: true },
+    );
+    trimSnapshots();
+    baselineEstablished = true;
+  }).pipe(
+    Effect.catchAllCause((cause) => Cause.isInterruptedOnly(cause)
+      ? Effect.failCause(cause)
+      : Effect.sync(() => {
+          log.warn("opencode event tick threw", { err: String(cause) });
+        })),
+  );
+  const fiber = Effect.runFork(
+    Effect.sleep(POLL_INTERVAL_MS).pipe(Effect.andThen(poll), Effect.forever),
+  );
+  return () => Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.asVoid));
 }

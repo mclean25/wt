@@ -13,10 +13,11 @@
  *      summary regardless of HEAD SHA.
  */
 import { CryptoHasher } from "bun";
+import { Data, Effect } from "effect";
 
 import { config } from "../config.ts";
-import { effectiveBaseOrTrunk } from "../git.ts";
-import { run } from "../proc.ts";
+import { effectiveBaseOrTrunkEffect } from "../git.ts";
+import { runEffect } from "../proc.ts";
 
 import { fitParts, formatCompaction, type ModeCounts } from "./fit.ts";
 import { parseDiff } from "./parts.ts";
@@ -74,6 +75,11 @@ export type DiffContext = {
   filesTotal: number;
 };
 
+export class DiffContextError extends Data.TaggedError("DiffContextError")<{
+  readonly operation: string;
+  readonly cause: unknown;
+}> {}
+
 /**
  * `effectiveBase` lets stacked worktrees diff against their parent
  * branch instead of trunk, so the LLM summary describes only the
@@ -84,24 +90,30 @@ export type DiffContext = {
  * across base changes — equivalent diffs against different bases hash
  * to different keys.
  */
-export async function buildDiffContext(
+export function buildDiffContextEffect(
   wtPath: string,
   effectiveBase?: string | null,
   signal?: AbortSignal,
-): Promise<DiffContext | null> {
-  if (!config.naming) return null;
-  const base = await effectiveBaseOrTrunk(wtPath, effectiveBase);
+): Effect.Effect<DiffContext | null, DiffContextError> {
+  const naming = config.naming;
+  if (!naming) return Effect.succeed(null);
+  return Effect.gen(function* () {
+  const base = yield* effectiveBaseOrTrunkEffect(wtPath, effectiveBase).pipe(
+    Effect.mapError((cause) =>
+      new DiffContextError({ operation: "resolve base", cause }),
+    ),
+  );
 
   // Short-circuit between awaits when the caller has cancelled. Without
   // these checks the post-stat git invocations still spawn just to be
   // SIGTERM'd; `fullDiff` in particular can buffer a megabyte of stdout
   // before its drain unwinds.
-  const stat = await diffStat(wtPath, base, signal);
+  const stat = yield* diffStatEffect(wtPath, base, signal);
   if (!stat || signal?.aborted) return null;
 
-  const log = await commitLog(wtPath, base, signal);
+  const log = yield* commitLogEffect(wtPath, base, signal);
   if (signal?.aborted) return null;
-  const rawDiff = await fullDiff(wtPath, base, signal);
+  const rawDiff = yield* fullDiffEffect(wtPath, base, signal);
   if (signal?.aborted) return null;
 
   // Nothing in `base...HEAD` — a freshly created worktree, or one
@@ -123,7 +135,7 @@ export async function buildDiffContext(
   const filesTotal = parts.length;
 
   const headerChars = stat.length + log.length + SCAFFOLD_OVERHEAD_CHARS;
-  const totalBudgetChars = config.naming.maxInputTokens * CHARS_PER_TOKEN;
+    const totalBudgetChars = naming.maxInputTokens * CHARS_PER_TOKEN;
   const fileBudget = Math.max(1000, totalBudgetChars - headerChars);
   const fit = fitParts(parts, fileBudget);
 
@@ -149,6 +161,15 @@ export async function buildDiffContext(
     counts: fit.counts,
     filesTotal,
   };
+  });
+}
+
+export function buildDiffContext(
+  wtPath: string,
+  effectiveBase?: string | null,
+  signal?: AbortSignal,
+): Promise<DiffContext | null> {
+  return Effect.runPromise(buildDiffContextEffect(wtPath, effectiveBase, signal));
 }
 
 // Three-dot (`base...HEAD` = `merge-base(base, HEAD)..HEAD`) so the diff
@@ -156,24 +177,28 @@ export async function buildDiffContext(
 // tree delta between base and HEAD, which on a branch that's purely
 // behind base produces the *inverse* of the commits base has gained —
 // the LLM then summarises those as if they were this branch's work.
-async function diffStat(wtPath: string, base: string, signal?: AbortSignal): Promise<string> {
-  const r = await run(
+function diffStatEffect(wtPath: string, base: string, signal?: AbortSignal) {
+  return runEffect(
     ["git", "diff", "--stat", `${base}...HEAD`, "--", ...STATIC_EXCLUDES],
     { cwd: wtPath, timeoutMs: 10_000, signal },
+  ).pipe(
+    Effect.map((r) => r.exitCode === 0 ? r.stdout.trim() : ""),
+    Effect.mapError((cause) => new DiffContextError({ operation: "diff stat", cause })),
   );
-  return r.exitCode === 0 ? r.stdout.trim() : "";
 }
 
-async function commitLog(wtPath: string, base: string, signal?: AbortSignal): Promise<string> {
-  const r = await run(
+function commitLogEffect(wtPath: string, base: string, signal?: AbortSignal) {
+  return runEffect(
     ["git", "log", "--reverse", "--format=%s", `${base}..HEAD`],
     { cwd: wtPath, timeoutMs: 5_000, signal },
+  ).pipe(
+    Effect.map((r) => r.exitCode === 0 ? r.stdout.trim() : ""),
+    Effect.mapError((cause) => new DiffContextError({ operation: "commit log", cause })),
   );
-  return r.exitCode === 0 ? r.stdout.trim() : "";
 }
 
-async function fullDiff(wtPath: string, base: string, signal?: AbortSignal): Promise<string> {
-  const r = await run(
+function fullDiffEffect(wtPath: string, base: string, signal?: AbortSignal) {
+  return runEffect(
     [
       "git",
       "diff",
@@ -187,8 +212,10 @@ async function fullDiff(wtPath: string, base: string, signal?: AbortSignal): Pro
       ...STATIC_EXCLUDES,
     ],
     { cwd: wtPath, timeoutMs: 15_000, signal },
+  ).pipe(
+    Effect.map((r) => r.exitCode === 0 ? r.stdout : ""),
+    Effect.mapError((cause) => new DiffContextError({ operation: "full diff", cause })),
   );
-  return r.exitCode === 0 ? r.stdout : "";
 }
 
 function shortHash(s: string): string {

@@ -5,6 +5,7 @@
  * closures always see fresh state.
  */
 import type { CliRenderer } from "@opentui/core";
+import { Data, Effect, Fiber } from "effect";
 
 import {
   addClaudeName,
@@ -28,7 +29,7 @@ import {
 import { effectiveBaseOrTrunk } from "../../core/git.ts";
 import { config } from "../../core/config.ts";
 
-import { enterHarnessSession, type EnterResult } from "../sessions/harness.ts";
+import { enterHarnessSession } from "../sessions/harness.ts";
 import { enterRemoteWorktreeSession } from "../sessions/remote.ts";
 import { enterDiffSession } from "../sessions/diff.ts";
 import { enterShellSession } from "../sessions/shell.ts";
@@ -40,6 +41,17 @@ import { theme } from "../theme.ts";
 import type { WorktreeModel } from "../worktree-model.ts";
 
 const appLog = createLogger("[app]");
+
+class SessionFlowError extends Data.TaggedError("SessionFlowError")<{
+  readonly operation: string;
+  readonly cause: unknown;
+}> {}
+
+const sessionPromise = <A>(operation: string, run: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) => new SessionFlowError({ operation, cause }),
+  });
 
 export function slotSessionResumeTarget(
   harness: Pick<Harness, "singleSlot">,
@@ -77,21 +89,27 @@ export function slotSessionResumeTarget(
  * back verbatim through the (generic, discriminated) return value /
  * their own closure.
  */
-export async function withNamedClaudePersistence<T extends { ok: boolean }>(
+export function withNamedClaudePersistenceEffect<T>(
   slug: string,
   name: string,
-  refreshClaudeSummaries: (slug: string) => Promise<void>,
-  spawn: () => Promise<T>,
-): Promise<T> {
-  const wasPersisted = nameInUse(slug, name);
-  addClaudeName(slug, name);
-  void refreshClaudeSummaries(slug);
-  const result = await spawn();
-  // Roll back the optimistic add IFF we created the entry — if `name`
-  // was already in the file (resume case), leave it so the user can
-  // retry from the picker.
-  if (!result.ok && !wasPersisted) removeClaudeName(slug, name);
-  return result;
+  refreshClaudeSummaries: Effect.Effect<void, SessionFlowError>,
+  spawn: Effect.Effect<T, SessionFlowError>,
+  succeeded: (result: T) => boolean,
+): Effect.Effect<T, SessionFlowError> {
+  return Effect.gen(function* () {
+    const wasPersisted = nameInUse(slug, name);
+    addClaudeName(slug, name);
+    // Keep the refresh owned by this effect. It may run while the session
+    // starts, but it is interrupted and joined before this helper completes.
+    const refreshFiber = yield* Effect.fork(
+      refreshClaudeSummaries.pipe(Effect.catchAll(() => Effect.void)),
+    );
+    const result = yield* spawn.pipe(Effect.ensuring(Fiber.interrupt(refreshFiber)));
+    // Roll back the optimistic add IFF we created the entry — if `name`
+    // was already in the file (resume case), leave it so the user can retry.
+    if (!succeeded(result) && !wasPersisted) removeClaudeName(slug, name);
+    return result;
+  });
 }
 
 export type SessionFlowsCtx = {
@@ -121,6 +139,19 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
     remoteUnavailable,
     reportActionError,
   } = ctx;
+
+  const forkReported = <A>(
+    label: string,
+    effect: Effect.Effect<A, SessionFlowError>,
+  ): void => {
+    Effect.runFork(
+      effect.pipe(
+        Effect.catchAll((error) =>
+          Effect.sync(() => reportActionError(label, error.cause)),
+        ),
+      ),
+    );
+  };
 
   /**
    * Attach to (or create) a harness session for `slug`. Used for all
@@ -156,15 +187,13 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
     }
     const harness = getHarness(harnessId);
     const sessionLog = createLogger(slug);
-    void (async () => {
-      const diffBase = await effectiveBaseOrTrunk(
-        row.wt.path,
-        resolveDiffBase(row),
-      );
+    forkReported(`${harness.label} session`, Effect.gen(function* () {
+      const diffBase = yield* sessionPromise("resolve diff base", () =>
+        effectiveBaseOrTrunk(row.wt.path, resolveDiffBase(row)));
       sessionLog.event.info(
         `entering ${harness.label} session (F12 to detach)`,
       );
-      const result = await enterHarnessSession({
+      const result = yield* sessionPromise("enter harness session", () => enterHarnessSession({
         renderer,
         slug,
         cwd: row.wt.path,
@@ -173,12 +202,18 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         resumeSessionId: opts.resumeSessionId ?? null,
         freshSlot: opts.freshSlot,
         diffBase,
-      });
+      }));
       // Refresh both together so the picker doesn't see a transient
       // state where tmux says "slot dead" but discovery still has the
       // session marked live (or vice versa) and the synthetic-row
       // logic in useHarnessSessions decides incorrectly.
-      await Promise.all([refreshTmuxSessions(), refreshHarnessSessions(slug)]);
+      yield* Effect.all(
+        [
+          sessionPromise("refresh tmux sessions", refreshTmuxSessions),
+          sessionPromise("refresh harness sessions", () => refreshHarnessSessions(slug)),
+        ],
+        { concurrency: 2 },
+      );
       if (result.kind === "spawn-failed") {
         sessionLog.event.err(`${harness.label} failed to start: ${result.reason}`);
         toast(`${harness.label} failed: ${result.reason}`, theme.err, 3000);
@@ -190,7 +225,7 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         );
         if (result.stderr) sessionLog.event.err(result.stderr);
       }
-    })();
+    }));
   }
 
   /**
@@ -204,73 +239,68 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
   function doEnterSlotSession(slot: SessionSlot): void {
     const harness = getHarness(primaryHarness);
     const slotLog = createLogger(slot.label);
-    void (async () => {
-      slotLog.event.info(`entering ${harness.label} session (F12 to detach)`);
-      // A named-identity slot (the manager) must have its claude name
-      // persisted before discovery or resume can see the conversation.
-      if (slot.claudeName !== null) addClaudeName(slot.slug, slot.claudeName);
-      let resumeSessionId: string | null = null;
-      let freshSlot = false;
-      if (harness.singleSlot) {
-        const tmuxName = harness.tmuxSessionName(slot.slug, null);
-        const liveTmux = await listTmuxSessions().catch(() => null);
-        const slotAlive = liveTmux?.all.has(tmuxName) ?? false;
-        let sessions: readonly HarnessSession[] = [];
-        if (!slotAlive) {
-          sessions = await harness
-            .discoverSessions({ slug: slot.slug, wtPath: slot.path })
-            .catch((err: unknown) => {
-              slotLog.event.warn(
-                `${harness.label} session discovery failed: ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              );
-              return [];
-            });
+    forkReported(
+      `${harness.label} slot session`,
+      Effect.gen(function* () {
+        slotLog.event.info(`entering ${harness.label} session (F12 to detach)`);
+        if (slot.claudeName !== null) addClaudeName(slot.slug, slot.claudeName);
+        let resumeSessionId: string | null = null;
+        let freshSlot = false;
+        if (harness.singleSlot) {
+          const tmuxName = harness.tmuxSessionName(slot.slug, null);
+          const liveTmux = yield* sessionPromise(
+            "list tmux sessions",
+            listTmuxSessions,
+          ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+          const slotAlive = liveTmux?.all.has(tmuxName) ?? false;
+          let sessions: readonly HarnessSession[] = [];
+          if (!slotAlive) {
+            sessions = yield* sessionPromise("discover harness sessions", () =>
+              harness.discoverSessions({ slug: slot.slug, wtPath: slot.path })
+            ).pipe(
+              Effect.catchAll((error) => {
+                const err = error.cause;
+                slotLog.event.warn(
+                  `${harness.label} session discovery failed: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                );
+                return Effect.succeed([]);
+              }),
+            );
+          }
+          const target = slotSessionResumeTarget(harness, slotAlive, sessions);
+          resumeSessionId = target.resumeSessionId;
+          freshSlot = target.freshSlot;
         }
-        const target = slotSessionResumeTarget(harness, slotAlive, sessions);
-        resumeSessionId = target.resumeSessionId;
-        freshSlot = target.freshSlot;
-      }
-      const result = await enterHarnessSession({
-        renderer,
-        slug: slot.slug,
-        cwd: slot.path,
-        harnessId: primaryHarness,
-        managedName: slot.claudeName,
-        // F10/F11/F12 inside a slot return to wt — slots aren't
-        // worktrees; there's no shell/diff sibling to switch to.
-        switchable: false,
-        // Surface the slot's label in claude's /resume listing so the
-        // conversation is recognizable by name; ignored by codex /
-        // opencode (their tmux name is the discriminator).
-        claudeDisplayName: slot.label,
-        resumeSessionId,
-        freshSlot,
-        diffBase: `origin/${config.branch.base}`,
-      });
-      // Refresh tmux sessions so the bottom-bar tail picks up the new
-      // session immediately rather than waiting for the next poll
-      // tick. `allSettled` (not `all`) so a refresh-rejection — e.g.
-      // a torn-down query client during shutdown — doesn't bubble up
-      // and swallow the result-feedback below.
-      // Harness-session discovery is row-keyed, so there's no slot
-      // entry to refresh there; only tmux matters.
-      await Promise.allSettled([refreshTmuxSessions()]);
-      if (result.kind === "spawn-failed") {
-        slotLog.event.err(
-          `${harness.label} failed to start: ${result.reason}`,
+        const result = yield* sessionPromise("enter slot session", () =>
+          enterHarnessSession({
+            renderer,
+            slug: slot.slug,
+            cwd: slot.path,
+            harnessId: primaryHarness,
+            managedName: slot.claudeName,
+            switchable: false,
+            claudeDisplayName: slot.label,
+            resumeSessionId,
+            freshSlot,
+            diffBase: `origin/${config.branch.base}`,
+          })
         );
-        toast(`${harness.label} failed: ${result.reason}`, theme.err, 3000);
-      } else if (result.kind === "detached") {
-        slotLog.event.info(`detached from ${harness.label} session`);
-      } else {
-        slotLog.event.info(
-          `${harness.label} exited (${result.code ?? "?"})`,
+        yield* sessionPromise("refresh tmux sessions", refreshTmuxSessions).pipe(
+          Effect.catchAll(() => Effect.void),
         );
-        if (result.stderr) slotLog.event.err(result.stderr);
-      }
-    })();
+        if (result.kind === "spawn-failed") {
+          slotLog.event.err(`${harness.label} failed to start: ${result.reason}`);
+          toast(`${harness.label} failed: ${result.reason}`, theme.err, 3000);
+        } else if (result.kind === "detached") {
+          slotLog.event.info(`detached from ${harness.label} session`);
+        } else {
+          slotLog.event.info(`${harness.label} exited (${result.code ?? "?"})`);
+          if (result.stderr) slotLog.event.err(result.stderr);
+        }
+      }),
+    );
   }
 
   /**
@@ -300,36 +330,26 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
       return;
     }
     const sessionLog = createLogger(slug);
-    void (async () => {
-      const diffBase = await effectiveBaseOrTrunk(
-        row.wt.path,
-        resolveDiffBase(row),
-      );
+    forkReported(
+      "named claude session",
+      Effect.gen(function* () {
+      const diffBase = yield* sessionPromise("resolve diff base", () =>
+        effectiveBaseOrTrunk(row.wt.path, resolveDiffBase(row)));
       sessionLog.event.info(`entering claude session "${name}" (F12 to detach)`);
-      // Captured via a ref object rather than a plain `let` — TS
-      // doesn't carry control-flow narrowing for a variable back out
-      // of the closure that assigns it, so a bare `let` would still
-      // type as its pre-closure (`null`) state below. A property on an
-      // object read straight back out doesn't hit that limitation.
-      const captured: { result: EnterResult | null } = { result: null };
-      await withNamedClaudePersistence(slug, name, refreshClaudeSummaries, async () => {
-        captured.result = await enterHarnessSession({
+      const result = yield* withNamedClaudePersistenceEffect(
+        slug,
+        name,
+        sessionPromise("refresh claude summaries", () => refreshClaudeSummaries(slug)),
+        sessionPromise("enter named claude session", () => enterHarnessSession({
           renderer,
           slug,
           cwd: row.wt.path,
           harnessId: "claude",
           managedName: name,
           diffBase,
-        });
-        return captured.result.kind === "spawn-failed"
-          ? { ok: false, reason: captured.result.reason }
-          : { ok: true };
-      });
-      void refreshTmuxSessions();
-      // Non-null: `withNamedClaudePersistence` always awaits `spawn()`
-      // to completion before returning, and the closure above sets
-      // `captured.result` as its very first statement.
-      const result = captured.result!;
+        })),
+        (result) => result.kind !== "spawn-failed",
+      );
       if (result.kind === "spawn-failed") {
         sessionLog.event.err(`claude failed to start: ${result.reason}`);
         toast(`claude failed: ${result.reason}`, theme.err, 3000);
@@ -339,7 +359,15 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         sessionLog.event.info(`claude exited (${result.code ?? "?"})`);
         if (result.stderr) sessionLog.event.err(result.stderr);
       }
-    })();
+      yield* sessionPromise("refresh tmux sessions", () => refreshTmuxSessions()).pipe(
+        Effect.catchAll((error) => Effect.sync(() => {
+          sessionLog.warn("tmux refresh after claude session failed", {
+            err: error.cause instanceof Error ? error.cause.message : String(error.cause),
+          });
+        })),
+      );
+      }),
+    );
   }
 
   /**
@@ -358,10 +386,13 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
     optimisticRemoveClaude(slug, name);
     if (name !== null) {
       removeClaudeName(slug, name);
-      void refreshClaudeSummaries(slug);
+      forkReported(
+        "refresh claude summaries",
+        sessionPromise("refresh claude summaries", () => refreshClaudeSummaries(slug)),
+      );
     }
-    void (async () => {
-      try {
+    Effect.runFork(
+      sessionPromise("kill claude session", async () => {
         // killHarnessSession routes both primary (`name === null`)
         // and named claude sessions through the same call — same
         // implementation as the legacy `killSession` /
@@ -372,15 +403,20 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
             ? `killed primary claude session on ${slug}`
             : `killed claude session "${name}" on ${slug}`,
         );
-        void refreshTmuxSessions();
-      } catch (err) {
+        await refreshTmuxSessions();
+      }).pipe(
+        Effect.catchAll((error) =>
+          sessionPromise("reconcile tmux sessions", async () => {
+        const err = error.cause;
         const msg = err instanceof Error ? err.message : String(err);
         appLog.event.err(`kill claude session failed for ${slug}: ${msg}`);
         // Refetch to reconcile against truth — the optimistic remove
         // is wrong if the kill genuinely failed.
-        void refreshTmuxSessions();
-      }
-    })();
+        await refreshTmuxSessions();
+          }).pipe(Effect.catchAll(() => Effect.void)),
+        ),
+      ),
+    );
   }
 
   /**
@@ -415,16 +451,20 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         toast(`${worktree.slug} is ${worktree.status.label}`, theme.warn, 2200);
         return;
       }
-      void enterRemoteWorktreeSession({
-        renderer,
-        worktree: worktree.target,
-        target,
-        harnessId: primaryHarness,
-      })
-        .then((code) => {
+      forkReported(
+        "remote session",
+        sessionPromise("enter remote session", () =>
+          enterRemoteWorktreeSession({
+            renderer,
+            worktree: worktree.target,
+            target,
+            harnessId: primaryHarness,
+          })).pipe(
+          Effect.tap((code) => Effect.sync(() => {
           if (code !== 0) toast(`remote session exited ${code}`, theme.warn, 2500);
-        })
-        .catch((err) => reportActionError("remote session", err));
+          })),
+        ),
+      );
       return;
     }
 
@@ -439,7 +479,9 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
       return;
     }
     const sessionLog = createLogger(worktree.slug);
-    void (async () => {
+    forkReported(
+      `${target} session`,
+      sessionPromise(`enter ${target} session`, async () => {
       const base = await effectiveBaseOrTrunk(
         worktree.path,
         resolveDiffBase(row),
@@ -465,7 +507,6 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
               harness: harnessRoute ?? { harnessId: primaryHarness },
             });
           })();
-      void refreshTmuxSessions();
       if (result.kind === "spawn-failed") {
         sessionLog.event.err(`${target} failed to start: ${result.reason}`);
         toast(`${target} failed: ${result.reason}`, theme.err, 3000);
@@ -475,7 +516,14 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
         sessionLog.event.info(`${target} exited (${result.code ?? "?"})`);
         if (result.stderr) sessionLog.event.err(result.stderr);
       }
-    })();
+      await refreshTmuxSessions().catch((err) => {
+        sessionLog.warn("tmux refresh after session failed", {
+          target,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+      }),
+    );
   }
 
   return {

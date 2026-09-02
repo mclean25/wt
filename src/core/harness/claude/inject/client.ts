@@ -94,7 +94,7 @@ export const __testing = { maskFrame, expectedAccept };
  * "retry shortly". Also rejects, rather than hanging, when the peer
  * accepts the connection but never completes the upgrade.
  */
-export async function connectInspector(socketPath: string): Promise<InspectorClient> {
+export async function connectInspector(socketPath: string, signal?: AbortSignal): Promise<InspectorClient> {
   let buf = Buffer.alloc(0);
   let upgraded = false;
   let nextId = 1;
@@ -231,6 +231,7 @@ export async function connectInspector(socketPath: string): Promise<InspectorCli
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       if (err) {
         // Tear the connection down explicitly: on a failed upgrade
         // `socket` was never assigned, so without `rawSocket` there
@@ -246,15 +247,28 @@ export async function connectInspector(socketPath: string): Promise<InspectorCli
         resolve();
       }
     };
+    const onAbort = () => finish(new Error("inspector connection interrupted"));
     const timer = setTimeout(
       () => finish(new Error("inspector did not complete the websocket upgrade")),
       UPGRADE_TIMEOUT_MS,
     );
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
     void Bun.connect({
       unix: socketPath,
       socket: {
         open(s) {
           rawSocket = s;
+          // Abort/timeout can win before Bun reports the opened socket.
+          // In that race finish() had no handle to close, so the late
+          // connection must be rejected here before any upgrade bytes leave.
+          if (settled) {
+            s.end();
+            return;
+          }
           sendRaw(
             Buffer.from(
               "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +

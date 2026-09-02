@@ -1,27 +1,28 @@
 import { cpus, loadavg } from "node:os";
+import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
 import {
   DEV_QUEUE_FIRST,
   DEV_WAIT_DEFAULT_TIMEOUT_MS,
   DevSlotFullError,
-  devServerLogs,
-  devServerStatus,
-  devSlotReport,
+  devServerLogsEffect,
+  devServerStatusEffect,
+  devSlotReportEffect,
   DEV_READY_DEFAULT_TIMEOUT_MS,
-  devHealth,
+  devHealthEffect,
   readDevCrashLog,
   readDevWaiters,
   DevResetStopFailedError,
-  resetDevServer,
+  resetDevServerEffect,
   setDevWaiterPriority,
-  startDevServer,
-  stopDevServer,
-  waitForDevReady,
+  startDevServerEffect,
+  stopDevServerEffect,
+  waitForDevReadyEffect,
   type DevSlotHolder,
 } from "../../core/dev-server.ts";
 import type { Worktree } from "../../core/types.ts";
-import { listWorktrees, worktreeAtCwd } from "../../core/worktree.ts";
+import { listWorktreesEffect, worktreeAtCwd } from "../../core/worktree.ts";
 import { agentIdentity } from "../../core/agent-identity.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
@@ -64,10 +65,11 @@ const USAGE =
   `exit ${EXIT_NO_SLOT} from \`start\` means the concurrency cap is full — retry later.`;
 
 /** The target worktree: explicit slug arg, else the one containing cwd. */
-async function resolveWorktree(slugArg: string | undefined): Promise<Worktree | null> {
-  const all = (await listWorktrees()).filter((w) => !w.isMain);
-  if (slugArg) return all.find((w) => w.slug === slugArg) ?? null;
-  return worktreeAtCwd(all);
+function resolveWorktree(slugArg: string | undefined) {
+  return listWorktreesEffect().pipe(Effect.map((all) => {
+    const worktrees = all.filter((w) => !w.isMain);
+    return slugArg ? worktrees.find((w) => w.slug === slugArg) ?? null : worktreeAtCwd(worktrees);
+  }));
 }
 
 function humanAge(ms: number): string {
@@ -79,9 +81,7 @@ function humanAge(ms: number): string {
 
 /** `slug`, `slug (crashed)`, … — the holder list a refusal or the queue prints. */
 function describeHolders(holders: readonly DevSlotHolder[]): string {
-  return holders
-    .map((h) => (h.state === "crashed" ? `${h.slug} (crashed)` : h.slug))
-    .join(", ");
+  return holders.map((h) => (h.state === "crashed" ? `${h.slug} (crashed)` : h.slug)).join(", ");
 }
 
 /**
@@ -97,7 +97,8 @@ function reclaimHint(holders: readonly DevSlotHolder[]): string | null {
   return `${parked.length} crashed server${s} hold${parked.length === 1 ? "s" : ""} a slot: ${parked.join(", ")}`;
 }
 
-async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> {
+function runStart(wt: Worktree, argv: readonly string[]) {
+  return Effect.gen(function* () {
   const wait = argv.includes("--wait");
   const rebuild = argv.includes("--rebuild");
   const timeoutIdx = argv.indexOf("--timeout");
@@ -117,18 +118,19 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
   if (wait) {
     // Imported lazily so a plain start never pays for the queue module
     // graph, and so a broken one can't take `wt dev start` with it.
-    const { waitForDevSlot } = await import("../../core/dev-server.ts");
+    const { waitForDevSlotEffect } = yield* Effect.tryPromise({
+      try: () => import("../../core/dev-server.ts"),
+      catch: (cause) => new DevCommandError({ cause }),
+    });
     let announced = false;
-    const got = await waitForDevSlot(wt.slug, {
+    const got = yield* waitForDevSlotEffect(wt.slug, {
       timeoutMs,
       onWait: ({ rank, holders, waited }) => {
         // First tick names who has the slots; after that just the
         // position, so a half-hour wait doesn't bury a terminal.
         if (!announced) {
           announced = true;
-          console.error(
-            yellow(`waiting for a dev-server slot — held by ${describeHolders(holders)}`),
-          );
+          console.error(yellow(`waiting for a dev-server slot — held by ${describeHolders(holders)}`));
           const hint = reclaimHint(holders);
           if (hint) console.error(dim(`  ${hint}`));
         }
@@ -136,9 +138,7 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
       },
     });
     if (!got) {
-      console.error(
-        red(`no dev-server slot after ${humanAge(timeoutMs)} — nothing freed up`),
-      );
+      console.error(red(`no dev-server slot after ${humanAge(timeoutMs)} — nothing freed up`));
       return EXIT_NO_SLOT;
     }
   }
@@ -147,11 +147,11 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
   // afterwards there is nothing left to compare against. This is the
   // moment the reader is paying attention, and it is the moment they
   // have historically had no reason to suspect anything.
-  const priorStale = rebuild ? false : (await devServerStatus(wt.slug, { path: wt.path })).rebasedSince;
-  try {
+  const priorStale = rebuild ? false : (yield* devServerStatusEffect(wt.slug, { path: wt.path })).rebasedSince;
+  const operation = Effect.gen(function* () {
     const { port, url, adopted } = rebuild
-      ? await resetDevServer(wt, (line) => console.error(dim(`  ${line}`)))
-      : await startDevServer(wt);
+      ? yield* resetDevServerEffect(wt, (line) => console.error(dim(`  ${line}`)))
+      : yield* startDevServerEffect(wt);
     if (priorStale) {
       // wt does not know what a volume is, but it knows this slug last
       // ran a server on a commit that is no longer in the history —
@@ -159,11 +159,7 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
       // (a migrated database above all) describes a tree that no longer
       // exists. Loud, and before the URL, because the URL is what makes
       // it look fine.
-      console.error(
-        yellow(
-          `! this worktree's environment last came up before a rebase — it may be stale`,
-        ),
-      );
+      console.error(yellow(`! this worktree's environment last came up before a rebase — it may be stale`));
       console.error(
         dim(
           `  anything it kept (a migrated database, a cache) predates this history;` +
@@ -193,13 +189,11 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
       // flight; a start now joins that launch rather than killing it,
       // but the advice was still telling them to run the wrong command.
       const self = rebuild ? `wt dev reset ${wt.slug}` : `wt dev start ${wt.slug}`;
-      console.log(
-        dim(`  still coming up — re-run as \`${self} --wait\` to block until usable,`),
-      );
+      console.log(dim(`  still coming up — re-run as \`${self} --wait\` to block until usable,`));
       console.log(dim("  `wt dev status` asks now, `wt dev logs` shows the boot"));
       return 0;
     }
-    const outcome = await waitForDevReady(wt, {
+    const outcome = yield* waitForDevReadyEffect(wt, {
       timeoutMs: timeoutMs,
       onTick: ({ waited, state }) => {
         if (state === "checking") {
@@ -216,19 +210,13 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
         return 1;
       }
       if (outcome.reason === "timeout") {
-        console.error(
-          red(`dev server still not serving after ${humanAge(timeoutMs)} (${wt.slug})`),
-        );
+        console.error(red(`dev server still not serving after ${humanAge(timeoutMs)} (${wt.slug})`));
         console.error(dim(`  ${bold(`wt dev logs ${wt.slug}`)} has the boot output`));
         return 1;
       }
-      console.error(
-        red(`dev server is serving but its environment never settled (${humanAge(timeoutMs)})`),
-      );
+      console.error(red(`dev server is serving but its environment never settled (${humanAge(timeoutMs)})`));
       console.error(`  ${red(outcome.health.message)}`);
-      console.error(
-        dim(`  ${bold(`wt dev reset ${wt.slug}`)} rebuilds it from scratch`),
-      );
+      console.error(dim(`  ${bold(`wt dev reset ${wt.slug}`)} rebuilds it from scratch`));
       return 1;
     }
     console.log(green(`✓ dev server ready for ${cyan(wt.slug)}`));
@@ -236,50 +224,40 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
     console.log(`  ${dim("url:")}  ${url}`);
     if (outcome.health) console.log(`  ${dim("health:")} ${outcome.health.message}`);
     return 0;
-  } catch (err) {
+  });
+  return yield* operation.pipe(Effect.catchAll((err) => {
     if (err instanceof DevResetStopFailedError) {
       // The environment is still up and its state is intact — nothing
       // was discarded, which is the whole point of stopping here. wt
       // cannot name the remedy because it does not know what the
       // environment IS; the project's own teardown does.
-      console.error(red(`stop_command failed — refusing to reset ${wt.slug}`));
-      console.error(
-        dim("  the environment is still up and its state is untouched; resetting"),
-      );
-      console.error(
-        dim("  on top of a live environment is what leaves it unstartable"),
-      );
-      console.error(
-        dim(`  clear it with the project's own teardown, then ${bold(`wt dev reset ${wt.slug}`)}`),
-      );
-      return 1;
+      return Effect.sync(() => {
+        console.error(red(`stop_command failed — refusing to reset ${wt.slug}`));
+        console.error(dim("  the environment is still up and its state is untouched; resetting"));
+        console.error(dim("  on top of a live environment is what leaves it unstartable"));
+        console.error(dim(`  clear it with the project's own teardown, then ${bold(`wt dev reset ${wt.slug}`)}`));
+        return 1;
+      });
     }
-    if (!(err instanceof DevSlotFullError)) throw err;
-    if (err.yieldingTo.length > 0) {
+    if (!(err instanceof DevSlotFullError)) return Effect.fail(err);
+    if (err.yieldingTo.length > 0) return Effect.sync(() => {
       // A slot IS free — saying "full" here would send the reader
       // looking for a holder to free, which is the wrong action and
       // the wrong worktree.
-      console.error(
-        red(
-          `a dev-server slot is free but held for ${err.yieldingTo.map((w) => w.slug).join(", ")}`,
-        ),
-      );
+      console.error(red(`a dev-server slot is free but held for ${err.yieldingTo.map((w) => w.slug).join(", ")}`));
       console.error(dim("  that worktree was moved to the front of the queue deliberately"));
       console.error(dim("  queue behind it with `wt dev start --wait`"));
       return EXIT_NO_SLOT;
-    }
-    console.error(
-      red(
-        `dev-server slots full (${err.holders.length}/${err.limit}): ${describeHolders(err.holders)}`,
-      ),
-    );
-    const hint = reclaimHint(err.holders);
-    if (hint) console.error(dim(`  ${hint}`));
-    console.error(
-      dim("  retry with `wt dev start --wait` to queue until a slot opens"),
-    );
-    return EXIT_NO_SLOT;
-  }
+    });
+    return Effect.sync(() => {
+      console.error(red(`dev-server slots full (${err.holders.length}/${err.limit}): ${describeHolders(err.holders)}`));
+      const hint = reclaimHint(err.holders);
+      if (hint) console.error(dim(`  ${hint}`));
+      console.error(dim("  retry with `wt dev start --wait` to queue until a slot opens"));
+      return EXIT_NO_SLOT;
+    });
+  }));
+  });
 }
 
 /**
@@ -291,11 +269,8 @@ async function runStart(wt: Worktree, argv: readonly string[]): Promise<number> 
  * and a message asking an agent to act does not, so the only orderings
  * that survive are the ones already written down when the slot opens.
  */
-async function runQueue(
-  slugArg: string | undefined,
-  flags: readonly string[],
-  json: boolean,
-): Promise<number> {
+function runQueue(slugArg: string | undefined, flags: readonly string[], json: boolean): Effect.Effect<number, never> {
+  return Effect.sync(() => {
   const first = flags.includes("--first");
   const normal = flags.includes("--normal");
   if (first && normal) {
@@ -321,18 +296,14 @@ async function runQueue(
   // carries no WT_AGENT and is never caught by this.
   if (first && agentIdentity() === slugArg) {
     console.error(red(`${slugArg} can't move itself to the front of the queue`));
-    console.error(
-      dim("  whether one task outranks another is a fleet call — ask for it:"),
-    );
+    console.error(dim("  whether one task outranks another is a fleet call — ask for it:"));
     console.error(dim(`  wt manager send "dev slot: <why ${slugArg} should jump>"`));
     return 2;
   }
   const updated = setDevWaiterPriority(slugArg, first ? DEV_QUEUE_FIRST : 0);
   if (!updated) {
     console.error(red(`${slugArg} is not in the dev-server queue`));
-    console.error(
-      dim("  only a waiting worktree can be moved — it queues with `wt dev start --wait`"),
-    );
+    console.error(dim("  only a waiting worktree can be moved — it queues with `wt dev start --wait`"));
     return 1;
   }
   console.log(
@@ -343,6 +314,7 @@ async function runQueue(
     ),
   );
   return printQueue(json);
+  });
 }
 
 function printQueue(json: boolean): number {
@@ -369,8 +341,9 @@ function printQueue(json: boolean): number {
   return 0;
 }
 
-async function runStatusAll(json: boolean): Promise<number> {
-  const report = await devSlotReport();
+function runStatusAll(json: boolean) {
+  return Effect.gen(function* () {
+  const report = yield* devSlotReportEffect();
   const now = Date.now();
   if (json) {
     console.log(
@@ -386,21 +359,28 @@ async function runStatusAll(json: boolean): Promise<number> {
           // `priority` rides along: a manager filtering this surface for
           // "who is next" must see a deliberate promotion, not just an
           // order it would have to trust blindly.
-          waiting: report.waiters.map((w) => ({ ...w, waitingMs: now - w.since })),
+          waiting: report.waiters.map((w) => ({
+            ...w,
+            waitingMs: now - w.since,
+          })),
         },
         null,
         2,
       ),
     );
-    return 0;
+    return report.holders === null ? 1 : 0;
   }
-  const cap = report.limit === null ? "uncapped" : `${report.holders.length}/${report.limit}`;
+  const cap = report.limit === null
+    ? "uncapped"
+    : report.holders === null
+      ? red("unavailable (tmux inventory failed)")
+      : `${report.holders.length}/${report.limit}`;
   console.log(`${dim("dev servers:")} ${cap}`);
-  for (const h of report.holders) {
+  for (const h of report.holders ?? []) {
     const st = h.state === "crashed" ? red("crashed") : green("up");
     console.log(`  ${cyan(h.slug)} ${st}`);
   }
-  if (report.holders.length === 0) console.log(dim("  (none running)"));
+  if (report.holders?.length === 0) console.log(dim("  (none running)"));
   // Slots ration STACKS, not load. A test run, a build, a type-check —
   // none are queued or counted here, so every slot can look healthy on a
   // box that is far past capacity. This is the surface that claims to
@@ -416,29 +396,27 @@ async function runStatusAll(json: boolean): Promise<number> {
     `${dim("load:")} ${ratio >= 2 ? red(`${loadText} — saturated`) : ratio >= 1 ? yellow(loadText) : dim(loadText)}`,
   );
   if (ratio >= 2) {
-    console.log(
-      dim("  test timeouts here measure the box, not your diff — `wt perf` for whose"),
-    );
+    console.log(dim("  test timeouts here measure the box, not your diff — `wt perf` for whose"));
   }
 
   if (report.waiters.length > 0) {
     console.log(`${dim("queued:")}`);
     report.waiters.forEach((w, i) => {
       const tier = w.priority > 0 ? yellow(" first") : "";
-      console.log(
-        `  ${i + 1}. ${cyan(w.slug)}${tier} ${dim(`waiting ${humanAge(now - w.since)}`)}`,
-      );
+      console.log(`  ${i + 1}. ${cyan(w.slug)}${tier} ${dim(`waiting ${humanAge(now - w.since)}`)}`);
     });
   }
-  return 0;
+  return report.holders === null ? 1 : 0;
+  });
 }
 
-async function runStatusOne(wt: Worktree, json: boolean): Promise<number> {
-  const st = await devServerStatus(wt.slug, { path: wt.path });
+function runStatusOne(wt: Worktree, json: boolean) {
+  return Effect.gen(function* () {
+  const st = yield* devServerStatusEffect(wt.slug, { path: wt.path });
   // Only worth asking a running server, and only here: this is the
   // on-demand surface, where a slow-but-exact answer is the point. It
   // never rides a poll.
-  const health = st.running ? await devHealth(wt) : null;
+  const health = st.running ? yield* devHealthEffect(wt) : null;
   const now = Date.now();
   if (json) {
     console.log(JSON.stringify({ slug: wt.slug, ...st, health }, null, 2));
@@ -455,9 +433,7 @@ async function runStatusOne(wt: Worktree, json: boolean): Promise<number> {
       : st.crashed
         ? red("crashed — gave up restarting")
         : st.waiting
-          ? yellow(
-              `queued #${st.waiting.rank + 1} for a slot (${humanAge(now - st.waiting.since)})`,
-            )
+          ? yellow(`queued #${st.waiting.rank + 1} for a slot (${humanAge(now - st.waiting.since)})`)
           : dim("not running");
   console.log(`${cyan(wt.slug)}: ${state}`);
   if (st.restarts) {
@@ -501,9 +477,7 @@ async function runStatusOne(wt: Worktree, json: boolean): Promise<number> {
     }
   }
   if (health) {
-    console.log(
-      `  ${dim("health:")} ${health.ok ? green(health.message) : red(health.message)}`,
-    );
+    console.log(`  ${dim("health:")} ${health.ok ? green(health.message) : red(health.message)}`);
     if (!health.ok) {
       // A one-shot check cannot tell "not yet" from "wrong", and a
       // young server is usually the former: a migration replay in
@@ -524,36 +498,41 @@ async function runStatusOne(wt: Worktree, json: boolean): Promise<number> {
     }
   }
   return st.crashed || health?.ok === false ? 1 : 0;
+  });
 }
 
-export async function run(argv: string[]): Promise<number> {
+function runEffectProgram(argv: string[]) {
+  return Effect.gen(function* () {
   if (hasHelpFlag(argv)) {
     console.log(USAGE);
     return 0;
   }
   const flags = argv.filter((a) => a.startsWith("--"));
   const timeoutIdx = argv.indexOf("--timeout");
-  const positional = argv.filter(
-    (a, i) => !a.startsWith("--") && !(timeoutIdx >= 0 && i === timeoutIdx + 1),
-  );
+  const positional = argv.filter((a, i) => !a.startsWith("--") && !(timeoutIdx >= 0 && i === timeoutIdx + 1));
   const [sub, slugArg, ...extra] = positional;
   if (!sub || extra.length > 0) {
     console.log(USAGE);
     return 2;
   }
-  const known = new Set([
-    "--wait",
-    "--timeout",
-    "--all",
-    "--json",
-    "--first",
-    "--normal",
-    "--rebuild",
-  ]);
+  const known = new Set(["--wait", "--timeout", "--all", "--json", "--first", "--normal", "--rebuild"]);
   const unknown = flags.find((f) => !known.has(f));
   if (unknown) {
     console.error(red(`unknown flag: ${unknown}`));
     console.log(USAGE);
+    return 2;
+  }
+  const allowedBySubcommand: Record<string, ReadonlySet<string>> = {
+    start: new Set(["--wait", "--timeout", "--rebuild"]),
+    reset: new Set(["--wait", "--timeout", "--rebuild"]),
+    status: new Set(["--all", "--json"]),
+    queue: new Set(["--first", "--normal", "--json"]),
+    stop: new Set(),
+    logs: new Set(),
+  };
+  const misplaced = flags.find((flag) => !(allowedBySubcommand[sub]?.has(flag) ?? false));
+  if (misplaced) {
+    console.error(red(`${misplaced} is not valid for \`wt dev ${sub}\``));
     return 2;
   }
   if (!config.devServer) {
@@ -565,37 +544,35 @@ export async function run(argv: string[]): Promise<number> {
   // The fleet view has no subject worktree, so it resolves before the
   // "not inside a worktree" bail — `wt dev status --all` has to work
   // from anywhere, which is where a manager or a queued agent runs it.
-  if (sub === "status" && flags.includes("--all")) return runStatusAll(json);
+  if (sub === "status" && flags.includes("--all")) return yield* runStatusAll(json);
   // Also subject-less: promoting names its target explicitly, and the
   // manager runs this from wherever it happens to be.
-  if (sub === "queue") return runQueue(slugArg, flags, json);
+  if (sub === "queue") return yield* runQueue(slugArg, flags, json);
 
-  const wt = await resolveWorktree(slugArg);
+  const wt = yield* resolveWorktree(slugArg);
   if (!wt) {
-    console.error(
-      red(slugArg ? `no worktree with slug ${slugArg}` : "not inside a worktree (pass a slug)"),
-    );
+    console.error(red(slugArg ? `no worktree with slug ${slugArg}` : "not inside a worktree (pass a slug)"));
     return 1;
   }
 
   switch (sub) {
     case "start":
-      return runStart(wt, argv);
+      return yield* runStart(wt, argv);
     case "reset":
       // Same code path as `start --rebuild`; a name of its own because
       // "rebuild this environment from the tree" is what someone
       // reaches for, and they will not find it under `start`.
-      return runStart(wt, [...argv, "--rebuild"]);
+      return yield* runStart(wt, [...argv, "--rebuild"]);
     case "stop": {
-      await stopDevServer(wt);
+      yield* stopDevServerEffect(wt);
       console.log(green(`✓ dev server stopped for ${cyan(wt.slug)}`));
       return 0;
     }
     case "status":
-      return runStatusOne(wt, json);
+      return yield* runStatusOne(wt, json);
     case "logs": {
       // The tmux pane (alive or remained-on-exit) IS the log store.
-      const output = await devServerLogs(wt.slug);
+      const output = yield* devServerLogsEffect(wt.slug);
       if (output !== null) {
         console.log(output);
         return 0;
@@ -616,4 +593,13 @@ export async function run(argv: string[]): Promise<number> {
       console.log(USAGE);
       return 2;
   }
+  });
+}
+
+class DevCommandError extends Data.TaggedError("DevCommandError")<{
+  readonly cause: unknown;
+}> {}
+
+export function run(argv: string[]): Effect.Effect<number, DevCommandError> {
+  return runEffectProgram(argv).pipe(Effect.mapError((cause) => new DevCommandError({ cause })));
 }

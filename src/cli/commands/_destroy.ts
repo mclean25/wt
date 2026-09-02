@@ -1,4 +1,7 @@
+import { Data, Effect } from "effect";
+
 import { removeWorktree } from "../../core/lifecycle.ts";
+import { killAllSessionsFor } from "../../core/tmux.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 
 type Parsed = {
@@ -37,35 +40,63 @@ function parse(argv: string[]): Parsed | { error: string } {
  * `console.log` here — and every grandchild's output — lands in the log
  * automatically. No monkey-patching.
  */
-export async function run(argv: string[]): Promise<number> {
-  const parsed = parse(argv);
-  if ("error" in parsed) {
-    console.error(parsed.error);
-    return 2;
-  }
+export class DestroyCommandError extends Data.TaggedError(
+  "DestroyCommandError",
+)<{
+  readonly operation: string;
+  readonly cause: unknown;
+}> {}
 
-  const wt = (await listWorktrees()).find((w) => w.slug === parsed.slug);
-  if (!wt) {
-    console.error(`No worktree: ${parsed.slug}`);
-    return 1;
-  }
-  console.log(
-    `[bg destroy] slug=${parsed.slug} force=${parsed.force} ` +
-      `stage=${parsed.destroyStage} branch=${parsed.deleteBranch}`,
-  );
-  const result = await removeWorktree(wt, {
-    force: parsed.force,
-    destroyStage: parsed.destroyStage,
-    deleteBranch: parsed.deleteBranch,
-    onLog: (line) => console.log(line),
-    onPhase: (phase) => console.log(`· ${phase}`),
+function commandPromise<A>(
+  operation: string,
+  f: () => Promise<A>,
+): Effect.Effect<A, DestroyCommandError> {
+  return Effect.tryPromise({
+    try: f,
+    catch: (cause) => new DestroyCommandError({ operation, cause }),
   });
-  if (!result.ok) {
-    console.error(`failed: ${result.message}`);
-    return 1;
-  }
-  console.log(`✓ ${result.message}`);
-  if (result.destroyedStage) console.log(`✓ destroyed stage ${wt.stage}`);
-  if (result.deletedBranch) console.log(`✓ deleted branch ${wt.branch}`);
-  return 0;
+}
+
+export function run(
+  argv: string[],
+): Effect.Effect<number, DestroyCommandError> {
+  return Effect.gen(function* () {
+    const parsed = parse(argv);
+    if ("error" in parsed) {
+      console.error(parsed.error);
+      return 2;
+    }
+
+    const wt = (yield* commandPromise("list worktrees", listWorktrees)).find(
+      (w) => w.slug === parsed.slug,
+    );
+    if (!wt) {
+      console.error(`No worktree: ${parsed.slug}`);
+      return 1;
+    }
+    console.log(
+      `[bg destroy] slug=${parsed.slug} force=${parsed.force} ` +
+        `stage=${parsed.destroyStage} branch=${parsed.deleteBranch}`,
+    );
+    const result = yield* commandPromise("remove worktree", () =>
+      removeWorktree(wt, {
+        force: parsed.force,
+        destroyStage: parsed.destroyStage,
+        deleteBranch: parsed.deleteBranch,
+        onLog: (line) => console.log(line),
+        onPhase: (phase) => console.log(`· ${phase}`),
+      }),
+    );
+    if (!result.ok) {
+      console.error(`failed: ${result.message}`);
+      return 1;
+    }
+    yield* commandPromise("kill removed worktree sessions", () =>
+      killAllSessionsFor(wt.slug),
+    );
+    console.log(`✓ ${result.message}`);
+    if (result.destroyedStage) console.log(`✓ destroyed stage ${wt.stage}`);
+    if (result.deletedBranch) console.log(`✓ deleted branch ${wt.branch}`);
+    return 0;
+  });
 }

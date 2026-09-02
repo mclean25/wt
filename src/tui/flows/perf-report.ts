@@ -7,6 +7,7 @@
  * live snapshot each render so the closure never sends a stale sample.
  */
 import type { Dispatch, SetStateAction } from "react";
+import { Data, Effect } from "effect";
 
 import type { HarnessId } from "../../core/harness/index.ts";
 import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
@@ -38,6 +39,10 @@ const log = createLogger(WT_SOURCE_SLOT.label);
  */
 let inFlight = false;
 let cancelled = false;
+
+class PerfReportSendError extends Data.TaggedError("PerfReportSendError")<{
+  readonly cause: unknown;
+}> {}
 
 /**
  * Called when the perf overlay closes. A send already in flight still
@@ -79,45 +84,64 @@ export function makePerfFlows(ctx: PerfFlowCtx): {
     inFlight = true;
     cancelled = false;
     patchInject({ kind: "sending" });
-    void (async () => {
-      // Targets the same harness session `,` attaches to:
-      // sendSessionMessage and doEnterSlotSession both resolve the name
-      // from (slug, primaryHarness), so the prompt lands in the
-      // conversation the user is about to be dropped into rather than a
-      // second one.
-      const result = await sendSessionMessage({
-        slug: WT_SOURCE_SLOT.slug,
-        cwd: WT_SOURCE_SLOT.path,
-        harnessId: primaryHarness,
-        text: buildPerfInvestigationPrompt(snapshot),
-      });
-      inFlight = false;
-      if (!result.ok) {
-        patchInject({ kind: "failed", reason: result.reason });
-        log.event.err(`perf send failed: ${result.reason}`);
-        return;
-      }
+    Effect.runFork(
+      Effect.tryPromise({
+        try: () =>
+          sendSessionMessage({
+            slug: WT_SOURCE_SLOT.slug,
+            cwd: WT_SOURCE_SLOT.path,
+            harnessId: primaryHarness,
+            text: buildPerfInvestigationPrompt(snapshot),
+          }),
+        catch: (cause) => new PerfReportSendError({ cause }),
+      }).pipe(
+        Effect.match({
+          onFailure: (error) => {
+            const reason =
+              error.cause instanceof Error
+                ? error.cause.message
+                : String(error.cause);
+            patchInject({ kind: "failed", reason });
+            log.event.err(`perf send failed: ${reason}`);
+          },
+          onSuccess: (result) => {
+            if (!result.ok) {
+              patchInject({ kind: "failed", reason: result.reason });
+              log.event.err(`perf send failed: ${result.reason}`);
+              return;
+            }
       // `ok` is not delivery — see the same check in error-report.ts.
       // Entering a session that never got the prompt drops the user
       // into a conversation with nothing to answer.
-      if (result.delivered === false) {
-        patchInject({ kind: "failed", reason: "the session never received it" });
-        log.event.err("perf snapshot was not received by the session");
-        return;
-      }
+            if (result.delivered === false) {
+              patchInject({
+                kind: "failed",
+                reason: "the session never received it",
+              });
+              log.event.err("perf snapshot was not received by the session");
+              return;
+            }
       // Closed mid-send: the prompt landed, but don't yank the terminal
       // out from under whatever the user moved on to.
-      if (cancelled) {
-        log.event.info("perf snapshot sent (overlay closed — not entering)");
-        return;
-      }
-      log.event.ok("perf snapshot sent — entering session");
+            if (cancelled) {
+              log.event.info("perf snapshot sent (overlay closed — not entering)");
+              return;
+            }
+            log.event.ok("perf snapshot sent — entering session");
       // Close before handing over the terminal: entering suspends the
       // renderer, and an overlay left open would paint back over the
       // session view on return.
-      setModal(null);
-      doEnterSlotSession(WT_SOURCE_SLOT);
-    })();
+            setModal(null);
+            doEnterSlotSession(WT_SOURCE_SLOT);
+          },
+        }),
+        Effect.ensuring(
+          Effect.sync(() => {
+            inFlight = false;
+          }),
+        ),
+      ),
+    );
   }
 
   return { doPerfInvestigate };

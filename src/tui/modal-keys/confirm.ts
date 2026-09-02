@@ -5,6 +5,16 @@ import { killDiffSession, killShellSession } from "../../core/tmux.ts";
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleYesNoKey } from "./list-picker.ts";
+import { Data, Effect } from "effect";
+
+class ConfirmModalError extends Data.TaggedError("ConfirmModalError")<{
+  cause: unknown;
+}> {}
+const confirmPromise = <A>(evaluate: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new ConfirmModalError({ cause }),
+  });
 
 export function handleKillActionConfirmKey(
   k: KeyEvent,
@@ -15,9 +25,16 @@ export function handleKillActionConfirmKey(
     onConfirm: () => {
       const { slug, actionName } = modal;
       setModal(null);
-      void actionRegistry.kill(slug).then((killed) => {
-        if (killed) logWarn(`killed action "${actionName}" on ${slug}`);
-      });
+      Effect.runFork(
+        confirmPromise(() => actionRegistry.kill(slug)).pipe(
+          Effect.tap((killed) =>
+            Effect.sync(() => {
+              if (killed) logWarn(`killed action "${actionName}" on ${slug}`);
+            }),
+          ),
+          Effect.catchAll(() => Effect.void),
+        ),
+      );
     },
     onCancel: () => setModal(null),
     extraCancelKeys: ["!"],
@@ -35,15 +52,25 @@ export function handleKillSessionConfirmKey(
       const { slug } = modal;
       setModal(null);
       const kill = sessionKind === "diff" ? killDiffSession : killShellSession;
-      void kill(slug)
-        .then(() => {
-          logWarn(`killed ${sessionKind} session on ${slug}`);
-          void refreshTmuxSessions();
-        })
-        .catch((err) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          logErr(`kill ${sessionKind} session failed for ${slug}: ${msg}`);
-        });
+      Effect.runFork(
+        confirmPromise(() => kill(slug)).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              logWarn(`killed ${sessionKind} session on ${slug}`);
+            }),
+          ),
+          Effect.andThen(confirmPromise(refreshTmuxSessions)),
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              const msg =
+                error.cause instanceof Error
+                  ? error.cause.message
+                  : String(error.cause);
+              logErr(`kill ${sessionKind} session failed for ${slug}: ${msg}`);
+            }),
+          ),
+        ),
+      );
     },
     onCancel: () => setModal(null),
   });
@@ -105,6 +132,7 @@ export function handleConfirmKey(
     doRestoreRemoved,
     clearAll,
     logWarn,
+    logErr,
   } = ctx;
   return handleYesNoKey(k, {
     onConfirm: () => {
@@ -118,20 +146,50 @@ export function handleConfirmKey(
       // on an unknown slug, the gh flows surface a clear error.
       const slug = modal.slug;
       if (pending === "d" && modal.target) {
-        void doRemoveWorktree(modal.target);
+        Effect.runFork(
+          confirmPromise(() => doRemoveWorktree(modal.target!)).pipe(
+            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+          ),
+        );
       } else if (pending === "d!" && modal.target) {
-        void doRemoveWorktree(modal.target, { force: true });
+        Effect.runFork(
+          confirmPromise(() =>
+            doRemoveWorktree(modal.target!, { force: true }),
+          ).pipe(
+            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+          ),
+        );
       } else if (pending === "e" && slug) {
-        void doMarkReady(slug);
+        Effect.runFork(
+          confirmPromise(() => doMarkReady(slug)).pipe(
+            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+          ),
+        );
       } else if (pending === "E" && slug) {
-        void doShipPr(slug);
+        Effect.runFork(
+          confirmPromise(() => doShipPr(slug)).pipe(
+            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+          ),
+        );
       } else if (pending === "review-wt" && modal.reviewBranch) {
-        void doCheckoutReview(modal.reviewBranch);
+        Effect.runFork(
+          confirmPromise(() => doCheckoutReview(modal.reviewBranch!)).pipe(
+            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+          ),
+        );
       } else if (pending === "restore" && modal.restoreEntry) {
-        void doRestoreRemoved(modal.restoreEntry);
+        Effect.runFork(
+          confirmPromise(() => doRestoreRemoved(modal.restoreEntry!)).pipe(
+            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+          ),
+        );
       } else if (pending === "R") {
         logWarn("cleared all cached data; refetching from scratch");
-        void clearAll();
+        Effect.runFork(
+          confirmPromise(clearAll).pipe(
+            Effect.catchAll((e) => Effect.sync(() => logErr(String(e.cause)))),
+          ),
+        );
       }
     },
     onCancel: () => setModal(null),

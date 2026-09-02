@@ -1,8 +1,10 @@
+import { Clock, Effect } from "effect";
+
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { run } from "../proc.ts";
+import { runEffect } from "../proc.ts";
 import type { Contributor } from "../types.ts";
-import { hasGh, repoSlug } from "./gh-cli.ts";
+import { hasGhEffect, repoSlugEffect } from "./gh-cli.ts";
 
 const log = createLogger("[gh]");
 
@@ -16,22 +18,25 @@ const ACTIVE_AUTHORS_MAX_PAGES = 5; // ≈ up to 500 commits
  * empty set on failure; callers should treat empty as "don't filter"
  * rather than "everyone is inactive".
  */
-async function fetchActiveCommitAuthors(signal?: AbortSignal): Promise<Set<string>> {
+function fetchActiveCommitAuthorsEffect(
+  slug: string,
+  now: number,
+  signal?: AbortSignal,
+): Effect.Effect<Set<string>> {
+  return Effect.gen(function* () {
   const empty = new Set<string>();
-  if (!(await hasGh())) return empty;
-  const slug = await repoSlug();
-  if (!slug) return empty;
-  const since = new Date(Date.now() - CONTRIB_RECENCY_MS).toISOString();
+  const since = new Date(now - CONTRIB_RECENCY_MS).toISOString();
   const authors = new Set<string>();
   for (let page = 1; page <= ACTIVE_AUTHORS_MAX_PAGES; page++) {
-    const r = await run(
+    const r = yield* runEffect(
       [
         "gh",
         "api",
         `repos/${slug}/commits?since=${since}&per_page=100&page=${page}`,
       ],
       { cwd: config.paths.mainClone, timeoutMs: 15_000, signal },
-    );
+    ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+    if (r === null) return empty;
     if (r.exitCode !== 0) {
       log.error("active authors fetch failed", {
         stderr: r.stderr.slice(0, 200),
@@ -39,13 +44,15 @@ async function fetchActiveCommitAuthors(signal?: AbortSignal): Promise<Set<strin
       });
       return empty;
     }
-    let arr: Array<{ author: { login?: string } | null }> = [];
-    try {
-      arr = JSON.parse(r.stdout);
-    } catch (err) {
-      log.error(err instanceof Error ? err : String(err), { page });
-      return empty;
-    }
+    const arr = yield* Effect.try(
+      () => JSON.parse(r.stdout) as Array<{ author: { login?: string } | null }>,
+    ).pipe(
+      Effect.catchAll((err) => {
+        log.error(err instanceof Error ? err : String(err), { page });
+        return Effect.succeed(null);
+      }),
+    );
+    if (!arr) return empty;
     if (arr.length === 0) break;
     for (const c of arr) {
       if (c.author?.login) authors.add(c.author.login);
@@ -53,6 +60,7 @@ async function fetchActiveCommitAuthors(signal?: AbortSignal): Promise<Set<strin
     if (arr.length < 100) break;
   }
   return authors;
+  });
 }
 
 /**
@@ -71,18 +79,23 @@ async function fetchActiveCommitAuthors(signal?: AbortSignal): Promise<Set<strin
  * the recency check fails (but contributors succeeded), we return
  * the unfiltered contributors so the picker isn't empty.
  */
-export async function fetchRepoContributors(signal?: AbortSignal): Promise<Contributor[]> {
-  if (!(await hasGh())) return [];
-  const slug = await repoSlug();
+export function fetchRepoContributorsEffect(
+  signal?: AbortSignal,
+): Effect.Effect<Contributor[]> {
+  return Effect.gen(function* () {
+  if (!(yield* hasGhEffect())) return [];
+  const slug = yield* repoSlugEffect();
   if (!slug) return [];
-  const [contribRes, activeAuthors] = await Promise.all([
-    run(["gh", "api", `repos/${slug}/contributors?per_page=100`], {
+  const now = yield* Clock.currentTimeMillis;
+  const [contribRes, activeAuthors] = yield* Effect.all([
+    runEffect(["gh", "api", `repos/${slug}/contributors?per_page=100`], {
       cwd: config.paths.mainClone,
       timeoutMs: 15_000,
       signal,
-    }),
-    fetchActiveCommitAuthors(signal),
-  ]);
+    }).pipe(Effect.catchAll(() => Effect.succeed(null))),
+    fetchActiveCommitAuthorsEffect(slug, now, signal),
+  ], { concurrency: 2 });
+  if (contribRes === null) return [];
   if (contribRes.exitCode !== 0) {
     log.error("contributors fetch failed", {
       stderr: contribRes.stderr.slice(0, 200),
@@ -90,19 +103,19 @@ export async function fetchRepoContributors(signal?: AbortSignal): Promise<Contr
     });
     return [];
   }
-  let arr: Array<{
+  const arr = yield* Effect.try(() => JSON.parse(contribRes.stdout) as Array<{
     login?: string;
     type?: string;
     contributions?: number;
-  }>;
-  try {
-    arr = JSON.parse(contribRes.stdout);
-  } catch (err) {
-    log.error(err instanceof Error ? err : String(err), {
-      stdout: contribRes.stdout.slice(0, 200),
-    });
-    return [];
-  }
+  }>).pipe(
+    Effect.catchAll((err) => {
+      log.error(err instanceof Error ? err : String(err), {
+        stdout: contribRes.stdout.slice(0, 200),
+      });
+      return Effect.succeed(null);
+    }),
+  );
+  if (!arr) return [];
   const out: Contributor[] = [];
   for (const c of arr) {
     if (!c.login) continue;
@@ -117,4 +130,11 @@ export async function fetchRepoContributors(signal?: AbortSignal): Promise<Contr
     out.push({ login: c.login, contributions: c.contributions ?? 0 });
   }
   return out;
+  });
+}
+
+export function fetchRepoContributors(
+  signal?: AbortSignal,
+): Promise<Contributor[]> {
+  return Effect.runPromise(fetchRepoContributorsEffect(signal));
 }

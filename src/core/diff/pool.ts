@@ -18,6 +18,8 @@
  * lazily on the next dispatch once it empties — no eager respawn, which
  * would tight-loop if a worker crashed at import.
  */
+import { Data, Effect } from "effect";
+
 import { chainSignal } from "../proc.ts";
 
 import type { DiffContext } from "./index.ts";
@@ -46,6 +48,10 @@ const pending = new Map<number, Pending>();
 let nextId = 1;
 let nextWorkerIndex = 0;
 let disposed = false;
+
+export class DiffPoolError extends Data.TaggedError("DiffPoolError")<{
+  readonly cause: unknown;
+}> {}
 
 /** Typed send so a `protocol.ts` field rename is a compile error rather
  *  than a runtime surprise (`postMessage` itself is untyped). */
@@ -123,7 +129,7 @@ function ensurePool(): void {
   }
 }
 
-export function buildDiffContextViaPool(
+function dispatchDiffContext(
   wtPath: string,
   base: string,
   signal?: AbortSignal,
@@ -141,10 +147,14 @@ export function buildDiffContextViaPool(
     pending.set(id, { resolve, reject, cleanup: () => {}, worker });
     if (signal) {
       const cleanup = chainSignal(signal, () => {
-        post(worker, { type: "cancel", id });
         const entry = pending.get(id);
         if (entry) {
           pending.delete(id);
+          try {
+            post(worker, { type: "cancel", id });
+          } catch {
+            // A dead worker is already equivalent to cancellation.
+          }
           entry.reject(new DOMException("Aborted", "AbortError"));
         }
       });
@@ -153,8 +163,38 @@ export function buildDiffContextViaPool(
     }
     // The signal may have already aborted synchronously above and
     // settled the promise — only dispatch the job if it's still live.
-    if (pending.has(id)) post(worker, { type: "run", id, wtPath, base });
+    if (pending.has(id)) {
+      try {
+        post(worker, { type: "run", id, wtPath, base });
+      } catch (error) {
+        const entry = pending.get(id);
+        if (entry) {
+          pending.delete(id);
+          entry.cleanup();
+          entry.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    }
   });
+}
+
+export function buildDiffContextViaPoolEffect(
+  wtPath: string,
+  base: string,
+): Effect.Effect<DiffContext | null, DiffPoolError> {
+  return Effect.tryPromise({
+    try: (signal) => dispatchDiffContext(wtPath, base, signal),
+    catch: (cause) => new DiffPoolError({ cause }),
+  });
+}
+
+/** TanStack adapter preserving its AbortSignal / AbortError contract. */
+export function buildDiffContextViaPool(
+  wtPath: string,
+  base: string,
+  signal?: AbortSignal,
+): Promise<DiffContext | null> {
+  return dispatchDiffContext(wtPath, base, signal);
 }
 
 export function disposeDiffPool(): void {
@@ -177,3 +217,6 @@ export function disposeDiffPool(): void {
   }
   pending.clear();
 }
+
+export const disposeDiffPoolEffect = (): Effect.Effect<void> =>
+  Effect.sync(disposeDiffPool);

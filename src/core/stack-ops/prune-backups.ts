@@ -1,6 +1,8 @@
+import { Clock, Effect } from "effect";
+
 import { isRiftWorktree } from "../backend.ts";
-import { gitRun } from "../git.ts";
-import { listWorktrees } from "../worktree.ts";
+import { gitRunEffect } from "../git.ts";
+import { listWorktreesEffect } from "../worktree.ts";
 import { backupBranchOwner, backupTimestamp } from "./engine.ts";
 import type { Logger } from "./shared.ts";
 
@@ -9,15 +11,18 @@ import type { Logger } from "./shared.ts";
 export type PruneBackupsResult = { deleted: string[]; kept: string[] };
 
 /** Sweep one object store's `backup/` refs, accumulating into result. */
-async function pruneBackupsIn(
+function pruneBackupsInEffect(
   cwd: string | undefined,
   cutoff: number,
   onLog: Logger,
-  out: PruneBackupsResult,
-): Promise<void> {
+): Effect.Effect<PruneBackupsResult> {
+  return Effect.gen(function* () {
+  const out: PruneBackupsResult = { deleted: [], kept: [] };
   const args = ["for-each-ref", "--format=%(refname:short)", "refs/heads/backup/"];
-  const r = cwd ? await gitRun(args, cwd) : await gitRun(args);
-  if (r.exitCode !== 0) return;
+  const r = yield* gitRunEffect(args, cwd).pipe(
+    Effect.catchAll(() => Effect.succeed(null)),
+  );
+  if (r === null || r.exitCode !== 0) return out;
   for (const ref of r.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
     if (backupBranchOwner(ref) === null) {
       out.kept.push(ref);
@@ -28,15 +33,19 @@ async function pruneBackupsIn(
       out.kept.push(ref);
       continue;
     }
-    const del = cwd ? await gitRun(["branch", "-D", ref], cwd) : await gitRun(["branch", "-D", ref]);
-    if (del.exitCode === 0) {
+    const del = yield* gitRunEffect(["branch", "-D", ref], cwd).pipe(
+      Effect.catchAll(() => Effect.succeed(null)),
+    );
+    if (del?.exitCode === 0) {
       out.deleted.push(ref);
       onLog(`  deleted ${ref}${cwd ? ` (in ${cwd})` : ""}`);
     } else {
       out.kept.push(ref);
-      onLog(`  could not delete ${ref}: ${(del.stderr || del.stdout).trim()}`);
+      onLog(`  could not delete ${ref}: ${(del?.stderr || del?.stdout || "git failed").trim()}`);
     }
   }
+  return out;
+  });
 }
 
 /**
@@ -54,18 +63,35 @@ async function pruneBackupsIn(
  * per-slice sweep — the engine creates them in the slice cwd
  * (`engine.ts` `replayStep`), so the manual sweep must look there too.
  */
-export async function pruneStackBackups(
+export function pruneStackBackupsEffect(
+  olderThanDays: number,
+  onLog: Logger,
+): Effect.Effect<PruneBackupsResult> {
+  return Effect.gen(function* () {
+  const cutoff = (yield* Clock.currentTimeMillis) - olderThanDays * 86_400_000;
+  const main = yield* pruneBackupsInEffect(undefined, cutoff, onLog);
+  // Rift slices carry their own refs; sweep each independent clone too.
+  const worktrees = yield* listWorktreesEffect().pipe(
+    Effect.catchAll(() => Effect.succeed([])),
+  );
+  const rift = yield* Effect.forEach(
+    worktrees.filter((w) => !w.isMain && isRiftWorktree(w.path)),
+    (w) => pruneBackupsInEffect(w.path, cutoff, onLog),
+    { concurrency: 4 },
+  );
+  return rift.reduce(
+    (result, next) => ({
+      deleted: [...result.deleted, ...next.deleted],
+      kept: [...result.kept, ...next.kept],
+    }),
+    main,
+  );
+  });
+}
+
+export function pruneStackBackups(
   olderThanDays: number,
   onLog: Logger,
 ): Promise<PruneBackupsResult> {
-  const result: PruneBackupsResult = { deleted: [], kept: [] };
-  const cutoff = Date.now() - olderThanDays * 86_400_000;
-  await pruneBackupsIn(undefined, cutoff, onLog, result);
-  // Rift slices carry their own refs; sweep each independent clone too.
-  const worktrees = await listWorktrees().catch(() => []);
-  for (const w of worktrees) {
-    if (w.isMain || !isRiftWorktree(w.path)) continue;
-    await pruneBackupsIn(w.path, cutoff, onLog, result);
-  }
-  return result;
+  return Effect.runPromise(pruneStackBackupsEffect(olderThanDays, onLog));
 }

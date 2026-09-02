@@ -42,6 +42,7 @@
  */
 import { chmodSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { Data, Effect, Schedule } from "effect";
 
 import { config } from "../../../config.ts";
 import {
@@ -96,16 +97,12 @@ export type SelftestOutcome =
  * two things they can't have.
  */
 export type InjectDeps = {
-  connect(socketPath: string): Promise<InspectorClient>;
+  connect(socketPath: string, signal?: AbortSignal): Promise<InspectorClient>;
   socketExists(tmuxName: string): boolean;
   now(): number;
-  sleep(ms: number): Promise<void>;
   /**
    * Timings, injectable so tests can exercise the timeout branches
-   * without waiting out the real budgets. A virtual clock can't do it:
-   * every deadline here is a `Promise.race` against a sleep, so a sleep
-   * that resolves instantly always wins and nothing else is ever
-   * reachable.
+   * without waiting out the real budgets.
    */
   attemptTimeoutMs: number;
   pollMs: number;
@@ -116,7 +113,6 @@ const defaultDeps: InjectDeps = {
   connect: connectInspector,
   socketExists: (tmuxName) => inspectorSocketExists(tmuxName),
   now: Date.now,
-  sleep: (ms) => Bun.sleep(ms),
   attemptTimeoutMs: ATTEMPT_TIMEOUT_MS,
   pollMs: READY_POLL_MS,
   locateRetryMs: LOCATE_RETRY_MS,
@@ -224,45 +220,62 @@ export function inspectorEnabled(): boolean {
 
 type Failure = { ok: false; kind: InjectFailureKind; reason: string };
 
-async function withClient<T>(
+export class InjectTransportError extends Data.TaggedError("InjectTransportError")<{
+  readonly phase: "connect" | "call";
+  readonly detail: string;
+  readonly cause?: unknown;
+}> {
+  override get message(): string { return this.detail; }
+}
+
+class LocateRetryError extends Data.TaggedError("LocateRetryError")<{
+  readonly result: PageResult & { ok: false };
+}> {}
+
+const clientCallEffect = (
+  client: InspectorClient,
+  method: string,
+  params?: Record<string, unknown>,
+) => Effect.tryPromise({
+  try: () => client.call(method, params),
+  catch: (cause) => new InjectTransportError({ phase: "call", detail: cause instanceof Error ? cause.message : String(cause), cause }),
+});
+
+function withClientEffect<T>(
   deps: InjectDeps,
   tmuxName: string,
-  body: (client: InspectorClient) => Promise<T | Failure>,
-): Promise<T | Failure> {
+  body: (client: InspectorClient) => Effect.Effect<T | Failure, InjectTransportError>,
+): Effect.Effect<T | Failure> {
   if (!deps.socketExists(tmuxName)) {
-    return {
+    return Effect.succeed({
       ok: false,
       kind: "absent",
       reason: `no inspector socket at ${inspectorSocketPath(tmuxName)}`,
-    };
+    });
   }
-  let client: InspectorClient;
-  try {
-    client = await deps.connect(inspectorSocketPath(tmuxName));
-  } catch (err) {
+  const acquire = Effect.tryPromise({
+    try: (signal) => deps.connect(inspectorSocketPath(tmuxName), signal),
+    catch: (cause) => new InjectTransportError({ phase: "connect", detail: cause instanceof Error ? cause.message : String(cause), cause }),
+  });
+  return Effect.acquireUseRelease(
+    acquire,
+    body,
+    (client) => Effect.sync(() => client.close()),
+  ).pipe(Effect.catchAll((err) => Effect.succeed((err.phase === "connect" ? {
     // The file exists but nothing usable is accepting: the session
     // restarted and the live process holds a now-unlinked inode. Only
     // that process can rebind the path, so this never heals on retry.
-    return {
       ok: false,
       kind: "stale",
-      reason: `inspector socket is stale (${err instanceof Error ? err.message : String(err)})`,
-    };
-  }
-  try {
-    return await body(client);
-  } catch (err) {
+      reason: `inspector socket is stale (${err.message})`,
+    } : {
     // A rejection anywhere inside — including `Runtime.enable`, which
     // is outside the per-attempt retry — becomes a classified failure
     // rather than escaping to the caller as an unhandled rejection.
-    return {
       ok: false,
       kind: "failed",
-      reason: err instanceof Error ? err.message : String(err),
-    };
-  } finally {
-    client.close();
-  }
+      reason: err.message,
+    }) as Failure)));
 }
 
 /**
@@ -273,17 +286,18 @@ async function withClient<T>(
  * are transient right after a launch or a `claude -c` revive, when Ink
  * has not finished wiring.
  */
-async function runRoutine(
+function runRoutineEffect(
   deps: InjectDeps,
   client: InspectorClient,
   text: string,
   probeOnly: boolean,
-): Promise<PageResult> {
-  let out: PageResult = { ok: false, err: "no attempt" };
-  for (let attempt = 1; attempt <= LOCATE_RETRIES; attempt += 1) {
-    try {
-      const appId = await appInstanceObjectId(client);
-      const res = await client.call("Runtime.callFunctionOn", {
+): Effect.Effect<PageResult, InjectTransportError> {
+  const once = Effect.gen(function* () {
+      const appId = yield* Effect.tryPromise({
+        try: () => appInstanceObjectId(client),
+        catch: (cause) => new InjectTransportError({ phase: "call", detail: cause instanceof Error ? cause.message : String(cause), cause }),
+      });
+      const res = yield* clientCallEffect(client, "Runtime.callFunctionOn", {
         objectId: appId,
         functionDeclaration: PAGE_ROUTINE,
         arguments: [{ value: probeOnly ? "" : text }, { value: probeOnly }],
@@ -293,22 +307,18 @@ async function runRoutine(
       // it explicitly — otherwise the real cause is replaced by a
       // JSON.parse "unexpected end of input" that matches nothing.
       const thrown = inspectorException(res);
-      out = thrown ? { ok: false, err: thrown } : parsePageResult(res.result?.value);
-    } catch (err) {
-      out = { ok: false, err: err instanceof Error ? err.message : String(err) };
-    }
-    if (out.ok) return out;
-    if (attempt < LOCATE_RETRIES && LOCATE_FAILURE.test(out.err)) {
-      await deps.sleep(deps.locateRetryMs);
-      continue;
-    }
-    return out;
-  }
-  return out;
+      const out: PageResult = thrown ? { ok: false, err: thrown } : parsePageResult(res.result?.value);
+      if (!out.ok && LOCATE_FAILURE.test(out.err)) return yield* new LocateRetryError({ result: out });
+      return out;
+  });
+  return once.pipe(
+    Effect.retry(Schedule.intersect(Schedule.recurs(LOCATE_RETRIES - 1), Schedule.spaced(deps.locateRetryMs))),
+    Effect.catchTag("LocateRetryError", (err) => Effect.succeed(err.result)),
+  );
 }
 
-function deadline<T>(deps: InjectDeps, work: Promise<T>, ms: number): Promise<T | "timeout"> {
-  return Promise.race([work, deps.sleep(ms).then(() => "timeout" as const)]);
+function deadlineEffect<T, E>(work: Effect.Effect<T, E>, ms: number): Effect.Effect<T | "timeout", E> {
+  return Effect.raceFirst(work, Effect.sleep(ms).pipe(Effect.as("timeout" as const)));
 }
 
 function classify(err: string): InjectFailureKind {
@@ -329,23 +339,37 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
    * Without re-asking, the caller would give up and type into that
    * dialog, answering it on the human's behalf.
    */
-  async function deliverClaudeMessage(
+  function deliverClaudeMessageEffect(
     tmuxName: string,
     text: string,
-    opts: { readyBudgetMs: number; abortIfBlocked?: () => string | null },
-  ): Promise<InjectOutcome> {
-    return await withClient(deps, tmuxName, async (client) => {
-      await client.call("Runtime.enable");
+    opts: { readyBudgetMs: number; abortIfBlocked?: () => string | null; signal?: AbortSignal },
+  ): Effect.Effect<InjectOutcome> {
+    return withClientEffect(deps, tmuxName, (client) => Effect.gen(function* () {
+      yield* clientCallEffect(client, "Runtime.enable");
       const until = deps.now() + opts.readyBudgetMs;
       let lastProbe = "never probed";
       for (;;) {
         const blocked = opts.abortIfBlocked?.();
         if (blocked) return { ok: false as const, kind: "blocked" as const, reason: blocked };
-        const probe = await deadline(
-          deps,
-          runRoutine(deps, client, "", true),
+        const probeAttempt = deadlineEffect(
+          runRoutineEffect(deps, client, "", true),
           deps.attemptTimeoutMs,
         );
+        const probe = opts.abortIfBlocked
+          ? yield* Effect.raceFirst(
+              probeAttempt,
+              Effect.gen(function* () {
+                for (;;) {
+                  yield* Effect.sleep(deps.pollMs);
+                  const reason = opts.abortIfBlocked?.();
+                  if (reason) return { blocked: reason } as const;
+                }
+              }),
+            )
+          : yield* probeAttempt;
+        if (typeof probe === "object" && "blocked" in probe) {
+          return { ok: false as const, kind: "blocked" as const, reason: probe.blocked };
+        }
         if (probe === "timeout") {
           return { ok: false as const, kind: "failed" as const, reason: "probe timed out" };
         }
@@ -357,12 +381,11 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
         if (deps.now() >= until) {
           return { ok: false as const, kind: "not-ready" as const, reason: lastProbe };
         }
-        await deps.sleep(deps.pollMs);
+        yield* Effect.sleep(deps.pollMs);
       }
 
-      const submitted = await deadline(
-        deps,
-        runRoutine(deps, client, text, false),
+      const submitted = yield* deadlineEffect(
+        runRoutineEffect(deps, client, text, false),
         deps.attemptTimeoutMs,
       );
       if (submitted === "timeout") {
@@ -384,7 +407,7 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
         ok: true as const,
         draftPreserved: "draftLen" in submitted ? (submitted.draftLen ?? 0) > 0 : false,
       };
-    });
+    }));
   }
 
   /**
@@ -393,10 +416,10 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
    * update broke something — wired into `wt doctor` and
    * `wt claude selftest`.
    */
-  async function claudeInjectSelftest(tmuxName: string): Promise<SelftestOutcome> {
-    return await withClient(deps, tmuxName, async (client) => {
-      await client.call("Runtime.enable");
-      const out = await deadline(deps, runRoutine(deps, client, "", true), deps.attemptTimeoutMs);
+  function claudeInjectSelftestEffect(tmuxName: string): Effect.Effect<SelftestOutcome> {
+    return withClientEffect(deps, tmuxName, (client) => Effect.gen(function* () {
+      yield* clientCallEffect(client, "Runtime.enable");
+      const out = yield* deadlineEffect(runRoutineEffect(deps, client, "", true), deps.attemptTimeoutMs);
       if (out === "timeout") {
         return { ok: false as const, kind: "failed" as const, reason: "probe timed out" };
       }
@@ -415,10 +438,17 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
         };
       }
       return { ok: true as const, foundInput: true, foundCaret: out.foundCaret };
-    });
+    }));
   }
 
-  return { deliverClaudeMessage, claudeInjectSelftest };
+  const deliverClaudeMessage = (
+    tmuxName: string, text: string,
+    opts: { readyBudgetMs: number; abortIfBlocked?: () => string | null; signal?: AbortSignal },
+  ): Promise<InjectOutcome> => Effect.runPromise(deliverClaudeMessageEffect(tmuxName, text, opts), { signal: opts.signal });
+  const claudeInjectSelftest = (tmuxName: string): Promise<SelftestOutcome> =>
+    Effect.runPromise(claudeInjectSelftestEffect(tmuxName));
+
+  return { deliverClaudeMessageEffect, claudeInjectSelftestEffect, deliverClaudeMessage, claudeInjectSelftest };
 }
 
 const injector = createClaudeInjector();

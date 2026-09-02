@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { Effect } from "effect";
 
 import {
   classifyCheckRuns,
   emptyUpdateMemory,
-  findNewestEligible,
+  findNewestEligibleEffect,
   parseUpdateMemory,
-  restartEventsDaemonAfterUpdate,
+  restartEventsDaemonAfterUpdateEffect,
   selectOffer,
   startupCheckGate,
   UPDATE_CHECK_INTERVAL_MS,
@@ -78,31 +79,31 @@ describe("selectOffer", () => {
   });
 });
 
-describe("restartEventsDaemonAfterUpdate", () => {
+describe("restartEventsDaemonAfterUpdateEffect", () => {
   test("skips cleanly when the launchd agent is not installed", async () => {
     expect(
-      await restartEventsDaemonAfterUpdate({ plist: "/tmp/wt-test-events-agent-does-not-exist.plist" }),
+      await Effect.runPromise(restartEventsDaemonAfterUpdateEffect({ plist: "/tmp/wt-test-events-agent-does-not-exist.plist" })),
     ).toEqual({ status: "not-installed" });
   });
 
   test("runs the newly checked-out events restart command", async () => {
     const calls: string[][] = [];
-    const result = await restartEventsDaemonAfterUpdate({
+    const result = await Effect.runPromise(restartEventsDaemonAfterUpdateEffect({
       plist: "/dev/null",
-      run: async (argv) => {
+      run: (argv) => {
         calls.push(argv);
-        return { stdout: "", stderr: "", exitCode: 0 };
+        return Effect.succeed({ stdout: "", stderr: "", exitCode: 0 });
       },
-    });
+    }));
     expect(result).toEqual({ status: "restarted" });
     expect(calls).toEqual([[`${process.cwd()}/bin/wt`, "events", "restart"]]);
   });
 
   test("reports a restart failure without throwing", async () => {
-    const result = await restartEventsDaemonAfterUpdate({
+    const result = await Effect.runPromise(restartEventsDaemonAfterUpdateEffect({
       plist: "/dev/null",
-      run: async () => ({ stdout: "", stderr: "launchctl load failed\n", exitCode: 1 }),
-    });
+      run: () => Effect.succeed({ stdout: "", stderr: "launchctl load failed\n", exitCode: 1 }),
+    }));
     expect(result).toEqual({ status: "failed", detail: "launchctl load failed" });
   });
 });
@@ -167,17 +168,17 @@ describe("findNewestEligible", () => {
   const pending = [{ name: "ci", status: "in_progress", conclusion: null }];
 
   test("skips red and pending heads, lands on the newest green", async () => {
-    const r = await findNewestEligible(
+    const r = await Effect.runPromise(findNewestEligibleEffect(
       ["aaa1111", "bbb2222", "ccc3333"],
       fakeFetch({ aaa1111: red, bbb2222: pending, ccc3333: green }),
-    );
+    ));
     expect(r.target).toBe("ccc3333");
     expect(r.gated).toBe(true);
     expect(r.checked.map((c) => c.status)).toEqual(["red", "pending", "green"]);
   });
 
   test("no matching runs = unknown = eligible (fail open), first hit wins", async () => {
-    const r = await findNewestEligible(["aaa1111", "bbb2222"], fakeFetch({}));
+    const r = await Effect.runPromise(findNewestEligibleEffect(["aaa1111", "bbb2222"], fakeFetch({})));
     expect(r.target).toBe("aaa1111");
     expect(r.checked).toHaveLength(1);
   });
@@ -185,13 +186,13 @@ describe("findNewestEligible", () => {
   test("every interrogated candidate red → no target, capped lookups", async () => {
     const shas = Array.from({ length: 12 }, (_, i) => `sha${i}xxxxxx`);
     const bySha = Object.fromEntries(shas.map((s) => [s, red]));
-    const r = await findNewestEligible(shas, fakeFetch(bySha));
+    const r = await Effect.runPromise(findNewestEligibleEffect(shas, fakeFetch(bySha)));
     expect(r.target).toBeNull();
     expect(r.checked).toHaveLength(10);
   });
 
   test("empty candidate list is a no-op", async () => {
-    const r = await findNewestEligible([], fakeFetch({}));
+    const r = await Effect.runPromise(findNewestEligibleEffect([], fakeFetch({})));
     expect(r).toEqual({ target: null, checked: [], gated: false });
   });
 });

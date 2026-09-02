@@ -19,7 +19,14 @@
  * whole replay. The `RestackEngine` seam stays so the replay mechanism
  * can be swapped or tested in isolation.
  */
-import { gitRun, rebaseInProgress, revParse } from "../git.ts";
+import { Data, Effect } from "effect";
+
+import {
+  gitRunEffect,
+  rebaseInProgressEffect,
+  revParseEffect,
+} from "../git.ts";
+import type { RunResult } from "../proc.ts";
 
 export type ReplayLogger = (line: string) => void;
 
@@ -48,6 +55,27 @@ export interface RestackEngine {
    * hands resolution to a human / skill. wt never auto-resolves conflicts.
    */
   replayStep(step: ReplayStep, onLog: ReplayLogger): Promise<ReplayOutcome>;
+  replayStepEffect?(
+    step: ReplayStep,
+    onLog: ReplayLogger,
+  ): Effect.Effect<ReplayOutcome, RestackEngineError>;
+}
+
+export class RestackEngineError extends Data.TaggedError("RestackEngineError")<{
+  readonly step: ReplayStep;
+  readonly cause: unknown;
+}> {}
+
+export function replayStepEffect(
+  engine: RestackEngine,
+  step: ReplayStep,
+  onLog: ReplayLogger,
+): Effect.Effect<ReplayOutcome, RestackEngineError> {
+  if (engine.replayStepEffect) return engine.replayStepEffect(step, onLog);
+  return Effect.tryPromise({
+    try: () => engine.replayStep(step, onLog),
+    catch: (cause) => new RestackEngineError({ step, cause }),
+  });
 }
 
 /** Collapse git's multi-line / `\r`-laden stderr into one clean line so it
@@ -63,9 +91,12 @@ function oneLine(s: string): string {
 const REBASE_ATTEMPTS = 5;
 const ABORT_ATTEMPTS = 4;
 
-async function lockBackoff(attempt: number): Promise<void> {
+export function restackBackoffEffect(
+  attempt: number,
+  jitterMs = Math.floor(Math.random() * 250),
+): Effect.Effect<void> {
   // Linear backoff + jitter so concurrent retriers don't re-collide in step.
-  await Bun.sleep(250 * attempt + Math.floor(Math.random() * 250));
+  return Effect.sleep(250 * attempt + jitterMs);
 }
 
 /** Does git stderr smell like a transient lock (index.lock / ref lock held by
@@ -79,25 +110,55 @@ function looksLikeLockError(detail: string): boolean {
  * the pick it's cleaning up — retry it before declaring the worktree stuck.
  * The authoritative success test is `rebaseInProgress`, not the exit code.
  */
-async function abortRebaseWithRetry(cwd: string): Promise<{ ok: true } | { ok: false; error: string }> {
+function safeGitRunEffect(args: readonly string[], cwd: string): Effect.Effect<RunResult> {
+  return gitRunEffect(args, cwd).pipe(
+    Effect.catchAll((error) =>
+      Effect.succeed({ stdout: "", stderr: error.message, exitCode: -1 }),
+    ),
+  );
+}
+
+function safeRebaseInProgressEffect(cwd: string): Effect.Effect<boolean> {
+  return rebaseInProgressEffect(cwd).pipe(
+    Effect.catchAll(() => Effect.succeed(false)),
+  );
+}
+
+function safeRevParseEffect(ref: string, cwd: string): Effect.Effect<string | null> {
+  return revParseEffect(ref, cwd).pipe(Effect.catchAll(() => Effect.succeed(null)));
+}
+
+function abortRebaseWithRetryEffect(
+  cwd: string,
+): Effect.Effect<{ ok: true } | { ok: false; error: string }> {
+  return Effect.gen(function* () {
   let lastErr = "";
   for (let attempt = 1; attempt <= ABORT_ATTEMPTS; attempt++) {
-    const aborted = await gitRun(["rebase", "--abort"], cwd);
-    if (!(await rebaseInProgress(cwd))) return { ok: true };
+    const aborted = yield* safeGitRunEffect(["rebase", "--abort"], cwd);
+    if (!(yield* safeRebaseInProgressEffect(cwd))) return { ok: true };
     lastErr = oneLine(aborted.stderr || aborted.stdout);
-    await lockBackoff(attempt);
+    yield* restackBackoffEffect(attempt);
   }
   return { ok: false, error: lastErr };
+  });
 }
 
 export class NativeRestackEngine implements RestackEngine {
-  async replayStep(step: ReplayStep, onLog: ReplayLogger): Promise<ReplayOutcome> {
+  replayStep(step: ReplayStep, onLog: ReplayLogger): Promise<ReplayOutcome> {
+    return Effect.runPromise(this.replayStepEffect(step, onLog));
+  }
+
+  replayStepEffect(
+    step: ReplayStep,
+    onLog: ReplayLogger,
+  ): Effect.Effect<ReplayOutcome, RestackEngineError> {
+    return Effect.gen(function* () {
     const { branch, worktreePath, anchor, newBase } = step;
-    const newBaseSha = await revParse(newBase, worktreePath);
+    const newBaseSha = yield* safeRevParseEffect(newBase, worktreePath);
     if (!newBaseSha) {
       return { ok: false, conflict: false, error: `cannot resolve base ref ${newBase} for ${branch}` };
     }
-    const beforeTip = await revParse(branch, worktreePath);
+    const beforeTip = yield* safeRevParseEffect(branch, worktreePath);
     if (!beforeTip) {
       return { ok: false, conflict: false, error: `cannot resolve branch ${branch}` };
     }
@@ -107,18 +168,26 @@ export class NativeRestackEngine implements RestackEngine {
     // Still push if the remote lags the local tip — the common case is a
     // hand-resolved conflict the operator rebased but forgot to push.
     if (anchor === newBaseSha) {
-      const sync = await pushIfRemoteStale(branch, beforeTip, worktreePath, onLog);
+      const sync = yield* pushIfRemoteStaleEffect(
+        branch,
+        beforeTip,
+        worktreePath,
+        onLog,
+      );
       if (!sync.ok) return { ok: false, conflict: false, error: sync.error };
       if (!sync.pushed) onLog(`  ${branch}: already on base, skipping`);
-      await pruneSupersededBackups(branch, worktreePath, onLog);
+      yield* pruneSupersededBackupsEffect(branch, worktreePath, onLog);
       return { ok: true, newTip: beforeTip, newBaseSha, moved: false, pushed: sync.pushed };
     }
 
     // Snapshot the pre-rebase tip on a backup ref so a conflict bail (or a
     // bad force-push) is always recoverable. Kept only on conflict; deleted
     // on success so backups don't pile up.
-    const backupBranch = `backup/restack-${epochMs()}-${branch}`;
-    const backup = await gitRun(["branch", "--force", backupBranch, beforeTip], worktreePath);
+    const backupBranch = `backup/restack-${yield* epochMsEffect}-${branch}`;
+    const backup = yield* safeGitRunEffect(
+      ["branch", "--force", backupBranch, beforeTip],
+      worktreePath,
+    );
     if (backup.exitCode !== 0) {
       return {
         ok: false,
@@ -138,14 +207,21 @@ export class NativeRestackEngine implements RestackEngine {
     // is cheap because the abort restores the untouched branch tip.
     let succeeded = false;
     for (let attempt = 1; attempt <= REBASE_ATTEMPTS; attempt++) {
-      const rebase = await gitRun(["rebase", "--onto", newBaseSha, anchor, branch], worktreePath);
+      const rebase = yield* safeGitRunEffect(
+        ["rebase", "--onto", newBaseSha, anchor, branch],
+        worktreePath,
+      ).pipe(
+        Effect.onInterrupt(() =>
+          abortRebaseWithRetryEffect(worktreePath).pipe(Effect.asVoid),
+        ),
+      );
       if (rebase.exitCode === 0) {
         succeeded = true;
         break;
       }
       const detail = oneLine(rebase.stderr || rebase.stdout);
-      if (await rebaseInProgress(worktreePath)) {
-        const conflicts = await gitRun(
+      if (yield* safeRebaseInProgressEffect(worktreePath)) {
+        const conflicts = yield* safeGitRunEffect(
           ["diff", "--name-only", "--diff-filter=U"],
           worktreePath,
         );
@@ -154,7 +230,7 @@ export class NativeRestackEngine implements RestackEngine {
         const lockMidPick = files.length === 0 && looksLikeLockError(detail);
         // Abort to restore a clean tree; the backup holds the original tip.
         // The abort can lose to the SAME lock that broke the pick — retry it.
-        const aborted = await abortRebaseWithRetry(worktreePath);
+        const aborted = yield* abortRebaseWithRetryEffect(worktreePath);
         if (!aborted.ok) {
           // Abort kept failing → the worktree really is stuck mid-rebase.
           // Surface both git errors so it's actionable.
@@ -167,11 +243,11 @@ export class NativeRestackEngine implements RestackEngine {
         if (lockMidPick && attempt < REBASE_ATTEMPTS) {
           // No conflicted paths + a lock-shaped error: not a content conflict.
           onLog(`  ${branch}: a transient lock broke the rebase mid-pick (attempt ${attempt}/${REBASE_ATTEMPTS}) — aborted clean, retrying`);
-          await lockBackoff(attempt);
+          yield* restackBackoffEffect(attempt);
           continue;
         }
         if (lockMidPick) {
-          await deleteBackup(backupBranch, worktreePath);
+          yield* deleteBackupEffect(backupBranch, worktreePath);
           return {
             ok: false,
             conflict: false,
@@ -195,10 +271,10 @@ export class NativeRestackEngine implements RestackEngine {
       // backup so it doesn't linger.
       if (attempt < REBASE_ATTEMPTS) {
         onLog(`  ${branch}: rebase didn't start (attempt ${attempt}/${REBASE_ATTEMPTS}, likely a transient lock) — retrying`);
-        await lockBackoff(attempt);
+        yield* restackBackoffEffect(attempt);
         continue;
       }
-      await deleteBackup(backupBranch, worktreePath);
+      yield* deleteBackupEffect(backupBranch, worktreePath);
       return {
         ok: false,
         conflict: false,
@@ -211,11 +287,11 @@ export class NativeRestackEngine implements RestackEngine {
       // the backup here is safe even if a future edit makes this
       // reachable: reaching it means no rebase landed, so the branch tip
       // is untouched and the backup merely duplicates the live tip.
-      await deleteBackup(backupBranch, worktreePath);
+      yield* deleteBackupEffect(backupBranch, worktreePath);
       return { ok: false, conflict: false, error: `could not replay ${branch} onto ${short(newBaseSha)}` };
     }
 
-    const newTip = await revParse(branch, worktreePath);
+    const newTip = yield* safeRevParseEffect(branch, worktreePath);
     if (!newTip) {
       return { ok: false, conflict: false, error: `lost ${branch} tip after rebase` };
     }
@@ -224,25 +300,33 @@ export class NativeRestackEngine implements RestackEngine {
     // commits were already present on the new base). Still sync a stale
     // remote, same as the skip path above.
     if (newTip === beforeTip) {
-      await deleteBackup(backupBranch, worktreePath);
-      const sync = await pushIfRemoteStale(branch, newTip, worktreePath, onLog);
+      yield* deleteBackupEffect(backupBranch, worktreePath);
+      const sync = yield* pushIfRemoteStaleEffect(
+        branch,
+        newTip,
+        worktreePath,
+        onLog,
+      );
       if (!sync.ok) return { ok: false, conflict: false, error: sync.error };
       if (!sync.pushed) onLog(`  ${branch}: no commits to move`);
-      await pruneSupersededBackups(branch, worktreePath, onLog);
+      yield* pruneSupersededBackupsEffect(branch, worktreePath, onLog);
       return { ok: true, newTip, newBaseSha, moved: false, pushed: sync.pushed };
     }
 
     // A branch that was never pushed stays local: rebasing it (the
     // standalone `R` case) must not invent a remote as a side effect.
     // The caller fetched origin up front, so this read is current.
-    const remoteExists = await revParse(`origin/${branch}`, worktreePath);
+    const remoteExists = yield* safeRevParseEffect(
+      `origin/${branch}`,
+      worktreePath,
+    );
     if (!remoteExists) {
-      await deleteBackup(backupBranch, worktreePath);
+      yield* deleteBackupEffect(backupBranch, worktreePath);
       onLog(`  rebased ${branch} (not pushed — no origin branch)`);
-      await pruneSupersededBackups(branch, worktreePath, onLog);
+      yield* pruneSupersededBackupsEffect(branch, worktreePath, onLog);
       return { ok: true, newTip, newBaseSha, moved: true, pushed: false };
     }
-    const push = await gitRun(
+    const push = yield* safeGitRunEffect(
       ["push", "--force-with-lease", "origin", branch],
       worktreePath,
     );
@@ -253,10 +337,11 @@ export class NativeRestackEngine implements RestackEngine {
         error: `push ${branch}: ${(push.stderr || push.stdout).trim()}`,
       };
     }
-    await deleteBackup(backupBranch, worktreePath);
+    yield* deleteBackupEffect(backupBranch, worktreePath);
     onLog(`  pushed ${branch}`);
-    await pruneSupersededBackups(branch, worktreePath, onLog);
+    yield* pruneSupersededBackupsEffect(branch, worktreePath, onLog);
     return { ok: true, newTip, newBaseSha, moved: true, pushed: true };
+    });
   }
 }
 
@@ -273,20 +358,25 @@ export class NativeRestackEngine implements RestackEngine {
  * (a remote that moved past our tracking ref rejects the push), and the
  * old remote tip stays reachable via the tracking-ref reflog regardless.
  */
-async function pushIfRemoteStale(
+function pushIfRemoteStaleEffect(
   branch: string,
   localTip: string,
   cwd: string,
   onLog: ReplayLogger,
-): Promise<{ ok: true; pushed: boolean } | { ok: false; error: string }> {
-  const remoteTip = await revParse(`origin/${branch}`, cwd);
+): Effect.Effect<{ ok: true; pushed: boolean } | { ok: false; error: string }> {
+  return Effect.gen(function* () {
+  const remoteTip = yield* safeRevParseEffect(`origin/${branch}`, cwd);
   if (!remoteTip || remoteTip === localTip) return { ok: true, pushed: false };
-  const push = await gitRun(["push", "--force-with-lease", "origin", branch], cwd);
+  const push = yield* safeGitRunEffect(
+    ["push", "--force-with-lease", "origin", branch],
+    cwd,
+  );
   if (push.exitCode !== 0) {
     return { ok: false, error: `push ${branch} (remote was stale): ${(push.stderr || push.stdout).trim()}` };
   }
   onLog(`  pushed ${branch} (remote was stale)`);
   return { ok: true, pushed: true };
+  });
 }
 
 /**
@@ -321,30 +411,42 @@ export function backupTimestamp(ref: string): number | null {
  * per-ref delete failure is silently skipped — a leftover backup is harmless
  * and `wt restack prune-backups` sweeps stragglers.
  */
-async function pruneSupersededBackups(
+function pruneSupersededBackupsEffect(
   branch: string,
   cwd: string,
   onLog: ReplayLogger,
-): Promise<void> {
-  const r = await gitRun(["for-each-ref", "--format=%(refname:short)", "refs/heads/backup/"], cwd);
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+  const r = yield* safeGitRunEffect(
+    ["for-each-ref", "--format=%(refname:short)", "refs/heads/backup/"],
+    cwd,
+  );
   if (r.exitCode !== 0) return;
   const stale = r.stdout
     .split("\n")
     .map((l) => l.trim())
     .filter((ref) => ref && backupBranchOwner(ref) === branch);
-  for (const ref of stale) await gitRun(["branch", "-D", ref], cwd);
+  yield* Effect.forEach(
+    stale,
+    (ref) => safeGitRunEffect(["branch", "-D", ref], cwd),
+    { concurrency: 4, discard: true },
+  );
   if (stale.length > 0) onLog(`  pruned ${stale.length} stale backup(s) of ${branch}`);
+  });
 }
 
 /** Best-effort delete of a backup ref after a clean replay. */
-async function deleteBackup(backupBranch: string, cwd: string): Promise<void> {
-  await gitRun(["branch", "-D", backupBranch], cwd);
+function deleteBackupEffect(
+  backupBranch: string,
+  cwd: string,
+): Effect.Effect<void> {
+  return safeGitRunEffect(["branch", "-D", backupBranch], cwd).pipe(
+    Effect.asVoid,
+  );
 }
 
 /** Epoch ms as a ref-safe token. Split out so it's easy to see/replace. */
-function epochMs(): number {
-  return Date.now();
-}
+const epochMsEffect = Effect.clockWith((clock) => clock.currentTimeMillis);
 
 function short(sha: string): string {
   return sha.slice(0, 9);

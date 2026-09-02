@@ -26,6 +26,7 @@
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Data, Deferred, Effect, Queue } from "effect";
 
 import { config } from "./config.ts";
 
@@ -105,11 +106,35 @@ export const SRC_PAD = 16;
 
 let sink: EventSink | null = null;
 let toastSink: ToastSink | null = null;
-// Serialize writes through a promise chain so lines land in order.
-// Each `appendFile` reopens the file (fast, ~80μs on macOS APFS) so
-// daily rollover is automatic — we just recompute the path per write.
-let writeChain: Promise<void> = Promise.resolve();
+// A single Effect Queue worker serializes writes so lines land in order.
+// Each `appendFile` reopens the file, so daily rollover is automatic.
 let initialized = false;
+
+class LoggerWriteError extends Data.TaggedError("LoggerWriteError")<{
+  readonly path: string;
+  readonly cause: unknown;
+}> {}
+
+type LogCommand =
+  | { readonly _tag: "Write"; readonly path: string; readonly line: string }
+  | { readonly _tag: "Flush"; readonly done: Deferred.Deferred<void> };
+
+let commandQueue: Queue.Queue<LogCommand> | null = null;
+
+function ensureLoggerWorker(): Queue.Queue<LogCommand> {
+  if (commandQueue) return commandQueue;
+  const queue = Effect.runSync(Queue.unbounded<LogCommand>());
+  commandQueue = queue;
+  const run = Effect.forever(Queue.take(queue).pipe(Effect.flatMap((command) => {
+    if (command._tag === "Flush") return Deferred.succeed(command.done, undefined);
+    return Effect.tryPromise({
+      try: () => appendFile(command.path, command.line, "utf8"),
+      catch: (cause) => new LoggerWriteError({ path: command.path, cause }),
+    }).pipe(Effect.catchAll(() => Effect.void));
+  })));
+  Effect.runFork(run);
+  return queue;
+}
 
 export function setEventSink(fn: EventSink | null): void {
   sink = fn;
@@ -119,10 +144,15 @@ export function setToastSink(fn: ToastSink | null): void {
   toastSink = fn;
 }
 
-/** Drain queued writes. Call from TUI/CLI shutdown before `process.exit`. */
-export async function flushLogger(): Promise<void> {
-  await writeChain;
-}
+/** Await every queued write before a CLI or daemon exits. */
+export const flushLoggerEffect = Effect.suspend(() => {
+  const queue = ensureLoggerWorker();
+  return Effect.gen(function* () {
+    const done = yield* Deferred.make<void>();
+    yield* Queue.offer(queue, { _tag: "Flush", done });
+    yield* Deferred.await(done);
+  });
+});
 
 export function createLogger(source: string): Logger {
   return {
@@ -256,23 +286,8 @@ function dailyPath(): string {
 
 function appendLine(line: string): void {
   ensureInit();
-  const path = dailyPath();
-  writeChain = writeChain.then(() => appendFile(path, line, "utf8")).catch(() => {});
-}
-
-/**
- * Await every queued write. Writes are chained ASYNCHRONOUSLY, so
- * `process.exit()` on the line after a `log.*` call drops it — and the
- * lines most worth keeping are exactly the ones a process emits to
- * explain why it is about to disappear. The events daemon's
- * self-restart notice was lost that way on its first real firing: the
- * pid changed with a clean gap in the log and nothing saying why.
- *
- * Never throws: the chain already swallows write errors, and an exit
- * path must not fail on its own diagnostics.
- */
-export async function flushLog(): Promise<void> {
-  await writeChain;
+  const queue = ensureLoggerWorker();
+  Effect.runSync(Queue.offer(queue, { _tag: "Write", path: dailyPath(), line }));
 }
 
 function ensureInit(): void {

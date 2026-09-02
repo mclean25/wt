@@ -1,14 +1,36 @@
 import { queryOptions } from "@tanstack/react-query";
+import { Data, Effect } from "effect";
 
-import { readRegistry, type RegistrySession } from "../../core/harness/claude/registry.ts";
+import {
+  readRegistry,
+  type RegistrySession,
+} from "../../core/harness/claude/registry.ts";
 import { wtSessionUuid } from "../../core/harness/claude/jsonl.ts";
 import { listClaudeNames } from "../../core/harness/claude/names.ts";
-import { readSummariesForSessions, type SessionSummary } from "../../core/harness/claude/summaries.ts";
-import type {
-  Worktree,
-} from "../../core/types.ts";
+import {
+  readSummariesForSessions,
+  type SessionSummary,
+} from "../../core/harness/claude/summaries.ts";
+import type { Worktree } from "../../core/types.ts";
 
 import { qk } from "../keys.ts";
+
+class ClaudeQueryError extends Data.TaggedError("ClaudeQueryError")<{
+  operation: string;
+  cause: unknown;
+}> {
+  override get message(): string {
+    return this.cause instanceof Error
+      ? this.cause.message
+      : String(this.cause);
+  }
+}
+
+const querySync = <A>(operation: string, evaluate: () => A) =>
+  Effect.try({
+    try: evaluate,
+    catch: (cause) => new ClaudeQueryError({ operation, cause }),
+  });
 
 export type ClaudeRegistryData = {
   /** Every live claude session on the machine, in readdir order. */
@@ -30,12 +52,15 @@ export type ClaudeRegistryData = {
 export const claudeRegistryQuery = () =>
   queryOptions({
     queryKey: qk.claudeRegistry(),
-    queryFn: async (): Promise<ClaudeRegistryData> => {
-      const sessions = readRegistry();
-      const bySessionId: Record<string, RegistrySession> = {};
-      for (const s of sessions) bySessionId[s.sessionId] = s;
-      return { sessions, bySessionId };
-    },
+    queryFn: (): Promise<ClaudeRegistryData> =>
+      Effect.runPromise(
+        querySync("read Claude registry", () => {
+          const sessions = readRegistry();
+          const bySessionId: Record<string, RegistrySession> = {};
+          for (const s of sessions) bySessionId[s.sessionId] = s;
+          return { sessions, bySessionId };
+        }),
+      ),
     staleTime: 1_000,
     refetchInterval: 15_000,
   });
@@ -52,10 +77,16 @@ export const claudeRegistryQuery = () =>
 export const claudeSummariesQuery = (wt: Pick<Worktree, "slug" | "path">) =>
   queryOptions({
     queryKey: qk.claudeSummaries(wt.slug),
-    queryFn: async (): Promise<Record<string, SessionSummary | null>> => {
-      const names: ReadonlyArray<string | null> = [null, ...listClaudeNames(wt.slug)];
-      const ids = names.map((n) => wtSessionUuid(wt.path, n));
-      return readSummariesForSessions(wt.path, ids);
-    },
+    queryFn: (): Promise<Record<string, SessionSummary | null>> =>
+      Effect.runPromise(
+        querySync("read Claude summaries", () => {
+          const names: ReadonlyArray<string | null> = [
+            null,
+            ...listClaudeNames(wt.slug),
+          ];
+          const ids = names.map((n) => wtSessionUuid(wt.path, n));
+          return readSummariesForSessions(wt.path, ids);
+        }),
+      ),
     staleTime: 30_000,
   });

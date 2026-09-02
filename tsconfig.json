@@ -1,4 +1,5 @@
 {
+  "$schema": "./node_modules/@effect/language-service/schema.json",
   "compilerOptions": {
     // Environment setup & latest features
     "lib": ["ESNext"],
@@ -32,9 +33,21 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
 
+    // Effect-specific correctness diagnostics run in editors, `lint`, and
+    // the patched `tsc` used by `typecheck`.
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": true,
+        "diagnosticsName": true,
+        "includeSuggestionsInTsc": true
+      }
+    ],
+
     // Left off intentionally: noisy or stylistic for this codebase.
     //   exactOptionalPropertyTypes — 39 hits, optional-vs-undefined footgun
     //   noPropertyAccessFromIndexSignature — 185 hits, forces bracket access
     "noPropertyAccessFromIndexSignature": false
-  }
+  },
+  "exclude": ["dist", "node_modules"]
 }

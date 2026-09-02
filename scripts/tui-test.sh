@@ -56,6 +56,7 @@ case "$cmd" in
       -e WT_UPDATE="${WT_UPDATE:-off}" -e WT_SKILLS="${WT_SKILLS:-off}" \
       ${WT_CONFIG:+-e WT_CONFIG="$WT_CONFIG"} \
       ${WT_TMUX_SOCKET:+-e WT_TMUX_SOCKET="$WT_TMUX_SOCKET"} \
+      ${WT_DEBUG_THROW:+-e WT_DEBUG_THROW="$WT_DEBUG_THROW"} \
       ${GH_TOKEN:+-e GH_TOKEN="$GH_TOKEN"} \
       ${CLAUDE_CODE_FORCE_SESSION_PERSISTENCE:+-e CLAUDE_CODE_FORCE_SESSION_PERSISTENCE="$CLAUDE_CODE_FORCE_SESSION_PERSISTENCE"} \
       -c "$ROOT" "exec env -u BUN_INSPECT bun src/main.ts"
@@ -70,7 +71,10 @@ case "$cmd" in
     # Wait for the first painted frame (bun cold start + cache hydrate).
     for _ in $(seq 1 60); do
       out="$(T capture-pane -pt "$name" 2>/dev/null || true)"
-      [ -n "${out//[[:space:]]/}" ] && { echo "started $name (${w}x${h})"; exit 0; }
+      # tmux trims an untouched pane to an empty capture. Avoid stripping
+      # whitespace from a painted Unicode frame here: bash's pattern
+      # replacement becomes pathologically slow as the pane grows.
+      [ -n "$out" ] && { echo "started $name (${w}x${h})"; exit 0; }
       sleep 0.25
     done
     echo "ERROR: $name never painted (is another probe wedged? try stop-all)" >&2

@@ -44,6 +44,10 @@ because matching is by check-run name. When the pick rests on an
 the gate fails open") rather than letting a network problem impersonate
 a green check. `wt update --head` bypasses the gate explicitly.
 
+The CI job runs Effect language-service diagnostics, TypeScript
+typechecking, the Bun production build, and the full test suite before its
+single `ci` check can turn green.
+
 **Boot probe.** After the fast-forward (and a `bun install` when the
 dependency manifest changed), the updater boot-probes the checkout in a
 child process: `wt version` (the CLI chain) and an import of the full
@@ -83,9 +87,9 @@ bad. `scripts/broken-module-check.sh` asserts the containment; see
 
 Starting the TUI writes `booting: {sha, at}` to the memory; the sha is
 promoted to `lastGoodSha` (and the sentinel cleared) after 15 s alive
-or a clean quit, whichever comes first. The crash handler cancels the
-pending promotion first, so a crashed sha can't be stamped good while
-the rollback prompt waits for an answer. An update additionally writes
+or a clean quit, whichever comes first. The promotion is an Effect fiber
+scoped to the TUI lifetime, so failure interrupts it before the crash
+handler can wait at the rollback prompt. An update additionally writes
 an `applying: {fromSha, toSha}` marker before its merge moves HEAD —
 if the process dies mid-update (the deps/probe window runs seconds to
 minutes), the offers treat the marker like a journal entry, so even an

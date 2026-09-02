@@ -1,4 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
+import { Data, Effect } from "effect";
 
 import {
   getHarness,
@@ -14,6 +15,28 @@ export type { ClaudeSessionEntry };
 
 import { qk } from "../keys.ts";
 import { STALE } from "./shared.ts";
+
+class SessionsQueryError extends Data.TaggedError("SessionsQueryError")<{
+  operation: string;
+  cause: unknown;
+}> {
+  override get message(): string {
+    return this.cause instanceof Error
+      ? this.cause.message
+      : String(this.cause);
+  }
+}
+
+const queryPromise = <A, E>(
+  effect: Effect.Effect<A, E>,
+  signal?: AbortSignal,
+) => Effect.runPromise(effect, signal ? { signal } : undefined);
+
+const promiseEffect = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new SessionsQueryError({ operation, cause }),
+  });
 
 export type TmuxSessionsData = {
   /**
@@ -66,23 +89,37 @@ export type TmuxSessionsData = {
 export const tmuxSessionsQuery = () =>
   queryOptions({
     queryKey: qk.tmuxSessions(),
-    queryFn: async (): Promise<TmuxSessionsData> => {
-      const { claude, claudeSlugs, codex, opencode, diff, shell, action, dev, all } =
-        await listTmuxSessions();
-      return {
-        claude,
-        slugsByHarness: {
-          claude: [...claudeSlugs],
-          codex: [...codex],
-          opencode: [...opencode],
-        },
-        diff: [...diff],
-        shell: [...shell],
-        action: [...action],
-        dev: [...dev],
-        all: [...all],
-      };
-    },
+    queryFn: (): Promise<TmuxSessionsData> =>
+      queryPromise(
+        Effect.gen(function* () {
+          const {
+            claude,
+            claudeSlugs,
+            codex,
+            opencode,
+            diff,
+            shell,
+            action,
+            dev,
+            all,
+          } = yield* promiseEffect("list tmux sessions", () =>
+            listTmuxSessions(),
+          );
+          return {
+            claude,
+            slugsByHarness: {
+              claude: [...claudeSlugs],
+              codex: [...codex],
+              opencode: [...opencode],
+            },
+            diff: [...diff],
+            shell: [...shell],
+            action: [...action],
+            dev: [...dev],
+            all: [...all],
+          };
+        }),
+      ),
     staleTime: STALE.fast,
     refetchInterval: 5_000,
   });
@@ -108,9 +145,14 @@ export const harnessSessionsQuery = (
 ) =>
   queryOptions({
     queryKey: qk.harnessSessions(harnessId, slug),
-    queryFn: async ({ signal }): Promise<HarnessSession[]> => {
+    queryFn: ({ signal }): Promise<HarnessSession[]> => {
       const harness = getHarness(harnessId);
-      return harness.discoverSessions({ slug, wtPath, signal });
+      return queryPromise(
+        promiseEffect("discover harness sessions", () =>
+          harness.discoverSessions({ slug, wtPath, signal }),
+        ),
+        signal,
+      );
     },
     staleTime: STALE.fast,
     // Claude session state is kept fresh by `watchRegistry` invalidation
@@ -120,7 +162,8 @@ export const harnessSessionsQuery = (
     // poll while the tmux slot is CURRENTLY live (not merely "ever had a
     // session on disk" — a worktree with old rollouts/DB rows but no live
     // tmux slot must not poll forever).
-    refetchInterval: () => (harnessId === "claude" ? false : isLive ? 3_000 : false),
+    refetchInterval: () =>
+      harnessId === "claude" ? false : isLive ? 3_000 : false,
     enabled: wtPath !== "",
   });
 
@@ -132,9 +175,13 @@ export const harnessSessionsQuery = (
 export const primaryHarnessQuery = () =>
   queryOptions({
     queryKey: qk.primaryHarness(),
-    queryFn: async () => {
-      const { readPrimaryHarness } = await import("../../core/harness/primary.ts");
-      return readPrimaryHarness();
-    },
+    queryFn: () =>
+      queryPromise(
+        promiseEffect("read primary harness", () =>
+          import("../../core/harness/primary.ts").then(
+            ({ readPrimaryHarness }) => readPrimaryHarness(),
+          ),
+        ),
+      ),
     staleTime: Infinity,
   });

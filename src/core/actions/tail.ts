@@ -34,6 +34,7 @@ import {
   watch,
 } from "node:fs";
 import { join } from "node:path";
+import { Duration, Effect, Fiber, Schedule } from "effect";
 
 import { createLogger } from "../logger.ts";
 import { closeSilent, readFileSlice } from "../tail-util.ts";
@@ -67,26 +68,25 @@ const POLL_INTERVAL_MS = 3_000;
 const DONE_POLL_INTERVAL_MS = 500;
 
 const activeStreams = new Set<StreamState>();
-let pollTimer: Timer | null = null;
+let pollFiber: Fiber.RuntimeFiber<number, never> | null = null;
 
 function ensurePoller(): void {
-  if (pollTimer) return;
-  pollTimer = setInterval(() => {
-    for (const st of activeStreams) {
-      // Skip streams still in `watchForCreation` mode — the dirWatcher
-      // promotes them to `seedAndWatch` when the file appears; a
-      // pre-seed readDelta would race the seed's drop-first-partial
-      // logic and duplicate content.
-      if (st.watcher == null) continue;
-      if (st.onLine) scheduleRead(st, st.onLine);
-    }
-  }, POLL_INTERVAL_MS);
+  if (pollFiber) return;
+  pollFiber = Effect.runFork(Effect.repeat(
+    Effect.sleep(Duration.millis(POLL_INTERVAL_MS)).pipe(Effect.andThen(Effect.sync(() => {
+      for (const st of activeStreams) {
+        if (st.watcher == null) continue;
+        if (st.onLine) scheduleRead(st, st.onLine);
+      }
+    }))),
+    Schedule.forever,
+  ));
 }
 
 function stopPollerIfIdle(): void {
-  if (activeStreams.size > 0 || pollTimer == null) return;
-  clearInterval(pollTimer);
-  pollTimer = null;
+  if (activeStreams.size > 0 || pollFiber == null) return;
+  Effect.runSync(Fiber.interruptFork(pollFiber));
+  pollFiber = null;
 }
 
 export type LineSource = "stdout" | "stderr";
@@ -109,7 +109,7 @@ type StreamState = {
   pending: string;
   watcher: FSWatcher | null;
   dirWatcher: FSWatcher | null;
-  debounce: Timer | null;
+  debounce: Fiber.RuntimeFiber<void, never> | null;
   source: LineSource;
   /** Stored on the state so `closeStream` can do a final flush-read
    *  before releasing watchers — without this we'd drop lines that
@@ -215,24 +215,31 @@ export function watchDoneSentinel(opts: {
   const { runDir, onDone } = opts;
   const path = join(runDir, "done.json");
   let dirWatcher: FSWatcher | null = null;
-  let pollTimer: Timer | null = null;
+  let pollFiber: Fiber.RuntimeFiber<void, never> | null = null;
   let fired = false;
 
   const stopAll = (): void => {
     closeSilent(dirWatcher);
     dirWatcher = null;
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
+    if (pollFiber) {
+      Effect.runSync(Fiber.interruptFork(pollFiber));
+      pollFiber = null;
     }
   };
 
-  const tryRead = (): boolean => {
+  const tryRead = (fromPoll = false): boolean => {
     if (fired) return true;
     const sentinel = readDoneFile(path);
     if (!sentinel) return false;
     fired = true;
-    onDone(sentinel);
+    // A polling fiber cannot synchronously join itself. Clear its handle;
+    // the loop observes `fired` and exits after this callback returns.
+    if (fromPoll) pollFiber = null;
+    try {
+      onDone(sentinel);
+    } catch (err) {
+      log.warn("done callback failed", { path, err: errMsg(err) });
+    }
     stopAll();
     return true;
   };
@@ -258,9 +265,15 @@ export function watchDoneSentinel(opts: {
   // git checkout) finishes inside that gap. The poller covers it; it
   // also stops as soon as the file appears.
   if (!fired) {
-    pollTimer = setInterval(() => {
-      tryRead();
-    }, DONE_POLL_INTERVAL_MS);
+    const poll = (): Effect.Effect<void> => Effect.suspend(() =>
+      fired
+        ? Effect.void
+        : Effect.sleep(Duration.millis(DONE_POLL_INTERVAL_MS)).pipe(
+            Effect.andThen(Effect.sync(() => { tryRead(true); })),
+            Effect.andThen(poll()),
+          ),
+    );
+    pollFiber = Effect.runFork(poll());
   }
 
   return { close: stopAll };
@@ -401,14 +414,16 @@ function scheduleRead(
   onLine: (line: TailLine) => void,
 ): void {
   if (st.debounce) return;
-  st.debounce = setTimeout(() => {
+  st.debounce = Effect.runFork(Effect.sleep(Duration.millis(READ_DEBOUNCE_MS)).pipe(
+    Effect.andThen(Effect.sync(() => {
     st.debounce = null;
     try {
       readDelta(st, onLine);
     } catch (err) {
       log.warn("delta read failed", { path: st.path, err: errMsg(err) });
     }
-  }, READ_DEBOUNCE_MS);
+    })),
+  ));
 }
 
 function readDelta(st: StreamState, onLine: (line: TailLine) => void): void {
@@ -443,7 +458,7 @@ function closeStream(st: StreamState): void {
   closeSilent(st.dirWatcher);
   st.watcher = null;
   st.dirWatcher = null;
-  if (st.debounce) clearTimeout(st.debounce);
+  if (st.debounce) Effect.runSync(Fiber.interruptFork(st.debounce));
   st.debounce = null;
   // Final flush: pull any bytes the wrapper wrote between the last
   // debounced read and the done.json sentinel that triggered close.

@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Effect } from "effect";
 
 import { sanitizeLine } from "../../proc.ts";
 import { readFileSlice } from "../../tail-util.ts";
@@ -707,16 +708,22 @@ function tailSession(wtPath: string, name: string | null): SessionTail {
  * consumer so tmux liveness (a separate, polled query) flows through
  * reactively without forcing this filesystem source to refetch.
  */
-export async function claudeStatus(wt: {
+export function claudeStatusEffect(wt: {
   slug: string;
   path: string;
-}): Promise<ClaudeStatus> {
-  const sessions: SessionTail[] = [];
-  const primary = tailSession(wt.path, null);
-  if (primary.hasJsonl) sessions.push(primary);
-  for (const name of listClaudeNames(wt.slug)) {
-    const tail = tailSession(wt.path, name);
-    if (tail.hasJsonl) sessions.push(tail);
-  }
-  return { sessions };
+}): Effect.Effect<ClaudeStatus> {
+  return Effect.sync(() => {
+    const sessions: SessionTail[] = [];
+    const primary = tailSession(wt.path, null);
+    if (primary.hasJsonl) sessions.push(primary);
+    for (const name of listClaudeNames(wt.slug)) {
+      const tail = tailSession(wt.path, name);
+      if (tail.hasJsonl) sessions.push(tail);
+    }
+    return { sessions };
+  });
 }
+
+/** Harness-interface adapter. */
+export const claudeStatus = (wt: { slug: string; path: string }): Promise<ClaudeStatus> =>
+  Effect.runPromise(claudeStatusEffect(wt));

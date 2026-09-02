@@ -56,6 +56,8 @@ export function PrimaryHarnessBadge({ primary }: { primary: HarnessId }) {
 export function UsageBadge({ primary }: { primary: HarnessId }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
+    // React-owned presentation timer: it only ages labels in this mounted
+    // badge, and hook cleanup prevents updates after unmount.
     const id = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => clearInterval(id);
   }, []);

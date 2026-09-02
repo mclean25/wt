@@ -10,6 +10,7 @@
  * of rollout parsing off the render thread.
  */
 import type { HarnessSession } from "../types.ts";
+import { Data, Effect } from "effect";
 import type {
   CodexDiscoveryRequest,
   CodexDiscoveryResult,
@@ -24,6 +25,10 @@ type Job = {
   cleanup: () => void;
   cancelled: boolean;
 };
+
+export class CodexDiscoveryError extends Data.TaggedError("CodexDiscoveryError")<{
+  readonly cause: unknown;
+}> {}
 
 /**
  * Narrow Worker surface used by the queue. Keeping this structural makes the
@@ -204,6 +209,13 @@ export function discoverCodexSessionsInWorker(
   signal?: AbortSignal,
 ): Promise<HarnessSession[]> {
   return discoveryClient.discover(slug, wtPath, signal);
+}
+
+export function discoverCodexSessionsEffect(slug: string, wtPath: string) {
+  return Effect.tryPromise({
+    try: (signal) => discoveryClient.discover(slug, wtPath, signal),
+    catch: (cause) => new CodexDiscoveryError({ cause }),
+  });
 }
 
 export function disposeCodexDiscoveryWorker(): void {

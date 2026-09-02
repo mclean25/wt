@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Effect, Exit, Fiber } from "effect";
 
 import {
   createSessionMessenger,
+  createSessionMessengerEffect,
   fallbackAdvice,
   senderTag,
   stampSender,
@@ -430,5 +432,50 @@ describe("the claude transport ladder", () => {
       fallback: { kind: "unsupported", harnessId: "codex" },
     });
     expect(fake.calls.ensure).toBe(0);
+  });
+
+  test("interrupting Effect delivery aborts the inspector without terminal fallback", async () => {
+    const fake = fakes();
+    let entered = false;
+    const send = createSessionMessengerEffect({
+      ...fake.deps,
+      deliver: (_name, _text, opts) => new Promise((_resolve, reject) => {
+        entered = true;
+        opts.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+    });
+    const exit = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const fiber = yield* Effect.forkScoped(send(target));
+      while (!entered) yield* Effect.sleep(1);
+      return yield* Fiber.interrupt(fiber);
+    })));
+    expect(Exit.isInterrupted(exit)).toBe(true);
+    expect(fake.calls.terminal).toBe(0);
+  });
+
+  test("interrupting transcript confirmation stops polling and never falls back", async () => {
+    const fake = fakes({ landed: false });
+    let sleeping = false;
+    const send = createSessionMessengerEffect({
+      ...fake.deps,
+      sleep: (_ms, signal) =>
+        new Promise<void>((_resolve, reject) => {
+          sleeping = true;
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        }),
+    });
+    const exit = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkScoped(send(target));
+          while (!sleeping) yield* Effect.sleep(1);
+          return yield* Fiber.interrupt(fiber);
+        }),
+      ),
+    );
+    expect(Exit.isInterrupted(exit)).toBe(true);
+    expect(fake.calls.terminal).toBe(0);
   });
 });

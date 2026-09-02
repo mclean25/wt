@@ -13,6 +13,7 @@
  *    always ALSO a pane line, so a missed toast is recoverable.
  */
 import { useSyncExternalStore } from "react";
+import { Duration, Effect, Fiber } from "effect";
 
 import { setToastSink, type EventKind } from "../core/logger.ts";
 
@@ -28,26 +29,43 @@ type Listener = () => void;
 
 class ToastStore {
   private current: Toast | null = null;
-  private timer: Timer | null = null;
+  private expiryFiber: Fiber.RuntimeFiber<void, never> | null = null;
   private listeners = new Set<Listener>();
   private nextId = 1;
+  private accepting = true;
 
   show(text: string, color: string, ms: number): void {
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.current = { id: this.nextId++, text, color };
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.current = null;
-      this.notify();
-    }, ms);
+    if (!this.accepting) return;
+    if (this.expiryFiber !== null) Effect.runSync(Fiber.interruptFork(this.expiryFiber));
+    const toast = { id: this.nextId++, text, color };
+    this.current = toast;
+    this.expiryFiber = Effect.runFork(
+      Effect.sleep(Duration.millis(ms)).pipe(
+        Effect.andThen(Effect.sync(() => {
+          if (this.current?.id !== toast.id) return;
+          this.expiryFiber = null;
+          this.current = null;
+          this.notify();
+        })),
+      ),
+    );
     this.notify();
   }
 
   clear(): void {
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
+    if (this.expiryFiber !== null) Effect.runSync(Fiber.interruptFork(this.expiryFiber));
+    this.expiryFiber = null;
     this.current = null;
     this.notify();
+  }
+
+  attach(): void {
+    this.accepting = true;
+  }
+
+  detach(): void {
+    this.accepting = false;
+    this.clear();
   }
 
   getSnapshot = (): Toast | null => this.current;
@@ -69,11 +87,9 @@ const store = new ToastStore();
 /**
  * Flash a toast in the footer. Latest call wins; `ms` bounds its life.
  *
- * Not gated by `attachLoggerToasts`'s lifecycle: a late promise
- * resolving after teardown can still arm one timer here. Inert today —
- * main.ts hits `process.exit` right after the TUI resolves — but if
- * shutdown ever becomes graceful/multi-phase, this needs a disposed
- * guard to avoid keeping the process alive.
+ * Gated by `attachLoggerToasts`'s lifecycle after the first detach: a
+ * promise resolving during teardown cannot re-arm an expiry fiber or
+ * publish into a retired TUI. A later attach enables the store again.
  */
 export function showToast(text: string, color: string = theme.ok, ms = 2500): void {
   store.show(text, color, ms);
@@ -121,11 +137,12 @@ export function toastDuration(level: EventKind): number {
  * call this, so `{ toast: true }` emits there are file/pane-only.
  */
 export function attachLoggerToasts(): () => void {
+  store.attach();
   setToastSink((t) => {
     store.show(t.text, toastColor(t.level), toastDuration(t.level));
   });
   return () => {
     setToastSink(null);
-    store.clear();
+    store.detach();
   };
 }

@@ -79,7 +79,8 @@
  *
  * ────────────────────────────────────────────────────────────────────
  */
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
+import { Data, Duration, Effect, Fiber } from "effect";
 import {
   MutationObserver,
   matchQuery,
@@ -92,10 +93,12 @@ import {
 
 import {
   archiveSlug as archiveOnDisk,
+  reapRemoteArchived,
   toggleArchived as toggleArchivedOnDisk,
 } from "../core/archive.ts";
+import { config } from "../core/config.ts";
 import type { DiffContext } from "../core/diff/index.ts";
-import { gitRun, invalidateMainFirstParents } from "../core/git.ts";
+import { gitRunEffect, invalidateMainFirstParents } from "../core/git.ts";
 import { fetchAuthenticatedLogin } from "../core/github.ts";
 import { createLogger } from "../core/logger.ts";
 import { markSelfSectionWrite } from "./self-writes.ts";
@@ -122,7 +125,6 @@ import { qk } from "./keys.ts";
 import { clearPersistedCache } from "./persister.ts";
 import {
   contributorsQuery,
-  fetchOriginNow,
   fetchOriginQuery,
   githubQuery,
   remoteWorktreesQuery,
@@ -131,7 +133,21 @@ import {
   type GithubData,
   type TmuxSessionsData,
 } from "./queries.ts";
+import { fetchOriginEffect } from "./queries/worktree.ts";
 import type { Contributor } from "../core/types.ts";
+
+class HookOperationError extends Data.TaggedError("HookOperationError")<{
+  operation: string;
+  cause: unknown;
+  message: string;
+}> {}
+
+const hookError = (operation: string, cause: unknown) =>
+  new HookOperationError({
+    operation,
+    cause,
+    message: cause instanceof Error ? cause.message : String(cause),
+  });
 
 /**
  * In-place patch helper for a single PR inside the github cache. The
@@ -166,6 +182,14 @@ export function patchPullRequest(
   };
 }
 
+/** Only a successful fetch in this mount may reconcile remote archive state. */
+export function shouldReapRemoteArchive(result: {
+  isSuccess: boolean;
+  isFetchedAfterMount: boolean;
+}): boolean {
+  return result.isSuccess && result.isFetchedAfterMount;
+}
+
 /**
  * Observe the combined GitHub query, scoped to the current local + remote
  * fleet branches. Both consumers (list-row aggregator + details pane) share
@@ -175,6 +199,27 @@ export function patchPullRequest(
 export function useGithub(): UseQueryResult<GithubData, Error> {
   const wtList = useQuery(worktreesQuery());
   const remoteList = useQuery(remoteWorktreesQuery());
+  useEffect(() => {
+    if (!shouldReapRemoteArchive(remoteList) || !config.remote) return;
+    Effect.runSync(
+      Effect.try({
+        try: () =>
+        reapRemoteArchived(
+          config.remote!.host,
+          new Set((remoteList.data ?? []).map((row) => row.slug)),
+        ),
+        catch: (cause) => hookError("reap remote archive", cause),
+      }).pipe(
+        Effect.catchAll((error) =>
+          Effect.sync(() =>
+            createLogger("[github]").warn("remote archive reconciliation failed", {
+              err: error.message,
+            }),
+          ),
+        ),
+      ),
+    );
+  }, [remoteList.data, remoteList.isFetchedAfterMount, remoteList.isSuccess]);
   const branches = useMemo(() => {
     const local = (wtList.data ?? [])
       .filter((w) => !w.isMain && !!w.branch)
@@ -288,9 +333,11 @@ export async function runOptimisticMutation<TData>(
     filter: QueryFilters;
     patch: (prev: TData | undefined) => TData | undefined;
     run: () => Promise<void>;
+    /** Test seam for the post-settle guard deadline. */
+    settleGuardMs?: number;
   },
 ): Promise<void> {
-  const { filter, patch, run } = opts;
+  const { filter, patch, run, settleGuardMs = SETTLE_GUARD_MS } = opts;
   // scope.id is the filter's queryKey serialized — falls back to a
   // sentinel when no queryKey was supplied (no current callers omit
   // it, but `QueryFilters` types it as optional).
@@ -299,12 +346,13 @@ export async function runOptimisticMutation<TData>(
     : "__nokey__";
   let snapshots: Array<readonly [readonly unknown[], TData | undefined]> = [];
   let unsubscribe: (() => void) | null = null;
-  let guardTimer: ReturnType<typeof setTimeout> | null = null;
+  let guardFiber: Fiber.RuntimeFiber<void, never> | null = null;
   let failed = false;
   const stopGuard = (): void => {
-    if (guardTimer !== null) {
-      clearTimeout(guardTimer);
-      guardTimer = null;
+    if (guardFiber !== null) {
+      const fiber = guardFiber;
+      guardFiber = null;
+      Effect.runFork(Fiber.interrupt(fiber));
     }
     unsubscribe?.();
     unsubscribe = null;
@@ -315,31 +363,44 @@ export async function runOptimisticMutation<TData>(
     // pause a mutation waiting for an "online" event that can't come.
     networkMode: "always",
     retry: false,
-    mutationFn: async () => {
-      await qc.cancelQueries(filter);
-      snapshots = qc.getQueriesData<TData>(filter);
-      qc.setQueriesData<TData>(filter, patch);
-      // Clobber guard (see docstring). `matchQuery` is the same
-      // predicate `invalidateQueries` uses, so guard coverage is
-      // exactly the entries the patch covered.
-      unsubscribe = qc.getQueryCache().subscribe((event) => {
-        if (event.type !== "updated") return;
-        if (event.action.type !== "success") return;
-        if ((event.action as { manual?: boolean }).manual) return;
-        if (!matchQuery(filter, event.query)) return;
-        const data = event.query.state.data as TData | undefined;
-        // The server has caught up the moment a fetch lands that the
-        // patch would not change. Structural compare rather than
-        // identity: `patch` builds fresh objects every call, so it is
-        // never `===` its input even when it changes nothing.
-        if (replaceEqualDeep(data, patch(data)) === data) {
-          stopGuard();
-          return;
-        }
-        qc.setQueryData<TData>(event.query.queryKey, patch);
-      });
-      await run();
-    },
+    mutationFn: () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          yield* Effect.tryPromise({
+            try: () => qc.cancelQueries(filter),
+            catch: (cause) => hookError("cancel queries", cause),
+          });
+          yield* Effect.sync(() => {
+            snapshots = qc.getQueriesData<TData>(filter);
+            qc.setQueriesData<TData>(filter, patch);
+          });
+          // Clobber guard (see docstring). `matchQuery` is the same
+          // predicate `invalidateQueries` uses, so guard coverage is
+          // exactly the entries the patch covered.
+          unsubscribe = yield* Effect.sync(() =>
+            qc.getQueryCache().subscribe((event) => {
+              if (event.type !== "updated") return;
+              if (event.action.type !== "success") return;
+              if ((event.action as { manual?: boolean }).manual) return;
+              if (!matchQuery(filter, event.query)) return;
+              const data = event.query.state.data as TData | undefined;
+              // The server has caught up the moment a fetch lands that the
+              // patch would not change. Structural compare rather than
+              // identity: `patch` builds fresh objects every call, so it is
+              // never `===` its input even when it changes nothing.
+              if (replaceEqualDeep(data, patch(data)) === data) {
+                stopGuard();
+                return;
+              }
+              qc.setQueryData<TData>(event.query.queryKey, patch);
+            }),
+          );
+          yield* Effect.tryPromise({
+            try: run,
+            catch: (cause) => hookError("run optimistic mutation", cause),
+          });
+        }),
+      ),
     onError: () => {
       failed = true;
       // Stop before the rollback, or the guard re-applies the patch on
@@ -352,7 +413,18 @@ export async function runOptimisticMutation<TData>(
     onSettled: () => {
       // Runs after onError too, so the deadline must not re-arm a guard
       // a failure already took down.
-      if (!failed && unsubscribe) guardTimer = setTimeout(stopGuard, SETTLE_GUARD_MS);
+      if (!failed && unsubscribe) {
+        guardFiber = Effect.runFork(
+          Effect.sleep(Duration.millis(settleGuardMs)).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                guardFiber = null;
+                stopGuard();
+              }),
+            ),
+          ),
+        );
+      }
       void qc.invalidateQueries(filter);
     },
   });
@@ -380,6 +452,21 @@ export function useWtActions() {
     return runOptimisticMutation(qc, opts);
   }
 
+  const queryClientEffect = <A>(evaluate: () => PromiseLike<A>) =>
+    Effect.tryPromise({
+      try: evaluate,
+      catch: (cause) => hookError("query client operation", cause),
+    });
+  const invalidate = (filter: QueryFilters) =>
+    queryClientEffect(() => qc.invalidateQueries(filter));
+  const writeWtState = <A>(evaluate: () => A): Promise<A> =>
+    Effect.runPromise(
+      Effect.try({
+        try: evaluate,
+        catch: (cause) => hookError("write wt state", cause),
+      }).pipe(Effect.tap(() => invalidate({ queryKey: qk.wtState() }))),
+    );
+
   return {
     mutate,
     /**
@@ -391,9 +478,7 @@ export function useWtActions() {
      * Returns the count of queries that will be refetched.
      */
     refreshStale(): number {
-      const stale = qc
-        .getQueryCache()
-        .findAll({ stale: true, type: "active" });
+      const stale = qc.getQueryCache().findAll({ stale: true, type: "active" });
       if (stale.length === 0) return 0;
       void qc.refetchQueries({ stale: true, type: "active" });
       return stale.length;
@@ -404,39 +489,52 @@ export function useWtActions() {
      * per-worktree field. This is the everyday "I want fresh data"
      * button — cheap enough to press whenever.
      */
-    async refreshAll(): Promise<void> {
+    refreshAll(): Promise<void> {
       // `queryKey: ["github"]` uses prefix match — invalidates every
       // github query regardless of the branches suffix. Stack
       // relationships are explicit now (wtState parent overrides), so
       // refreshing them is just a `["wtState"]` invalidation. The
       // review-requests query lives off-prefix (see qk.reviewRequests)
       // and gets its own invalidation here.
-      await Promise.all([
-        qc.fetchQuery(fetchOriginQuery()),
-        qc.invalidateQueries({ queryKey: qk.worktrees() }),
-        qc.invalidateQueries({ queryKey: qk.remoteWorkerInfo() }),
-        qc.invalidateQueries({ queryKey: qk.remoteWorktrees() }),
-        qc.invalidateQueries({ queryKey: ["github"] }),
-        qc.invalidateQueries({ queryKey: qk.reviewRequests() }),
-        qc.invalidateQueries({ queryKey: qk.wtState() }),
-      ]);
-      // The first-parent SHA set is not a TanStack query — it's a
-      // module-level promise cache in core/git.ts, already dropped by
-      // invalidateMainFirstParents() inside fetchOriginQuery. The
-      // per-worktree ["wt"] wave is the expensive part, so start it on
-      // the next timer turn instead of keeping the key handler/caller
-      // parked behind every row's git/fs probes.
-      setTimeout(() => {
-        void qc.invalidateQueries({ queryKey: ["wt"] });
-      }, 50);
+      return Effect.runPromise(
+        Effect.all(
+          [
+            queryClientEffect(() => qc.fetchQuery(fetchOriginQuery())),
+            invalidate({ queryKey: qk.worktrees() }),
+            invalidate({ queryKey: qk.remoteWorkerInfo() }),
+            invalidate({ queryKey: qk.remoteWorktrees() }),
+            invalidate({ queryKey: ["github"] }),
+            invalidate({ queryKey: qk.reviewRequests() }),
+            invalidate({ queryKey: qk.wtState() }),
+          ],
+          { concurrency: "unbounded", discard: true },
+        ).pipe(
+          // The first-parent SHA set is not a TanStack query — it's a
+          // module-level promise cache in core/git.ts, already dropped by
+          // invalidateMainFirstParents() inside fetchOriginQuery. The
+          // per-worktree ["wt"] wave is the expensive part, so start it on
+          // the next timer turn instead of keeping the key handler/caller
+          // parked behind every row's git/fs probes.
+          Effect.tap(() =>
+            Effect.sync(() => {
+              Effect.runFork(
+                Effect.sleep(Duration.millis(50)).pipe(
+                  Effect.andThen(invalidate({ queryKey: ["wt"] })),
+                  Effect.catchAll(() => Effect.void),
+                ),
+              );
+            }),
+          ),
+        ),
+      );
     },
     /**
      * Force an origin refresh even if the marker query is still fresh.
      * Passive triggers use this so webhook/action events can advance local
      * main immediately instead of waiting out fetchOriginQuery's staleTime.
      */
-    async refreshOrigin(): Promise<void> {
-      await fetchOriginNow();
+    refreshOrigin(): Promise<void> {
+      return Effect.runPromise(fetchOriginEffect().pipe(Effect.asVoid));
     },
     /**
      * Nuke every cached query — in-memory *and* the SQLite blob on
@@ -445,24 +543,36 @@ export function useWtActions() {
      * re-issue their own fetches immediately, so the UI returns to a
      * loading state and rebuilds from scratch.
      */
-    async clearAll(): Promise<void> {
-      qc.clear();
-      clearPersistedCache(CACHE_DB);
-      invalidateMainFirstParents();
-      // Not observed by any component, so it won't auto-refetch on
-      // clear — kick it off explicitly so the first-parents cache gets
-      // repopulated alongside the observed queries.
-      void qc.fetchQuery(fetchOriginQuery());
-      // Belt-and-suspenders: `qc.clear()` removes cache entries, but
-      // active observers sitting on `staleTime: Infinity` (notably
-      // the AI summary) don't always re-trigger their queryFn
-      // afterwards. Forcing a refetch on every active observer makes
-      // "R" deterministic for the AI chain.
-      void qc.refetchQueries({ type: "active" });
+    clearAll(): Promise<void> {
+      return Effect.runPromise(
+        Effect.sync(() => {
+          qc.clear();
+          clearPersistedCache(CACHE_DB);
+          invalidateMainFirstParents();
+          // Not observed by any component, so it won't auto-refetch on
+          // clear — kick it off explicitly so the first-parents cache gets
+          // repopulated alongside the observed queries.
+          Effect.runFork(
+            queryClientEffect(() => qc.fetchQuery(fetchOriginQuery())).pipe(
+              Effect.catchAll(() => Effect.void),
+            ),
+          );
+          // Belt-and-suspenders: `qc.clear()` removes cache entries, but
+          // active observers sitting on `staleTime: Infinity` (notably
+          // the AI summary) don't always re-trigger their queryFn
+          // afterwards. Forcing a refetch on every active observer makes
+          // "R" deterministic for the AI chain.
+          Effect.runFork(
+            queryClientEffect(() => qc.refetchQueries({ type: "active" })).pipe(
+              Effect.catchAll(() => Effect.void),
+            ),
+          );
+        }),
+      );
     },
     /** Invalidate everything for a single worktree (useful after an action). */
-    async invalidateWorktree(slug: string): Promise<void> {
-      await qc.invalidateQueries({ queryKey: qk.wt(slug).all() });
+    invalidateWorktree(slug: string): Promise<void> {
+      return Effect.runPromise(invalidate({ queryKey: qk.wt(slug).all() }));
     },
     /**
      * Post-removal refresh — deliberately NOT `refreshAll`.
@@ -486,11 +596,16 @@ export function useWtActions() {
      * lock-release chain all invalidate the list first (see
      * docs/architecture.md#freshness-model).
      */
-    async refreshAfterRemoval(): Promise<void> {
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: qk.worktrees() }),
-        qc.invalidateQueries({ queryKey: qk.wtState() }),
-      ]);
+    refreshAfterRemoval(): Promise<void> {
+      return Effect.runPromise(
+        Effect.all(
+          [
+            invalidate({ queryKey: qk.worktrees() }),
+            invalidate({ queryKey: qk.wtState() }),
+          ],
+          { concurrency: "unbounded", discard: true },
+        ),
+      );
     },
     /**
      * Refresh stack relationships and the per-worktree diff queries.
@@ -499,11 +614,16 @@ export function useWtActions() {
      * invalidating `["wt"]` re-runs the per-base diff / sync queries
      * after a rebase rewrites history under a fixed parent.
      */
-    async refreshStack(): Promise<void> {
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: qk.wtState() }),
-        qc.invalidateQueries({ queryKey: ["wt"] }),
-      ]);
+    refreshStack(): Promise<void> {
+      return Effect.runPromise(
+        Effect.all(
+          [
+            invalidate({ queryKey: qk.wtState() }),
+            invalidate({ queryKey: ["wt"] }),
+          ],
+          { concurrency: "unbounded", discard: true },
+        ),
+      );
     },
     /**
      * Read the repo-wide contributor list from cache without blocking
@@ -516,28 +636,36 @@ export function useWtActions() {
      * 30-day maxAge): there we await one fetch so the picker has
      * *something* to show beyond an empty fallback list.
      */
-    async fetchContributors(): Promise<readonly Contributor[]> {
+    fetchContributors(): Promise<readonly Contributor[]> {
       const opts = contributorsQuery();
       const cached = qc.getQueryData<readonly Contributor[]>(opts.queryKey);
       if (cached === undefined) {
-        return await qc.fetchQuery(opts);
+        return Effect.runPromise(queryClientEffect(() => qc.fetchQuery(opts)));
       }
       const state = qc.getQueryState(opts.queryKey);
       const isStale =
-        !state ||
-        Date.now() - state.dataUpdatedAt > (opts.staleTime as number);
+        !state || Date.now() - state.dataUpdatedAt > (opts.staleTime as number);
       if (isStale) {
-        void qc.prefetchQuery(opts);
+        Effect.runFork(
+          queryClientEffect(() => qc.prefetchQuery(opts)).pipe(
+            Effect.catchAll(() => Effect.void),
+          ),
+        );
       }
-      return cached;
+      return Promise.resolve(cached);
     },
     /**
      * Currently-authenticated GitHub login (or `null` when gh isn't
      * usable). Process-cached at the source — see
      * `fetchAuthenticatedLogin` in `core/github.ts`.
      */
-    async fetchMe(): Promise<string | null> {
-      return await fetchAuthenticatedLogin();
+    fetchMe(): Promise<string | null> {
+      return Effect.runPromise(
+        Effect.tryPromise({
+          try: () => fetchAuthenticatedLogin(),
+          catch: (cause) => hookError("fetch authenticated login", cause),
+        }),
+      );
     },
     /**
      * Invalidate the combined PR + merge-queue fetch. Use after an
@@ -545,19 +673,26 @@ export function useWtActions() {
      * the next render picks up the new server-side state without
      * waiting for the slow staleTime to expire.
      */
-    async refreshGithub(): Promise<void> {
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ["github"] }),
-        qc.invalidateQueries({ queryKey: qk.reviewRequests() }),
-      ]);
+    refreshGithub(): Promise<void> {
+      return Effect.runPromise(
+        Effect.all(
+          [
+            invalidate({ queryKey: ["github"] }),
+            invalidate({ queryKey: qk.reviewRequests() }),
+          ],
+          { concurrency: "unbounded", discard: true },
+        ),
+      );
     },
     /**
      * Invalidate the tmux-sessions query. Call after entering or
      * detaching from a session so the per-row indicator flips
      * immediately rather than waiting for the polling backstop.
      */
-    async refreshTmuxSessions(): Promise<void> {
-      await qc.invalidateQueries({ queryKey: tmuxSessionsQuery().queryKey });
+    refreshTmuxSessions(): Promise<void> {
+      return Effect.runPromise(
+        invalidate({ queryKey: tmuxSessionsQuery().queryKey }),
+      );
     },
     /**
      * Invalidate the harness-sessions discovery for a slug. Call after
@@ -565,30 +700,48 @@ export function useWtActions() {
      * up the new on-disk state. Hits all harnesses since codex /
      * opencode write to shared stores that could surface new entries.
      */
-    async refreshHarnessSessions(slug: string): Promise<void> {
-      await qc.invalidateQueries({
-        queryKey: ["harnessSessions"],
-        predicate: (q) => q.queryKey[2] === slug,
-      });
+    refreshHarnessSessions(slug: string): Promise<void> {
+      return Effect.runPromise(
+        invalidate({
+          queryKey: ["harnessSessions"],
+          predicate: (q) => q.queryKey[2] === slug,
+        }),
+      );
     },
     /**
      * Persist a new primary harness selection and invalidate the
      * cached query so observers pick up the change.
      */
-    async setPrimaryHarness(id: import("../core/harness/index.ts").HarnessId): Promise<void> {
-      const { writePrimaryHarness } = await import("../core/harness/primary.ts");
-      writePrimaryHarness(id);
-      await qc.invalidateQueries({ queryKey: qk.primaryHarness() });
+    setPrimaryHarness(
+      id: import("../core/harness/index.ts").HarnessId,
+    ): Promise<void> {
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          const { writePrimaryHarness } = yield* Effect.promise(
+            () => import("../core/harness/primary.ts"),
+          );
+          yield* Effect.sync(() => writePrimaryHarness(id));
+          yield* invalidate({ queryKey: qk.primaryHarness() });
+        }),
+      );
     },
     /**
      * Cycle the primary harness to the next registered impl and
      * invalidate the cached query.
      */
-    async cyclePrimaryHarness(): Promise<import("../core/harness/index.ts").HarnessId> {
-      const { cyclePrimaryHarness } = await import("../core/harness/primary.ts");
-      const next = cyclePrimaryHarness();
-      await qc.invalidateQueries({ queryKey: qk.primaryHarness() });
-      return next;
+    cyclePrimaryHarness(): Promise<
+      import("../core/harness/index.ts").HarnessId
+    > {
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          const { cyclePrimaryHarness } = yield* Effect.promise(
+            () => import("../core/harness/primary.ts"),
+          );
+          const next = yield* Effect.sync(() => cyclePrimaryHarness());
+          yield* invalidate({ queryKey: qk.primaryHarness() });
+          return next;
+        }),
+      );
     },
     /**
      * Invalidate the cached LLM summaries for `slug`. The query key
@@ -597,8 +750,10 @@ export function useWtActions() {
      * freshly-spawned session opens the picker showing "(no summary
      * yet)" for up to staleTime (~30s).
      */
-    async refreshClaudeSummaries(slug: string): Promise<void> {
-      await qc.invalidateQueries({ queryKey: qk.claudeSummaries(slug) });
+    refreshClaudeSummaries(slug: string): Promise<void> {
+      return Effect.runPromise(
+        invalidate({ queryKey: qk.claudeSummaries(slug) }),
+      );
     },
     /**
      * Optimistically remove a single (slug, name) claude entry from
@@ -640,42 +795,47 @@ export function useWtActions() {
      * keepPreviousData fallback only kicks in on a queryKey change,
      * not on an evicted same-key entry.
      */
-    async refreshAiSummary(slug: string): Promise<boolean> {
-      // The diffContext key is per-(slug, base) so a worktree can
-      // have multiple cached entries (trunk, parent A, parent B…) as
-      // its stack relationship evolves. Prefix-match to address every
-      // cached entry for this slug; the row aggregator observes only
-      // the *current* base, so on next render the live observer's
-      // refetch produces the up-to-date value regardless of which
-      // entries we touched here.
-      const prefix = ["wt", slug, "diffContext"] as const;
-      const existing = qc.getQueriesData<DiffContext | null>({
-        queryKey: prefix,
-      });
-      if (existing.length === 0 || existing.every(([, v]) => !v)) {
-        return false;
-      }
-      // `invalidateQueries` awaits the refetch of any active observer
-      // (default `refetchType: "active"`), so by the time this resolves
-      // the diff context cache holds the new hash.
-      await qc.invalidateQueries({ queryKey: prefix });
-      const refreshed = qc.getQueriesData<DiffContext | null>({
-        queryKey: prefix,
-      });
-      if (refreshed.every(([, v]) => !v)) return false;
-      // Invalidate (don't remove) the AI summary entry for each
-      // still-present hash. Invalidate triggers an active-observer
-      // refetch even with `staleTime: Infinity`, and the cache entry
-      // stays put so `keepPreviousData` has data to show during the
-      // gap.
-      await Promise.all(
-        refreshed
-          .filter(([, ctx]) => !!ctx)
-          .map(([, ctx]) =>
-            qc.invalidateQueries({ queryKey: qk.aiSummary(ctx!.hash) }),
-          ),
+    refreshAiSummary(slug: string): Promise<boolean> {
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          // The diffContext key is per-(slug, base) so a worktree can
+          // have multiple cached entries (trunk, parent A, parent B…) as
+          // its stack relationship evolves. Prefix-match to address every
+          // cached entry for this slug; the row aggregator observes only
+          // the *current* base, so on next render the live observer's
+          // refetch produces the up-to-date value regardless of which
+          // entries we touched here.
+          const prefix = ["wt", slug, "diffContext"] as const;
+          const existing = yield* Effect.sync(() =>
+            qc.getQueriesData<DiffContext | null>({ queryKey: prefix }),
+          );
+          if (existing.length === 0 || existing.every(([, v]) => !v)) {
+            return false;
+          }
+          // `invalidateQueries` awaits the refetch of any active observer
+          // (default `refetchType: "active"`), so by the time this resolves
+          // the diff context cache holds the new hash.
+          yield* invalidate({ queryKey: prefix });
+          const refreshed = yield* Effect.sync(() =>
+            qc.getQueriesData<DiffContext | null>({ queryKey: prefix }),
+          );
+          if (refreshed.every(([, v]) => !v)) return false;
+          // Invalidate (don't remove) the AI summary entry for each
+          // still-present hash. Invalidate triggers an active-observer
+          // refetch even with `staleTime: Infinity`, and the cache entry
+          // stays put so `keepPreviousData` has data to show during the
+          // gap.
+          yield* Effect.all(
+            refreshed
+              .filter(([, ctx]) => !!ctx)
+              .map(([, ctx]) =>
+                invalidate({ queryKey: qk.aiSummary(ctx!.hash) }),
+              ),
+            { concurrency: "unbounded", discard: true },
+          );
+          return true;
+        }),
       );
-      return true;
     },
     /**
      * Flip the archived flag for a slug. Optimistically patches the
@@ -700,15 +860,21 @@ export function useWtActions() {
           intendedArchived ??= !set.has(key);
           return patchArchivedKeys(prev, key, intendedArchived);
         },
-        run: async () => {
-          // Disk write is synchronous; wrapped in async so it slots
-          // into the mutate pipeline. Errors propagate as throws and
-          // trigger the rollback path.
-          result = toggleArchivedOnDisk(key);
-          // Disk is authoritative if another process changed the ledger
-          // between the cached read and this serialized write.
-          intendedArchived = result.archived;
-        },
+        run: () =>
+          Effect.runPromise(
+            Effect.try({
+              try: () => {
+                // Disk write is synchronous; wrapped in async so it slots
+                // into the mutate pipeline. Errors propagate as throws and
+                // trigger the rollback path.
+                result = toggleArchivedOnDisk(key);
+                // Disk is authoritative if another process changed the ledger
+                // between the cached read and this serialized write.
+                intendedArchived = result.archived;
+              },
+              catch: (cause) => hookError("toggle archive", cause),
+            }),
+          ),
       });
       // `result` is set inside `run` which always runs before mutate
       // resolves; the `?? throw` here is just a type-narrowing prop.
@@ -730,9 +896,13 @@ export function useWtActions() {
           set.add(slug);
           return [...set];
         },
-        run: async () => {
-          archiveOnDisk(slug);
-        },
+        run: () =>
+          Effect.runPromise(
+            Effect.try({
+              try: () => archiveOnDisk(slug),
+              catch: (cause) => hookError("archive slug", cause),
+            }),
+          ),
       });
     },
     /**
@@ -740,7 +910,7 @@ export function useWtActions() {
      * to the bottom of the target group — the picker convention. Awaits
      * invalidation so cursor-follow can read fresh rows.
      */
-    async setSection(key: string, section: string | null): Promise<void> {
+    setSection(key: string, section: string | null): Promise<void> {
       // Narration is NOT emitted here. `wt section` writes this same
       // field from another process, so the only place that sees every
       // move is the wtstate diff in `useWtStateEvents` — emitting at
@@ -748,9 +918,10 @@ export function useWtActions() {
       // Marking the write first lets that diff tell "the human just
       // pressed `l`" (firehose) from "something else rearranged their
       // board" (attention).
-      markSelfSectionWrite(key, section);
-      setWorktreeSectionOnDisk(key, section);
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
+      return writeWtState(() => {
+        markSelfSectionWrite(key, section);
+        setWorktreeSectionOnDisk(key, section);
+      });
     },
     /**
      * Assert (or clear, with `null`) a slug's work status — the TUI
@@ -758,21 +929,23 @@ export function useWtActions() {
      * re-runs the status-first sort; awaited so cursor-follow reads
      * fresh rows.
      */
-    async setWorkStatus(
+    setWorkStatus(
       slug: string,
       record: WorkStatusRecord | null,
     ): Promise<void> {
-      setSlugWorkStatusOnDisk(slug, record);
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
+      return writeWtState(() => {
+        setSlugWorkStatusOnDisk(slug, record);
+      });
     },
     /**
      * Set (or clear, with `null`) a worktree's tracker-id override —
      * the same per-slug record `wt issue <slug> --id` writes. Pure
      * wtstate, so the wtState query is the only thing to invalidate.
      */
-    async setIssueId(slug: string, id: string | null): Promise<void> {
-      setSlugIssueIdOnDisk(slug, id);
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
+    setIssueId(slug: string, id: string | null): Promise<void> {
+      return writeWtState(() => {
+        setSlugIssueIdOnDisk(slug, id);
+      });
     },
     /**
      * Record (or clear, with `null`) a worktree's fork base — the same
@@ -783,31 +956,47 @@ export function useWtActions() {
      * queries — diff context and sync counts are computed against the
      * base, so they must re-run under the new one.
      */
-    async setBase(wt: Worktree, branch: string | null): Promise<void> {
-      if (branch) {
-        const mb = await gitRun(["merge-base", wt.branch, branch], wt.path);
-        const sha = mb.exitCode === 0 ? mb.stdout.trim() : "";
-        setSlugBaseOnDisk(wt.slug, { branch, sha: sha || undefined });
-      } else {
-        setSlugBaseOnDisk(wt.slug, null);
-      }
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: qk.wtState() }),
-        qc.invalidateQueries({ queryKey: qk.wt(wt.slug).all() }),
-      ]);
+    setBase(wt: Worktree, branch: string | null): Promise<void> {
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          if (branch) {
+            const mb = yield* gitRunEffect(
+              ["merge-base", wt.branch, branch],
+              wt.path,
+            );
+            const sha = mb.exitCode === 0 ? mb.stdout.trim() : "";
+            yield* Effect.try({
+              try: () =>
+                setSlugBaseOnDisk(wt.slug, { branch, sha: sha || undefined }),
+              catch: (cause) => hookError("set worktree base", cause),
+            });
+          } else {
+            yield* Effect.try({
+              try: () => setSlugBaseOnDisk(wt.slug, null),
+              catch: (cause) => hookError("clear worktree base", cause),
+            });
+          }
+          yield* Effect.all(
+            [
+              invalidate({ queryKey: qk.wtState() }),
+              invalidate({ queryKey: qk.wt(wt.slug).all() }),
+            ],
+            { concurrency: "unbounded", discard: true },
+          );
+        }),
+      );
     },
     /**
      * Place a slug at the top or bottom of a section. Used by the
      * unified Shift+J/K cross-section nudge so the moved row lands
      * adjacent to where it was (top of next section, bottom of prev).
      */
-    async placeSlug(
+    placeSlug(
       slug: string,
       section: string | null,
       position: "top" | "bottom",
     ): Promise<void> {
-      placeSlugOnDisk(slug, section, position);
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
+      return writeWtState(() => placeSlugOnDisk(slug, section, position));
     },
     /**
      * Swap two slugs' order values within a single section bucket.
@@ -815,23 +1004,23 @@ export function useWtActions() {
      * write path renormalizes the bucket against this list before
      * swapping, so any unstated entries get materialized cleanly.
      */
-    async swapOrder(
+    swapOrder(
       slugA: string,
       slugB: string,
       section: string | null,
       bucketDisplay: readonly string[],
     ): Promise<void> {
-      swapOrdersOnDisk(slugA, slugB, section, bucketDisplay);
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
+      return writeWtState(() =>
+        swapOrdersOnDisk(slugA, slugB, section, bucketDisplay),
+      );
     },
     /**
      * Rename a section across every slug that references it. Awaits
      * invalidation so the renamed section and its members are visible
      * in the next render.
      */
-    async renameSection(oldName: string, newName: string): Promise<void> {
-      renameSectionOnDisk(oldName, newName);
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
+    renameSection(oldName: string, newName: string): Promise<void> {
+      return writeWtState(() => renameSectionOnDisk(oldName, newName));
     },
     /**
      * Reorder the group list: place group `key` immediately before/
@@ -842,17 +1031,22 @@ export function useWtActions() {
      * (no spurious re-fetch / re-render churn that could otherwise
      * look like a phantom step to the user).
      */
-    async moveGroupPast(
+    moveGroupPast(
       key: string,
       pastKey: string,
       side: "before" | "after",
       visualOrder: readonly string[] = [],
     ): Promise<boolean> {
-      const moved = moveGroupPastOnDisk(key, pastKey, side, visualOrder);
-      if (moved) {
-        await qc.invalidateQueries({ queryKey: qk.wtState() });
-      }
-      return moved;
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          const moved = yield* Effect.try({
+            try: () => moveGroupPastOnDisk(key, pastKey, side, visualOrder),
+            catch: (cause) => hookError("move section group", cause),
+          });
+          if (moved) yield* invalidate({ queryKey: qk.wtState() });
+          return moved;
+        }),
+      );
     },
     /**
      * Toggle the per-worktree automations pause flag (persisted in
@@ -860,10 +1054,8 @@ export function useWtActions() {
      * state. The automations engine reads the flag through the wtState
      * query, so the invalidation is what makes the toggle take effect.
      */
-    async toggleAutomationsPaused(slug: string): Promise<boolean> {
-      const paused = toggleSlugAutomationsPausedOnDisk(slug);
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
-      return paused;
+    toggleAutomationsPaused(slug: string): Promise<boolean> {
+      return writeWtState(() => toggleSlugAutomationsPausedOnDisk(slug));
     },
     /**
      * Toggle the automations pause on an ARCHIVED row (Ctrl+A in the
@@ -871,10 +1063,17 @@ export function useWtActions() {
      * record was reaped with the worktree while post-merge `external`
      * automations were not. Null when the slug isn't in the history.
      */
-    async toggleRemovedAutomationsPaused(slug: string): Promise<boolean | null> {
-      const paused = toggleRemovedAutomationsPausedOnDisk(slug);
-      if (paused !== null) await qc.invalidateQueries({ queryKey: qk.wtState() });
-      return paused;
+    toggleRemovedAutomationsPaused(slug: string): Promise<boolean | null> {
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          const paused = yield* Effect.try({
+            try: () => toggleRemovedAutomationsPausedOnDisk(slug),
+            catch: (cause) => hookError("toggle removed automations", cause),
+          });
+          if (paused !== null) yield* invalidate({ queryKey: qk.wtState() });
+          return paused;
+        }),
+      );
     },
     /**
      * Toggle the whole-stack automations pause (Ctrl+A on a stack
@@ -883,37 +1082,36 @@ export function useWtActions() {
      * current members' per-slug flags are mirrored too, so the pause
      * survives the stack re-rooting when the root lands.
      */
-    async toggleStackAutomationsPaused(
+    toggleStackAutomationsPaused(
       stackId: string,
       memberSlugs: readonly string[],
     ): Promise<boolean> {
-      const paused = toggleStackAutomationsPausedOnDisk(stackId, memberSlugs);
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
-      return paused;
+      return writeWtState(() =>
+        toggleStackAutomationsPausedOnDisk(stackId, memberSlugs),
+      );
     },
     /**
      * Fold or unfold a section in the list (persisted). Returns the new
      * folded state. The list re-derives its items from the refreshed
      * `wtState`, collapsing/expanding the section's rows.
      */
-    async toggleSectionFold(sectionKey: string): Promise<boolean> {
-      const folded = toggleSectionFoldedOnDisk(sectionKey);
+    toggleSectionFold(sectionKey: string): Promise<boolean> {
       // File-only: a fold is view state and TAB is pressed constantly,
       // so this would drown the activity pane. It's in the log because
       // a folded section makes its rows vanish from the list, which is
       // indistinguishable from them having moved — the daily log is
       // where that question gets settled.
-      createLogger("[app]").debug(
-        `section ${folded ? "folded" : "unfolded"}: ${sectionKey}`,
-      );
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
-      return folded;
+      return writeWtState(() => {
+        const folded = toggleSectionFoldedOnDisk(sectionKey);
+        createLogger("[app]").debug(
+          `section ${folded ? "folded" : "unfolded"}: ${sectionKey}`,
+        );
+        return folded;
+      });
     },
     /** Set a section's fold state without risking an accidental re-toggle. */
-    async setSectionFolded(sectionKey: string, folded: boolean): Promise<boolean> {
-      const result = setSectionFoldedOnDisk(sectionKey, folded);
-      await qc.invalidateQueries({ queryKey: qk.wtState() });
-      return result;
+    setSectionFolded(sectionKey: string, folded: boolean): Promise<boolean> {
+      return writeWtState(() => setSectionFoldedOnDisk(sectionKey, folded));
     },
   };
 }

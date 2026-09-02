@@ -1,17 +1,8 @@
+import { Data, Effect, Exit, Ref } from "effect";
+
 import { config } from "./config.ts";
 
-/**
- * Forward an external `AbortSignal` to a local handler. Returns a
- * cleanup function that removes the listener; the listener itself is
- * `{ once: true }`, so this is a belt-and-suspenders cleanup for the
- * non-aborted-yet case. When `signal` is already aborted on entry the
- * handler fires synchronously and no listener is registered.
- *
- * Exported so callers that chain external signals into per-call
- * controllers (query cancellation, subprocess kill) share one
- * implementation. Without it, the same five-line dance was repeated
- * in two files with subtly different semantics.
- */
+/** Forward an external AbortSignal to a local handler. */
 export function chainSignal(
   signal: AbortSignal,
   onAbort: () => void,
@@ -28,19 +19,7 @@ export type RunResult = {
   stdout: string;
   stderr: string;
   exitCode: number;
-  /**
-   * The `timeoutMs` budget fired and the process was SIGKILLed.
-   *
-   * Whatever had been captured is still returned, and for a command
-   * that buffers its output that is NOTHING — which parses as a clean
-   * empty result, indistinguishable from a completed scan that found
-   * nothing. So any caller reading a command's output as an answer
-   * ABOUT THE WORLD has to check this: a timeout on our own clock is
-   * not evidence about anything out there. Measured on the destroy
-   * reaper's `lsof`, which takes 76ms on an idle box against an 8000ms
-   * budget: when the box was loaded enough to blow it, the reaper read
-   * the empty stdout as "nothing is listening" and skipped the reap.
-   */
+  /** The `timeoutMs` budget fired and the process was SIGKILLed. */
   timedOut?: boolean;
 };
 
@@ -49,274 +28,594 @@ export type RunOptions = {
   input?: string;
   timeoutMs?: number;
   env?: Record<string, string | undefined>;
-  /**
-   * Optional cancellation signal. When the signal aborts the spawned
-   * process is SIGTERM'd; the awaited stdout/stderr drains then unwind
-   * and the function resolves with whatever was captured plus the
-   * signal-induced exit code. Pass the queryFn's `signal` so a
-   * superseded query (worktree list re-keyed, observer unmounted) stops
-   * burning a `gh`/`git` invocation in the background.
-   */
+  /** Compatibility cancellation for Promise/TanStack callers. */
   signal?: AbortSignal;
 };
 
-/**
- * How many `run()` subprocesses may be in flight at once.
- *
- * This is a RENDER-THREAD budget, not a machine one. `Bun.spawn` does
- * its `posix_spawn` synchronously on the calling thread — ~1ms under
- * load — so a burst that issues N spawns in one turn blocks the TUI for
- * N milliseconds before any of them has done any work. Bursts of that
- * size are routine: one `invalidateQueries(["wt"])` fans out to
- * `worktrees × 10` git probes, which was ~280 spawns (and 30% of
- * main-thread self time) in the profile behind the post-sweep stall.
- *
- * With a cap, a waiter resumes on a microtask when a slot frees, so the
- * spawns spread across turns instead of landing in one: the worst
- * synchronous run is the cap, and the render loop gets a turn between
- * waves. The cost is wall-clock on huge bursts, which is the right
- * trade — nobody is watching 280 git probes, they're watching the
- * cursor move. It also stops wt from putting 280 concurrent gits on the
- * disk, which was never a good idea either.
- *
- * There is no deadlock hazard as long as nothing holds a slot while
- * awaiting another `run()`: a slot is held only INSIDE this function,
- * and callers that chain probes await them from outside it.
- */
+/** Streaming deliberately has no `signal` or `timeoutMs` compatibility fields. */
+export type RunStreamingOptions = {
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+  onLine?: (line: string) => void;
+  /** Opt-in lifecycle deadline. The child is killed and fully joined. */
+  killAfterMs?: number;
+};
+
+const errorMessage = (cause: unknown): string =>
+  cause instanceof Error ? cause.message : String(cause);
+
+export class ProcSpawnError extends Data.TaggedError("ProcSpawnError")<{
+  readonly argv: readonly string[];
+  readonly cause: unknown;
+}> {
+  override get message(): string {
+    return `${this.argv.join(" ")}: ${errorMessage(this.cause)}`;
+  }
+}
+
+export class ProcReadError extends Data.TaggedError("ProcReadError")<{
+  readonly argv: readonly string[];
+  readonly stream: "stdout" | "stderr" | "stdin";
+  readonly cause: unknown;
+}> {
+  override get message(): string {
+    return `${this.argv.join(" ")} (${this.stream}): ${errorMessage(this.cause)}`;
+  }
+}
+
+export class ProcNonZeroExitError extends Data.TaggedError(
+  "ProcNonZeroExitError",
+)<{
+  readonly argv: readonly string[];
+  readonly result: RunResult;
+}> {
+  override get message(): string {
+    const detail =
+      this.result.stderr.trim() ||
+      this.result.stdout.trim() ||
+      `exit ${this.result.exitCode}`;
+    return `${this.argv.join(" ")}: ${detail}`;
+  }
+}
+
+export class ProcTimeoutError extends Data.TaggedError("ProcTimeoutError")<{
+  readonly argv: readonly string[];
+  readonly timeoutMs: number;
+  readonly result: RunResult;
+}> {
+  override get message(): string {
+    return `${this.argv.join(" ")}: timed out after ${this.timeoutMs}ms`;
+  }
+}
+
+export class ProcInterruptedError extends Data.TaggedError(
+  "ProcInterruptedError",
+)<{
+  readonly argv: readonly string[];
+}> {
+  override get message(): string {
+    return `${this.argv.join(" ")}: aborted`;
+  }
+}
+
+export type ProcError =
+  | ProcSpawnError
+  | ProcReadError
+  | ProcNonZeroExitError
+  | ProcTimeoutError
+  | ProcInterruptedError;
+
 const RUN_CONCURRENCY = 8;
+const TERMINATION_GRACE_MS = 1_000;
+const runSemaphore = Effect.unsafeMakeSemaphore(RUN_CONCURRENCY);
 
-let runsInFlight = 0;
-const runWaiters: Array<() => void> = [];
+type CapturedProcess = {
+  readonly proc: Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
+  readonly stdout: PromiseSettledResult<string>;
+  readonly stderr: PromiseSettledResult<string>;
+  readonly exited: PromiseSettledResult<number>;
+};
 
-function acquireRunSlot(): Promise<void> | null {
-  if (runsInFlight < RUN_CONCURRENCY) {
-    runsInFlight++;
-    return null;
-  }
-  return new Promise<void>((resolve) => runWaiters.push(resolve));
-}
+type RunningProcess = {
+  readonly proc: Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
+  readonly settled: Promise<CapturedProcess>;
+};
 
-/** Hand the slot to the next waiter, or give it back to the pool. */
-function releaseRunSlot(): void {
-  const next = runWaiters.shift();
-  if (next) next();
-  else runsInFlight--;
-}
+type KillableProcess = {
+  readonly exitCode: number | null;
+  kill(signal?: number | NodeJS.Signals): void;
+};
 
 /**
- * Run a subprocess, capture stdout/stderr, never throw. Missing
- * binaries and timeouts surface as `exitCode < 0`.
- *
- * Queued behind `RUN_CONCURRENCY`. A call whose signal aborts while it's
- * still waiting never spawns at all — a superseded query stops costing a
- * subprocess instead of spawning one just to SIGTERM it.
+ * Terminate an inherited-stdio child without allowing scope shutdown to
+ * wait forever. Interactive handoffs cannot use the captured-process runner,
+ * but they need the same TERM, bounded grace, KILL, join contract.
  */
-export async function run(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
-  const { cwd = config.paths.mainClone, input, timeoutMs, env, signal } = opts;
-  const queued = acquireRunSlot();
-  if (queued) {
-    await queued;
-    if (signal?.aborted) {
-      releaseRunSlot();
-      return { stdout: "", stderr: "aborted", exitCode: -1 };
-    }
-  }
-  let proc: Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
+export function terminateSubprocessEffect(
+  proc: KillableProcess & { readonly exited: Promise<number> },
+  graceMs = TERMINATION_GRACE_MS,
+): Effect.Effect<void> {
+  const joined = Effect.promise(() => proc.exited.then(() => undefined, () => undefined));
+  return Effect.gen(function* () {
+    if (proc.exitCode !== null) return;
+    killProcess(proc, "SIGTERM");
+    const graceful = yield* joined.pipe(Effect.timeoutOption(graceMs));
+    if (graceful._tag === "Some") return;
+    killProcess(proc, "SIGKILL");
+    yield* joined;
+  });
+}
+
+function killProcess(proc: KillableProcess, signal: NodeJS.Signals): void {
+  if (proc.exitCode !== null) return;
   try {
-    proc = Bun.spawn(argv, {
-      cwd,
-      stdin: input !== undefined ? "pipe" : "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: env ? { ...process.env, ...env } : process.env,
+    proc.kill(signal);
+  } catch {
+    // A process may exit between the exitCode check and kill.
+  }
+}
+
+function killProcessGroup(
+  proc: KillableProcess & { readonly pid: number },
+  signal: NodeJS.Signals,
+): void {
+  try {
+    process.kill(-proc.pid, signal);
+  } catch {
+    killProcess(proc, signal);
+  }
+}
+
+function spawnCaptured(
+  argv: readonly string[],
+  opts: Pick<RunOptions, "cwd" | "env" | "input">,
+): Effect.Effect<RunningProcess, ProcSpawnError> {
+  return Effect.gen(function* () {
+    const proc = yield* Effect.try({
+      try: () =>
+        Bun.spawn([...argv], {
+          cwd: opts.cwd,
+          stdin: opts.input !== undefined ? "pipe" : "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+          env: opts.env ? { ...process.env, ...opts.env } : process.env,
+          detached: true,
+        }),
+      catch: (cause) => new ProcSpawnError({ argv, cause }),
     });
-  } catch (err) {
-    // Bun.spawn throws SYNCHRONOUSLY on a missing binary / bad cwd; in
-    // this async body that becomes a rejected promise, and fire-and-
-    // forget callers would die on the unhandled rejection (Bun kills
-    // the process). Honor the documented contract instead.
-    releaseRunSlot();
-    return {
-      stdout: "",
-      stderr: err instanceof Error ? err.message : String(err),
-      exitCode: -1,
-    };
-  }
-  if (input !== undefined && proc.stdin) {
-    proc.stdin.write(input);
-    proc.stdin.end();
-  }
 
-  let timer: Timer | undefined;
-  let timedOut = false;
-  if (timeoutMs) {
-    timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill("SIGKILL");
-    }, timeoutMs);
-  }
+    const stdoutPromise = new Response(proc.stdout).text().catch((cause) => {
+      killProcessGroup(proc, "SIGTERM");
+      throw cause;
+    });
+    const stderrPromise = new Response(proc.stderr).text().catch((cause) => {
+      killProcessGroup(proc, "SIGTERM");
+      throw cause;
+    });
+    const exitedPromise = proc.exited;
+    const settled = Promise.allSettled([
+      stdoutPromise,
+      stderrPromise,
+      exitedPromise,
+    ]).then(([stdout, stderr, exited]) => ({ proc, stdout, stderr, exited }));
 
-  // Abort plumbing: SIGTERM on signal, but let the drains complete so
-  // the caller still gets a structured RunResult instead of an
-  // uncaught rejection. If the signal is already aborted, kill
-  // immediately (the spawn race window is small but real).
-  const cleanupAbort = signal
-    ? chainSignal(signal, () => {
-        try {
-          proc.kill("SIGTERM");
-        } catch {
-          // proc may already have exited
+    return { proc, settled };
+  });
+}
+
+function writeInput(
+  argv: readonly string[],
+  running: RunningProcess,
+  input: string | undefined,
+): Effect.Effect<void, ProcReadError> {
+  if (input === undefined || !running.proc.stdin) return Effect.void;
+  const stdin = running.proc.stdin;
+  return Effect.try({
+    try: () => {
+      stdin.write(input);
+      stdin.end();
+    },
+    catch: (cause) => new ProcReadError({ argv, stream: "stdin", cause }),
+  });
+}
+
+const awaitCaptured = (running: RunningProcess) =>
+  Effect.promise(() => running.settled).pipe(Effect.asVoid);
+
+const terminateCaptured = (running: RunningProcess) =>
+  Effect.gen(function* () {
+    killProcessGroup(running.proc, "SIGTERM");
+    const graceful = yield* Effect.interruptible(awaitCaptured(running)).pipe(
+      Effect.timeoutOption(TERMINATION_GRACE_MS),
+    );
+    if (graceful._tag === "None") {
+      killProcessGroup(running.proc, "SIGKILL");
+      yield* awaitCaptured(running);
+    }
+  });
+
+function joinCaptured(
+  argv: readonly string[],
+  running: RunningProcess,
+): Effect.Effect<CapturedProcess, ProcReadError> {
+  return Effect.async<CapturedProcess, ProcReadError>((resume, signal) => {
+    const onAbort = () => killProcessGroup(running.proc, "SIGTERM");
+    signal.addEventListener("abort", onAbort, { once: true });
+    void running.settled.then((captured) => {
+      signal.removeEventListener("abort", onAbort);
+      if (captured.stdout.status === "rejected") {
+        resume(
+          Effect.fail(
+            new ProcReadError({
+              argv,
+              stream: "stdout",
+              cause: captured.stdout.reason,
+            }),
+          ),
+        );
+      } else if (captured.stderr.status === "rejected") {
+        resume(
+          Effect.fail(
+            new ProcReadError({
+              argv,
+              stream: "stderr",
+              cause: captured.stderr.reason,
+            }),
+          ),
+        );
+      } else if (captured.exited.status === "rejected") {
+        resume(
+          Effect.fail(
+            new ProcReadError({
+              argv,
+              stream: "stderr",
+              cause: captured.exited.reason,
+            }),
+          ),
+        );
+      } else {
+        resume(Effect.succeed(captured));
+      }
+    });
+
+    // Effect runs this cleanup uninterruptibly. Kill first, then join all
+    // stream drains and the child before the semaphore permit is released.
+    return terminateCaptured(running);
+  });
+}
+
+const releaseCaptured = (
+  running: RunningProcess,
+  exit: Exit.Exit<unknown, unknown>,
+): Effect.Effect<void> =>
+  Exit.isSuccess(exit) ? awaitCaptured(running) : terminateCaptured(running);
+
+function externalInterruption(
+  argv: readonly string[],
+  signal: AbortSignal,
+): Effect.Effect<never, ProcInterruptedError> {
+  return Effect.async<never, ProcInterruptedError>((resume) => {
+    const abort = () => resume(Effect.fail(new ProcInterruptedError({ argv })));
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+    return Effect.sync(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+function capturedRunEffect(
+  argv: readonly string[],
+  opts: RunOptions,
+): Effect.Effect<
+  RunResult,
+  ProcSpawnError | ProcReadError | ProcInterruptedError
+> {
+  const cwd = opts.cwd ?? config.paths.mainClone;
+  return Effect.scoped(
+    Effect.gen(function* () {
+      if (opts.signal?.aborted) {
+        return yield* new ProcInterruptedError({ argv });
+      }
+      const running = yield* Effect.acquireRelease(
+        spawnCaptured(argv, { cwd, env: opts.env, input: opts.input }),
+        releaseCaptured,
+      );
+      yield* writeInput(argv, running, opts.input);
+      if (opts.signal) {
+        // AbortSignal is the compatibility boundary used by Promise callers.
+        // After spawn, preserve their captured partial output as a nonzero
+        // RunResult; native Effect callers interrupt the fiber itself and the
+        // scoped finalizer kills and joins the child before interruption ends.
+        yield* Effect.forkScoped(
+          externalInterruption(argv, opts.signal).pipe(
+            Effect.catchAll(() => terminateCaptured(running)),
+          ),
+        );
+      }
+      const timedOut = yield* Ref.make(false);
+      if (opts.timeoutMs !== undefined && opts.timeoutMs > 0) {
+        yield* Effect.forkScoped(
+          Effect.sleep(opts.timeoutMs).pipe(
+            Effect.andThen(Ref.set(timedOut, true)),
+            Effect.andThen(
+              Effect.sync(() => killProcessGroup(running.proc, "SIGKILL")),
+            ),
+          ),
+        );
+      }
+      const captured = yield* joinCaptured(argv, running);
+      const didTimeOut = yield* Ref.get(timedOut);
+      return {
+        stdout:
+          captured.stdout.status === "fulfilled" ? captured.stdout.value : "",
+        stderr:
+          captured.stderr.status === "fulfilled" ? captured.stderr.value : "",
+        exitCode:
+          captured.exited.status === "fulfilled" ? captured.exited.value : -1,
+        timedOut: didTimeOut,
+      };
+    }),
+  );
+}
+
+/** Effect-native captured subprocess execution. */
+export function runEffect(
+  argv: readonly string[],
+  opts: RunOptions = {},
+): Effect.Effect<
+  RunResult,
+  ProcSpawnError | ProcReadError | ProcInterruptedError
+> {
+  const acquirePermit = opts.signal
+    ? Effect.raceFirst(
+        runSemaphore.take(1),
+        externalInterruption(argv, opts.signal),
+      )
+    : runSemaphore.take(1);
+  // Match Semaphore.withPermits' masked acquire/use/release shape while racing
+  // only queued acquisition against an external AbortSignal. A cancelled take
+  // leaves Effect's waiter set, and a successful take cannot be interrupted in
+  // the gap before its release finalizer is installed.
+  return Effect.uninterruptibleMask((restore) =>
+    Effect.flatMap(restore(acquirePermit), (permits) =>
+      Effect.ensuring(
+        restore(capturedRunEffect(argv, opts)),
+        runSemaphore.release(permits),
+      ),
+    ),
+  );
+}
+
+/** Run and return trimmed stdout, failing with the precise expected cause. */
+export function runOkEffect(
+  argv: readonly string[],
+  opts: RunOptions = {},
+): Effect.Effect<string, ProcError> {
+  return runEffect(argv, opts).pipe(
+    Effect.flatMap(
+      (
+        result,
+      ): Effect.Effect<string, ProcTimeoutError | ProcNonZeroExitError> => {
+        if (result.timedOut) {
+          return Effect.fail(
+            new ProcTimeoutError({
+              argv,
+              timeoutMs: opts.timeoutMs ?? 0,
+              result,
+            }),
+          );
         }
-      })
-    : noop;
-
-  try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    return { stdout, stderr, exitCode, timedOut };
-  } finally {
-    if (timer) clearTimeout(timer);
-    cleanupAbort();
-    releaseRunSlot();
-  }
+        if (result.exitCode !== 0) {
+          return Effect.fail(new ProcNonZeroExitError({ argv, result }));
+        }
+        return Effect.succeed(result.stdout.trimEnd());
+      },
+    ),
+  );
 }
 
-const noop = (): void => {};
-
-/**
- * Run and return trimmed stdout. Throws on non-zero exit with a
- * message including stderr — matches Python's `subprocess.run(check=True)`.
- */
-export async function runOk(argv: string[], opts: RunOptions = {}): Promise<string> {
-  const r = await run(argv, opts);
-  if (r.exitCode !== 0) {
-    const msg = r.stderr.trim() || r.stdout.trim() || `exit ${r.exitCode}`;
-    throw new Error(`${argv.join(" ")}: ${msg}`);
-  }
-  return r.stdout.trimEnd();
+/** Returns true when the command exits zero. */
+export function runQuietEffect(
+  argv: readonly string[],
+  opts: RunOptions = {},
+): Effect.Effect<
+  boolean,
+  ProcSpawnError | ProcReadError | ProcInterruptedError
+> {
+  return runEffect(argv, opts).pipe(
+    Effect.map((result) => result.exitCode === 0),
+  );
 }
 
-/** Returns true when the command exits zero. Never throws. */
-export async function runQuiet(argv: string[], opts: RunOptions = {}): Promise<boolean> {
-  const r = await run(argv, opts);
-  return r.exitCode === 0;
+function failedRunResult(
+  error: ProcSpawnError | ProcReadError | ProcInterruptedError,
+): RunResult {
+  return { stdout: "", stderr: error.message, exitCode: -1 };
 }
 
-// Matches CSI (`ESC [ … letter`), OSC (`ESC ] … BEL|ST`), and bare
-// two-byte ESC sequences. Enough to scrub the color/cursor noise that
-// `pnpm`, `sst`, and friends emit even when stdout isn't a TTY.
+/** Compatibility boundary. Captures every expected failure as a RunResult. */
+export function run(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
+  return Effect.runPromise(
+    runEffect(argv, opts).pipe(
+      Effect.catchAll((error) => Effect.succeed(failedRunResult(error))),
+    ),
+  );
+}
+
+/** Compatibility boundary for callers not yet migrated to Effect. */
+export function runOk(argv: string[], opts: RunOptions = {}): Promise<string> {
+  return Effect.runPromise(runOkEffect(argv, opts));
+}
+
+/** Compatibility boundary for callers not yet migrated to Effect. */
+export function runQuiet(
+  argv: string[],
+  opts: RunOptions = {},
+): Promise<boolean> {
+  return Effect.runPromise(
+    runQuietEffect(argv, opts).pipe(
+      Effect.catchAll(() => Effect.succeed(false)),
+    ),
+  );
+}
+
 // eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+const ANSI_RE =
+  /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 
-/**
- * Strip ANSI escapes, collapse in-place `\r` overwrites to the final
- * visible state, and scrub remaining control characters. Tabs in
- * particular confuse OpenTUI's width calc (it counts 1 cell; the real
- * terminal expands to the next tab stop), which cascades into rows
- * overflowing their allocated height and colliding with siblings.
- */
 export function sanitizeLine(line: string): string {
-  let s = line.replace(ANSI_RE, "");
-  const lastCr = s.lastIndexOf("\r");
-  if (lastCr >= 0) s = s.slice(lastCr + 1);
-  s = s.replace(/\t/g, " ");
-  // Drop remaining C0 / DEL control bytes. LF already split upstream.
+  let value = line.replace(ANSI_RE, "");
+  const lastCr = value.lastIndexOf("\r");
+  if (lastCr >= 0) value = value.slice(lastCr + 1);
+  value = value.replace(/\t/g, " ");
   // eslint-disable-next-line no-control-regex
-  s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
-  return s;
+  return value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
-/**
- * Drain a ReadableStream of bytes, splitting on newlines and invoking
- * `onLine` for each complete line. Trailing partial-line content is
- * flushed at end-of-stream.
- */
-export async function streamLines(
+/** Effect-native, interruptible line drain with scoped reader cancellation. */
+export function streamLinesEffect(
+  stream: ReadableStream<Uint8Array>,
+  onLine: (line: string) => void,
+): Effect.Effect<void, ProcReadError> {
+  const argv = ["<stream>"] as const;
+  return Effect.acquireUseRelease(
+    Effect.sync(() => stream.getReader()),
+    (reader) =>
+      Effect.gen(function* () {
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const chunk = yield* Effect.tryPromise({
+            try: () => reader.read(),
+            catch: (cause) =>
+              new ProcReadError({ argv, stream: "stdout", cause }),
+          });
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          let newline = buffer.indexOf("\n");
+          while (newline !== -1) {
+            const line = sanitizeLine(buffer.slice(0, newline));
+            yield* Effect.try({
+              try: () => onLine(line),
+              catch: (cause) =>
+                new ProcReadError({ argv, stream: "stdout", cause }),
+            });
+            buffer = buffer.slice(newline + 1);
+            newline = buffer.indexOf("\n");
+          }
+        }
+        const tail = buffer + decoder.decode();
+        if (tail) {
+          yield* Effect.try({
+            try: () => onLine(sanitizeLine(tail)),
+            catch: (cause) =>
+              new ProcReadError({ argv, stream: "stdout", cause }),
+          });
+        }
+      }),
+    (reader) =>
+      Effect.promise(async () => {
+        try {
+          await reader.cancel();
+        } catch {
+          // The process may already have closed the stream.
+        }
+        try {
+          reader.releaseLock();
+        } catch {
+          // The lock may already have been released after a read failure.
+        }
+      }),
+  );
+}
+
+/** Compatibility boundary for non-Effect stream consumers. */
+export function streamLines(
   stream: ReadableStream<Uint8Array>,
   onLine: (line: string) => void,
 ): Promise<void> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let nl = buf.indexOf("\n");
-      while (nl !== -1) {
-        onLine(sanitizeLine(buf.slice(0, nl)));
-        buf = buf.slice(nl + 1);
-        nl = buf.indexOf("\n");
-      }
-    }
-    const tail = buf + decoder.decode();
-    if (tail) onLine(sanitizeLine(tail));
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch (err) {
-      // Lock may already be released if the reader errored out. Safe
-      // to ignore — the stream is owned by this function.
-      void err;
-    }
-  }
+  return Effect.runPromise(streamLinesEffect(stream, onLine));
 }
 
-/**
- * Spawn a subprocess, stream stdout+stderr line-by-line through the
- * callback, resolve with the exit code. Lets long-running output surface
- * in the TUI without blocking on `inherit`.
- *
- * `killAfterMs` is the ONE opt-in bound (see the note inside about why
- * `timeoutMs` is otherwise ignored). Absent — every caller but the
- * `[lifecycle] destroy_command` — keeps the original wait-forever
- * behavior exactly.
- */
-export async function runStreaming(
-  argv: string[],
-  opts: RunOptions & { onLine?: (line: string) => void; killAfterMs?: number } = {},
-): Promise<number> {
-  // Deliberately NOT behind `RUN_CONCURRENCY` either: these run for
-  // minutes (pnpm install, sst remove), so a slot held here would starve
-  // the short probes the cap exists to keep responsive — the exact
-  // inversion of what it's for. One spawn, once, is not the burst
-  // problem.
-  //
-  // Deliberately ignores `timeoutMs`/`signal` from RunOptions: callers
-  // are long-running lifecycle ops (pnpm install, sst remove) where a
-  // mid-flight kill leaves worse state than waiting. A caller that needs
-  // cancellation asks for it explicitly via `killAfterMs` — don't assume
-  // the other options work just because the type accepts them.
-  const { cwd, env, onLine, killAfterMs } = opts;
-  const proc = Bun.spawn(argv, {
-    cwd,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: env ? { ...process.env, ...env } : process.env,
+type StreamingProcess = Bun.Subprocess<"ignore", "pipe", "pipe">;
+
+const awaitStreaming = (proc: StreamingProcess) =>
+  Effect.promise(() => proc.exited).pipe(Effect.asVoid);
+
+const terminateStreaming = (proc: StreamingProcess) =>
+  Effect.gen(function* () {
+    killProcessGroup(proc, "SIGTERM");
+    const graceful = yield* Effect.interruptible(awaitStreaming(proc)).pipe(
+      Effect.timeoutOption(TERMINATION_GRACE_MS),
+    );
+    if (graceful._tag === "None") {
+      killProcessGroup(proc, "SIGKILL");
+      yield* awaitStreaming(proc);
+    }
   });
-  const emit = onLine ?? (() => {});
-  // Kill on the deadline rather than abandoning the wait: resolving
-  // early would leave the child streaming into a callback whose caller
-  // has moved on (for destroy, into a worktree it is about to delete).
-  const timer =
-    killAfterMs !== undefined && killAfterMs > 0
-      ? setTimeout(() => {
-          emit(`timed out after ${Math.round(killAfterMs / 1000)}s — killing`);
-          proc.kill("SIGKILL");
-        }, killAfterMs)
-      : null;
-  try {
-    await Promise.all([
-      streamLines(proc.stdout, emit),
-      streamLines(proc.stderr, emit),
-    ]);
-    return await proc.exited;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+
+const releaseStreaming = (
+  proc: StreamingProcess,
+  exit: Exit.Exit<unknown, unknown>,
+): Effect.Effect<void> =>
+  Exit.isSuccess(exit) ? awaitStreaming(proc) : terminateStreaming(proc);
+
+/** Effect-native streaming subprocess execution. */
+export function runStreamingEffect(
+  argv: readonly string[],
+  opts: RunStreamingOptions = {},
+): Effect.Effect<number, ProcSpawnError | ProcReadError> {
+  const emit = opts.onLine ?? (() => {});
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const proc = yield* Effect.acquireRelease(
+        Effect.try({
+          try: () =>
+            Bun.spawn([...argv], {
+              cwd: opts.cwd,
+              stdin: "ignore",
+              stdout: "pipe",
+              stderr: "pipe",
+              env: opts.env ? { ...process.env, ...opts.env } : process.env,
+              detached: true,
+            }),
+          catch: (cause) => new ProcSpawnError({ argv, cause }),
+        }),
+        releaseStreaming,
+      );
+
+      if (opts.killAfterMs !== undefined && opts.killAfterMs > 0) {
+        yield* Effect.forkScoped(
+          Effect.interruptible(
+            Effect.sleep(opts.killAfterMs).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  emit(
+                    `timed out after ${Math.round(opts.killAfterMs! / 1000)}s — killing`,
+                  );
+                  killProcessGroup(proc, "SIGKILL");
+                }),
+              ),
+            ),
+          ),
+        );
+      }
+
+      const [exitCode] = yield* Effect.all(
+        [
+          Effect.tryPromise({
+            try: () => proc.exited,
+            catch: (cause) =>
+              new ProcReadError({ argv, stream: "stderr", cause }),
+          }),
+          streamLinesEffect(proc.stdout, emit),
+          streamLinesEffect(proc.stderr, emit),
+        ],
+        { concurrency: "unbounded" },
+      );
+      return exitCode;
+    }),
+  );
 }

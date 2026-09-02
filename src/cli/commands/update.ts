@@ -1,23 +1,25 @@
 /**
  * `wt update` — fast-forward the wt source clone — plus the pre-TUI
- * startup prompt (`startupUpdatePrompt`, wired in main.ts the same way
+ * startup prompt (`startupUpdatePromptEffect`, wired in main.ts the same way
  * as the skills check). The git/decision machinery lives in
  * core/update.ts (config-free — see the barrel comment); this file is
  * presentation and consent.
  */
+import { Cause, Effect } from "effect";
+
 import {
-  applyWtUpdate,
-  fetchWtOrigin,
-  findNewestEligible,
-  listRunningWtInstances,
+  applyWtUpdateEffect,
+  fetchWtOriginEffect,
+  findNewestEligibleEffect,
+  listRunningWtInstancesEffect,
   logSafe,
-  pendingCommits,
+  pendingCommitsEffect,
   readUpdateMemory,
   recordUpdateApplied,
   rememberUpdateCheck,
   rememberUpdateDecline,
-  restartEventsDaemonAfterUpdate,
-  repoUpdateState,
+  restartEventsDaemonAfterUpdateEffect,
+  repoUpdateStateEffect,
   selectOffer,
   shortSha,
   startupCheckGate,
@@ -29,7 +31,7 @@ import {
 } from "../../core/update.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
-import { confirm as askYesNo, isInteractive } from "../prompt.ts";
+import { confirmEffect, isInteractive } from "../prompt.ts";
 
 const USAGE = `usage: wt update [log] [--check] [--head]
 
@@ -58,8 +60,8 @@ function printCommits(commits: PendingCommit[]): void {
   if (commits.length > CAP) console.log(dim(`  … and ${commits.length - CAP} more`));
 }
 
-async function noteRunningInstances(): Promise<void> {
-  const pids = await listRunningWtInstances();
+const noteRunningInstances = Effect.gen(function* () {
+  const pids = yield* listRunningWtInstancesEffect;
   if (pids.length > 0) {
     console.log(
       yellow(
@@ -67,7 +69,7 @@ async function noteRunningInstances(): Promise<void> {
       ),
     );
   }
-}
+});
 
 function describeGateHoldback(gate: GateResult): string {
   const parts = gate.checked
@@ -95,24 +97,26 @@ function gateCaveat(gate: GateResult, target: string): string | null {
  * Stamps the daily check BEFORE fetching (one attempt per day even
  * when offline). Null = fetch failed.
  */
-async function fetchAndSelect(useGate: boolean): Promise<
+function fetchAndSelectEffect(useGate: boolean): Effect.Effect<
   | { fresh: RepoUpdateState; gate: GateResult; decision: ReturnType<typeof selectOffer>; commits: PendingCommit[] }
   | null
 > {
-  rememberUpdateCheck(Date.now());
-  if (!(await fetchWtOrigin())) return null;
-  const fresh = await repoUpdateState();
-  if (!fresh) return null;
-  const commits = fresh.behind > 0 ? await pendingCommits() : [];
-  const gate: GateResult = useGate
-    ? await findNewestEligible(commits.map((c) => c.sha))
-    : { target: commits[0]?.sha ?? null, checked: [], gated: false };
-  const decision = selectOffer({
-    behind: fresh.behind,
-    target: gate.target,
-    declinedSha: readUpdateMemory().declinedSha,
+  return Effect.gen(function* () {
+    yield* Effect.sync(() => rememberUpdateCheck(Date.now()));
+    if (!(yield* fetchWtOriginEffect)) return null;
+    const fresh = yield* repoUpdateStateEffect;
+    if (!fresh) return null;
+    const commits = fresh.behind > 0 ? yield* pendingCommitsEffect() : [];
+    const gate: GateResult = useGate
+      ? yield* findNewestEligibleEffect(commits.map((c) => c.sha))
+      : { target: commits[0]?.sha ?? null, checked: [], gated: false };
+    const decision = selectOffer({
+      behind: fresh.behind,
+      target: gate.target,
+      declinedSha: readUpdateMemory().declinedSha,
+    });
+    return { fresh, gate, decision, commits };
   });
-  return { fresh, gate, decision, commits };
 }
 
 /** Commits from HEAD up to and including `target` (they're what an update to `target` applies). */
@@ -121,9 +125,9 @@ function commitsUpTo(commits: PendingCommit[], target: string): PendingCommit[] 
   return idx === -1 ? commits : commits.slice(idx);
 }
 
-async function runLog(): Promise<number> {
+const runLog: Effect.Effect<number> = Effect.gen(function* () {
   const mem = readUpdateMemory();
-  const state = await repoUpdateState();
+  const state = yield* repoUpdateStateEffect;
   const head = state?.headSha ?? null;
   console.log(
     `current ${head ? shortSha(head) : "?"} · last good boot ${mem.lastGoodSha ? shortSha(mem.lastGoodSha) : dim("none recorded")}${
@@ -141,109 +145,131 @@ async function runLog(): Promise<number> {
     console.log(`  ${dim(when)}  ${kind}  ${shortSha(e.fromSha)} → ${shortSha(e.toSha)}`);
   }
   return 0;
-}
+});
 
-export async function run(argv: string[]): Promise<number> {
-  if (hasHelpFlag(argv)) {
-    console.log(USAGE);
-    return 0;
-  }
-  const positional = argv.filter((a) => !a.startsWith("-"));
-  if (positional[0] === "log") return runLog();
-  if (positional.length > 0) {
-    console.error(red(`unknown argument: ${positional[0]}\n`));
-    console.error(USAGE);
-    return 2;
-  }
-  const unknown = firstUnknownFlag(argv, KNOWN);
-  if (unknown) {
-    console.error(red(`unknown flag: ${unknown}\n`));
-    console.error(USAGE);
-    return 2;
-  }
-  const checkOnly = argv.includes("--check");
-
-  const state = await repoUpdateState();
-  if (!state) {
-    console.error(red(`${WT_REPO_ROOT} is not a git checkout (or git is missing) — can't update`));
-    return 1;
-  }
-  if (state.upstream === null) {
-    console.error(yellow("HEAD has no upstream — nothing to compare against; update by hand"));
-    return 1;
-  }
-  if (state.dirty || state.ahead > 0) {
-    const why = [
-      state.dirty ? "local changes" : null,
-      state.ahead > 0 ? `${state.ahead} commit(s) ahead of ${state.upstream}` : null,
-    ]
-      .filter(Boolean)
-      .join(" and ");
-    console.error(yellow(`the wt clone has ${why} — refusing to touch it; update by hand with git`));
-    return 1;
-  }
-
-  console.log(dim(`fetching ${state.upstream.split("/")[0]} …`));
-  const sel = await fetchAndSelect(!argv.includes("--head"));
-  if (!sel) {
-    console.error(red("git fetch failed (offline? auth?) — see the app log"));
-    return 1;
-  }
-  const { fresh, gate, decision, commits } = sel;
-
-  if (decision.action === "up-to-date") {
-    console.log(green(`✓ wt is up to date — ${wtVersion()}`));
-    return 0;
-  }
-  if (decision.action === "none-eligible") {
-    console.log(
-      yellow(`${fresh.behind} commit(s) available but held back: ${describeGateHoldback(gate)}`),
-    );
-    if (commits.length > gate.checked.length) {
-      console.log(dim(`(only the newest ${gate.checked.length} of ${commits.length} were checked)`));
+export function run(argv: string[]): Effect.Effect<number> {
+  return Effect.gen(function* () {
+    if (hasHelpFlag(argv)) {
+      console.log(USAGE);
+      return 0;
     }
-    console.log(dim("retry once CI is green, or take the tip anyway with `wt update --head`"));
-    return 0;
-  }
-  // An explicit `wt update` overrides a remembered decline — the
-  // decline only silences the daily startup offer.
-  const target = decision.target;
-  const applying = commitsUpTo(commits, target);
-  const skipped = commits.length - applying.length;
-  console.log(
-    bold(`update available: ${applying.length} commit(s) (${shortSha(fresh.headSha)} → ${shortSha(target)})`),
-  );
-  printCommits(applying);
-  const caveat = gateCaveat(gate, target);
-  if (caveat) console.log(dim(caveat));
-  if (skipped > 0) {
-    console.log(dim(`(holding back ${skipped} newer: ${describeGateHoldback(gate)})`));
-  }
-  if (checkOnly) {
-    console.log(dim("run `wt update` to apply"));
-    return 0;
-  }
+    const positional = argv.filter((a) => !a.startsWith("-"));
+    if (positional[0] === "log") return yield* runLog;
+    if (positional.length > 0) {
+      console.error(red(`unknown argument: ${positional[0]}\n`));
+      console.error(USAGE);
+      return 2;
+    }
+    const unknown = firstUnknownFlag(argv, KNOWN);
+    if (unknown) {
+      console.error(red(`unknown flag: ${unknown}\n`));
+      console.error(USAGE);
+      return 2;
+    }
+    const checkOnly = argv.includes("--check");
 
-  const before = wtVersion();
-  const result = await applyWtUpdate(target);
-  if (!result.ok) {
-    if (result.stage === "smoke") {
-      rememberUpdateDecline(target);
-      console.error(red(`✗ ${shortSha(target)} failed its boot probe${result.reverted ? " — reverted, staying on the current version" : ""}`));
-      console.error(dim(result.detail));
-      if (result.depsRestoreWarning) console.error(yellow(`⚠ ${result.depsRestoreWarning}`));
-      console.error(dim("the version is skipped; new origin commits will be offered normally"));
+    const state = yield* repoUpdateStateEffect;
+    if (!state) {
+      console.error(
+        red(`${WT_REPO_ROOT} is not a git checkout (or git is missing) — can't update`),
+      );
       return 1;
     }
-    console.error(red(result.stage === "lock" ? result.detail : `fast-forward failed: ${result.detail}`));
-    return 1;
-  }
-  recordUpdateApplied({ now: Date.now(), fromSha: fresh.headSha, toSha: target });
-  if (result.installedDeps) console.log(dim("dependencies changed — ran bun install"));
-  if (result.depsWarning) console.error(yellow(`⚠ ${result.depsWarning}`));
-  console.log(green(`✓ updated ${before} → ${wtVersion()}`));
-  await noteRunningInstances();
-  return result.depsWarning ? 1 : 0;
+    if (state.upstream === null) {
+      console.error(yellow("HEAD has no upstream — nothing to compare against; update by hand"));
+      return 1;
+    }
+    if (state.dirty || state.ahead > 0) {
+      const why = [
+        state.dirty ? "local changes" : null,
+        state.ahead > 0 ? `${state.ahead} commit(s) ahead of ${state.upstream}` : null,
+      ]
+        .filter(Boolean)
+        .join(" and ");
+      console.error(
+        yellow(`the wt clone has ${why} — refusing to touch it; update by hand with git`),
+      );
+      return 1;
+    }
+
+    console.log(dim(`fetching ${state.upstream.split("/")[0]} …`));
+    const sel = yield* fetchAndSelectEffect(!argv.includes("--head"));
+    if (!sel) {
+      console.error(red("git fetch failed (offline? auth?) — see the app log"));
+      return 1;
+    }
+    const { fresh, gate, decision, commits } = sel;
+
+    if (decision.action === "up-to-date") {
+      console.log(green(`✓ wt is up to date — ${wtVersion()}`));
+      return 0;
+    }
+    if (decision.action === "none-eligible") {
+      console.log(
+        yellow(
+          `${fresh.behind} commit(s) available but held back: ${describeGateHoldback(gate)}`,
+        ),
+      );
+      if (commits.length > gate.checked.length) {
+        console.log(
+          dim(`(only the newest ${gate.checked.length} of ${commits.length} were checked)`),
+        );
+      }
+      console.log(
+        dim("retry once CI is green, or take the tip anyway with `wt update --head`"),
+      );
+      return 0;
+    }
+    // An explicit `wt update` overrides a remembered decline — the
+    // decline only silences the daily startup offer.
+    const target = decision.target;
+    const applying = commitsUpTo(commits, target);
+    const skipped = commits.length - applying.length;
+    console.log(
+      bold(
+        `update available: ${applying.length} commit(s) (${shortSha(fresh.headSha)} → ${shortSha(target)})`,
+      ),
+    );
+    printCommits(applying);
+    const caveat = gateCaveat(gate, target);
+    if (caveat) console.log(dim(caveat));
+    if (skipped > 0) {
+      console.log(dim(`(holding back ${skipped} newer: ${describeGateHoldback(gate)})`));
+    }
+    if (checkOnly) {
+      console.log(dim("run `wt update` to apply"));
+      return 0;
+    }
+
+    const before = wtVersion();
+    const result = yield* applyWtUpdateEffect(target);
+    if (!result.ok) {
+      if (result.stage === "smoke") {
+        rememberUpdateDecline(target);
+        console.error(
+          red(
+            `✗ ${shortSha(target)} failed its boot probe${result.reverted ? " — reverted, staying on the current version" : ""}`,
+          ),
+        );
+        console.error(dim(result.detail));
+        if (result.depsRestoreWarning) {
+          console.error(yellow(`⚠ ${result.depsRestoreWarning}`));
+        }
+        console.error(dim("the version is skipped; new origin commits will be offered normally"));
+        return 1;
+      }
+      console.error(
+        red(result.stage === "lock" ? result.detail : `fast-forward failed: ${result.detail}`),
+      );
+      return 1;
+    }
+    recordUpdateApplied({ now: Date.now(), fromSha: fresh.headSha, toSha: target });
+    if (result.installedDeps) console.log(dim("dependencies changed — ran bun install"));
+    if (result.depsWarning) console.error(yellow(`⚠ ${result.depsWarning}`));
+    console.log(green(`✓ updated ${before} → ${wtVersion()}`));
+    yield* noteRunningInstances;
+    return result.depsWarning ? 1 : 0;
+  });
 }
 
 /**
@@ -261,13 +287,13 @@ export async function run(argv: string[]): Promise<number> {
  * modules would come from the new checkout. One process must never
  * run that mix.
  */
-export async function startupUpdatePrompt(): Promise<"updated" | null> {
-  if (!isInteractive()) return null;
-  try {
-    const state = await repoUpdateState();
+export function startupUpdatePromptEffect(): Effect.Effect<"updated" | null> {
+  if (!isInteractive()) return Effect.succeed(null);
+  return Effect.gen(function* () {
+    const state = yield* repoUpdateStateEffect;
     if (!state) return null;
     if (startupCheckGate(state, readUpdateMemory(), Date.now()) !== "run") return null;
-    const sel = await fetchAndSelect(true);
+    const sel = yield* fetchAndSelectEffect(true);
     if (!sel || sel.decision.action !== "offer") return null;
     const target = sel.decision.target;
     const applying = commitsUpTo(sel.commits, target);
@@ -281,12 +307,12 @@ export async function startupUpdatePrompt(): Promise<"updated" | null> {
     console.log(
       dim('(a "no" is remembered for this version; [update] startup_check = false disables this check)'),
     );
-    if (!(await askYesNo(`${cyan("•")} Update now?`, true))) {
+    if (!(yield* confirmEffect(`${cyan("•")} Update now?`, true))) {
       rememberUpdateDecline(target);
       console.log(dim("  skipped (won't ask again until new commits land)"));
       return null;
     }
-    const result = await applyWtUpdate(target);
+    const result = yield* applyWtUpdateEffect(target);
     if (!result.ok) {
       if (result.stage === "smoke") {
         rememberUpdateDecline(target);
@@ -303,16 +329,16 @@ export async function startupUpdatePrompt(): Promise<"updated" | null> {
     recordUpdateApplied({ now: Date.now(), fromSha: sel.fresh.headSha, toSha: target });
     if (result.depsWarning) console.error(yellow(`⚠ ${result.depsWarning}`));
     console.log(green(`✓ updated to ${wtVersion()}`));
-    const daemon = await restartEventsDaemonAfterUpdate();
+    const daemon = yield* restartEventsDaemonAfterUpdateEffect();
     if (daemon.status === "restarted") {
       console.log(dim("  restarted the events daemon on the new build"));
     } else if (daemon.status === "failed") {
       console.error(yellow(`⚠ events daemon restart failed (${daemon.detail}); starting wt anyway`));
     }
-    return "updated";
-  } catch (err) {
-    logSafe("error", err instanceof Error ? err.stack ?? err.message : String(err));
+    return "updated" as const;
+  }).pipe(Effect.catchAllCause((cause) => Effect.sync(() => {
+    logSafe("error", Cause.pretty(cause));
     console.error(dim("wt: update check failed (see app log); starting anyway"));
     return null;
-  }
+  })));
 }

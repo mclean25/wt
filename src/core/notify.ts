@@ -10,8 +10,10 @@
  * never worth surfacing as an error, the attention feed already
  * carries the signal.
  */
+import { Effect } from "effect";
+
 import { createLogger } from "./logger.ts";
-import { run } from "./proc.ts";
+import { runEffect } from "./proc.ts";
 
 const log = createLogger("[notify]");
 
@@ -31,17 +33,37 @@ function appleScriptString(s: string): string {
   );
 }
 
-export async function notifyMacos(title: string, message: string): Promise<void> {
+export function notifyMacosEffect(
+  title: string,
+  message: string,
+): Effect.Effect<void> {
   if (process.platform !== "darwin") {
-    log.debug("skipping notification (not macOS)", { title });
-    return;
+    return Effect.sync(() =>
+      log.debug("skipping notification (not macOS)", { title }),
+    );
   }
   const script = `display notification ${appleScriptString(message)} with title ${appleScriptString(title)}`;
-  const result = await run(["osascript", "-e", script]);
-  if (result.exitCode !== 0) {
-    log.warn("osascript notification failed", {
-      exitCode: result.exitCode,
-      stderr: result.stderr.slice(0, 200),
-    });
-  }
+  return runEffect(["osascript", "-e", script]).pipe(
+    Effect.tap((result) =>
+      Effect.sync(() => {
+        if (result.exitCode !== 0) {
+          log.warn("osascript notification failed", {
+            exitCode: result.exitCode,
+            stderr: result.stderr.slice(0, 200),
+          });
+        }
+      }),
+    ),
+    Effect.catchAll((error) =>
+      Effect.sync(() =>
+        log.warn("osascript notification failed", { error: error.message }),
+      ),
+    ),
+    Effect.asVoid,
+  );
+}
+
+/** Compatibility adapter for automation dispatch. */
+export function notifyMacos(title: string, message: string): Promise<void> {
+  return Effect.runPromise(notifyMacosEffect(title, message));
 }

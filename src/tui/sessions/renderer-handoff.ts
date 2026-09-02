@@ -19,6 +19,7 @@
 import type { CliRenderer } from "@opentui/core";
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
+import { Effect } from "effect";
 
 /**
  * Clear-screen + cursor-home. opentui's suspend emits `\x1b[?1049l`
@@ -47,31 +48,43 @@ export function cwdOsc7(cwd: string, host = hostname()): string {
   return `\x1b]7;${url.href}\x1b\\`;
 }
 
-export async function handoffTerminal<T>(
+export function handoffTerminalEffect<A, E, R>(
+  renderer: CliRenderer,
+  cwd: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const returnCwd = process.cwd();
+      renderer.suspend();
+      process.stdout.write(CLEAR_SCREEN);
+      process.stdout.write(cwdOsc7(cwd));
+      const winchListeners = process.listeners("SIGWINCH");
+      for (const listener of winchListeners) {
+        process.removeListener("SIGWINCH", listener as NodeJS.SignalsListener);
+      }
+      return { returnCwd, winchListeners };
+    }),
+    () => effect,
+    ({ returnCwd, winchListeners }) => Effect.sync(() => {
+      for (const listener of winchListeners) {
+        process.on("SIGWINCH", listener as NodeJS.SignalsListener);
+      }
+      process.stdout.write(cwdOsc7(returnCwd));
+      process.stdout.write(CLEAR_SCREEN);
+      renderer.resume();
+      process.kill(process.pid, "SIGWINCH");
+    }),
+  );
+}
+
+/** Compatibility adapter for callback-shaped renderer consumers. */
+export const handoffTerminal = <T>(
   renderer: CliRenderer,
   cwd: string,
   fn: () => Promise<T>,
-): Promise<T> {
-  const returnCwd = process.cwd();
-  renderer.suspend();
-  process.stdout.write(CLEAR_SCREEN);
-  process.stdout.write(cwdOsc7(cwd));
-  const winchListeners = process.listeners("SIGWINCH");
-  for (const l of winchListeners) {
-    process.removeListener("SIGWINCH", l as NodeJS.SignalsListener);
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const l of winchListeners) {
-      process.on("SIGWINCH", l as NodeJS.SignalsListener);
-    }
-    process.stdout.write(cwdOsc7(returnCwd));
-    process.stdout.write(CLEAR_SCREEN);
-    renderer.resume();
-    // Catch up on any resize that happened while the listeners were
-    // detached — the handler reads current stdout.columns/rows, so one
-    // synthetic signal fully resyncs the layout.
-    process.kill(process.pid, "SIGWINCH");
-  }
-}
+): Promise<T> => Effect.runPromise(handoffTerminalEffect(
+  renderer,
+  cwd,
+  Effect.tryPromise(fn),
+));

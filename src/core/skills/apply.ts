@@ -19,8 +19,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { Data, Effect } from "effect";
 
-import { run as sh } from "../proc.ts";
+import { runEffect } from "../proc.ts";
 import type { UnitReport } from "./report.ts";
 import type { RulesyncInfo } from "./targets.ts";
 import { unitSourcePath } from "./registry.ts";
@@ -34,6 +35,18 @@ export function applyReport(report: UnitReport): void {
     applyInstructions(report);
   }
 }
+
+export class SkillApplyError extends Data.TaggedError("SkillApplyError")<{
+  readonly unit: string;
+  readonly cause: unknown;
+}> {}
+
+/** Effect-native write path for scoped command composition. */
+export const applyReportEffect = (report: UnitReport): Effect.Effect<void, SkillApplyError> =>
+  Effect.try({
+    try: () => applyReport(report),
+    catch: (cause) => new SkillApplyError({ unit: report.unit.name, cause }),
+  });
 
 function applySkill(report: UnitReport): void {
   const destDir = dirname(report.path); // <skills root>/<name>
@@ -103,26 +116,27 @@ export function touchedRulesyncRoots(applied: UnitReport[]): RulesyncInfo[] {
 export type RegenResult = { root: string; ok: boolean; output: string };
 
 /** Run each root's regenerate command; the sources are already durable, so a failure is reported, not fatal. */
-export async function regenRulesync(roots: RulesyncInfo[]): Promise<RegenResult[]> {
-  const out: RegenResult[] = [];
-  for (const rs of roots) {
+export function regenRulesyncEffect(roots: RulesyncInfo[]): Effect.Effect<RegenResult[]> {
+  return Effect.forEach(roots, (rs) =>
     // Bun.spawn throws synchronously when the binary itself is
     // missing (ENOENT on bash/npx) — that must degrade to a per-root
     // failure like any non-zero exit, not abort the remaining roots.
-    try {
-      const r = await sh(rs.regen, { cwd: rs.root, timeoutMs: 180_000 });
-      out.push({
+    runEffect(rs.regen, { cwd: rs.root, timeoutMs: 180_000 }).pipe(
+      Effect.map((r) => ({
         root: rs.root,
         ok: r.exitCode === 0,
         output: [r.stdout, r.stderr].filter((s) => s.trim() !== "").join("\n"),
-      });
-    } catch (err) {
-      out.push({
+      })),
+      Effect.catchAll((err) => Effect.succeed({
         root: rs.root,
         ok: false,
         output: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-  return out;
+      })),
+    ),
+    { concurrency: 1 },
+  );
 }
+
+/** Promise adapter for the existing CLI command boundary. */
+export const regenRulesync = (roots: RulesyncInfo[]): Promise<RegenResult[]> =>
+  Effect.runPromise(regenRulesyncEffect(roots));

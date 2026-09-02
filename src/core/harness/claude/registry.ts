@@ -23,6 +23,7 @@
 import { readdirSync, readFileSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Effect, Fiber } from "effect";
 
 import { createLogger } from "../../logger.ts";
 
@@ -184,14 +185,18 @@ const WATCH_DEBOUNCE_MS = 100;
  * than crashing the TUI.
  */
 export function watchRegistry(onChange: () => void): () => void {
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let debounceFiber: Fiber.RuntimeFiber<void, never> | null = null;
   let disposed = false;
   const trigger = (): void => {
-    if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      if (!disposed) onChange();
-    }, WATCH_DEBOUNCE_MS);
+    if (debounceFiber !== null) Effect.runFork(Fiber.interrupt(debounceFiber));
+    debounceFiber = Effect.runFork(
+      Effect.sleep(WATCH_DEBOUNCE_MS).pipe(
+        Effect.andThen(Effect.sync(() => {
+          debounceFiber = null;
+          if (!disposed) onChange();
+        })),
+      ),
+    );
   };
   try {
     const w = watch(REGISTRY_DIR, trigger);
@@ -200,9 +205,9 @@ export function watchRegistry(onChange: () => void): () => void {
     });
     return () => {
       disposed = true;
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
+      if (debounceFiber !== null) {
+        Effect.runFork(Fiber.interrupt(debounceFiber));
+        debounceFiber = null;
       }
       try {
         w.close();

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { Effect, Fiber, TestClock, TestContext } from "effect";
 
 import type { GhActionResult } from "../../core/github/types.ts";
 import {
   autoMergeRetryPending,
+  autoMergeRetryEffect,
   cancelAutoMergeRetry,
   RETRY_LIMIT_MS,
   startAutoMergeRetry,
@@ -20,16 +22,28 @@ describe("startAutoMergeRetry", () => {
   test("keeps asking while the refusal stays retryable, then arms", async () => {
     let calls = 0;
     let armed = 0;
-    startAutoMergeRetry(
-      1,
-      async () => (++calls < 3 ? gap : { ok: true }),
-      { onArmed: () => void armed++, onFailed: () => {}, onGaveUp: () => {} },
-      { everyMs: 1 },
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.fork(
+          autoMergeRetryEffect(
+            async () => (++calls < 3 ? gap : { ok: true }),
+            {
+              onArmed: () => void armed++,
+              onFailed: () => {},
+              onGaveUp: () => {},
+            },
+            { everyMs: 100 },
+          ),
+        );
+        for (let attempt = 0; attempt < 3; attempt++) {
+          yield* TestClock.adjust(100);
+          yield* Effect.yieldNow();
+        }
+        yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(TestContext.TestContext)),
     );
-    await tick(40);
     expect(calls).toBe(3);
     expect(armed).toBe(1);
-    expect(autoMergeRetryPending(1)).toBe(false);
   });
 
   test("a refusal that is NOT the gap ends it immediately", async () => {
@@ -37,36 +51,56 @@ describe("startAutoMergeRetry", () => {
     // hide inside a retry loop.
     let calls = 0;
     const errors: string[] = [];
-    startAutoMergeRetry(
-      2,
-      async () => {
-        calls++;
-        return hard;
-      },
-      { onArmed: () => {}, onFailed: (e) => void errors.push(e), onGaveUp: () => {} },
-      { everyMs: 1 },
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.fork(
+          autoMergeRetryEffect(
+            async () => {
+              calls++;
+              return hard;
+            },
+            {
+              onArmed: () => {},
+              onFailed: (error) => void errors.push(error),
+              onGaveUp: () => {},
+            },
+            { everyMs: 100 },
+          ),
+        );
+        yield* TestClock.adjust(100);
+        yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(TestContext.TestContext)),
     );
-    await tick(30);
     expect(calls).toBe(1);
     expect(errors).toEqual(["head oid does not match"]);
-    expect(autoMergeRetryPending(2)).toBe(false);
   });
 
   test("gives up once the budget is spent rather than looping forever", async () => {
     let gaveUp = 0;
-    let t = 0;
-    startAutoMergeRetry(
-      3,
-      async () => gap,
-      { onArmed: () => {}, onFailed: () => {}, onGaveUp: () => void gaveUp++ },
-      // Clock jumps past RETRY_LIMIT_MS on the second reading, derived
-      // rather than hardcoded so widening the budget can't quietly turn
-      // this into a test that never reaches the give-up branch.
-      { everyMs: 1, now: () => (t++ === 0 ? 0 : RETRY_LIMIT_MS + 1) },
+    let nowCalls = 0;
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.fork(
+          autoMergeRetryEffect(
+            async () => gap,
+            {
+              onArmed: () => {},
+              onFailed: () => {},
+              onGaveUp: () => void gaveUp++,
+            },
+            {
+              everyMs: 100,
+              now: () => (nowCalls++ === 0 ? 0 : RETRY_LIMIT_MS + 1),
+            },
+          ),
+        );
+        yield* Effect.yieldNow();
+        yield* TestClock.adjust(100);
+        yield* Effect.yieldNow();
+        yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(TestContext.TestContext)),
     );
-    await tick(30);
     expect(gaveUp).toBe(1);
-    expect(autoMergeRetryPending(3)).toBe(false);
   });
 
   test("cancel stops it and reports whether there was anything to stop", async () => {

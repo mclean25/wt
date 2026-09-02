@@ -7,12 +7,14 @@
  * reconcile-then-replay convenience. The genuinely hard part (anchored
  * rebase replay) lives in `RestackEngine`.
  */
+import { Clock, Data, Effect } from "effect";
+
 import { config } from "../config.ts";
 import { tryAcquireLock, type LockHandle } from "../locks.ts";
 import { createLogger } from "../logger.ts";
-import { retargetPrBase, viewPrInfo } from "../github.ts";
-import { runQuiet } from "../proc.ts";
-import { resolveChain, type RestackChain } from "./chain.ts";
+import { retargetPrBaseEffect, viewPrInfoEffect } from "../github/mutations.ts";
+import { gitQuietEffect } from "../git.ts";
+import { resolveChainEffect, type RestackChain } from "./chain.ts";
 
 /** PRs already warned about as closed-by-base-deletion (once per process). */
 const warnedClosedPrs = new Set<number>();
@@ -31,6 +33,25 @@ export type ChainLockResult =
   | { status: "busy" }
   /** The branch resolves no live worktree — nothing to lock or restack. */
   | { status: "gone" };
+
+export class StackLockError extends Data.TaggedError("StackLockError")<{
+  readonly cause: unknown;
+}> {}
+
+function releaseHandles(handles: readonly LockHandle[]): void {
+  for (const handle of handles) handle.release();
+}
+
+export function withLockHandlesEffect<A, E, R>(
+  handles: readonly LockHandle[],
+  use: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> {
+  return Effect.acquireUseRelease(
+    Effect.succeed(handles),
+    () => use,
+    (owned) => Effect.sync(() => releaseHandles(owned)),
+  );
+}
 
 /**
  * Resolve the chain containing `branch` and acquire the per-slug lock of
@@ -65,14 +86,17 @@ export type ChainLockResult =
  * reconcile re-derives. The wtstate file itself stays consistent via
  * its own `__wtstate__` flock.
  */
-export async function lockChain(
+export function lockChainEffect(
   branch: string,
   phase: string,
-): Promise<ChainLockResult> {
-  const deadline = Date.now() + 5_000;
+): Effect.Effect<ChainLockResult, StackLockError> {
+  return Effect.gen(function* () {
+  const deadline = (yield* Clock.currentTimeMillis) + 5_000;
   for (;;) {
-    const probe = await resolveChain(branch);
-    if (!probe) return { status: "gone" };
+    const probe = yield* resolveChainEffect(branch).pipe(
+      Effect.mapError((cause) => new StackLockError({ cause })),
+    );
+    if (!probe) return { status: "gone" } as const;
     const slugs = [...new Set(probe.steps.map((s) => s.slug))].sort();
     const handles: LockHandle[] = [];
     // Everything between the first acquire and the successful return
@@ -81,10 +105,14 @@ export async function lockChain(
     // already held would otherwise leak them for the life of the
     // process — flock only drops on fd close — wedging those slugs'
     // restack/destroy until a restart.
-    try {
+    let keep = false;
+    const attempt = Effect.gen(function* () {
       let refused = false;
       for (const slug of slugs) {
-        const h = tryAcquireLock(slug, "restack", { phase });
+        const h = yield* Effect.try({
+          try: () => tryAcquireLock(slug, "restack", { phase }),
+          catch: (cause) => new StackLockError({ cause }),
+        });
         if (!h) {
           refused = true;
           break;
@@ -92,28 +120,57 @@ export async function lockChain(
         handles.push(h);
       }
       if (!refused) {
-        const chain = await resolveChain(branch);
+        const chain = yield* resolveChainEffect(branch).pipe(
+          Effect.mapError((cause) => new StackLockError({ cause })),
+        );
         if (!chain) {
-          for (const h of handles) h.release();
-          return { status: "gone" };
+          return { status: "gone" } as const;
         }
         const locked = new Set(slugs);
         if (chain.steps.every((s) => locked.has(s.slug))) {
-          return { status: "ok", chain, handles };
+          keep = true;
+          return { status: "ok", chain, handles } as const;
         }
         // Membership grew under us — release and retry against the new shape.
       }
-      for (const h of handles) h.release();
-    } catch (err) {
-      for (const h of handles) h.release();
-      throw err;
+      return null;
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => {
+        if (!keep) releaseHandles(handles);
+      })),
+    );
+    const result = yield* attempt;
+    if (result) return result;
+    if ((yield* Clock.currentTimeMillis) >= deadline) {
+      return { status: "busy" } as const;
     }
-    if (Date.now() >= deadline) return { status: "busy" };
     // Jitter so two chains repeatedly colliding on a shared member (a
     // stack-on-stack boundary) don't retry in lockstep for the whole
     // deadline (same rationale as the engine's lockBackoff).
-    await Bun.sleep(250 + Math.floor(Math.random() * 250));
+    yield* Effect.sleep(250 + Math.floor(Math.random() * 250));
   }
+  });
+}
+
+export function lockChain(
+  branch: string,
+  phase: string,
+): Promise<ChainLockResult> {
+  return Effect.runPromise(lockChainEffect(branch, phase));
+}
+
+export function withLockedChainEffect<A, E, R>(
+  branch: string,
+  phase: string,
+  use: (locked: ChainLockResult) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | StackLockError, R> {
+  return Effect.acquireUseRelease(
+    lockChainEffect(branch, phase),
+    use,
+    (locked) => Effect.sync(() => {
+      if (locked.status === "ok") releaseHandles(locked.handles);
+    }),
+  );
 }
 
 /** Retarget a branch's PR base to `expectedBase` when GitHub disagrees.
@@ -121,12 +178,13 @@ export async function lockChain(
  *  with no PR, or a PR that already left OPEN, is left alone — EXCEPT
  *  the one recoverable-by-human case below, which gets an attention
  *  line instead of silence. */
-export async function retargetIfNeeded(
+export function retargetIfNeededEffect(
   branch: string,
   expectedBase: string,
   onLog: Logger,
-): Promise<void> {
-  const live = await viewPrInfo(branch);
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+  const live = yield* viewPrInfoEffect(branch);
   if (!live) return;
   // Deleting a merged parent's branch via the API (`gh pr merge
   // --delete-branch`) makes GitHub CLOSE the child PRs that target it,
@@ -142,10 +200,10 @@ export async function retargetIfNeeded(
   // process (this runs on every replay pass of an active chain).
   if (live.state === "CLOSED" && live.baseRefName !== expectedBase) {
     if (warnedClosedPrs.has(live.number)) return;
-    const baseStillExists = await runQuiet(
-      ["git", "rev-parse", "--verify", "--quiet", `origin/${live.baseRefName}`],
-      { cwd: config.paths.mainClone },
-    );
+    const baseStillExists = yield* gitQuietEffect(
+      ["rev-parse", "--verify", "--quiet", `origin/${live.baseRefName}`],
+      config.paths.mainClone,
+    ).pipe(Effect.catchAll(() => Effect.succeed(false)));
     if (baseStillExists) return;
     warnedClosedPrs.add(live.number);
     log.attention.warn(
@@ -156,7 +214,16 @@ export async function retargetIfNeeded(
     return;
   }
   if (live.state !== "OPEN" || live.baseRefName === expectedBase) return;
-  const r = await retargetPrBase(live.number, expectedBase);
+  const r = yield* retargetPrBaseEffect(live.number, expectedBase);
   if (r.ok) onLog(`  retargeted PR #${live.number} base → ${expectedBase}`);
   else onLog(`  warn: retarget PR #${live.number} base: ${r.error}`);
+  });
+}
+
+export function retargetIfNeeded(
+  branch: string,
+  expectedBase: string,
+  onLog: Logger,
+): Promise<void> {
+  return Effect.runPromise(retargetIfNeededEffect(branch, expectedBase, onLog));
 }

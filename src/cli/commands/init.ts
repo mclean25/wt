@@ -1,9 +1,21 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 
 import { repositoryNamespace } from "../../core/config-layer.ts";
 import { hasHelpFlag } from "../args.ts";
+import { Data, Effect } from "effect";
+
+export class InitCommandError extends Data.TaggedError("InitCommandError")<{
+  cause: unknown;
+}> {}
 
 const USAGE = `usage: wt init [directory]
 
@@ -38,7 +50,10 @@ export function detectBaseBranch(git: GitRunner, repoRoot: string): string {
     "--short",
     "refs/remotes/origin/HEAD",
   ]);
-  if (remoteHead?.startsWith("origin/") && remoteHead.length > "origin/".length) {
+  if (
+    remoteHead?.startsWith("origin/") &&
+    remoteHead.length > "origin/".length
+  ) {
     return remoteHead.slice("origin/".length);
   }
   for (const candidate of ["main", "master"]) {
@@ -46,13 +61,16 @@ export function detectBaseBranch(git: GitRunner, repoRoot: string): string {
       return candidate;
     }
   }
-  return git(repoRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]) ?? "main";
+  return (
+    git(repoRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]) ?? "main"
+  );
 }
 
 function displayPath(path: string, home: string): string {
   const fromHome = relative(home, path);
   if (fromHome === "") return "~";
-  if (!fromHome.startsWith("..") && !isAbsolute(fromHome)) return `~/${fromHome}`;
+  if (!fromHome.startsWith("..") && !isAbsolute(fromHome))
+    return `~/${fromHome}`;
   return path;
 }
 
@@ -111,7 +129,8 @@ export function initializeRepository(
     repoId,
     home: deps.home,
   });
-  const write = deps.write ?? ((path, text) => writeFileSync(path, text, { flag: "wx" }));
+  const write =
+    deps.write ?? ((path, text) => writeFileSync(path, text, { flag: "wx" }));
   try {
     write(configPath, content);
   } catch (err) {
@@ -123,26 +142,31 @@ export function initializeRepository(
   return { ok: true, configPath, repoId, content };
 }
 
-export async function run(argv: string[]): Promise<number> {
-  if (hasHelpFlag(argv)) {
-    console.log(USAGE);
+export function run(argv: string[]): Effect.Effect<number, InitCommandError> {
+  return Effect.gen(function* () {
+    if (hasHelpFlag(argv)) {
+      console.log(USAGE);
+      return 0;
+    }
+    const unknown = argv.find((arg) => arg.startsWith("-") && arg !== "-");
+    if (unknown) {
+      console.error(`unknown flag: ${unknown}\n\n${USAGE}`);
+      return 2;
+    }
+    if (argv.length > 1) {
+      console.error(`expected at most one directory\n\n${USAGE}`);
+      return 2;
+    }
+    const result = yield* Effect.try({
+      try: () => initializeRepository(argv[0] ?? process.cwd()),
+      catch: (cause) => new InitCommandError({ cause }),
+    });
+    if (!result.ok) {
+      console.error(result.message);
+      return 1;
+    }
+    console.log(`created ${result.configPath}`);
+    console.log(`namespace ${result.repoId}`);
     return 0;
-  }
-  const unknown = argv.find((arg) => arg.startsWith("-") && arg !== "-");
-  if (unknown) {
-    console.error(`unknown flag: ${unknown}\n\n${USAGE}`);
-    return 2;
-  }
-  if (argv.length > 1) {
-    console.error(`expected at most one directory\n\n${USAGE}`);
-    return 2;
-  }
-  const result = initializeRepository(argv[0] ?? process.cwd());
-  if (!result.ok) {
-    console.error(result.message);
-    return 1;
-  }
-  console.log(`created ${result.configPath}`);
-  console.log(`namespace ${result.repoId}`);
-  return 0;
+  });
 }

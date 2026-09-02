@@ -12,6 +12,16 @@ import type { PendingStatusText } from "../flows/work-status.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { applyEditKey, insertText, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
+import { Data, Effect } from "effect";
+
+class FooterInputError extends Data.TaggedError("FooterInputError")<{
+  cause: unknown;
+}> {}
+const footerPromise = <A>(evaluate: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new FooterInputError({ cause }),
+  });
 
 const appLog = createLogger("[app]");
 
@@ -44,7 +54,17 @@ export type FooterInputKeysCtx = {
   commitIssueId: (slug: string, raw: string) => void;
 };
 
-export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void {
+export function restoreFailedCreateFooter(
+  current: FooterMode,
+  submitted: Extract<FooterMode, { kind: "input" }>,
+): FooterMode {
+  return current.kind === "legend" ? submitted : current;
+}
+
+export function handleFooterInputKey(
+  k: KeyEvent,
+  ctx: FooterInputKeysCtx,
+): void {
   const {
     footer,
     setFooter,
@@ -62,97 +82,128 @@ export function handleFooterInputKey(k: KeyEvent, ctx: FooterInputKeysCtx): void
     setPendingIssueSlug,
     commitIssueId,
   } = ctx;
-      if (k.name === "escape" || (k.ctrl && k.name === "c")) {
-        setFooter({ kind: "legend" });
-        setPendingRename(null);
-        // Esc during a status pick's text entry cancels the whole
-        // pick — no write.
-        setPendingStatusText(null);
-        setPendingIssueSlug(null);
-        return;
-      }
-      if (k.name === "return") {
-        const raw = footer.edit.value.trim();
-        const base = footer.base;
-        const purpose = footer.purpose;
-        setFooter({ kind: "legend" });
-        if (purpose === "status-text") {
-          const pending = pendingStatusText;
-          setPendingStatusText(null);
-          // An empty line is meaningful and field-dependent —
-          // `statusTextRecord` owns that decision.
-          if (pending) commitStatusText(pending, raw);
-          return;
-        }
-        if (purpose === "issue-id") {
-          const slug = pendingIssueSlug;
-          setPendingIssueSlug(null);
-          // An empty line is meaningful here (it clears the override),
-          // so it goes to the flow rather than being dropped as a
-          // no-input cancel the way the create prompts treat it.
-          if (slug) commitIssueId(slug, raw);
-          return;
-        }
-        if (purpose === "rename-section") {
-          const oldName = pendingRename;
-          setPendingRename(null);
-          if (!oldName || !raw || raw === oldName) return;
-          renameSection(oldName, raw).catch((err) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            appLog.event.err(`rename failed: ${msg}`);
-            toast(`rename failed: ${msg}`, theme.err, 3000);
-          });
-          // Update sticky last-move-target so a stale name doesn't
-          // dangle as the picker default.
-          setLastMoveTarget((prev) => (prev === oldName ? raw : prev));
-          toast(`renamed "${oldName}" to "${raw}"`, theme.info, 1800);
-          return;
-        }
-        if (raw) {
-          // Optimistic reset above already cleared the footer to legend.
-          // On failure, put the typed line back in input mode (same
-          // prompt/purpose/base) so a bad flag or a resolution error
-          // doesn't cost the user a full retype — the flow's own toast
-          // already explains why.
-          // Guarded restore: the create can take seconds and the user
-          // may have started ANOTHER footer interaction meanwhile — a
-          // failed create must never clobber it. Only resurrect the
-          // typed line if the footer is still idle.
-          const restore = () =>
-            setFooter((prev) =>
-              prev.kind === "legend"
-                ? { kind: "input", prompt: footer.prompt, edit: makeEdit(raw), purpose, base }
-                : prev,
-            );
-          if (purpose === "new-remote") {
-            void doRemoteNew(raw).then((ok) => {
-              if (!ok) restore();
-            });
-          } else {
-            void doNew(raw, base).then((ok) => {
-              if (!ok) restore();
-            });
-          }
-        }
-        return;
-      }
-      // Backspace on empty input exits, matching the filter convention.
-      if (k.name === "backspace" && footer.edit.value.length === 0) {
-        setFooter({ kind: "legend" });
-        setPendingStatusText(null);
-        return;
-      }
-      // Cursor movement / deletion (arrows, word jumps, home/end,
-      // backspace/delete) — shared editor logic.
-      const edited = applyEditKey(k, footer.edit);
-      if (edited) {
-        setFooter({ ...footer, edit: edited });
-        return;
-      }
-      // `k.sequence` is the literal bytes the terminal delivered — a
-      // single key for typing, or a paste blob. Filter to printable
-      // ASCII so control chars in the middle of a paste don't corrupt.
-      const text = printableText(k.sequence);
-      if (text) setFooter({ ...footer, edit: insertText(footer.edit, text) });
+  if (k.name === "escape" || (k.ctrl && k.name === "c")) {
+    setFooter({ kind: "legend" });
+    setPendingRename(null);
+    // Esc during a status pick's text entry cancels the whole
+    // pick — no write.
+    setPendingStatusText(null);
+    setPendingIssueSlug(null);
+    return;
+  }
+  if (k.name === "return") {
+    const raw = footer.edit.value.trim();
+    const base = footer.base;
+    const purpose = footer.purpose;
+    setFooter({ kind: "legend" });
+    if (purpose === "status-text") {
+      const pending = pendingStatusText;
+      setPendingStatusText(null);
+      // An empty line is meaningful and field-dependent —
+      // `statusTextRecord` owns that decision.
+      if (pending) commitStatusText(pending, raw);
       return;
+    }
+    if (purpose === "issue-id") {
+      const slug = pendingIssueSlug;
+      setPendingIssueSlug(null);
+      // An empty line is meaningful here (it clears the override),
+      // so it goes to the flow rather than being dropped as a
+      // no-input cancel the way the create prompts treat it.
+      if (slug) commitIssueId(slug, raw);
+      return;
+    }
+    if (purpose === "rename-section") {
+      const oldName = pendingRename;
+      setPendingRename(null);
+      if (!oldName || !raw || raw === oldName) return;
+      Effect.runFork(
+        footerPromise(() => renameSection(oldName, raw)).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              // Update only after persistence succeeds so a failed rename
+              // cannot leave the sticky picker target pointing at fiction.
+              setLastMoveTarget((prev) => (prev === oldName ? raw : prev));
+              toast(`renamed "${oldName}" to "${raw}"`, theme.info, 1800);
+            }),
+          ),
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              const msg =
+                error.cause instanceof Error
+                  ? error.cause.message
+                  : String(error.cause);
+              appLog.event.err(`rename failed: ${msg}`);
+              toast(`rename failed: ${msg}`, theme.err, 3000);
+            }),
+          ),
+        ),
+      );
+      return;
+    }
+    if (raw) {
+      // Optimistic reset above already cleared the footer to legend.
+      // On failure, put the typed line back in input mode (same
+      // prompt/purpose/base) so a bad flag or a resolution error
+      // doesn't cost the user a full retype — the flow's own toast
+      // already explains why.
+      // Guarded restore: the create can take seconds and the user
+      // may have started ANOTHER footer interaction meanwhile — a
+      // failed create must never clobber it. Only resurrect the
+      // typed line if the footer is still idle.
+      const restore = () =>
+        setFooter((prev) =>
+          restoreFailedCreateFooter(prev, {
+            kind: "input",
+            prompt: footer.prompt,
+            edit: makeEdit(raw),
+            purpose,
+            base,
+          }),
+        );
+      if (purpose === "new-remote") {
+        Effect.runFork(
+          footerPromise(() => doRemoteNew(raw)).pipe(
+            Effect.tap((ok) =>
+              Effect.sync(() => {
+                if (!ok) restore();
+              }),
+            ),
+            Effect.catchAll(() => Effect.sync(restore)),
+          ),
+        );
+      } else {
+        Effect.runFork(
+          footerPromise(() => doNew(raw, base)).pipe(
+            Effect.tap((ok) =>
+              Effect.sync(() => {
+                if (!ok) restore();
+              }),
+            ),
+            Effect.catchAll(() => Effect.sync(restore)),
+          ),
+        );
+      }
+    }
+    return;
+  }
+  // Backspace on empty input exits, matching the filter convention.
+  if (k.name === "backspace" && footer.edit.value.length === 0) {
+    setFooter({ kind: "legend" });
+    setPendingStatusText(null);
+    return;
+  }
+  // Cursor movement / deletion (arrows, word jumps, home/end,
+  // backspace/delete) — shared editor logic.
+  const edited = applyEditKey(k, footer.edit);
+  if (edited) {
+    setFooter({ ...footer, edit: edited });
+    return;
+  }
+  // `k.sequence` is the literal bytes the terminal delivered — a
+  // single key for typing, or a paste blob. Filter to printable
+  // ASCII so control chars in the middle of a paste don't corrupt.
+  const text = printableText(k.sequence);
+  if (text) setFooter({ ...footer, edit: insertText(footer.edit, text) });
+  return;
 }

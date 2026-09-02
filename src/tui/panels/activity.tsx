@@ -203,6 +203,8 @@ function EventsList({
   const geomRef = useRef({ windowStart, spacerRows, windowSize, total: events.length });
   geomRef.current = { windowStart, spacerRows, windowSize, total: events.length };
   useEffect(() => {
+    // React owns this geometry sampler. It exists only with the activity
+    // pane and cleanup removes it before the pane's refs become stale.
     const timer = setInterval(() => {
       const box = listRef.current;
       if (!box) return;

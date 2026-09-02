@@ -1,0 +1,42 @@
+import { describe, expect, test } from "bun:test";
+import { Effect, Fiber } from "effect";
+
+import { tailLog } from "./logs.ts";
+
+describe("wt logs tail lifecycle", () => {
+  test("interruption kills and reaps tail -F", async () => {
+    let killed = 0;
+    let reaped = 0;
+    let exitCode: number | null = null;
+    let finish!: (code: number) => void;
+    const exited = new Promise<number>((resolve) => {
+      finish = (code) => {
+        reaped++;
+        resolve(code);
+      };
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.fork(
+          tailLog("/tmp/wt-logs-cleanup.log", () => ({
+            exited,
+            get exitCode() {
+              return exitCode;
+            },
+            kill() {
+              killed++;
+              exitCode = 143;
+              finish(143);
+            },
+          })),
+        );
+        yield* Effect.yieldNow();
+        yield* Fiber.interrupt(fiber);
+      }),
+    );
+
+    expect(killed).toBe(1);
+    expect(reaped).toBe(1);
+  });
+});

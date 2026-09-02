@@ -38,12 +38,12 @@
  * Other harnesses have only terminal input and always take path 2.
  */
 import { agentIdentity } from "../agent-identity.ts";
-import { withAsyncFileLock } from "../locks.ts";
+import { Data, Effect, Runtime } from "effect";
+import { withAsyncFileLockEffect } from "../locks.ts";
 import { createLogger } from "../logger.ts";
-import { pollUntil } from "../poll.ts";
 import {
-  injectClaudeFallback,
-  injectIntoSession,
+  injectClaudeFallbackEffect,
+  injectIntoSessionEffect,
   type InjectResult,
 } from "../tmux/inject.ts";
 import {
@@ -100,6 +100,17 @@ export type SessionMessageTarget = {
   managedName?: string | null;
   text: string;
 };
+
+export class SessionMessagingError extends Data.TaggedError("SessionMessagingError")<{
+  readonly target: string;
+  readonly cause: unknown;
+}> {
+  override get message(): string { return this.cause instanceof Error ? this.cause.message : String(this.cause); }
+}
+
+class SessionMessagingOperationError extends Data.TaggedError(
+  "SessionMessagingOperationError",
+)<{ readonly operation: string; readonly cause: unknown }> {}
 
 /** How long to wait for a session's prompt UI to become injectable. */
 const READY_WARM_MS = 4_000;
@@ -159,35 +170,54 @@ type SessionSnapshot = { status: RegistryStatus; waitingFor: string | null };
 
 type Dependencies = {
   inspectorEnabled(): boolean;
-  ensureInfo(target: { slug: string; cwd: string; managedName: string | null }): Promise<{
+  ensureInfo(target: { slug: string; cwd: string; managedName: string | null }, signal?: AbortSignal): Promise<{
     session: SessionSnapshot;
     coldStarted: boolean;
   }>;
   /** Fresh status, re-read during the readiness wait. */
   statusOf(target: { slug: string; cwd: string; managedName: string | null }): SessionSnapshot | null;
   deliver: typeof deliverClaudeMessage;
-  terminal(target: SessionMessageTarget): Promise<InjectResult>;
+  terminal(target: SessionMessageTarget, signal?: AbortSignal): Promise<InjectResult>;
   landed(cwd: string, managedName: string | null, text: string, sinceMs: number): boolean;
   warn(slug: string, message: string): void;
   now(): number;
-  sleep(ms: number): Promise<void>;
-  lock<T>(key: string, body: () => Promise<T>): Promise<T>;
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
+  lock<T>(key: string, body: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 };
 
 const defaults: Dependencies = {
   inspectorEnabled,
-  ensureInfo: (target) => claudeSessions.ensureInfo(target),
+  ensureInfo: (target, signal) =>
+    Effect.runPromise(
+      claudeSessions.ensureInfoEffect(target),
+      signal ? { signal } : undefined,
+    ),
   statusOf: (target) => claudeSessions.find(target),
   deliver: deliverClaudeMessage,
-  terminal: (target) =>
-    target.harnessId === "claude"
-      ? injectClaudeFallback(target)
-      : injectIntoSession({ ...target, harnessId: target.harnessId }),
+  terminal: (target, signal) =>
+    Effect.runPromise(
+      target.harnessId === "claude"
+        ? injectClaudeFallbackEffect(target)
+        : injectIntoSessionEffect({ ...target, harnessId: target.harnessId }),
+      signal ? { signal } : undefined,
+    ),
   landed: injectedPromptLanded,
   warn: (slug, message) => createLogger(slug).attention.warn(message),
   now: Date.now,
-  sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
-  lock: withAsyncFileLock,
+  sleep: (ms, signal) =>
+    Effect.runPromise(Effect.sleep(ms), signal ? { signal } : undefined),
+  lock: (key, body, signal) =>
+    Effect.runPromise(
+      withAsyncFileLockEffect(
+        key,
+        Effect.tryPromise({
+          try: body,
+          catch: (cause) =>
+            new SessionMessagingError({ target: key, cause }),
+        }),
+      ),
+      signal ? { signal } : undefined,
+    ),
 };
 
 /**
@@ -260,66 +290,77 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     } — answer it first, then resend`;
   }
 
-  /**
-   * Did the injected prompt reach the conversation?
-   *
-   * A prompt submitted while the target is mid-turn QUEUES — exactly as
-   * typing would — and won't appear in the transcript until that turn
-   * ends, which can be many minutes. So a session that wasn't idle at
-   * submit time and hasn't recorded the prompt yet is reported as
-   * delivered: the submit was accepted, and the alternative is telling
-   * the caller a queued message was lost. Only an IDLE session that
-   * never records it really did swallow it.
-   */
-  async function confirmInjected(opts: {
+  const promiseEffect = <A>(
+    operation: string,
+    run: (signal: AbortSignal) => Promise<A>,
+  ) => Effect.tryPromise({
+    try: run,
+    catch: (cause) => new SessionMessagingOperationError({ operation, cause }),
+  });
+
+  /** Effect-native transcript confirmation. */
+  function confirmInjectedEffect(opts: {
     cwd: string;
     managedName: string | null;
     text: string;
     sinceMs: number;
     idleAtSubmit: boolean;
-  }): Promise<boolean> {
-    const landed = await pollUntil({
-      check: () => deps.landed(opts.cwd, opts.managedName, opts.text, opts.sinceMs),
-      budgetMs: CONFIRM_MS,
-      intervalMs: CONFIRM_POLL_MS,
-      now: deps.now,
-      sleep: deps.sleep,
+    signal?: AbortSignal;
+  }): Effect.Effect<boolean, SessionMessagingOperationError> {
+    return Effect.gen(function* () {
+      const deadline = deps.now() + CONFIRM_MS;
+      while (true) {
+        if (deps.landed(opts.cwd, opts.managedName, opts.text, opts.sinceMs)) return true;
+        const remaining = deadline - deps.now();
+        if (remaining <= 0) return !opts.idleAtSubmit;
+        yield* promiseEffect("confirmation sleep", (signal) =>
+          deps.sleep(Math.min(CONFIRM_POLL_MS, remaining), signal));
+      }
     });
-    return landed || !opts.idleAtSubmit;
   }
 
-  async function sendToClaude(target: SessionMessageTarget): Promise<SessionMessageResult> {
+  function sendToClaudeEffect(
+    target: SessionMessageTarget,
+  ): Effect.Effect<SessionMessageResult, SessionMessagingOperationError> {
+    return Effect.gen(function* () {
     const { slug, cwd, text } = target;
     const managedName = target.managedName ?? null;
     const tmuxName = claudeTmuxName(slug, managedName);
     const identity = { slug, cwd, managedName };
-    const typeIt = async (cause: FallbackCause): Promise<SessionMessageResult> => {
-      const res = await deps.terminal({ ...target, managedName, text });
-      return res.ok ? { ...res, transport: "terminal", fallback: cause } : res;
-    };
+    const typeIt = (cause: FallbackCause) => promiseEffect(
+      "terminal delivery",
+      (signal) => deps.terminal({ ...target, managedName, text }, signal),
+    ).pipe(Effect.map((res): SessionMessageResult => {
+      return res.ok ? { ...res, transport: "terminal" as const, fallback: cause } : res;
+    }));
 
-    if (!deps.inspectorEnabled()) return await typeIt({ kind: "disabled" });
+    if (!deps.inspectorEnabled()) return yield* typeIt({ kind: "disabled" });
 
-    let coldStarted = false;
-    let idleAtSubmit = false;
-    try {
-      // Cold-start under wt, which is what stamps BUN_INSPECT — a
-      // session wt starts is injectable; one started any other way is
-      // not.
-      const ensured = await deps.ensureInfo(identity);
-      coldStarted = ensured.coldStarted;
-      idleAtSubmit = ensured.session.status === "idle";
-      const blocked = blockedReason(ensured.session, tmuxName);
-      if (blocked) return { ok: false, reason: blocked };
-    } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    // Cold-start under wt, which is what stamps BUN_INSPECT.
+    const ensured = yield* promiseEffect("ensure session", (signal) =>
+      deps.ensureInfo(identity, signal)).pipe(
+        Effect.map((value) => ({ ok: true as const, value })),
+        Effect.catchAll((error) => Effect.succeed({ ok: false as const, error })),
+      );
+    if (!ensured.ok) {
+      return {
+        ok: false,
+        reason: ensured.error.cause instanceof Error
+          ? ensured.error.cause.message
+          : String(ensured.error.cause),
+      };
     }
+    const coldStarted = ensured.value.coldStarted;
+    const idleAtSubmit = ensured.value.session.status === "idle";
+    const blocked = blockedReason(ensured.value.session, tmuxName);
+    if (blocked) return { ok: false, reason: blocked };
 
     const sinceMs = deps.now();
-    const delivery = await deps.deliver(tmuxName, text, {
+    const delivery = yield* promiseEffect("inspector delivery", (signal) => deps.deliver(tmuxName, text, {
       readyBudgetMs: coldStarted ? READY_COLD_MS : READY_WARM_MS,
       abortIfBlocked: () => blockedReason(deps.statusOf(identity), tmuxName),
-    });
+      signal,
+    }));
 
     if (delivery.ok) {
       // A Claude slash command is recorded in the transcript as an EXPANDED
@@ -328,7 +369,7 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
       // perfectly and confirms as lost. Unknown is the honest answer.
       const delivered = isHarnessCommand(text)
         ? null
-        : await confirmInjected({ cwd, managedName, text, sinceMs, idleAtSubmit });
+        : yield* confirmInjectedEffect({ cwd, managedName, text, sinceMs, idleAtSubmit });
       return { ok: true, coldStarted, delivered, resent: false, transport: "inspector" };
     }
 
@@ -336,7 +377,7 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
 
     if (delivery.kind === "submitted-unknown") {
       // Retyping could double-submit, so ask the transcript instead.
-      const landed = await confirmInjected({
+      const landed = yield* confirmInjectedEffect({
         cwd,
         managedName,
         text,
@@ -354,14 +395,17 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
 
     const cause: FallbackCause = { kind: delivery.kind, reason: delivery.reason };
     warnFallback(slug, tmuxName, cause);
-    return await typeIt(cause);
+    return yield* typeIt(cause);
+    });
   }
 
   /**
    * Deliver a prompt to a live harness conversation, cold-starting its
    * tmux host when needed.
    */
-  return async function send(target: SessionMessageTarget): Promise<SessionMessageResult> {
+  function sendEffect(target: SessionMessageTarget): Effect.Effect<SessionMessageResult, SessionMessagingOperationError> {
+    return Effect.gen(function* () {
+    const runtime = yield* Effect.runtime<never>();
     // Emptiness is a question about what the CALLER sent, so it is
     // asked before stamping: from inside a wt session `stampSender`
     // turns "" into "[slug] ", which passed this guard and delivered a
@@ -370,7 +414,8 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     if (!target.text.trim()) return { ok: false, reason: "message is empty" };
     const text = stampSender(target.text);
     if (target.harnessId !== "claude") {
-      const res = await deps.terminal({ ...target, text });
+      const res = yield* promiseEffect("terminal delivery", (signal) =>
+        deps.terminal({ ...target, text }, signal));
       return res.ok
         ? {
             ...res,
@@ -389,10 +434,35 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     // reason; the key is distinct from the ones `ensureInfo` and the
     // terminal path take, and is always acquired before them.
     const tmuxName = claudeTmuxName(target.slug, target.managedName ?? null);
-    return await deps.lock(`__claude_send__${tmuxName}`, () => sendToClaude({ ...target, text }));
+    return yield* promiseEffect("session lock", (signal) =>
+      deps.lock(
+        `__claude_send__${tmuxName}`,
+        () => Runtime.runPromise(runtime)(sendToClaudeEffect({ ...target, text }), { signal }),
+        signal,
+      ));
+    });
+  }
+
+  type Messenger = ((target: SessionMessageTarget, signal?: AbortSignal) => Promise<SessionMessageResult>) & {
+    effect: (target: SessionMessageTarget) => Effect.Effect<SessionMessageResult, SessionMessagingOperationError>;
   };
+  const send = ((target: SessionMessageTarget, signal?: AbortSignal) =>
+    Effect.runPromise(sendEffect(target), signal ? { signal } : undefined)) as Messenger;
+  send.effect = sendEffect;
+  return send;
 }
 
 export const sendSessionMessage = createSessionMessenger();
+
+export function createSessionMessengerEffect(overrides: Partial<Dependencies> = {}) {
+  const send = createSessionMessenger(overrides);
+  return (target: SessionMessageTarget): Effect.Effect<SessionMessageResult, SessionMessagingError> =>
+    send.effect(target).pipe(
+      Effect.mapError((error) =>
+        new SessionMessagingError({ target: target.slug, cause: error.cause })),
+    );
+}
+
+export const sendSessionMessageEffect = createSessionMessengerEffect();
 
 export type { InjectResult };

@@ -43,6 +43,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Data, Effect, Fiber } from "effect";
 
 import {
   actionRegistry,
@@ -130,6 +131,18 @@ type Executing = {
 /** Outcome of one dispatch's async half. `declined` = a contention
  *  guard refused BEFORE anything ran; the fire gets un-consumed. */
 type ExecuteOutcome = { declined: string | null };
+
+class AutomationDispatchError extends Data.TaggedError(
+  "AutomationDispatchError",
+)<{ readonly cause: unknown }> {}
+
+const automationPromise = <A>(operation: string, run: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) => new AutomationDispatchError({
+      cause: new Error(`${operation}: ${cause instanceof Error ? cause.message : String(cause)}`),
+    }),
+  });
 
 /** Triggers whose condition needs fresh github data to evaluate at all.
  *  Their breaker resets are gated on freshness too — a boot-stale pass
@@ -373,7 +386,9 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
 
   const intents = useRef<Map<string, Intent>>(new Map());
   const executing = useRef<Map<string, Executing>>(new Map());
-  const passTimer = useRef<Timer | null>(null);
+  const passFiber = useRef<Fiber.RuntimeFiber<void, never> | null>(null);
+  const dispatchFibers = useRef(new Set<Fiber.RuntimeFiber<void, never>>());
+  const automationActive = useRef(true);
 
   // Boot reconciliation: match ledger entries stuck in `dispatched`
   // against the fire keys stamped into rehydrated action runs
@@ -462,11 +477,16 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     }
   }
 
-  async function execute(fire: AutomationFire): Promise<ExecuteOutcome> {
+  function execute(fire: AutomationFire): Effect.Effect<ExecuteOutcome, AutomationDispatchError> {
+    return Effect.gen(function* () {
     const { rule, slug, stackId } = fire;
     const wtLog = createLogger(slug);
     if (rule.run === "builtin:restack") {
-      if (!stackId) throw new Error("builtin:restack fire without a stackId");
+      if (!stackId) {
+        return yield* new AutomationDispatchError({
+          cause: new Error("builtin:restack fire without a stackId"),
+        });
+      }
       // Busy check FIRST, before the pre-clean: a manual `R` running on
       // THIS stack means nothing ran, so decline (un-consume the fire)
       // while the trigger condition is still intact. After the
@@ -509,7 +529,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         wtLog.event.info(
           `auto ${rule.id}: cleaning merged member${mergedSlugs.length === 1 ? "" : "s"} ${mergedSlugs.join(", ")}`,
         );
-        await latest.current.doCleanSlugs(mergedSlugs);
+        yield* automationPromise("clean merged members", () => latest.current.doCleanSlugs(mergedSlugs));
       }
       // Target the restack at a SURVIVING member's branch, never the
       // stack id: the id is the ROOT's branch, and when the merged
@@ -518,28 +538,31 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // `fire.slug` is the first open member, which the pre-clean never
       // touches; the engine resolves the whole surviving stack from it.
       const targetRow = latest.current.rows.find((r) => r.wt.slug === slug);
-      const outcome = await latest.current.doRestackStack(
-        targetRow?.wt.branch ?? stackId,
+      const outcome = yield* automationPromise(
+        "restack stack",
+        () => latest.current.doRestackStack(targetRow?.wt.branch ?? stackId),
       );
       if (outcome === "busy") {
         // Lost the mutex in the window between the peek above and the
         // engine acquiring it (a manual `R` mid-dispatch). The merged
         // members are already cleaned, so surface it as a failure that
         // names the manual follow-up instead of silently retrying.
-        throw new Error(
-          "restack engine grabbed by another run after the pre-clean — press R (or /restack) once it's free",
-        );
+        return yield* new AutomationDispatchError({
+          cause: new Error(
+            "restack engine grabbed by another run after the pre-clean — press R (or /restack) once it's free",
+          ),
+        });
       }
       return { declined: null };
     }
     if (rule.run === "builtin:clean") {
-      await latest.current.doCleanSlugs([slug]);
+      yield* automationPromise("clean worktree", () => latest.current.doCleanSlugs([slug]));
       return { declined: null };
     }
     if (rule.run === "builtin:notify") {
       // The attention feed already narrates the transition; this is the
       // "you're not looking at wt" leg. Detail carries state + note.
-      await notifyMacos(`wt · ${slug}`, fire.detail);
+      yield* automationPromise("notify macOS", () => notifyMacos(`wt · ${slug}`, fire.detail));
       return { declined: null };
     }
     if (rule.run === "builtin:close-issue") {
@@ -552,7 +575,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         wtLog.event.dim(`auto ${rule.id}: fire carried no issue number — nothing to close`);
         return { declined: null };
       }
-      const r = await closeGithubIssue(issue);
+      const r = yield* automationPromise("close GitHub issue", () => closeGithubIssue(issue));
       if (r.ok) {
         // ATTENTION, not the firehose: this is the one builtin that
         // writes to a system OUTSIDE wt, where wt's undo does not
@@ -584,7 +607,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // whose head ref disappears, with no close event to explain it,
       // so a wrong delete destroys a PR and hides why. A live read is
       // one gh call on a path that runs once per merged branch.
-      const live = await viewPrInfo(branch);
+      const live = yield* automationPromise("view GitHub pull request", () => viewPrInfo(branch));
       const confirmed = live
         ? live.state === "MERGED"
         // No PR on the branch at all: only the fire that claimed local
@@ -603,7 +626,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         );
         return { declined: null };
       }
-      const r = await deleteRemoteBranch(branch);
+      const r = yield* automationPromise("delete remote branch", () => deleteRemoteBranch(branch));
       if (r.ok) {
         // ATTENTION for the same reason close-issue takes it: this
         // writes to a system outside wt, where wt's undo does not
@@ -628,15 +651,15 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // measured against.
     const range = fire.branchRange;
     if (range) {
-      const started = await actionRegistry.start(
-        def,
-        FLEET_SLUG,
-        config.paths.mainClone,
-        "",
-        { branch: range.branch, from: range.from, to: range.to },
-        "claude",
-        { autoFireKeys: fire.fireKeys },
-      );
+      const started = yield* automationPromise("start fleet action", () => actionRegistry.start(
+          def,
+          FLEET_SLUG,
+          config.paths.mainClone,
+          "",
+          { branch: range.branch, from: range.from, to: range.to },
+          "claude",
+          { autoFireKeys: fire.fireKeys },
+        ));
       if (!started.ok) return { declined: started.reason };
       // Advance the watermark only now. The range is consumed exactly
       // once, so moving the mark before the run is launched would drop
@@ -654,26 +677,31 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // exists is not a soft failure: `Bun.spawn` rejects a bad cwd
     // before it ever reaches the binary, so the run would report an
     // exit code without having run.)
-    if (fire.frozenVars) {
-      const started = await actionRegistry.start(
-        def,
-        slug,
-        config.paths.mainClone,
-        "",
-        fire.frozenVars,
-        "claude",
-        { autoFireKeys: fire.fireKeys },
-      );
+    const frozenVars = fire.frozenVars;
+    if (frozenVars) {
+      const started = yield* automationPromise("start post-merge action", () => actionRegistry.start(
+          def,
+          slug,
+          config.paths.mainClone,
+          "",
+          frozenVars,
+          "claude",
+          { autoFireKeys: fire.fireKeys },
+        ));
       return { declined: started.ok ? null : started.reason };
     }
-    const outcome = await latest.current.launchAction(slug, def, "", undefined, {
-      autoFireKeys: fire.fireKeys,
-    });
+    const outcome = yield* automationPromise(
+      "launch action",
+      () => latest.current.launchAction(slug, def, "", undefined, {
+        autoFireKeys: fire.fireKeys,
+      }),
+    );
     // A launch the guards refused (action already running, busy row,
     // unmet requirements at the last instant) never ran — un-consume.
     return {
       declined: outcome.launched ? null : (outcome.reason ?? "launch declined"),
     };
+    });
   }
 
   function dispatchKind(rule: AutomationFire["rule"]): Executing["kind"] {
@@ -994,9 +1022,10 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       wtLog.event.info(`auto ${rule.id}: ${fire.detail} — running ${rule.run}`, {
         toast: true,
       });
-      void execute(fire)
-        .then(
-          (outcome) => {
+      let dispatchFiber: Fiber.RuntimeFiber<void, never>;
+      const dispatch = execute(fire).pipe(
+        Effect.match({
+          onSuccess: (outcome) => {
             if (outcome.declined) {
               // Un-consume: the fire never ran. The still-true
               // condition re-derives an intent (with a fresh settle
@@ -1011,31 +1040,54 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
             markFiresDelivered(fire.fireKeys);
             if (!breakerExempt) bumpBreaker(rule.id, target);
           },
-          (err) => {
+          onFailure: (error) => {
             // A run that LAUNCHED and failed does NOT retry: keys stay
             // handled; a new push (new fire key) is the sanctioned
             // retry path.
             markFiresDelivered(fire.fireKeys);
             if (!breakerExempt) bumpBreaker(rule.id, target);
-            const msg = err instanceof Error ? err.message : String(err);
+            const msg =
+              error.cause instanceof Error
+                ? error.cause.message
+                : String(error.cause);
             wtLog.event.err(`auto ${rule.id} failed: ${msg}`, { toast: true });
           },
-        )
-        .finally(() => {
-          entry.promiseDone = true;
-          schedulePass();
-        });
+        }),
+        Effect.ensuring(
+          Effect.sync(() => {
+            dispatchFibers.current.delete(dispatchFiber);
+            if (!automationActive.current) return;
+            entry.promiseDone = true;
+            schedulePass();
+          }),
+        ),
+      );
+      dispatchFiber = Effect.runFork(dispatch);
+      dispatchFibers.current.add(dispatchFiber);
     }
 
     setPendingCount(intents.current.size);
   }
 
   function schedulePass(): void {
-    if (passTimer.current) return;
-    passTimer.current = setTimeout(() => {
-      passTimer.current = null;
-      runPass();
-    }, PASS_DEBOUNCE_MS);
+    if (passFiber.current) return;
+    let fiber: Fiber.RuntimeFiber<void, never>;
+    fiber = Effect.runFork(
+      Effect.sleep(`${PASS_DEBOUNCE_MS} millis`).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            if (passFiber.current === fiber) passFiber.current = null;
+            runPass();
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (passFiber.current === fiber) passFiber.current = null;
+          }),
+        ),
+      ),
+    );
+    passFiber.current = fiber;
   }
 
   // Re-evaluate whenever the observable inputs change. `rows` and the
@@ -1059,13 +1111,25 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
   // window / cooldowns without needing external churn.
   useEffect(() => {
     if (!configured) return;
-    const t = setInterval(() => runPass(), TICK_MS);
+    automationActive.current = true;
+    const heartbeat = Effect.runFork(
+      Effect.forever(
+        Effect.sleep(`${TICK_MS} millis`).pipe(
+          Effect.andThen(Effect.sync(runPass)),
+        ),
+      ),
+    );
     return () => {
-      clearInterval(t);
-      if (passTimer.current) {
-        clearTimeout(passTimer.current);
-        passTimer.current = null;
+      automationActive.current = false;
+      Effect.runFork(Fiber.interrupt(heartbeat));
+      if (passFiber.current) {
+        Effect.runFork(Fiber.interrupt(passFiber.current));
+        passFiber.current = null;
       }
+      for (const fiber of dispatchFibers.current) {
+        Effect.runFork(Fiber.interrupt(fiber));
+      }
+      dispatchFibers.current.clear();
     };
   }, [configured]);
 

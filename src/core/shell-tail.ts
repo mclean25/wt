@@ -39,6 +39,7 @@ import {
   watch,
 } from "node:fs";
 import { join } from "node:path";
+import { Duration, Effect, Fiber, Schedule } from "effect";
 
 import { config } from "./config.ts";
 import { MAX_BUFFERED_LINES } from "./harness/claude/events.ts";
@@ -183,16 +184,16 @@ type State = {
   pending: string;
   watcher: FSWatcher | null;
   dirWatcher: FSWatcher | null;
-  debounce: Timer | null;
+  debounce: Fiber.RuntimeFiber<void, never> | null;
   /** Monotonic line id counter — restarts at 0 per slug. */
   nextId: number;
 };
 
-class ShellTailRegistry {
+export class ShellTailRegistry {
   private runs: ReadonlyMap<string, ShellRun> = new Map();
   private state = new Map<string, State>();
   private listeners = new Set<Listener>();
-  private poller: Timer | null = null;
+  private poller: Fiber.RuntimeFiber<number, never> | null = null;
 
   /**
    * Idempotent. Spins up a tailer for `slug`'s pipe-pane log if not
@@ -233,7 +234,7 @@ class ShellTailRegistry {
     if (!st) return;
     closeSilent(st.watcher);
     closeSilent(st.dirWatcher);
-    if (st.debounce) clearTimeout(st.debounce);
+    if (st.debounce) Effect.runSync(Fiber.interruptFork(st.debounce));
     this.state.delete(slug);
     this.commit((m) => {
       m.delete(slug);
@@ -287,18 +288,20 @@ class ShellTailRegistry {
 
   private ensurePoller(): void {
     if (this.poller) return;
-    this.poller = setInterval(() => {
-      for (const [slug, st] of this.state) {
-        // Skip tails still in `watchForCreation` mode — see session-tail.
-        if (st.watcher == null) continue;
-        this.scheduleRead(slug);
-      }
-    }, POLL_INTERVAL_MS);
+    this.poller = Effect.runFork(Effect.repeat(
+      Effect.sleep(Duration.millis(POLL_INTERVAL_MS)).pipe(Effect.andThen(Effect.sync(() => {
+        for (const [slug, st] of this.state) {
+          if (st.watcher == null) continue;
+          this.scheduleRead(slug);
+        }
+      }))),
+      Schedule.forever,
+    ));
   }
 
   private stopPoller(): void {
     if (!this.poller) return;
-    clearInterval(this.poller);
+    Effect.runSync(Fiber.interruptFork(this.poller));
     this.poller = null;
   }
 
@@ -390,14 +393,16 @@ class ShellTailRegistry {
     const st = this.state.get(slug);
     if (!st) return;
     if (st.debounce) return;
-    st.debounce = setTimeout(() => {
-      st.debounce = null;
-      try {
-        this.readDelta(slug);
-      } catch (err) {
-        log.warn("delta read failed", { slug, err: errMsg(err) });
-      }
-    }, READ_DEBOUNCE_MS);
+    st.debounce = Effect.runFork(Effect.sleep(Duration.millis(READ_DEBOUNCE_MS)).pipe(
+      Effect.andThen(Effect.sync(() => {
+        st.debounce = null;
+        try {
+          this.readDelta(slug);
+        } catch (err) {
+          log.warn("delta read failed", { slug, err: errMsg(err) });
+        }
+      })),
+    ));
   }
 
   private readDelta(slug: string): void {

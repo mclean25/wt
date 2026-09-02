@@ -17,9 +17,15 @@
  * is running in, not about which editor is being launched.
  */
 import { spawn } from "node:child_process";
+import { Data, Effect } from "effect";
 
 import { config } from "./config.ts";
-import { hideFrontmostTerminal, openInZed } from "./zed.ts";
+import { hideFrontmostTerminalEffect, openInZedEffect } from "./zed.ts";
+
+export class EditorLaunchError extends Data.TaggedError("EditorLaunchError")<{
+  readonly command: string;
+  readonly cause: unknown;
+}> {}
 
 /** Single-quote for `$SHELL -lc` so a path with spaces or quotes can't break out. */
 function shellQuote(s: string): string {
@@ -43,28 +49,60 @@ export function renderEditorCommand(command: string, path: string): string {
  * been attempted — short-lived CLI callers exit immediately afterwards,
  * so nothing may be left to a background tick.
  */
-export async function openInEditor(path: string): Promise<void> {
+function spawnDetachedEffect(
+  shell: string,
+  command: string,
+): Effect.Effect<void, EditorLaunchError> {
+  return Effect.async<void, EditorLaunchError>((resume) => {
+    let child: ReturnType<typeof spawn>;
+    let settled = false;
+    try {
+      child = spawn(shell, ["-lc", command], {
+        stdio: "ignore",
+        detached: true,
+      });
+    } catch (cause) {
+      resume(Effect.fail(new EditorLaunchError({ command, cause })));
+      return;
+    }
+    const onSpawn = () => {
+      settled = true;
+      child.unref();
+      resume(Effect.void);
+    };
+    const onError = (cause: unknown) => {
+      settled = true;
+      resume(Effect.fail(new EditorLaunchError({ command, cause })));
+    };
+    child.once("spawn", onSpawn);
+    child.once("error", onError);
+    return Effect.sync(() => {
+      child.removeListener("spawn", onSpawn);
+      child.removeListener("error", onError);
+      if (!settled) child.kill();
+    });
+  });
+}
+
+export function openInEditorEffect(
+  path: string,
+): Effect.Effect<void, EditorLaunchError> {
   const command = config.editor.command;
   if (command === null) {
-    await openInZed(path);
-    return;
+    return openInZedEffect(path).pipe(
+      Effect.mapError((cause) =>
+        new EditorLaunchError({ command: `zed -n ${path}`, cause }),
+      ),
+    );
   }
-  await hideFrontmostTerminal();
   const shell = process.env.SHELL || "bash";
-  const child = spawn(shell, ["-lc", renderEditorCommand(command, path)], {
-    stdio: "ignore",
-    detached: true,
-  });
-  // An unhandled 'error' event is fatal to the whole process in
-  // Node/Bun, so convert it into something the caller's catch can
-  // report (same reasoning as `spawnZedAndTrack`).
-  let spawnError: Error | null = null;
-  child.once("error", (err) => {
-    spawnError = err instanceof Error ? err : new Error(String(err));
-  });
-  child.unref();
-  await new Promise((r) => setTimeout(r, 30));
-  if (spawnError !== null) {
-    throw new Error(`[editor] command failed to launch: ${(spawnError as Error).message}`);
-  }
+  const rendered = renderEditorCommand(command, path);
+  return hideFrontmostTerminalEffect().pipe(
+    Effect.andThen(spawnDetachedEffect(shell, rendered)),
+  );
+}
+
+/** Promise adapter for CLI and React event boundaries. */
+export function openInEditor(path: string): Promise<void> {
+  return Effect.runPromise(openInEditorEffect(path));
 }

@@ -28,6 +28,7 @@
  * duty here is the regression signal (see AGENTS.md's Timeline trap).
  */
 import { createLogger } from "../logger.ts";
+import { Effect, Fiber } from "effect";
 
 const log = createLogger("[perf]");
 
@@ -84,7 +85,7 @@ export function attachInputLatencyProbe(
     }
   };
   renderer.on("frame", onFrame);
-  const summaryTimer = setInterval(() => {
+  const summarize = (): void => {
     // Live-mode duty: sampled on the summary cadence AND every check
     // tick below; isRunning true means something re-armed continuous
     // rendering (a Timeline, requestAnimationFrame) — the exact state
@@ -110,9 +111,16 @@ export function attachInputLatencyProbe(
     }
     liveChecks = 0;
     liveHits = 0;
-  }, SUMMARY_MS);
+  };
+  const summaryFiber = Effect.runFork(
+    Effect.forever(
+      Effect.sleep(`${SUMMARY_MS} millis`).pipe(
+        Effect.andThen(Effect.sync(summarize)),
+      ),
+    ),
+  );
   return () => {
-    clearInterval(summaryTimer);
+    Effect.runFork(Fiber.interrupt(summaryFiber));
     renderer.off("frame", onFrame);
     pendingMarkMs = null;
     samples = [];

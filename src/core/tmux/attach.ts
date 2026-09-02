@@ -2,15 +2,18 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { Data, Effect } from "effect";
+
 import { config } from "../config.ts";
 import { getHarness, type Harness, type HarnessId } from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
+import { runEffect, terminateSubprocessEffect } from "../proc.ts";
 import { shellLogPath } from "../shell-tail.ts";
-import { killServer, resolveDiffCommand } from "./admin.ts";
+import { killServerEffect, resolveDiffCommand } from "./admin.ts";
 import { writeConfig } from "./config.ts";
 import {
   capturesInnerStderr,
-  prepareInspectorSocket,
+  prepareInspectorSocketEffect,
   wrapInnerArgs,
 } from "./inner-process.ts";
 import {
@@ -22,7 +25,7 @@ import {
   shQuote,
   TMUX_SOCKET,
 } from "./naming.ts";
-import { listAllSessionsRaw } from "./process.ts";
+import { listAllSessionsRawEffect } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
@@ -31,6 +34,40 @@ export type AttachResult =
   | { kind: "detached" }
   | { kind: "switch"; target: SessionShortcut }
   | { kind: "spawn-failed"; reason: string };
+
+export class AttachOperationError extends Data.TaggedError("AttachOperationError")<{
+  readonly message: string;
+  readonly cause: unknown;
+}> {}
+
+/** Run the interactive tmux client as a scoped resource. Interruption must
+ * terminate the client and reap it, otherwise an aborted renderer handoff
+ * leaves an inherited-stdio process attached to the user's terminal. */
+function runAttachedClientEffect(
+  args: string[],
+  options: Parameters<typeof Bun.spawn>[1],
+  onStderr: (text: string) => void,
+): Effect.Effect<number, AttachOperationError> {
+  return Effect.acquireUseRelease(
+    Effect.try({
+      try: () => Bun.spawn(args, options),
+      catch: (cause) => new AttachOperationError({ message: "tmux attach spawn failed", cause }),
+    }),
+    (proc) => Effect.tryPromise({
+      try: async () => {
+        const stream = proc.stderr as ReadableStream<Uint8Array> | undefined;
+        const [code, stderr] = await Promise.all([
+          proc.exited,
+          stream ? new Response(stream).text() : Promise.resolve(""),
+        ]);
+        if (stderr.trim()) onStderr(stderr);
+        return code;
+      },
+      catch: (cause) => new AttachOperationError({ message: "tmux attach wait failed", cause }),
+    }),
+    (proc) => terminateSubprocessEffect(proc),
+  );
+}
 
 /**
  * Working directory for every tmux *client* process we spawn. The first
@@ -188,7 +225,7 @@ export function buildInnerArgs(params: {
  * this call — this function makes no assumptions about who owns the
  * terminal before/after.
  */
-export async function attachOrCreate(opts: {
+export function attachOrCreateEffect(opts: {
   slug: string;
   cwd: string;
   kind: Exclude<SessionKind, "action" | "dev">;
@@ -222,7 +259,27 @@ export async function attachOrCreate(opts: {
    * (the ref is double-quoted at spawn time).
    */
   base?: string;
-}): Promise<AttachResult> {
+}): Effect.Effect<AttachResult, AttachOperationError> {
+  return attachOrCreateEffectInternal(opts).pipe(
+    Effect.mapError((cause) =>
+      cause instanceof AttachOperationError
+        ? cause
+        : new AttachOperationError({ message: "tmux attach failed", cause }),
+    ),
+  );
+}
+
+/** Promise boundary for terminal/CLI callers. */
+export function attachOrCreate(
+  opts: Parameters<typeof attachOrCreateEffect>[0],
+): Promise<AttachResult> {
+  return Effect.runPromise(attachOrCreateEffect(opts));
+}
+
+function attachOrCreateEffectInternal(
+  opts: Parameters<typeof attachOrCreateEffect>[0],
+): Effect.Effect<AttachResult, AttachOperationError> {
+ return Effect.gen(function* () {
   const {
     slug,
     cwd,
@@ -249,23 +306,19 @@ export async function attachOrCreate(opts: {
     // empty-server path; otherwise apply what tmux can hot-reload via
     // `source-file` and accept that server-start-only settings (e.g.
     // `default-terminal`) lag until the next organic restart.
-    const liveSessions = await listAllSessionsRaw().catch(() => new Set<string>());
+    const liveSessions = yield* listAllSessionsRawEffect();
     if (liveSessions.size === 0) {
       log.info("config changed, killing server before attach (no live sessions)", {
         slug,
         kind,
       });
-      await killServer();
+      yield* killServerEffect;
     } else {
-      const source = Bun.spawn(["tmux", "-L", TMUX_SOCKET, "source-file", configPath], {
+      const sourceResult = yield* runEffect(["tmux", "-L", TMUX_SOCKET, "source-file", configPath], {
         cwd: tmuxClientCwd(),
-        stdout: "ignore",
-        stderr: "pipe",
       });
-      const [sourceCode, sourceErr] = await Promise.all([
-        source.exited,
-        new Response(source.stderr).text(),
-      ]);
+      const sourceCode = sourceResult.exitCode;
+      const sourceErr = sourceResult.stderr;
       if (sourceCode !== 0) {
         log.debug("config source-file (hot-reload) failed", {
           slug,
@@ -343,7 +396,7 @@ export async function attachOrCreate(opts: {
     // `>` not `>>` so a destroy-and-recreate of the same slug doesn't
     // seed the new tail with the prior session's lines.
     const pipePaneArgs = ["pipe-pane", "-o", "-t", name, `cat > ${quotedLog}`];
-    const alreadyRunning = (await listAllSessionsRaw().catch(() => new Set<string>())).has(name);
+    const alreadyRunning = (yield* listAllSessionsRawEffect()).has(name);
     const setupArgs = alreadyRunning
       ? ["tmux", "-L", TMUX_SOCKET, "-f", configPath, ...pipePaneArgs]
       : [
@@ -362,15 +415,9 @@ export async function attachOrCreate(opts: {
           ";",
           ...pipePaneArgs,
         ];
-    const setup = Bun.spawn(setupArgs, {
-      cwd: tmuxClientCwd(),
-      stdout: "ignore",
-      stderr: "pipe",
-    });
-    const [setupCode, setupErr] = await Promise.all([
-      setup.exited,
-      new Response(setup.stderr).text(),
-    ]);
+    const setupResult = yield* runEffect(setupArgs, { cwd: tmuxClientCwd() });
+    const setupCode = setupResult.exitCode;
+    const setupErr = setupResult.stderr;
     if (setupCode !== 0) {
       // Falling through to the regular attach below means the user
       // still gets a working shell, but the bottom-pane tail will sit
@@ -389,8 +436,7 @@ export async function attachOrCreate(opts: {
   // this option to make the owning key detach while the other F-keys request
   // an in-place switch. Set it on every attach so sessions created by older
   // wt versions are upgraded automatically.
-  const tag = Bun.spawn(
-    [
+  yield* runEffect([
       "tmux",
       "-L",
       TMUX_SOCKET,
@@ -401,19 +447,13 @@ export async function attachOrCreate(opts: {
       name,
       "@wt-shortcut",
       shortcut,
-    ],
-    { cwd: tmuxClientCwd(), stdout: "ignore", stderr: "ignore" },
-  );
-  await tag.exited;
+  ], { cwd: tmuxClientCwd() });
 
   // Only clears a socket left behind by a DEAD session of this name —
   // `new-session -A` may be about to attach to a live one, whose socket
   // is in use. See `prepareInspectorSocket`.
-  await prepareInspectorSocket(kind, name);
-  let proc: Bun.Subprocess;
-  try {
-    proc = Bun.spawn(
-      [
+  yield* prepareInspectorSocketEffect(kind, name);
+  const clientArgs = [
         "tmux",
         "-L",
         TMUX_SOCKET,
@@ -437,8 +477,23 @@ export async function attachOrCreate(opts: {
         name,
         "@wt-shortcut",
         shortcut,
-      ],
-      {
+      ];
+  const code = yield* runAttachedClientEffect(clientArgs, {
+    cwd: tmuxClientCwd(),
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "pipe",
+    env: {
+      ...process.env,
+      TERM: process.env.TERM ?? "xterm-256color",
+      COLORTERM: process.env.COLORTERM ?? "truecolor",
+      FORCE_COLOR: process.env.FORCE_COLOR ?? "3",
+    },
+  }, (text) => {
+      const trimmed = text.trim();
+      if (trimmed) log.debug("tmux stderr", { slug, kind, text: trimmed });
+  });
+  /*
         // NOT the worktree — see tmuxClientCwd. The session's start
         // directory comes from `-c` above; the client cwd only matters
         // as the potential birth cwd of the tmux server.
@@ -466,37 +521,17 @@ export async function attachOrCreate(opts: {
     log.error("spawn failed", { slug, kind, reason });
     return { kind: "spawn-failed", reason };
   }
-
-  // Drain stderr to the file log so genuine tmux errors aren't
-  // silently lost. Resolves when the process closes the stream.
-  const drainStderr = (async () => {
-    const stream = proc.stderr as ReadableStream<Uint8Array> | undefined;
-    if (!stream) return;
-    try {
-      const text = await new Response(stream).text();
-      const trimmed = text.trim();
-      if (trimmed) log.debug("tmux stderr", { slug, kind, text: trimmed });
-    } catch (err) {
-      log.warn("stderr drain failed", {
-        slug,
-        kind,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
-  })();
-
-  const code = await proc.exited;
-  await drainStderr;
+  */
   // tmux client exits with 0 on detach AND on session-end (inner
   // program exit). Distinguish by re-querying the raw set: if the
   // session still exists, the user detached; if not, the inner program
   // exited and tmux cleaned up.
-  const sessions = await listAllSessionsRaw();
+  const sessions = yield* listAllSessionsRawEffect();
   const stillRunning = sessions.has(name);
   if (stillRunning) {
     const target = sessionSwitchTarget(code);
-    if (target) return { kind: "switch", target };
-    return { kind: "detached" };
+    if (target) return { kind: "switch", target } as AttachResult;
+    return { kind: "detached" } as AttachResult;
   }
   // A capture-enabled inner program died. Read whatever it wrote so the
   // caller can surface the actual reason instead of just "exited (N)".
@@ -505,12 +540,16 @@ export async function attachOrCreate(opts: {
   // be reported as the reason for this exit.
   let stderrText: string | null = null;
   if (capturesInnerStderr(kind)) {
-    try {
-      const raw = readFileSync(stderrPath, "utf8");
-      stderrText = scrubStderr(raw);
-    } catch {
-      // no stderr file — bash never wrote anything, or it was already swept
-    }
+    const raw = yield* Effect.try({
+      try: () => readFileSync(stderrPath, "utf8"),
+      catch: () => null,
+    });
+    stderrText = raw === null ? null : scrubStderr(raw);
   }
-  return { kind: "exited", code, stderr: stderrText };
+  return { kind: "exited", code, stderr: stderrText } as AttachResult;
+ }).pipe(Effect.mapError((cause) =>
+   cause instanceof AttachOperationError
+     ? cause
+     : new AttachOperationError({ message: "tmux attach failed", cause }),
+ ));
 }

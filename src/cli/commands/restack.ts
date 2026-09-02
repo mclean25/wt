@@ -1,3 +1,5 @@
+import { Data, Effect } from "effect";
+
 import { git } from "../../core/git.ts";
 import {
   pruneStackBackups,
@@ -38,9 +40,15 @@ function report(target: string, result: RebaseResult): number {
     console.error(red(result.error));
     if (result.conflict) {
       // Hand off to the resolving skill — wt never auto-resolves conflicts.
-      if (result.failedBranch) console.error(yellow(`  failing branch: ${result.failedBranch}`));
-      if (result.backupBranch) console.error(yellow(`  backup branch:  ${result.backupBranch}`));
-      console.error(dim("  resolve in that worktree, then re-run `wt restack` (or /restack)."));
+      if (result.failedBranch)
+        console.error(yellow(`  failing branch: ${result.failedBranch}`));
+      if (result.backupBranch)
+        console.error(yellow(`  backup branch:  ${result.backupBranch}`));
+      console.error(
+        dim(
+          "  resolve in that worktree, then re-run `wt restack` (or /restack).",
+        ),
+      );
       return 3;
     }
     return 1;
@@ -50,80 +58,121 @@ function report(target: string, result: RebaseResult): number {
   return 0;
 }
 
-async function runPruneBackups(argv: string[]): Promise<number> {
-  let days = 0;
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--days") {
-      const n = Number(argv[++i]);
-      if (!Number.isFinite(n) || n < 0) {
-        console.error(red(`--days expects a non-negative number, got: ${argv[i] ?? "(nothing)"}`));
+export class RestackCommandError extends Data.TaggedError(
+  "RestackCommandError",
+)<{
+  readonly operation: string;
+  readonly cause: unknown;
+}> {}
+
+function commandPromise<A>(
+  operation: string,
+  f: () => Promise<A>,
+): Effect.Effect<A, RestackCommandError> {
+  return Effect.tryPromise({
+    try: f,
+    catch: (cause) => new RestackCommandError({ operation, cause }),
+  });
+}
+
+function runPruneBackups(
+  argv: string[],
+): Effect.Effect<number, RestackCommandError> {
+  return Effect.gen(function* () {
+    let days = 0;
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i] === "--days") {
+        const n = Number(argv[++i]);
+        if (!Number.isFinite(n) || n < 0) {
+          console.error(
+            red(
+              `--days expects a non-negative number, got: ${argv[i] ?? "(nothing)"}`,
+            ),
+          );
+          return 2;
+        }
+        days = n;
+      } else {
+        console.error(red(`unknown prune-backups option: ${argv[i]}\n`));
+        console.error(USAGE);
         return 2;
       }
-      days = n;
-    } else {
-      console.error(red(`unknown prune-backups option: ${argv[i]}\n`));
-      console.error(USAGE);
-      return 2;
     }
-  }
-  const res = await pruneStackBackups(days, logLine);
-  if (res.deleted.length === 0 && res.kept.length === 0) {
-    console.log(dim("no backup branches found"));
+    const res = yield* commandPromise("prune restack backups", () =>
+      pruneStackBackups(days, logLine),
+    );
+    if (res.deleted.length === 0 && res.kept.length === 0) {
+      console.log(dim("no backup branches found"));
+      return 0;
+    }
+    const keptNote =
+      res.kept.length > 0 ? dim(` (${res.kept.length} kept)`) : "";
+    console.log(
+      green(`✓ deleted ${bold(String(res.deleted.length))} backup branch(es)`) +
+        keptNote,
+    );
     return 0;
-  }
-  const keptNote = res.kept.length > 0 ? dim(` (${res.kept.length} kept)`) : "";
-  console.log(green(`✓ deleted ${bold(String(res.deleted.length))} backup branch(es)`) + keptNote);
-  return 0;
+  });
 }
 
 /** The current worktree's branch, for the bare `wt restack` form. */
-async function branchFromCwd(): Promise<string | null> {
-  try {
-    const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], process.cwd())).trim();
-    return branch && branch !== "HEAD" ? branch : null;
-  } catch {
-    return null;
-  }
+function branchFromCwd(): Effect.Effect<string | null, never> {
+  return commandPromise("resolve current branch", () =>
+    git(["rev-parse", "--abbrev-ref", "HEAD"], process.cwd()),
+  ).pipe(
+    Effect.map((output) => output.trim()),
+    Effect.map((branch) => (branch && branch !== "HEAD" ? branch : null)),
+    Effect.catchTag("RestackCommandError", () => Effect.succeed(null)),
+  );
 }
 
-export async function run(argv: string[]): Promise<number> {
-  if (hasHelpFlag(argv)) {
-    console.log(USAGE);
-    return 0;
-  }
-  const [first] = argv;
-  if (first === "prune-backups") {
-    return runPruneBackups(argv.slice(1));
-  }
-  let branch: string | undefined;
-  let onto: string | undefined;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    if (a === "--onto") {
-      onto = argv[++i];
-      if (!onto) {
-        console.error(red("--onto requires a ref"));
+export function run(
+  argv: string[],
+): Effect.Effect<number, RestackCommandError> {
+  return Effect.gen(function* () {
+    if (hasHelpFlag(argv)) {
+      console.log(USAGE);
+      return 0;
+    }
+    const [first] = argv;
+    if (first === "prune-backups") {
+      return yield* runPruneBackups(argv.slice(1));
+    }
+    let branch: string | undefined;
+    let onto: string | undefined;
+    for (let i = 0; i < argv.length; i++) {
+      const a = argv[i]!;
+      if (a === "--onto") {
+        onto = argv[++i];
+        if (!onto) {
+          console.error(red("--onto requires a ref"));
+          return 2;
+        }
+      } else if (a.startsWith("--")) {
+        console.error(red(`unknown flag: ${a}\n`));
+        console.error(USAGE);
+        return 2;
+      } else if (!branch) branch = a;
+      else {
+        console.error(red(`unexpected arg: ${a}\n`));
+        console.error(USAGE);
         return 2;
       }
-    } else if (a.startsWith("--")) {
-      console.error(red(`unknown flag: ${a}\n`));
-      console.error(USAGE);
-      return 2;
-    } else if (!branch) branch = a;
-    else {
-      console.error(red(`unexpected arg: ${a}\n`));
-      console.error(USAGE);
+    }
+    if (!branch) {
+      branch = (yield* branchFromCwd()) ?? undefined;
+      if (branch) console.log(dim(`restacking from current branch ${branch}`));
+    }
+    if (!branch) {
+      console.error(
+        red(`${USAGE}\n  (no branch given and the cwd isn't on one)`),
+      );
       return 2;
     }
-  }
-  if (!branch) {
-    branch = (await branchFromCwd()) ?? undefined;
-    if (branch) console.log(dim(`restacking from current branch ${branch}`));
-  }
-  if (!branch) {
-    console.error(red(`${USAGE}\n  (no branch given and the cwd isn't on one)`));
-    return 2;
-  }
-  const opts = onto ? { onto } : {};
-  return report(branch, await rebaseStack(branch, opts, logLine));
+    const opts = onto ? { onto } : {};
+    const result = yield* commandPromise("restack branches", () =>
+      rebaseStack(branch, opts, logLine),
+    );
+    return report(branch, result);
+  });
 }

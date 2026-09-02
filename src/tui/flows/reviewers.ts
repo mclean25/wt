@@ -14,6 +14,13 @@ import type { Modal } from "../modal-state.ts";
 import type { MultiPickerItem } from "../panels/picker.tsx";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
+import { Data, Effect } from "effect";
+
+class ReviewersFlowError extends Data.TaggedError("ReviewersFlowError")<{ cause: unknown }> {}
+const reviewerPromise = <A>(evaluate: () => PromiseLike<A>) => Effect.tryPromise({
+  try: evaluate,
+  catch: (cause) => new ReviewersFlowError({ cause }),
+});
 
 type ReviewerFlowsCtx = {
   rows: WorktreeRow[];
@@ -54,10 +61,18 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
     // pays a fetch; after that the picker opens instantly even when
     // the cached list is stale. `fetchMe` is process-cached after
     // first call.
-    const [contributors, me] = await Promise.all([
-      fetchContributors(),
-      fetchMe(),
-    ]);
+    const fetched = await Effect.runPromise(Effect.all([
+      reviewerPromise(fetchContributors),
+      reviewerPromise(fetchMe),
+    ], { concurrency: "unbounded" }).pipe(
+      Effect.catchAll((error) => Effect.sync(() => {
+        const message = error.cause instanceof Error ? error.cause.message : String(error.cause);
+        toast(`reviewers unavailable: ${message}`, theme.err, 3000);
+        return null;
+      })),
+    ));
+    if (!fetched) return;
+    const [contributors, me] = fetched;
     const requested = new Set(row.pr.requestedReviewers);
     // Three-tier candidate list:
     //   1. PR-scoped suggestions (highest signal — file ownership +

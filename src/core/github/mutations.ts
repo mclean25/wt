@@ -1,11 +1,18 @@
+import { Effect } from "effect";
+
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { run, runStreaming } from "../proc.ts";
+import { runEffect, runStreamingEffect } from "../proc.ts";
 import type { AutoMergeMethod } from "../types.ts";
-import { hasGh, repoSlug } from "./gh-cli.ts";
+import { hasGhEffect, repoSlugEffect } from "./gh-cli.ts";
 import type { GhActionResult, LivePrInfo } from "./types.ts";
 
 const log = createLogger("[gh]");
+
+const parseJsonOrNullEffect = <A>(text: string): Effect.Effect<A | null> =>
+  Effect.try(() => JSON.parse(text) as A).pipe(
+    Effect.catchAll(() => Effect.succeed(null)),
+  );
 
 /**
  * The merge method `enableAutoMerge` arms. Hardcoded to match the repo's
@@ -50,13 +57,21 @@ export function missingWorkflowScope(error: string | undefined): boolean {
     || /without\s+`?workflow`?\s+scope/i.test(error);
 }
 
-async function runGhMutation(
+function runGhMutationEffect(
   argv: string[],
   logLabel: string,
   logCtx: Record<string, unknown>,
-): Promise<GhActionResult> {
-  if (!(await hasGh())) return { ok: false, error: "gh CLI not found" };
-  const r = await run(argv, { cwd: config.paths.mainClone, timeoutMs: 15_000 });
+): Effect.Effect<GhActionResult> {
+  return Effect.gen(function* () {
+  if (!(yield* hasGhEffect())) return { ok: false, error: "gh CLI not found" };
+  const r = yield* runEffect(argv, {
+    cwd: config.paths.mainClone,
+    timeoutMs: 15_000,
+  }).pipe(Effect.catchAll((error) => Effect.succeed({
+    stdout: "",
+    stderr: error.message,
+    exitCode: -1,
+  })));
   if (r.exitCode !== 0) {
     const raw = (r.stderr || r.stdout).trim() || `gh exited ${r.exitCode}`;
     const msg = missingWorkflowScope(raw) ? `${raw} ${WORKFLOW_SCOPE_REMEDY}` : raw;
@@ -64,6 +79,7 @@ async function runGhMutation(
     return { ok: false, error: msg };
   }
   return { ok: true };
+  });
 }
 
 /**
@@ -78,13 +94,14 @@ async function runGhMutation(
  * buys a deterministic answer instead of arming the wrong feature off a
  * stale badge.
  */
-async function mergeQueueIdForBranch(branch: string): Promise<string | null> {
-  if (!branch) return null;
-  const slug = await repoSlug();
+function mergeQueueIdForBranchEffect(branch: string): Effect.Effect<string | null> {
+  if (!branch) return Effect.succeed(null);
+  return Effect.gen(function* () {
+  const slug = yield* repoSlugEffect();
   if (!slug) return null;
   const [owner, name] = slug.split("/");
   if (!owner || !name) return null;
-  const r = await run(
+  const r = yield* runEffect(
     [
       "gh", "api", "graphql",
       "-f",
@@ -94,16 +111,17 @@ async function mergeQueueIdForBranch(branch: string): Promise<string | null> {
       "-f", `branch=${branch}`,
     ],
     { cwd: config.paths.mainClone, timeoutMs: 15_000 },
-  );
+  ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+  if (r === null) return null;
   if (r.exitCode !== 0) {
     log.warn("merge-queue probe failed", { branch, msg: (r.stderr || r.stdout).slice(0, 200) });
     return null;
   }
-  try {
-    return JSON.parse(r.stdout)?.data?.repository?.mergeQueue?.id ?? null;
-  } catch {
-    return null;
-  }
+  const parsed = yield* parseJsonOrNullEffect<{
+    data?: { repository?: { mergeQueue?: { id?: string } | null } };
+  }>(r.stdout);
+  return parsed?.data?.repository?.mergeQueue?.id ?? null;
+  });
 }
 
 /**
@@ -130,16 +148,16 @@ async function mergeQueueIdForBranch(branch: string): Promise<string | null> {
  * unprotected repo — the picker's confirm-less "arm" keystroke once
  * shipped a dogfood PR on the spot while toasting "auto-merge enabled".
  */
-export async function enableAutoMerge(
+export function enableAutoMergeEffect(
   prId: string,
   opts: { baseRefName?: string; headRefOid?: string } = {},
-): Promise<GhActionResult> {
+): Effect.Effect<GhActionResult> {
   // Callers guard, but a raw GraphQL "Could not resolve to a node with
   // the global id of ''" toast is useless — fail with a named reason.
-  if (!prId) return { ok: false, error: "missing PR node id" };
+  if (!prId) return Effect.succeed({ ok: false, error: "missing PR node id" });
 
-  const classic = (): Promise<GhActionResult> =>
-    runGhMutation(
+  const classic = (): Effect.Effect<GhActionResult> =>
+    runGhMutationEffect(
       [
         "gh", "api", "graphql",
         "-f",
@@ -151,8 +169,11 @@ export async function enableAutoMerge(
       { prId },
     );
 
-  const queueId = opts.baseRefName ? await mergeQueueIdForBranch(opts.baseRefName) : null;
-  if (!queueId) return classic();
+  return Effect.gen(function* () {
+  const queueId = opts.baseRefName
+    ? yield* mergeQueueIdForBranchEffect(opts.baseRefName)
+    : null;
+  if (!queueId) return yield* classic();
 
   // `expectedHeadOid` makes this fail rather than enqueue a commit we
   // never saw, if the branch moved between the poll and the keystroke.
@@ -165,7 +186,7 @@ export async function enableAutoMerge(
     "-f", `prId=${prId}`,
   ];
   if (opts.headRefOid) argv.push("-f", `oid=${opts.headRefOid}`);
-  const enqueued = await runGhMutation(argv, "enqueue failed", {
+  const enqueued = yield* runGhMutationEffect(argv, "enqueue failed", {
     prId,
     base: opts.baseRefName,
   });
@@ -187,7 +208,7 @@ export async function enableAutoMerge(
   // the fallback also fails: "Auto merge is not allowed for this
   // repository" alone sends the reader to a repo setting that is not
   // why this failed.
-  const armed = await classic();
+  const armed = yield* classic();
   if (armed.ok) return armed;
   return {
     ok: false,
@@ -196,6 +217,14 @@ export async function enableAutoMerge(
       ? `${enqueued.error} That check has not reported for this commit yet, so the refusal clears itself once CI does. (arming instead also failed: ${armed.error})`
       : `${enqueued.error} (arming instead also failed: ${armed.error})`,
   };
+  });
+}
+
+export function enableAutoMerge(
+  prId: string,
+  opts: { baseRefName?: string; headRefOid?: string } = {},
+): Promise<GhActionResult> {
+  return Effect.runPromise(enableAutoMergeEffect(prId, opts));
 }
 
 /**
@@ -315,14 +344,17 @@ export function notYetEnqueueable(error: string | undefined): boolean {
  * `gh pr merge --disable-auto`, which no-ops with an error we surface
  * verbatim when the PR wasn't armed.
  */
-export async function disableAutoMerge(
+export function disableAutoMergeEffect(
   prNumber: number,
   opts: { prId?: string; baseRefName?: string } = {},
-): Promise<GhActionResult> {
+): Effect.Effect<GhActionResult> {
+  return Effect.gen(function* () {
   const queueId =
-    opts.prId && opts.baseRefName ? await mergeQueueIdForBranch(opts.baseRefName) : null;
+    opts.prId && opts.baseRefName
+      ? yield* mergeQueueIdForBranchEffect(opts.baseRefName)
+      : null;
   if (queueId && opts.prId) {
-    return runGhMutation(
+    return yield* runGhMutationEffect(
       [
         "gh", "api", "graphql",
         "-f",
@@ -333,11 +365,19 @@ export async function disableAutoMerge(
       { prNumber, base: opts.baseRefName },
     );
   }
-  return runGhMutation(
+  return yield* runGhMutationEffect(
     ["gh", "pr", "merge", String(prNumber), "--disable-auto"],
     "disable auto-merge failed",
     { prNumber },
   );
+  });
+}
+
+export function disableAutoMerge(
+  prNumber: number,
+  opts: { prId?: string; baseRefName?: string } = {},
+): Promise<GhActionResult> {
+  return Effect.runPromise(disableAutoMergeEffect(prNumber, opts));
 }
 
 /**
@@ -346,17 +386,24 @@ export async function disableAutoMerge(
  * sets at once. Logins are users; team slugs use the `org/team-slug`
  * form. Empty changes is a no-op.
  */
-export async function editReviewers(
+export function editReviewersEffect(
   prNumber: number,
   changes: { add: readonly string[]; remove: readonly string[] },
-): Promise<GhActionResult> {
+): Effect.Effect<GhActionResult> {
   if (changes.add.length === 0 && changes.remove.length === 0) {
-    return { ok: true };
+    return Effect.succeed({ ok: true });
   }
   const argv = ["gh", "pr", "edit", String(prNumber)];
   for (const l of changes.add) argv.push("--add-reviewer", l);
   for (const l of changes.remove) argv.push("--remove-reviewer", l);
-  return runGhMutation(argv, "edit reviewers failed", { prNumber, changes });
+  return runGhMutationEffect(argv, "edit reviewers failed", { prNumber, changes });
+}
+
+export function editReviewers(
+  prNumber: number,
+  changes: { add: readonly string[]; remove: readonly string[] },
+): Promise<GhActionResult> {
+  return Effect.runPromise(editReviewersEffect(prNumber, changes));
 }
 
 /**
@@ -366,15 +413,19 @@ export async function editReviewers(
  * GitHub matches the recorded parent. No-op-safe: gh is idempotent if the base
  * already matches. Runs from the main clone so gh resolves the right repo.
  */
-export async function retargetPrBase(
+export function retargetPrBaseEffect(
   prNumber: number,
   base: string,
-): Promise<GhActionResult> {
-  return runGhMutation(
+): Effect.Effect<GhActionResult> {
+  return runGhMutationEffect(
     ["gh", "pr", "edit", String(prNumber), "--base", base],
     "retarget pr base failed",
     { prNumber, base },
   );
+}
+
+export function retargetPrBase(prNumber: number, base: string): Promise<GhActionResult> {
+  return Effect.runPromise(retargetPrBaseEffect(prNumber, base));
 }
 
 /**
@@ -383,12 +434,18 @@ export async function retargetPrBase(
  * should gate on user confirmation. Runs from the main clone so gh
  * resolves the right repo.
  */
-export async function markPullRequestReady(prNumber: number): Promise<GhActionResult> {
-  return runGhMutation(
+export function markPullRequestReadyEffect(
+  prNumber: number,
+): Effect.Effect<GhActionResult> {
+  return runGhMutationEffect(
     ["gh", "pr", "ready", String(prNumber)],
     "mark ready failed",
     { prNumber },
   );
+}
+
+export function markPullRequestReady(prNumber: number): Promise<GhActionResult> {
+  return Effect.runPromise(markPullRequestReadyEffect(prNumber));
 }
 
 /**
@@ -398,12 +455,16 @@ export async function markPullRequestReady(prNumber: number): Promise<GhActionRe
  * (a PR-body closing keyword, or a hand close, beat us to it) — so
  * they log and move on rather than surfacing an error.
  */
-export async function closeGithubIssue(issue: number): Promise<GhActionResult> {
-  return runGhMutation(
+export function closeGithubIssueEffect(issue: number): Effect.Effect<GhActionResult> {
+  return runGhMutationEffect(
     ["gh", "issue", "close", String(issue), "--reason", "completed"],
     "close issue failed",
     { issue },
   );
+}
+
+export function closeGithubIssue(issue: number): Promise<GhActionResult> {
+  return Effect.runPromise(closeGithubIssueEffect(issue));
 }
 
 /**
@@ -424,20 +485,26 @@ export async function closeGithubIssue(issue: number): Promise<GhActionResult> {
  * end state, not an error, so callers log and move on rather than
  * retrying into a ref that is already gone.
  */
-export async function deleteRemoteBranch(branch: string): Promise<GhActionResult> {
-  if (!branch) return { ok: false, error: "missing branch" };
+export function deleteRemoteBranchEffect(branch: string): Effect.Effect<GhActionResult> {
+  if (!branch) return Effect.succeed({ ok: false, error: "missing branch" });
   if (branch === config.branch.base) {
-    return { ok: false, error: `refusing to delete the trunk branch ${branch}` };
+    return Effect.succeed({ ok: false, error: `refusing to delete the trunk branch ${branch}` });
   }
-  const slug = await repoSlug();
+  return Effect.gen(function* () {
+  const slug = yield* repoSlugEffect();
   if (!slug) return { ok: false, error: "could not resolve the origin repo" };
   // Nested refs (`user/feature`) need no escaping — the REST path takes
   // the rest of the ref verbatim after `heads/`.
-  return runGhMutation(
+  return yield* runGhMutationEffect(
     ["gh", "api", "--method", "DELETE", `repos/${slug}/git/refs/heads/${branch}`],
     "delete branch failed",
     { branch },
   );
+  });
+}
+
+export function deleteRemoteBranch(branch: string): Promise<GhActionResult> {
+  return Effect.runPromise(deleteRemoteBranchEffect(branch));
 }
 
 /**
@@ -447,12 +514,13 @@ export async function deleteRemoteBranch(branch: string): Promise<GhActionResult
  * run exists (a check can fail as a bare `StatusContext` with no Actions
  * run behind it), or gh errors. Read-only; safe to fire from a keybind.
  */
-export async function streamFailedRunLog(
+export function streamFailedRunLogEffect(
   branch: string,
   onLine: (line: string) => void,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  if (!(await hasGh())) return { ok: false, reason: "gh CLI not found" };
-  const listed = await run(
+): Effect.Effect<{ ok: true } | { ok: false; reason: string }> {
+  return Effect.gen(function* () {
+  if (!(yield* hasGhEffect())) return { ok: false, reason: "gh CLI not found" };
+  const listed = yield* runEffect(
     [
       "gh", "run", "list",
       "--branch", branch,
@@ -461,24 +529,34 @@ export async function streamFailedRunLog(
       "--json", "databaseId",
     ],
     { cwd: config.paths.mainClone, timeoutMs: 15_000 },
-  );
+  ).pipe(Effect.catchAll((error) => Effect.succeed({
+    stdout: "",
+    stderr: error.message,
+    exitCode: -1,
+  })));
   if (listed.exitCode !== 0) {
     return { ok: false, reason: (listed.stderr || listed.stdout).trim() || "gh run list failed" };
   }
-  let runs: Array<{ databaseId?: number }>;
-  try {
-    runs = JSON.parse(listed.stdout) as typeof runs;
-  } catch {
-    return { ok: false, reason: "could not parse gh run list" };
-  }
+  const runs = yield* parseJsonOrNullEffect<Array<{ databaseId?: number }>>(
+    listed.stdout,
+  );
+  if (!runs) return { ok: false, reason: "could not parse gh run list" };
   const runId = runs[0]?.databaseId;
   if (runId === undefined) return { ok: false, reason: "no failed workflow run" };
-  const code = await runStreaming(
+  const code = yield* runStreamingEffect(
     ["gh", "run", "view", String(runId), "--log-failed"],
     { cwd: config.paths.mainClone, onLine },
-  );
+  ).pipe(Effect.catchAll(() => Effect.succeed(-1)));
   if (code !== 0) return { ok: false, reason: `gh run view exited ${code}` };
   return { ok: true };
+  });
+}
+
+export function streamFailedRunLog(
+  branch: string,
+  onLine: (line: string) => void,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  return Effect.runPromise(streamFailedRunLogEffect(branch, onLine));
 }
 
 /**
@@ -487,25 +565,27 @@ export async function streamFailedRunLog(
  * the recorded parent against the PR's actual base. Returns null when
  * there's no PR (or gh is unavailable).
  */
-export async function viewPrInfo(branch: string): Promise<LivePrInfo | null> {
-  if (!branch || !(await hasGh())) return null;
-  const r = await run(
+export function viewPrInfoEffect(branch: string): Effect.Effect<LivePrInfo | null> {
+  if (!branch) return Effect.succeed(null);
+  return Effect.gen(function* () {
+  if (!(yield* hasGhEffect())) return null;
+  const r = yield* runEffect(
     [
       "gh", "pr", "view", branch,
       "--json", "number,baseRefName,state,isDraft,title,id,headRefOid",
     ],
     { cwd: config.paths.mainClone, timeoutMs: 15_000 },
-  );
+  ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+  if (r === null) return null;
   if (r.exitCode !== 0) return null;
-  try {
-    const d = JSON.parse(r.stdout) as Partial<LivePrInfo>;
-    if (typeof d.number !== "number") return null;
+  const d = yield* parseJsonOrNullEffect<Partial<LivePrInfo>>(r.stdout);
+  if (!d || typeof d.number !== "number") return null;
     // Validate `state` against the known set rather than asserting — gh
     // could in principle return a value outside the union, and downstream
     // merge-detection branches on it.
     const state: LivePrInfo["state"] =
       d.state === "CLOSED" || d.state === "MERGED" ? d.state : "OPEN";
-    return {
+  return {
       number: d.number,
       baseRefName: typeof d.baseRefName === "string" ? d.baseRefName : "",
       state,
@@ -513,8 +593,10 @@ export async function viewPrInfo(branch: string): Promise<LivePrInfo | null> {
       title: typeof d.title === "string" ? d.title : "",
       id: typeof d.id === "string" ? d.id : "",
       headRefOid: typeof d.headRefOid === "string" ? d.headRefOid : "",
-    };
-  } catch {
-    return null;
-  }
+  };
+  });
+}
+
+export function viewPrInfo(branch: string): Promise<LivePrInfo | null> {
+  return Effect.runPromise(viewPrInfoEffect(branch));
 }

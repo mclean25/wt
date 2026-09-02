@@ -16,6 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { Effect, Scope } from "effect";
 
 import { gitSync, logSafe, WT_REPO_ROOT } from "./exec.ts";
 
@@ -236,40 +237,34 @@ export function markBootGood(sha: string): void {
 
 const BOOT_HEALTHY_MS = 15_000;
 
-let bootTimer: Timer | null = null;
 let bootSha: string | null = null;
 let bootPromoted = false;
 
 /**
  * Record that this version is starting and schedule its promotion to
- * "known good" after BOOT_HEALTHY_MS alive. The timer handle stays in
- * module state so the crash path can cancel it — without that, a crash
- * within the window followed by a slow answer at the rollback prompt
- * would let the timer promote the very sha that just crashed.
+ * "known good" after BOOT_HEALTHY_MS alive. The promotion fiber is scoped
+ * to the TUI program, so failure interrupts it before the crash handler can
+ * wait at a rollback prompt.
  */
-export function armBootSentinel(): void {
-  const head = gitSync(["rev-parse", "HEAD"]);
-  if (!head) return;
-  bootSha = head;
-  markBooting(head, Date.now());
-  bootTimer = setTimeout(() => {
-    bootPromoted = true;
-    markBootGood(head);
-  }, BOOT_HEALTHY_MS);
-}
-
-/**
- * Crash path: synchronously stop the pending promotion. MUST run
- * before the crash-rollback offer's first await.
- */
-export function cancelBootPromotion(): void {
-  if (bootTimer) clearTimeout(bootTimer);
-  bootTimer = null;
+export function armBootSentinelEffect(): Effect.Effect<void, never, Scope.Scope> {
+  return Effect.gen(function* () {
+    const head = yield* Effect.sync(() => gitSync(["rev-parse", "HEAD"]));
+    if (!head) return;
+    bootSha = head;
+    bootPromoted = false;
+    yield* Effect.sync(() => markBooting(head, Date.now()));
+    yield* Effect.sleep(BOOT_HEALTHY_MS).pipe(
+      Effect.andThen(Effect.sync(() => {
+        bootPromoted = true;
+        markBootGood(head);
+      })),
+      Effect.forkScoped,
+    );
+  });
 }
 
 /** Clean TUI exit before the health timer fired still counts as a healthy boot. */
 export function completeBootSentinel(): void {
-  cancelBootPromotion();
   if (bootSha && !bootPromoted) {
     bootPromoted = true;
     markBootGood(bootSha);

@@ -1,5 +1,7 @@
+import { Data, Effect } from "effect";
+
 import type { RemoteConfig } from "./config.ts";
-import { runStreaming } from "./proc.ts";
+import { runStreamingEffect, terminateSubprocessEffect } from "./proc.ts";
 import { remoteWtCommand } from "./remote-protocol.ts";
 
 export type RemoteRunOptions = {
@@ -93,22 +95,45 @@ export function interactiveRemoteSshArgv(
 }
 
 /** Run this target's wt over ordinary SSH, relying on ~/.ssh/config. */
-export async function runRemoteWt(
+export class RemoteRunError extends Data.TaggedError("RemoteRunError")<{
+  readonly operation: "spawn" | "wait";
+  readonly cause: unknown;
+}> {}
+
+export function runRemoteWtEffect(
   remote: RemoteConfig,
   argv: readonly string[],
   opts: RemoteRunOptions = {},
-): Promise<number> {
+): Effect.Effect<number, RemoteRunError> {
   if (opts.interactive) {
-    const proc = Bun.spawn(interactiveRemoteSshArgv(remote, argv), {
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    return proc.exited;
+    return Effect.acquireUseRelease(
+      Effect.try({
+        try: () => Bun.spawn(interactiveRemoteSshArgv(remote, argv), {
+          stdin: "inherit",
+          stdout: "inherit",
+          stderr: "inherit",
+        }),
+        catch: (cause) => new RemoteRunError({ operation: "spawn", cause }),
+      }),
+      (proc) => Effect.tryPromise({
+        try: () => proc.exited,
+        catch: (cause) => new RemoteRunError({ operation: "wait", cause }),
+      }),
+      (proc) => terminateSubprocessEffect(proc),
+    );
   }
 
-  return runStreaming(
+  return runStreamingEffect(
     remoteWtSshArgv(remote, argv),
     { cwd: process.cwd(), onLine: opts.onLine },
+  ).pipe(
+    Effect.mapError((cause) => new RemoteRunError({ operation: "wait", cause })),
   );
 }
+
+/** Promise adapter for the CLI and React boundaries. */
+export const runRemoteWt = (
+  remote: RemoteConfig,
+  argv: readonly string[],
+  opts: RemoteRunOptions = {},
+): Promise<number> => Effect.runPromise(runRemoteWtEffect(remote, argv, opts));

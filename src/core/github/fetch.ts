@@ -1,17 +1,46 @@
+import { Data, Effect, Schedule } from "effect";
+
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
-import { chainSignal, run, type RunResult } from "../proc.ts";
+import { runEffect, type RunResult } from "../proc.ts";
 import type { MergeQueueEntry, PullRequest } from "../types.ts";
-import { listWorktrees } from "../worktree.ts";
-import { hasGh, repoSlug } from "./gh-cli.ts";
+import { listWorktreesEffect } from "../worktree.ts";
+import { hasGhEffect, repoSlugEffect } from "./gh-cli.ts";
 import { nodeToPr } from "./parse.ts";
 import type { GithubData, GqlResponse } from "./types.ts";
 
 const log = createLogger("[gh]");
 
+export class GithubTransportError extends Data.TaggedError(
+  "GithubTransportError",
+)<{ readonly message: string; readonly cause?: unknown }> {}
+
+export class GithubProtocolError extends Data.TaggedError(
+  "GithubProtocolError",
+)<{ readonly message: string; readonly cause?: unknown }> {}
+
+export class GithubRateLimitError extends Data.TaggedError(
+  "GithubRateLimitError",
+)<{ readonly message: string }> {}
+
+export class GithubTransientError extends Data.TaggedError(
+  "GithubTransientError",
+)<{ readonly message: string; readonly result: RunResult }> {}
+
+export type GithubFetchError =
+  | GithubTransportError
+  | GithubProtocolError
+  | GithubRateLimitError
+  | GithubTransientError;
+
 /** First non-empty line, trimmed — gh failure bodies are multiline. */
 function firstLine(s: string): string {
-  return s.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "";
+  return (
+    s
+      .split("\n")
+      .find((l) => l.trim().length > 0)
+      ?.trim() ?? ""
+  );
 }
 
 // Invariant: the github source is ONE batched fetch. Every per-worktree
@@ -28,7 +57,8 @@ function firstLine(s: string): string {
 // review-bot mode ALSO finds the bot's summary comment in this window,
 // so it widens — a summary buried past the window would silently read
 // as "the bot never ran".
-const COMMENT_FETCH_LIMIT = config.reviewBot.unresolvedVia === "checklist" ? 30 : 10;
+const COMMENT_FETCH_LIMIT =
+  config.reviewBot.unresolvedVia === "checklist" ? 30 : 10;
 
 /**
  * Branches per GraphQL round trip.
@@ -95,6 +125,9 @@ const TRANSIENT_PATTERNS = [
   /stream error:.*\bCANCEL\b/i,
   /unexpected end of JSON input/i,
   /\b(connection reset|broken pipe|i\/o timeout|unexpected EOF)\b/i,
+  /\b(INTERNAL|SERVICE_UNAVAILABLE|TIMEOUT)\b/,
+  /something went wrong while executing your query/i,
+  /internal server error/i,
 ];
 
 /**
@@ -123,26 +156,10 @@ export function isTransientFailure(r: RunResult): boolean {
   return TRANSIENT_PATTERNS.some((re) => re.test(body));
 }
 
-/** Sleep that gives up early when the fetch is superseded. */
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    let unchain = (): void => {};
-    const timer = setTimeout(() => {
-      unchain();
-      resolve();
-    }, ms);
-    if (signal) {
-      unchain = chainSignal(signal, () => {
-        clearTimeout(timer);
-        resolve();
-      });
-    }
-  });
-}
-
 export function chunkBranches(branches: string[], size: number): string[][] {
   const out: string[][] = [];
-  for (let i = 0; i < branches.length; i += size) out.push(branches.slice(i, i + size));
+  for (let i = 0; i < branches.length; i += size)
+    out.push(branches.slice(i, i + size));
   return out;
 }
 
@@ -244,10 +261,18 @@ fragment PrFields on PullRequest {
  * The merge queue is repo-wide, so it rides exactly one chunk rather
  * than being refetched by each.
  */
-export function buildQuery(branchCount: number, withMergeQueue: boolean): string {
-  const varDecls = Array.from({ length: branchCount }, (_, i) => `$b${i}: String!`).join(", ");
-  const aliases = Array.from({ length: branchCount }, (_, i) =>
-    `    wt_${i}: pullRequests(first: 2, headRefName: $b${i}, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...PrFields } }`,
+export function buildQuery(
+  branchCount: number,
+  withMergeQueue: boolean,
+): string {
+  const varDecls = Array.from(
+    { length: branchCount },
+    (_, i) => `$b${i}: String!`,
+  ).join(", ");
+  const aliases = Array.from(
+    { length: branchCount },
+    (_, i) =>
+      `    wt_${i}: pullRequests(first: 2, headRefName: $b${i}, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...PrFields } }`,
   ).join("\n");
   // `mergeQueue` with no `branch:` argument resolves to the DEFAULT
   // branch's queue, which is the wrong queue whenever worktrees target
@@ -295,14 +320,77 @@ ${PR_FRAGMENT}`;
  * badges on screen throughout, so a retry here is invisible rather than
  * "annoying in a TUI".
  */
-async function fetchChunk(
+type GithubExecutor = (
+  args: readonly string[],
+) => Effect.Effect<RunResult, GithubTransportError>;
+
+const executeGithub: GithubExecutor = (args) =>
+  runEffect(args, {
+    cwd: config.paths.mainClone,
+    timeoutMs: ATTEMPT_TIMEOUT_MS,
+  }).pipe(
+    Effect.mapError(
+      (cause) => new GithubTransportError({ message: cause.message, cause }),
+    ),
+  );
+
+const classifyFailure = (result: RunResult): GithubFetchError => {
+  const message =
+    firstLine(result.stderr) ||
+    firstLine(result.stdout) ||
+    `gh exited ${result.exitCode}`;
+  const body = `${result.stderr}\n${result.stdout}`;
+  if (PERMANENT_PATTERNS.some((pattern) => pattern.test(body))) {
+    if (/rate limit|RATE_LIMITED|abuse detection/i.test(body)) {
+      return new GithubRateLimitError({ message });
+    }
+    return new GithubTransportError({ message });
+  }
+  return isTransientFailure(result)
+    ? new GithubTransientError({ message, result })
+    : new GithubTransportError({ message });
+};
+
+const classifyProtocolFailure = (result: RunResult): GithubFetchError => {
+  const body = `${result.stderr}\n${result.stdout}`;
+  if (PERMANENT_PATTERNS.some((pattern) => pattern.test(body))) {
+    return classifyFailure({ ...result, exitCode: result.exitCode || 1 });
+  }
+  try {
+    const parsed = JSON.parse(result.stdout) as GqlResponse;
+    if (parsed.errors?.length) {
+      const graphqlBody = parsed.errors
+        .map((error) => [error.type, error.message].filter(Boolean).join(": "))
+        .join("\n");
+      return classifyFailure({
+        ...result,
+        stdout: graphqlBody,
+        exitCode: result.exitCode || 1,
+      });
+    }
+  } catch (cause) {
+    return new GithubTransientError({
+      message:
+        cause instanceof Error ? cause.message : "unparseable gh JSON output",
+      result,
+    });
+  }
+  return new GithubProtocolError({
+    message: firstLine(result.stdout) || "missing GitHub repository payload",
+  });
+};
+
+const retrySchedule = Schedule.exponential(RETRY_BASE_MS).pipe(
+  Schedule.jittered,
+);
+
+export function fetchChunkEffect(
   owner: string,
   name: string,
   branches: string[],
   withMergeQueue: boolean,
-  deadline: number,
-  signal: AbortSignal | undefined,
-): Promise<GithubData> {
+  execute: GithubExecutor = executeGithub,
+): Effect.Effect<GithubData, GithubFetchError> {
   const query = buildQuery(branches.length, withMergeQueue);
   const args = [
     "gh",
@@ -320,67 +408,45 @@ async function fetchChunk(
     args.push("-f", `b${i}=${branches[i]}`);
   }
 
-  let lastError = "";
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const r = await run(args, {
-      cwd: config.paths.mainClone,
-      timeoutMs: ATTEMPT_TIMEOUT_MS,
-      signal,
-    });
+  const attempt = Effect.suspend(() => execute(args)).pipe(
+    Effect.flatMap((result) => {
+      if (result.exitCode !== 0) return Effect.fail(classifyFailure(result));
+      const parsed = parseChunk(result, branches, withMergeQueue);
+      if (parsed) return Effect.succeed(parsed);
+      return Effect.fail(classifyProtocolFailure(result));
+    }),
+  );
+  return attempt.pipe(
+    Effect.retry({
+      times: MAX_ATTEMPTS - 1,
+      schedule: retrySchedule,
+      while: (error) => error._tag === "GithubTransientError",
+    }),
+  );
+}
 
-    // Cancelled mid-flight (branch list re-keyed, `run` SIGTERMed the
-    // child). Routine supersession, not a failure — unwind quietly and
-    // let the caller return empty.
-    if (signal?.aborted) return { prs: new Map(), mergeQueue: new Map() };
-
-    if (r.exitCode === 0) {
-      const parsed = parseChunk(r, branches, withMergeQueue);
-      if (parsed) return parsed;
-      // Exit 0 with an unusable body. `unexpected end of JSON input` is
-      // a truncated response, which is the timeout wearing yet another
-      // costume, so it goes through the same transient test.
-      lastError = firstLine(r.stdout) || "unparseable gh output";
-      if (!isTransientFailure(r)) break;
-    } else {
-      lastError = firstLine(r.stderr) || firstLine(r.stdout) || `gh exited ${r.exitCode}`;
-      if (!isTransientFailure(r)) {
-        log.error("gh api graphql failed (permanent)", {
-          exitCode: r.exitCode,
-          stderr: r.stderr.slice(0, 400),
-          stdout: r.stdout.slice(0, 400),
-          branchCount: branches.length,
-        });
-        break;
+export function fetchChunksEffect(
+  owner: string,
+  name: string,
+  groups: string[][],
+  execute: GithubExecutor = executeGithub,
+): Effect.Effect<GithubData, GithubFetchError> {
+  return Effect.all(
+    groups.map((group, index) =>
+      fetchChunkEffect(owner, name, group, index === 0, execute),
+    ),
+    { concurrency: "unbounded" },
+  ).pipe(
+    Effect.map((chunks) => {
+      const prs = new Map<string, PullRequest>();
+      const mergeQueue = new Map<string, MergeQueueEntry>();
+      for (const chunk of chunks) {
+        for (const [key, value] of chunk.prs) prs.set(key, value);
+        for (const [key, value] of chunk.mergeQueue) mergeQueue.set(key, value);
       }
-    }
-
-    if (attempt === MAX_ATTEMPTS) break;
-    // Full jitter: two chunks that fail together must not retry in
-    // lockstep, or they reproduce the burst that timed them out.
-    const backoff = Math.round(Math.random() * RETRY_BASE_MS * 2 ** (attempt - 1));
-    if (Date.now() + backoff >= deadline) {
-      log.warn("gh api graphql: retry budget exhausted", {
-        attempt,
-        branchCount: branches.length,
-        error: lastError.slice(0, 200),
-      });
-      break;
-    }
-    log.warn("gh api graphql: transient failure, retrying", {
-      attempt,
-      backoffMs: backoff,
-      branchCount: branches.length,
-      error: lastError.slice(0, 200),
-    });
-    await delay(backoff, signal);
-    if (signal?.aborted) return { prs: new Map(), mergeQueue: new Map() };
-  }
-
-  // A genuine failure must THROW, not return empty: an empty success
-  // overwrites the last good PR data with "no PRs anywhere" on the first
-  // transient blip, while a rejection keeps the cached data and surfaces
-  // through the details pane's error row.
-  throw new Error(`github fetch failed: ${lastError}`);
+      return { prs, mergeQueue };
+    }),
+  );
 }
 
 /**
@@ -399,8 +465,9 @@ function parseChunk(
   } catch {
     return null;
   }
-  // Exit 0 with no repository payload = a GraphQL-level error response
-  // (partial errors land in an `errors` array we don't model).
+  // GraphQL may return exit 0 and useful-looking partial data alongside an
+  // errors array. Accepting it would turn every omitted alias into "no PR".
+  if (parsed.errors?.length) return null;
   const repo = parsed.data?.repository;
   if (!repo) return null;
 
@@ -447,53 +514,46 @@ function parseChunk(
  * previous fetch returned — actually stops the subprocesses instead of
  * letting them burn graphql round trips on data nobody will read.
  */
-export async function fetchGithub(
+export function fetchGithubEffect(
+  branches: string[],
+): Effect.Effect<GithubData, GithubFetchError> {
+  const empty: GithubData = { prs: new Map(), mergeQueue: new Map() };
+  return Effect.gen(function* () {
+    if (!(yield* hasGhEffect())) return empty;
+    const slug = yield* repoSlugEffect();
+    if (!slug) return empty;
+    const [owner, name] = slug.split("/");
+    if (!owner || !name || branches.length === 0) return empty;
+
+    const groups = chunkBranches(branches, CHUNK_SIZE);
+    return yield* fetchChunksEffect(owner, name, groups).pipe(
+      Effect.timeoutFail({
+        duration: RETRY_DEADLINE_MS,
+        onTimeout: () =>
+          new GithubTransientError({
+            message: "github fetch retry budget exhausted",
+            result: { stdout: "", stderr: "", exitCode: -1, timedOut: true },
+          }),
+      }),
+      Effect.tapError((error) =>
+        Effect.sync(() =>
+          log.error("gh api graphql failed", {
+            totalChunks: groups.length,
+            branchCount: branches.length,
+            error: error.message,
+          }),
+        ),
+      ),
+    );
+  });
+}
+
+/** TanStack/CLI compatibility boundary. Cancellation rejects as interruption. */
+export function fetchGithub(
   branches: string[],
   signal?: AbortSignal,
 ): Promise<GithubData> {
-  const empty: GithubData = { prs: new Map(), mergeQueue: new Map() };
-  if (!(await hasGh())) return empty;
-  const slug = await repoSlug();
-  if (!slug) return empty;
-  const [owner, name] = slug.split("/");
-  if (!owner || !name) return empty;
-  // No worktrees → nothing to show a merge-queue position for either,
-  // so there is nothing worth a round trip.
-  if (branches.length === 0) return empty;
-
-  const groups = chunkBranches(branches, CHUNK_SIZE);
-  const deadline = Date.now() + RETRY_DEADLINE_MS;
-  const settled = await Promise.allSettled(
-    groups.map((g, i) => fetchChunk(owner, name, g, i === 0, deadline, signal)),
-  );
-
-  if (signal?.aborted) return empty;
-
-  const failed = settled.filter((s) => s.status === "rejected");
-  if (failed.length > 0) {
-    // Partial data is worse than none. A chunk that fails while its
-    // siblings succeed would blank the PR badge on exactly its branches,
-    // which is indistinguishable from "those branches have no PR" —
-    // a silent, per-row version of the same lie an empty success tells.
-    // Failing the whole fetch keeps the last good cache for every row.
-    const reason = (failed[0] as PromiseRejectedResult).reason;
-    log.error("gh api graphql failed", {
-      failedChunks: failed.length,
-      totalChunks: groups.length,
-      branchCount: branches.length,
-      error: reason instanceof Error ? reason.message : String(reason),
-    });
-    throw reason instanceof Error ? reason : new Error(String(reason));
-  }
-
-  const prs = new Map<string, PullRequest>();
-  const mergeQueue = new Map<string, MergeQueueEntry>();
-  for (const s of settled) {
-    if (s.status !== "fulfilled") continue;
-    for (const [k, v] of s.value.prs) prs.set(k, v);
-    for (const [k, v] of s.value.mergeQueue) mergeQueue.set(k, v);
-  }
-  return { prs, mergeQueue };
+  return Effect.runPromise(fetchGithubEffect(branches), { signal });
 }
 
 /**
@@ -503,14 +563,25 @@ export async function fetchGithub(
  * listing without PR columns beats a crashed listing — but says so on
  * stderr instead of impersonating "no PRs".
  */
-export async function fetchPrs(): Promise<Map<string, PullRequest>> {
-  const branches = (await listWorktrees())
-    .filter((w) => !w.isMain && w.branch)
-    .map((w) => w.branch as string);
-  try {
-    return (await fetchGithub(branches)).prs;
-  } catch (err) {
-    console.error(`wt: ${err instanceof Error ? err.message : String(err)} (PR info omitted)`);
-    return new Map();
-  }
+export function fetchPrsEffect(): Effect.Effect<Map<string, PullRequest>> {
+  return Effect.gen(function* () {
+    const worktrees = yield* listWorktreesEffect();
+    const branches = worktrees
+      .filter((worktree) => !worktree.isMain && worktree.branch)
+      .map((worktree) => worktree.branch as string);
+    return (yield* fetchGithubEffect(branches)).prs;
+  }).pipe(
+    Effect.catchAll((error) =>
+      Effect.sync(() => {
+        console.error(
+          `wt: ${error instanceof Error ? error.message : String(error)} (PR info omitted)`,
+        );
+        return new Map<string, PullRequest>();
+      }),
+    ),
+  );
+}
+
+export function fetchPrs(): Promise<Map<string, PullRequest>> {
+  return Effect.runPromise(fetchPrsEffect());
 }

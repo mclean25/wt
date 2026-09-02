@@ -26,6 +26,8 @@
  * Keyed by PR number, because that is what both the keystroke and the
  * disarm leg have in hand and it is stable across row re-renders.
  */
+import { Clock, Data, Effect, Fiber } from "effect";
+
 import type { GhActionResult } from "../../core/github/types.ts";
 
 /**
@@ -46,7 +48,10 @@ const RETRY_EVERY_MS = 30_000;
  */
 export const RETRY_LIMIT_MS = 20 * 60_000;
 
-type Pending = { timer: ReturnType<typeof setTimeout>; startedAt: number };
+type Pending = {
+  fiber: Fiber.RuntimeFiber<void, never> | null;
+  token: object;
+};
 
 const pending = new Map<number, Pending>();
 
@@ -72,11 +77,61 @@ export function autoMergeRetryPending(prNumber: number): boolean {
  * before it decides there is nothing to do.
  */
 export function cancelAutoMergeRetry(prNumber: number): boolean {
-  const p = pending.get(prNumber);
-  if (!p) return false;
-  clearTimeout(p.timer);
+  const entry = pending.get(prNumber);
+  if (!entry) return false;
   pending.delete(prNumber);
+  if (entry.fiber) Effect.runFork(Fiber.interrupt(entry.fiber));
   return true;
+}
+
+/** Stop every retry during TUI teardown. */
+export function cancelAllAutoMergeRetries(): void {
+  for (const prNumber of [...pending.keys()]) cancelAutoMergeRetry(prNumber);
+}
+
+class AutoMergeAttemptError extends Data.TaggedError("AutoMergeAttemptError")<{
+  readonly cause: unknown;
+}> {}
+
+export function autoMergeRetryEffect(
+  attempt: () => Promise<GhActionResult>,
+  cb: RetryCallbacks,
+  opts: { everyMs?: number; now?: () => number } = {},
+): Effect.Effect<void> {
+  const everyMs = opts.everyMs ?? RETRY_EVERY_MS;
+  const currentTime = opts.now
+    ? Effect.sync(opts.now)
+    : Clock.currentTimeMillis;
+  return Effect.gen(function* () {
+    const startedAt = yield* currentTime;
+    while (true) {
+      yield* Effect.sleep(`${everyMs} millis`);
+      const result = yield* Effect.tryPromise({
+        try: attempt,
+        catch: (cause) => new AutoMergeAttemptError({ cause }),
+      }).pipe(Effect.either);
+      if (result._tag === "Left") {
+        cb.onFailed(
+          result.left.cause instanceof Error
+            ? result.left.cause.message
+            : String(result.left.cause),
+        );
+        return;
+      }
+      if (result.right.ok) {
+        cb.onArmed();
+        return;
+      }
+      if (!result.right.retryable) {
+        cb.onFailed(result.right.error);
+        return;
+      }
+      if ((yield* currentTime) - startedAt >= RETRY_LIMIT_MS) {
+        cb.onGaveUp();
+        return;
+      }
+    }
+  });
 }
 
 /**
@@ -91,45 +146,28 @@ export function startAutoMergeRetry(
   /** Injectable so the tests can run the loop without spending a minute. */
   opts: { everyMs?: number; now?: () => number } = {},
 ): void {
-  const everyMs = opts.everyMs ?? RETRY_EVERY_MS;
-  const now = opts.now ?? Date.now;
   cancelAutoMergeRetry(prNumber);
-  const startedAt = now();
-  const schedule = () => {
-    const timer = setTimeout(() => {
-      void attempt().then(
-        (r) => {
-          // Cancelled while the request was in flight: the user changed
-          // their mind, and honouring that beats honouring the result.
-          if (!pending.has(prNumber)) return;
-          if (r.ok) {
-            pending.delete(prNumber);
-            cb.onArmed();
-            return;
-          }
-          if (!r.retryable) {
-            pending.delete(prNumber);
-            cb.onFailed(r.error);
-            return;
-          }
-          if (now() - startedAt >= RETRY_LIMIT_MS) {
-            pending.delete(prNumber);
-            cb.onGaveUp();
-            return;
-          }
-          schedule();
-        },
-        (err) => {
-          if (!pending.has(prNumber)) return;
-          pending.delete(prNumber);
-          cb.onFailed(err instanceof Error ? err.message : String(err));
-        },
-      );
-    }, everyMs);
-    // `unref` where the runtime has it: a pending retry must never be
-    // the reason a CLI process refuses to exit.
-    (timer as { unref?: () => void }).unref?.();
-    pending.set(prNumber, { timer, startedAt });
+  const token = {};
+  const isCurrent = () => pending.get(prNumber)?.token === token;
+  const guarded: RetryCallbacks = {
+    onArmed: () => {
+      if (isCurrent()) cb.onArmed();
+    },
+    onFailed: (error) => {
+      if (isCurrent()) cb.onFailed(error);
+    },
+    onGaveUp: () => {
+      if (isCurrent()) cb.onGaveUp();
+    },
   };
-  schedule();
+  const program = autoMergeRetryEffect(attempt, guarded, opts).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (isCurrent()) pending.delete(prNumber);
+      }),
+    ),
+  );
+  const entry: Pending = { fiber: null, token };
+  pending.set(prNumber, entry);
+  entry.fiber = Effect.runFork(program);
 }

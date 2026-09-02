@@ -1,9 +1,20 @@
 import type { KeyEvent } from "@opentui/core";
 
-import { nextAutoName, removeClaudeName, validateSessionName } from "../../core/harness/claude/names.ts";
-import { getHarness, HARNESSES, type HarnessId } from "../../core/harness/index.ts";
+import {
+  nextAutoName,
+  removeClaudeName,
+  validateSessionName,
+} from "../../core/harness/claude/names.ts";
+import {
+  getHarness,
+  HARNESSES,
+  type HarnessId,
+} from "../../core/harness/index.ts";
 import { sessionOutputId } from "../../core/outputs.ts";
-import { closeHarnessSessionGracefully, killHarnessSession } from "../../core/tmux.ts";
+import {
+  closeHarnessSessionGracefully,
+  killHarnessSession,
+} from "../../core/tmux.ts";
 import { isBareShiftedKey } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import { applyEditKey, emptyEdit, insertText } from "../text-edit.tsx";
@@ -11,6 +22,16 @@ import { previewFocusPatch } from "../picker-preview.ts";
 import { isSyntheticLiveSessionId } from "../hooks/useHarnessSessions.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleListPickerKey } from "./list-picker.ts";
+import { Data, Duration, Effect } from "effect";
+
+class SessionsModalError extends Data.TaggedError("SessionsModalError")<{
+  cause: unknown;
+}> {}
+const modalPromise = <A>(evaluate: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new SessionsModalError({ cause }),
+  });
 
 export function handleClaudeSessionsPickerKey(
   k: KeyEvent,
@@ -50,7 +71,12 @@ export function handleClaudeSessionsPickerKey(
     if (patch) setFocus(slug, patch);
   };
   const openNewClaude = (): void => {
-    setModal({ kind: "claudeSessionsNew", slug, input: emptyEdit, error: null });
+    setModal({
+      kind: "claudeSessionsNew",
+      slug,
+      input: emptyEdit,
+      error: null,
+    });
   };
   const commitRow = (i: number): void => {
     const r = rowsLocal[i];
@@ -65,8 +91,7 @@ export function handleClaudeSessionsPickerKey(
     }
     const e = r.entry;
     const isSyntheticLive = isSyntheticLiveSessionId(e.sessionId);
-    const resumeSessionId =
-      e.isLive || isSyntheticLive ? null : e.sessionId;
+    const resumeSessionId = e.isLive || isSyntheticLive ? null : e.sessionId;
     const freshSlot =
       getHarness(e.harnessId).singleSlot && resumeSessionId !== null;
     setModal(null);
@@ -101,22 +126,51 @@ export function handleClaudeSessionsPickerKey(
           // — forgetting a dead name is harmless.
           if (e.extras.managedName !== null) {
             removeClaudeName(slug, e.extras.managedName);
-            void refreshClaudeSummaries(slug);
-            logInfo(`forgot ghost session "${e.extras.managedName}" on ${slug}`);
+            Effect.runFork(
+              modalPromise(() => refreshClaudeSummaries(slug)).pipe(
+                Effect.catchAll((error) =>
+                  Effect.sync(() =>
+                    reportActionError("refresh summaries", error.cause),
+                  ),
+                ),
+              ),
+            );
+            logInfo(
+              `forgot ghost session "${e.extras.managedName}" on ${slug}`,
+            );
           }
           setModal(null);
         }
       } else if (e.isLive) {
         const harnessId = e.harnessId;
         setModal(null);
-        void (async () => {
-          await killHarnessSession(slug, harnessId);
-          await Promise.all([refreshTmuxSessions(), refreshHarnessSessions(slug)]);
-          logWarn(`killed ${getHarness(harnessId).label} session on ${slug}`);
-        })().catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          logErr(`kill ${harnessId} session failed for ${slug}: ${msg}`);
-        });
+        Effect.runFork(
+          Effect.gen(function* () {
+            yield* modalPromise(() => killHarnessSession(slug, harnessId));
+            yield* Effect.all(
+              [
+                modalPromise(refreshTmuxSessions),
+                modalPromise(() => refreshHarnessSessions(slug)),
+              ],
+              { concurrency: "unbounded", discard: true },
+            );
+            yield* Effect.sync(() =>
+              logWarn(
+                `killed ${getHarness(harnessId).label} session on ${slug}`,
+              ),
+            );
+          }).pipe(
+            Effect.catchAll((error) =>
+              Effect.sync(() => {
+                const msg =
+                  error.cause instanceof Error
+                    ? error.cause.message
+                    : String(error.cause);
+                logErr(`kill ${harnessId} session failed for ${slug}: ${msg}`);
+              }),
+            ),
+          ),
+        );
       } else {
         toast(
           `${getHarness(e.harnessId).label} session is dead; remove via ${e.harnessId} CLI`,
@@ -136,17 +190,28 @@ export function handleClaudeSessionsPickerKey(
         return true;
       }
       logInfo(`closing ${getHarness(e.harnessId).label} session on ${slug}`);
-      void closeHarnessSessionGracefully(
-        slug,
-        e.harnessId,
-        e.extras.managedName,
-      ).then(
-        () =>
-          setTimeout(() => {
-            void refreshTmuxSessions();
-            void refreshHarnessSessions(slug);
-          }, 800),
-        (err) => reportActionError("close session", err),
+      Effect.runFork(
+        modalPromise(() =>
+          closeHarnessSessionGracefully(
+            slug,
+            e.harnessId,
+            e.extras.managedName,
+          ),
+        ).pipe(
+          Effect.andThen(Effect.sleep(Duration.millis(800))),
+          Effect.andThen(
+            Effect.all(
+              [
+                modalPromise(refreshTmuxSessions),
+                modalPromise(() => refreshHarnessSessions(slug)),
+              ],
+              { concurrency: "unbounded", discard: true },
+            ),
+          ),
+          Effect.catchAll((error) =>
+            Effect.sync(() => reportActionError("close session", error.cause)),
+          ),
+        ),
       );
       setModal(null);
     }
@@ -218,7 +283,11 @@ export function handleClaudeSessionsNewKey(
     return true;
   }
   if (k.sequence && /^[a-zA-Z0-9_-]$/.test(k.sequence)) {
-    setModal({ ...modal, input: insertText(modal.input, k.sequence), error: null });
+    setModal({
+      ...modal,
+      input: insertText(modal.input, k.sequence),
+      error: null,
+    });
   }
   return true;
 }
@@ -226,7 +295,11 @@ export function handleClaudeSessionsNewKey(
 export function handleHarnessSelectKey(
   k: KeyEvent,
   modal: Extract<Modal, { kind: "harnessSelect" }>,
-  { setModal, doSpawnNamedClaudeSession, doEnterHarnessSession }: SimpleModalContext,
+  {
+    setModal,
+    doSpawnNamedClaudeSession,
+    doEnterHarnessSession,
+  }: SimpleModalContext,
 ): boolean {
   const idx = Math.min(Math.max(0, modal.index), HARNESSES.length - 1);
   const slug = modal.slug;

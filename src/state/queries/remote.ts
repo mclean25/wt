@@ -1,17 +1,34 @@
 import { keepPreviousData, queryOptions } from "@tanstack/react-query";
+import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
-import { reapRemoteArchived } from "../../core/archive.ts";
 import { fetchRemoteWorktrees } from "../../core/remote-worktrees.ts";
-import { refreshRemoteWorkerInfo } from "../../core/worker-info.ts";
+import { refreshRemoteWorkerInfoEffect } from "../../core/worker-info.ts";
 import { DEV_SERVER_STOPPED } from "../../core/dev-server.ts";
 import { qk } from "../keys.ts";
+
+class RemoteQueryError extends Data.TaggedError("RemoteQueryError")<{
+  operation: string;
+  cause: unknown;
+}> {
+  override get message(): string {
+    return this.cause instanceof Error
+      ? this.cause.message
+      : String(this.cause);
+  }
+}
+
+const queryPromise = <A, E>(effect: Effect.Effect<A, E>, signal: AbortSignal) =>
+  Effect.runPromise(effect, { signal });
 
 export const remoteWorkerInfoQuery = (remote = config.remote) =>
   queryOptions({
     queryKey: qk.remoteWorkerInfo(remote?.host),
     queryFn: ({ signal }) =>
-      remote ? refreshRemoteWorkerInfo(remote, signal) : Promise.resolve(null),
+      queryPromise(
+        remote ? refreshRemoteWorkerInfoEffect(remote) : Effect.succeed(null),
+        signal,
+      ),
     staleTime: Infinity,
     refetchInterval: 15_000,
     retry: false,
@@ -20,12 +37,17 @@ export const remoteWorkerInfoQuery = (remote = config.remote) =>
 export const remoteWorktreesQuery = (remote = config.remote) =>
   queryOptions({
     queryKey: qk.remoteWorktrees(remote?.host),
-    queryFn: async ({ signal }) => {
-      if (!remote) return [];
-      const rows = await fetchRemoteWorktrees(remote, signal);
-      reapRemoteArchived(remote.host, new Set(rows.map((row) => row.slug)));
-      return rows;
-    },
+    queryFn: ({ signal }) =>
+      queryPromise(
+        remote
+          ? Effect.tryPromise({
+              try: () => fetchRemoteWorktrees(remote, signal),
+              catch: (cause) =>
+                new RemoteQueryError({ operation: "fetch worktrees", cause }),
+            })
+          : Effect.succeed([]),
+        signal,
+      ),
     // Persisted query data from versions before location-aware fleet keys has
     // no hostKey. Normalize that last-known/offline inventory at the observer
     // boundary so an archive written before the first successful refetch still
@@ -52,7 +74,8 @@ export const remoteWorktreesQuery = (remote = config.remote) =>
     placeholderData: keepPreviousData,
     refetchInterval: (query) =>
       query.state.data?.some(
-        (row) => row.status.kind === "busy" || row.dev?.starting || row.dev?.waiting,
+        (row) =>
+          row.status.kind === "busy" || row.dev?.starting || row.dev?.waiting,
       )
         ? 2_000
         : 15_000,

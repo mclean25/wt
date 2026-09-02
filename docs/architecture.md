@@ -12,6 +12,39 @@ The TUI is split into three layers; respect the boundaries:
 
 The list panel (`src/tui/panels/list.tsx`) is deliberately **not** row-driven — different layout (one line of glyphs, no labels). Don't try to unify them.
 
+## Effect boundary
+
+Effect is the default model for production work that performs I/O, starts or
+waits for subprocesses, coordinates concurrency, retries, waits on time, or
+owns a resource. These functions return `Effect<Success, ExpectedError,
+Requirements>` and compose until one of the explicit runtime boundaries runs
+them:
+
+- `src/main.ts` for CLI and process lifetime;
+- TanStack query functions and React event/lifecycle adapters;
+- worker entrypoints;
+- tests.
+
+Pure synchronous transforms and React's own lifecycle hooks remain plain
+TypeScript. Expected failures use tagged error types. Defects remain defects.
+Use Effect scopes and finalizers for watchers, subprocesses, timers, workers,
+and subscriptions; Effect concurrency primitives for shared limits and
+in-flight work; schedules and `TestClock` for retry and time behavior. Do not
+hide Effect programs behind new Promise-returning core APIs. Promise adapters
+remain only where an external contract requires one, such as TanStack query
+functions, React/OpenTUI callbacks, worker messages, or a legacy public
+interface that cannot change in the same migration. Remove migration-only
+adapters as soon as their callers move.
+
+The project uses Effect 3 and the official Effect language-service diagnostics.
+`bun run lint` runs those diagnostics, and `bun run typecheck` runs them again
+through the patched TypeScript compiler. `bun run build` verifies the Bun
+production bundle. The design follows the official Effect guidance for
+[typed errors](https://www.effect.website/docs/v3/error-management/expected-errors),
+[resource management](https://www.effect.website/docs/v3/resource-management/introduction),
+[concurrency](https://www.effect.website/docs/v3/concurrency/basic-concurrency),
+and [code style](https://www.effect.website/docs/v3/code-style/guidelines).
+
 ## Composition root
 
 `src/tui/app.tsx` wires everything: state declarations, hook wiring, per-render flow factories, the ctx objects key handlers destructure, and the layout JSX. The pieces:
@@ -60,7 +93,7 @@ Freshness is **push-based**; the `r` keybind is a backstop, not the mechanism. E
 | claude-registry fs.watch, session-tail triggers (`gh pr …` / `git push` inside a session) | sessions / github / claudeUsage (a registry rewrite IS claude activity, exactly when API utilization changes) |
 | `tmuxSessionsQuery`'s `dev` set (batched tmux read, 5s poll + push-invalidated) | `wtDevQuery`'s session-liveness half — the value is part of that query's key, so a session start/stop cache-misses into an immediate refetch instead of spawning a redundant per-worktree `tmux has-session`; the port-probe half keeps its own 15s poll as backstop. That probe is three-valued (`probePort`: listening / free / unknown) — on loopback only `ECONNREFUSED` means "nothing there", so a timeout is reported as `unknown` and a live server is left alone rather than being flipped to stopped |
 | codex/opencode activity-poller ticks (`startCodexEventPolling` / `startOpencodeEventPolling`, the same 2.5s tickers that feed the activity pane) | codexUsage / opencodeCost, on ticks that actually observed an event — token usage and spend change exactly when those sessions are active, so this rides the existing sensor instead of leaving the query poll-only |
-| action `affects` tags on completion | the declared domains (`git`, `github`, `dev` — the dev-server start/stop builtins declare `dev`, refreshing the slug's fields; a 15s poll backstops out-of-band crashes) |
+| action `affects` tags on completion | the declared domains (`git`, `github`, `dev` — the dev-server start/stop builtins declare `dev`, refreshing both the slug's fields and the batched tmux-session source that drives the dev query key; a 15s poll backstops out-of-band crashes) |
 | manager-reports spool watcher (`~/.cache/wt/manager/reports.jsonl`, written by `wt manager report`) | nothing query-shaped — new lines are narrated straight onto the attention feed (`useManagerReports`; 10s poll backstop). The footer's manager context % is likewise push-based, riding the session-tail registry's per-turn `lastUsage` rather than any query |
 
 A second, smaller exception rides an existing query: `wtDevQuery` also reports whether the slug is queued behind `[dev_server] max_concurrent`, read from the waiting-room dir on each fetch. That half is interval-only (the query's own 15s poll) with no watcher, deliberately — a wait lasts minutes and joining a queue is not worth an fs watcher of its own.

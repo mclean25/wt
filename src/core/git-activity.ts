@@ -1,7 +1,8 @@
 import { statSync } from "node:fs";
+import { Effect } from "effect";
 
-import { effectiveBaseOrTrunk } from "./git.ts";
-import { run } from "./proc.ts";
+import { effectiveBaseOrTrunkEffect } from "./git.ts";
+import { runEffect } from "./proc.ts";
 
 export type GitActivity = {
   /** Worktree directory creation time (epoch ms). null if path is gone. */
@@ -32,15 +33,18 @@ function createdMsFor(path: string): number | null {
   }
 }
 
-async function lastCommitMsFor(path: string): Promise<number | null> {
-  const r = await run(["git", "log", "-1", "--format=%ct", "HEAD"], {
+function lastCommitMsForEffect(path: string) {
+  return runEffect(["git", "log", "-1", "--format=%ct", "HEAD"], {
     cwd: path,
     timeoutMs: TIMEOUT_MS,
-  });
-  if (r.exitCode !== 0) return null;
-  const secs = Number.parseInt(r.stdout.trim(), 10);
-  if (!Number.isFinite(secs)) return null;
-  return secs * 1000;
+  }).pipe(
+    Effect.map((r) => {
+      if (r.exitCode !== 0) return null;
+      const secs = Number.parseInt(r.stdout.trim(), 10);
+      if (!Number.isFinite(secs)) return null;
+      return secs * 1000;
+    }),
+  );
 }
 
 // Diff the WORKING TREE against the fork point (explicit merge-base,
@@ -50,32 +54,34 @@ async function lastCommitMsFor(path: string): Promise<number | null> {
 // unstacked, parent branch for stacked — so the count reflects this
 // branch's actual contribution. Untracked files are invisible to
 // `git diff` and get folded in separately below.
-async function diffFor(
+function diffForEffect(
   path: string,
   branch: string,
   base: string,
-): Promise<{ files: number; added: number; removed: number } | null> {
-  if (!branch) return null;
-  const mb = await run(["git", "merge-base", base, "HEAD"], {
-    cwd: path,
-    timeoutMs: TIMEOUT_MS,
+) {
+  if (!branch) return Effect.succeed(null);
+  return Effect.gen(function* () {
+    const mb = yield* runEffect(["git", "merge-base", base, "HEAD"], {
+      cwd: path,
+      timeoutMs: TIMEOUT_MS,
+    });
+    if (mb.exitCode !== 0) return null;
+    const r = yield* runEffect(
+      ["git", "diff", "--shortstat", mb.stdout.trim()],
+      { cwd: path, timeoutMs: TIMEOUT_MS },
+    );
+    if (r.exitCode !== 0) return null;
+    const out = r.stdout.trim();
+    const files = out.match(/(\d+) files? changed/);
+    const added = out.match(/(\d+) insertions?\(\+\)/);
+    const removed = out.match(/(\d+) deletions?\(-\)/);
+    const untracked = yield* untrackedCountsEffect(path);
+    return {
+      files: (files ? Number.parseInt(files[1]!, 10) : 0) + untracked.files,
+      added: (added ? Number.parseInt(added[1]!, 10) : 0) + untracked.added,
+      removed: removed ? Number.parseInt(removed[1]!, 10) : 0,
+    };
   });
-  if (mb.exitCode !== 0) return null;
-  const r = await run(
-    ["git", "diff", "--shortstat", mb.stdout.trim()],
-    { cwd: path, timeoutMs: TIMEOUT_MS },
-  );
-  if (r.exitCode !== 0) return null;
-  const out = r.stdout.trim();
-  const files = out.match(/(\d+) files? changed/);
-  const added = out.match(/(\d+) insertions?\(\+\)/);
-  const removed = out.match(/(\d+) deletions?\(-\)/);
-  const untracked = await untrackedCounts(path);
-  return {
-    files: (files ? Number.parseInt(files[1]!, 10) : 0) + untracked.files,
-    added: (added ? Number.parseInt(added[1]!, 10) : 0) + untracked.added,
-    removed: removed ? Number.parseInt(removed[1]!, 10) : 0,
-  };
 }
 
 /**
@@ -87,42 +93,51 @@ async function diffFor(
  * output is parsed regardless of exit code so one unreadable file
  * (dangling symlink) doesn't zero out the rest.
  */
-async function untrackedCounts(
+function untrackedCountsEffect(
   path: string,
-): Promise<{ files: number; added: number }> {
-  const ls = await run(
-    ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-    { cwd: path, timeoutMs: TIMEOUT_MS },
-  );
-  if (ls.exitCode !== 0) return { files: 0, added: 0 };
-  const names = ls.stdout.split("\0").filter(Boolean);
-  if (names.length === 0) return { files: 0, added: 0 };
-  // "./" prefix so a name starting with "-" can't read as a wc flag.
-  const wc = await run(["wc", "-l", ...names.map((n) => `./${n}`)], {
-    cwd: path,
-    timeoutMs: TIMEOUT_MS,
+) {
+  return Effect.gen(function* () {
+    const ls = yield* runEffect(
+      ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+      { cwd: path, timeoutMs: TIMEOUT_MS },
+    );
+    if (ls.exitCode !== 0) return { files: 0, added: 0 };
+    const names = ls.stdout.split("\0").filter(Boolean);
+    if (names.length === 0) return { files: 0, added: 0 };
+    // "./" prefix so a name starting with "-" can't read as a wc flag.
+    const wc = yield* runEffect(["wc", "-l", ...names.map((n) => `./${n}`)], {
+      cwd: path,
+      timeoutMs: TIMEOUT_MS,
+    });
+    let added = 0;
+    // Per-file lines look like "  12 ./path"; with 2+ operands wc appends
+    // a "  34 total" line — drop it and sum the per-file lines.
+    const lines = wc.stdout.split("\n").filter((l) => /^\s*\d+\s/.test(l));
+    const perFile = names.length > 1 ? lines.slice(0, -1) : lines;
+    for (const l of perFile) {
+      const m = l.match(/^\s*(\d+)\s/);
+      if (m) added += Number.parseInt(m[1]!, 10);
+    }
+    return { files: names.length, added };
   });
-  let added = 0;
-  // Per-file lines look like "  12 ./path"; with 2+ operands wc appends
-  // a "  34 total" line — drop it and sum the per-file lines.
-  const lines = wc.stdout.split("\n").filter((l) => /^\s*\d+\s/.test(l));
-  const perFile = names.length > 1 ? lines.slice(0, -1) : lines;
-  for (const l of perFile) {
-    const m = l.match(/^\s*(\d+)\s/);
-    if (m) added += Number.parseInt(m[1]!, 10);
-  }
-  return { files: names.length, added };
 }
 
-export async function gitActivity(
+export function gitActivityEffect(
   wt: { path: string; branch: string },
   effectiveBase?: string | null,
-): Promise<GitActivity> {
-  const base = await effectiveBaseOrTrunk(wt.path, effectiveBase);
-  const [createdMs, lastCommitMs, diff] = await Promise.all([
-    Promise.resolve(createdMsFor(wt.path)),
-    lastCommitMsFor(wt.path).catch(() => null),
-    diffFor(wt.path, wt.branch, base).catch(() => null),
-  ]);
-  return { createdMs, lastCommitMs, diff };
+): Effect.Effect<GitActivity> {
+  return effectiveBaseOrTrunkEffect(wt.path, effectiveBase).pipe(
+    Effect.flatMap((base) => Effect.all({
+        createdMs: Effect.sync(() => createdMsFor(wt.path)),
+        lastCommitMs: lastCommitMsForEffect(wt.path).pipe(Effect.orElseSucceed(() => null)),
+        diff: diffForEffect(wt.path, wt.branch, base).pipe(Effect.orElseSucceed(() => null)),
+      }, { concurrency: 3 })),
+    Effect.orElseSucceed(() => ({
+      createdMs: createdMsFor(wt.path),
+      lastCommitMs: null,
+      diff: null,
+    })),
+  );
 }
+export const gitActivity = (wt: { path: string; branch: string }, effectiveBase?: string | null) =>
+  Effect.runPromise(gitActivityEffect(wt, effectiveBase));

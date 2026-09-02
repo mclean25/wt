@@ -1,26 +1,34 @@
 import { homedir } from "node:os";
+import { Effect } from "effect";
 
 import { createLogger } from "../logger.ts";
-import { run } from "../proc.ts";
+import { runEffect } from "../proc.ts";
 import { TMUX_SOCKET } from "./naming.ts";
 
 const log = createLogger("[tmux]");
 
-export async function killByName(name: string): Promise<void> {
-  const r = await run(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", `=${name}`]);
+export function killByNameEffect(name: string): Effect.Effect<void> {
+  return runEffect(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", `=${name}`]).pipe(
+    Effect.orElseSucceed(() => ({ stdout: "", stderr: "", exitCode: 1, timedOut: false })),
+    Effect.tap((r) => Effect.sync(() => {
   // tmux exits non-zero for "session not found" (the desired no-op
   // path when killing an absent slot) but ALSO for connection /
   // permission failures. Filter the benign case so the noise floor
   // is low, but surface real errors so a failed kill doesn't look
   // like silent success.
-  if (r.exitCode !== 0 && !/can't find session/i.test(r.stderr)) {
-    log.warn("tmux kill-session failed", {
-      name,
-      code: r.exitCode,
-      stderr: r.stderr.trim() || null,
-    });
-  }
+      if (r.exitCode !== 0 && !/can't find session/i.test(r.stderr)) {
+        log.warn("tmux kill-session failed", {
+          name,
+          code: r.exitCode,
+          stderr: r.stderr.trim() || null,
+        });
+      }
+    })),
+    Effect.asVoid,
+  );
 }
+
+export const killByName = (name: string): Promise<void> => Effect.runPromise(killByNameEffect(name));
 
 /**
  * Every session name on our private tmux server, including the
@@ -28,9 +36,10 @@ export async function killByName(name: string): Promise<void> {
  * post-detach existence check, which need exact-name matching
  * regardless of kind.
  */
-export async function listAllSessionsRaw(): Promise<Set<string>> {
-  return (await probeSessionNames()) ?? new Set();
-}
+export const listAllSessionsRawEffect = (): Effect.Effect<Set<string>> =>
+  probeSessionNamesEffect().pipe(Effect.map((names) => names ?? new Set()));
+
+export const listAllSessionsRaw = (): Promise<Set<string>> => Effect.runPromise(listAllSessionsRawEffect());
 
 /**
  * The three-valued form of `listAllSessionsRaw`: `null` means the query
@@ -42,16 +51,18 @@ export async function listAllSessionsRaw(): Promise<Set<string>> {
  * an unanswerable question must never read as a definite no. That is
  * `prepareInspectorSocket`, which unlinks a session's message socket.
  */
-export async function probeSessionNames(): Promise<Set<string> | null> {
-  const r = await run([
+export function probeSessionNamesEffect(): Effect.Effect<Set<string> | null> {
+  return runEffect([
     "tmux",
     "-L",
     TMUX_SOCKET,
     "list-sessions",
     "-F",
     "#{session_name}",
-  ]);
-  if (r.exitCode !== 0) {
+  ]).pipe(
+    Effect.orElseSucceed(() => ({ stdout: "", stderr: "", exitCode: 1, timedOut: false })),
+    Effect.map((r) => {
+    if (r.exitCode !== 0) {
     // "No server running" is the honest empty — nobody has entered a
     // session yet. Any OTHER failure (spawn refused under fork
     // pressure, a socket we can't reach) is unknown, not empty; the
@@ -63,16 +74,20 @@ export async function probeSessionNames(): Promise<Set<string> | null> {
         code: r.exitCode,
         stderr: r.stderr.trim() || null,
       });
-      return null;
+        return null;
+      }
+      return new Set<string>();
     }
-    return new Set();
-  }
-  const names = r.stdout
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-  return new Set(names);
+    const names = r.stdout
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    return new Set(names);
+    }),
+  );
 }
+
+export const probeSessionNames = (): Promise<Set<string> | null> => Effect.runPromise(probeSessionNamesEffect());
 
 /**
  * Exact-match target for the *pane* commands below (capture-pane,
@@ -97,16 +112,21 @@ export function paneTarget(name: string): string {
  * against this socket, including this one, uses the immortal home
  * directory instead.
  */
-export async function runTmux(
+export function runTmuxEffect(
   args: readonly string[],
-): Promise<{ code: number; stderr: string }> {
-  const r = await run(["tmux", "-L", TMUX_SOCKET, ...args], { cwd: homedir() });
-  return { code: r.exitCode, stderr: r.stderr };
+): Effect.Effect<{ code: number; stderr: string }> {
+  return runEffect(["tmux", "-L", TMUX_SOCKET, ...args], { cwd: homedir() }).pipe(
+    Effect.map((r) => ({ code: r.exitCode, stderr: r.stderr })),
+    Effect.orElseSucceed(() => ({ code: 1, stderr: "tmux command failed" })),
+  );
 }
 
+export const runTmux = (args: readonly string[]): Promise<{ code: number; stderr: string }> =>
+  Effect.runPromise(runTmuxEffect(args));
+
 /** Snapshot a session's active pane as plain text, or null on failure. */
-export async function capturePane(name: string): Promise<string | null> {
-  const r = await run([
+export function capturePaneEffect(name: string): Effect.Effect<string | null> {
+  return runEffect([
     "tmux",
     "-L",
     TMUX_SOCKET,
@@ -114,6 +134,10 @@ export async function capturePane(name: string): Promise<string | null> {
     "-p",
     "-t",
     paneTarget(name),
-  ]);
-  return r.exitCode === 0 ? r.stdout : null;
+  ]).pipe(
+    Effect.map((r) => r.exitCode === 0 ? r.stdout : null),
+    Effect.orElseSucceed(() => null),
+  );
 }
+
+export const capturePane = (name: string): Promise<string | null> => Effect.runPromise(capturePaneEffect(name));

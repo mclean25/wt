@@ -15,6 +15,11 @@ import { isPlainLetter } from "../app-helpers.ts";
 import { openUrlHidingTerminal } from "../../core/macos.ts";
 import type { Modal } from "../modal-state.ts";
 import { theme } from "../theme.ts";
+import { Data, Effect } from "effect";
+
+class RemovedViewError extends Data.TaggedError("RemovedViewError")<{
+  cause: unknown;
+}> {}
 
 export type RemovedViewKeysCtx = {
   setRemovedView: (v: boolean) => void;
@@ -35,7 +40,10 @@ export type RemovedViewKeysCtx = {
   toggleRemovedAutomationsPaused: (slug: string) => Promise<boolean | null>;
 };
 
-export function handleRemovedViewKey(k: KeyEvent, ctx: RemovedViewKeysCtx): void {
+export function handleRemovedViewKey(
+  k: KeyEvent,
+  ctx: RemovedViewKeysCtx,
+): void {
   const {
     setRemovedView,
     handleGlobalKey,
@@ -48,92 +56,122 @@ export function handleRemovedViewKey(k: KeyEvent, ctx: RemovedViewKeysCtx): void
     toast,
     toggleRemovedAutomationsPaused,
   } = ctx;
-      if (k.name === "escape" || isPlainLetter(k, "h")) {
-        setRemovedView(false);
-        return;
-      }
-      if (handleGlobalKey(k)) return;
-      if (k.name === "j" || k.name === "down") {
-        setRemovedIndex(
-          Math.min(removedCursor + 1, Math.max(0, removedEntries.length - 1)),
-        );
-        return;
-      }
-      if (k.name === "k" || k.name === "up") {
-        setRemovedIndex(Math.max(0, removedCursor - 1));
-        return;
-      }
-      if (k.sequence === "g") {
-        setRemovedIndex(0);
-        return;
-      }
-      if (k.sequence === "G") {
-        setRemovedIndex(Math.max(0, removedEntries.length - 1));
-        return;
-      }
-      const entry = removedEntries[removedCursor];
-      if (!entry) return;
-      const removedLog = createLogger(entry.slug);
-      // Ctrl+A, same key as on a live row. The target is the removed
-      // entry rather than `slugs`, which the reap already dropped —
-      // and the automations still able to fire for an archived slug
-      // (post-merge `external` runs) are exactly the ones this stops.
-      if (k.ctrl && k.name === "a") {
-        void (async () => {
-          const paused = await toggleRemovedAutomationsPaused(entry.slug);
-          if (paused === null) {
-            toast("not in the archive record", theme.fgDim, 1500);
-            return;
-          }
-          removedLog.event.info(
-            paused
-              ? "automations paused for this archived worktree"
-              : "automations resumed for this archived worktree",
-          );
-          toast(
-            paused
-              ? `automations paused for ${entry.slug}`
-              : `automations resumed for ${entry.slug}`,
-            paused ? theme.warn : theme.ok,
-            2000,
-          );
-        })();
-        return;
-      }
-      if (isPlainLetter(k, "p")) {
-        if (!entry.prUrl) {
-          removedLog.event.warn("no PR recorded for this branch");
-          toast("no PR recorded", theme.fgDim, 1500);
-          return;
-        }
-        openPrUrl(entry.prUrl, entry.prNumber ?? 0, null, entry.slug);
-        return;
-      }
-      if (isPlainLetter(k, "i")) {
-        const url = issueUrlForSlug(entry.slug);
-        if (!url) {
-          removedLog.event.warn("no issue URL (needs an id in the slug + [issue_tracker] url_template)");
-          return;
-        }
-        void openUrlHidingTerminal(url);
-        removedLog.event.info("opened issue");
-        return;
-      }
-      if (k.sequence === "y") {
-        doYank(entry.slug, "branch", entry.branch);
-        return;
-      }
-      if (k.name === "return") {
-        setModal({
-          kind: "confirm",
-          pendingKey: "restore",
-          restoreEntry: entry,
-          title: "restore worktree",
-          message: `Restore ${entry.slug}?`,
-          detail: `Creates a worktree for ${entry.branch} (checked out if the branch still exists, fresh off ${config.branch.base} otherwise).`,
-          confirmLabel: "restore",
-        });
-        return;
-      }
+  if (k.name === "escape" || isPlainLetter(k, "h")) {
+    setRemovedView(false);
+    return;
+  }
+  if (handleGlobalKey(k)) return;
+  if (k.name === "j" || k.name === "down") {
+    setRemovedIndex(
+      Math.min(removedCursor + 1, Math.max(0, removedEntries.length - 1)),
+    );
+    return;
+  }
+  if (k.name === "k" || k.name === "up") {
+    setRemovedIndex(Math.max(0, removedCursor - 1));
+    return;
+  }
+  if (k.sequence === "g") {
+    setRemovedIndex(0);
+    return;
+  }
+  if (k.sequence === "G") {
+    setRemovedIndex(Math.max(0, removedEntries.length - 1));
+    return;
+  }
+  const entry = removedEntries[removedCursor];
+  if (!entry) return;
+  const removedLog = createLogger(entry.slug);
+  // Ctrl+A, same key as on a live row. The target is the removed
+  // entry rather than `slugs`, which the reap already dropped —
+  // and the automations still able to fire for an archived slug
+  // (post-merge `external` runs) are exactly the ones this stops.
+  if (k.ctrl && k.name === "a") {
+    Effect.runFork(
+      Effect.tryPromise({
+        try: () => toggleRemovedAutomationsPaused(entry.slug),
+        catch: (cause) => new RemovedViewError({ cause }),
+      }).pipe(
+        Effect.tap((paused) =>
+          Effect.sync(() => {
+            if (paused === null) {
+              toast("not in the archive record", theme.fgDim, 1500);
+              return;
+            }
+            removedLog.event.info(
+              paused
+                ? "automations paused for this archived worktree"
+                : "automations resumed for this archived worktree",
+            );
+            toast(
+              paused
+                ? `automations paused for ${entry.slug}`
+                : `automations resumed for ${entry.slug}`,
+              paused ? theme.warn : theme.ok,
+              2000,
+            );
+          }),
+        ),
+        Effect.catchAll((error) =>
+          Effect.sync(() =>
+            removedLog.event.err(
+              `automations toggle failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
+            ),
+          ),
+        ),
+      ),
+    );
+    return;
+  }
+  if (isPlainLetter(k, "p")) {
+    if (!entry.prUrl) {
+      removedLog.event.warn("no PR recorded for this branch");
+      toast("no PR recorded", theme.fgDim, 1500);
       return;
+    }
+    openPrUrl(entry.prUrl, entry.prNumber ?? 0, null, entry.slug);
+    return;
+  }
+  if (isPlainLetter(k, "i")) {
+    const url = issueUrlForSlug(entry.slug);
+    if (!url) {
+      removedLog.event.warn(
+        "no issue URL (needs an id in the slug + [issue_tracker] url_template)",
+      );
+      return;
+    }
+    Effect.runFork(
+      Effect.tryPromise({
+        try: () => openUrlHidingTerminal(url),
+        catch: (cause) => new RemovedViewError({ cause }),
+      }).pipe(
+        Effect.catchAll((error) =>
+          Effect.sync(() =>
+            removedLog.event.err(
+              `open issue failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
+            ),
+          ),
+        ),
+      ),
+    );
+    removedLog.event.info("opened issue");
+    return;
+  }
+  if (k.sequence === "y") {
+    doYank(entry.slug, "branch", entry.branch);
+    return;
+  }
+  if (k.name === "return") {
+    setModal({
+      kind: "confirm",
+      pendingKey: "restore",
+      restoreEntry: entry,
+      title: "restore worktree",
+      message: `Restore ${entry.slug}?`,
+      detail: `Creates a worktree for ${entry.branch} (checked out if the branch still exists, fresh off ${config.branch.base} otherwise).`,
+      confirmLabel: "restore",
+    });
+    return;
+  }
+  return;
 }

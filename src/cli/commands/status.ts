@@ -38,6 +38,26 @@ import {
 } from "../../core/wtstate.ts";
 import { bold, cyan, dim, green, magenta, red, yellow } from "../colors.ts";
 import { removedJsonEntry } from "../../core/wtstate.ts";
+import { Data, Effect } from "effect";
+
+export class StatusCommandError extends Data.TaggedError("StatusCommandError")<{
+  operation: string;
+  cause: unknown;
+}> {}
+
+function tryCommand<A>(operation: string, evaluate: () => PromiseLike<A>) {
+  return Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new StatusCommandError({ operation, cause }),
+  });
+}
+
+function commandIo<A>(operation: string, evaluate: () => A) {
+  return Effect.try({
+    try: evaluate,
+    catch: (cause) => new StatusCommandError({ operation, cause }),
+  });
+}
 
 const VOCAB = `states (unique prefixes + nh/nt work):
   ${bold("todo")}           created, not started
@@ -55,7 +75,7 @@ const VOCAB = `states (unique prefixes + nh/nt work):
                  required: why. No --risk — nothing is being merged. The row
                  sinks out of the queue instead of wearing a fake ready
 
-${bold("--blocked-on \"<gate>\"")} names an external condition that must clear.
+${bold('--blocked-on "<gate>"')} names an external condition that must clear.
 The STATE supplies the verb:
   ${bold("ready")} + gate   finished and verified, but MUST NOT be merged until <gate>
   ${bold("todo")}  + gate   deliberately NOT STARTED until <gate>
@@ -449,9 +469,13 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
         // costs one branch; "requires a value (got \"-m\")" states the
         // symptom and leaves the reader to guess the form.
         if (a === "--note-only" && (value === "-m" || value === "--note")) {
-          return err(`--note-only takes the note itself — drop the ${value} (wt status --note-only "...")`);
+          return err(
+            `--note-only takes the note itself — drop the ${value} (wt status --note-only "...")`,
+          );
         }
-        return err(`${a} requires a value${value !== undefined ? ` (got "${value}")` : ""}`);
+        return err(
+          `${a} requires a value${value !== undefined ? ` (got "${value}")` : ""}`,
+        );
       }
       i++;
       if (a === "--risk") riskRaw = value;
@@ -466,7 +490,8 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     else if (a === "--all") all = true;
     else if (a === "--json") json = true;
     else if (a === "--help" || a === "-h") return { kind: "help" };
-    else if (a.startsWith("-")) return err(`unknown flag: ${a}`, undefined, true);
+    else if (a.startsWith("-"))
+      return err(`unknown flag: ${a}`, undefined, true);
     else positionals.push(a);
   }
 
@@ -509,7 +534,10 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   let risk: WorkRisk | null = null;
   if (riskRaw !== null) {
     risk = resolveRisk(riskRaw);
-    if (!risk) return err(`--risk must be one of ${WORK_RISKS.join("|")}, got "${riskRaw}"`);
+    if (!risk)
+      return err(
+        `--risk must be one of ${WORK_RISKS.join("|")}, got "${riskRaw}"`,
+      );
   }
 
   // `--note-only` amends the note of an EXISTING record without
@@ -518,7 +546,8 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   // faking a fresh assertion. Everything else about the record is
   // untouched, so it conflicts with every state-changing flag.
   if (noteOnly !== null) {
-    if (clear || all) return err("--note-only doesn't combine with --all/--clear");
+    if (clear || all)
+      return err("--note-only doesn't combine with --all/--clear");
     if (
       note !== null ||
       riskRaw !== null ||
@@ -530,7 +559,8 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
         "--note-only amends only the note — drop -m/--risk/--blocked-on/--verify-after-merge/--unblock",
       );
     }
-    if (positionals.length > 1) return err("too many arguments for --note-only");
+    if (positionals.length > 1)
+      return err("too many arguments for --note-only");
     if (positionals[0] && resolveWorkState(positionals[0])) {
       return err(
         "--note-only keeps the current state — drop the state argument (use -m alongside a state to set both)",
@@ -557,7 +587,9 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       verifyAfterMerge !== null ||
       unblock
     ) {
-      return err("--examined records an observer's verdict on its own — drop the other flags");
+      return err(
+        "--examined records an observer's verdict on its own — drop the other flags",
+      );
     }
     const verdict = sanitizeWorkNote(examinedRaw);
     if (verdict === "") return err("--examined requires the verdict itself");
@@ -566,7 +598,9 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   }
 
   if (append && note === null && noteOnly === null) {
-    return err("--append needs the text to append (-m \"...\" or --note-only \"...\")");
+    return err(
+      '--append needs the text to append (-m "..." or --note-only "...")',
+    );
   }
 
   if (all) {
@@ -579,14 +613,22 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
       unblock ||
       positionals.length > 0
     ) {
-      return err("--all only combines with --json — drop the other flags/arguments");
+      return err(
+        "--all only combines with --json — drop the other flags/arguments",
+      );
     }
     return { kind: "all", json };
   }
   if (json) return err("--json requires --all");
 
   if (clear) {
-    if (riskRaw !== null || note !== null || blockedOn !== null || verifyAfterMerge !== null || unblock) {
+    if (
+      riskRaw !== null ||
+      note !== null ||
+      blockedOn !== null ||
+      verifyAfterMerge !== null ||
+      unblock
+    ) {
       return err(
         "--clear doesn't take -m/--risk/--blocked-on/--verify-after-merge/--unblock — it just drops the record",
       );
@@ -601,9 +643,15 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   const resolveState = (input: string): WorkState | StatusArgs => {
     const state = resolveWorkState(input);
     if (state) return state;
-    const matches = WORK_STATES.filter((s) => s.startsWith(input.trim().toLowerCase()));
+    const matches = WORK_STATES.filter((s) =>
+      s.startsWith(input.trim().toLowerCase()),
+    );
     if (matches.length > 1) {
-      return err(`ambiguous status "${input}" (matches ${matches.join(", ")})`, undefined, true);
+      return err(
+        `ambiguous status "${input}" (matches ${matches.join(", ")})`,
+        undefined,
+        true,
+      );
     }
     return err(`unknown status: ${input}`, undefined, true);
   };
@@ -700,7 +748,10 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
   // attach it at `ready`. The two exclusions are contradictions, not
   // restrictions: `verified` says the check already happened, and
   // `dropped` says nothing will ever be deployed to check.
-  if (verifyAfterMerge !== null && (state === "verified" || state === "dropped")) {
+  if (
+    verifyAfterMerge !== null &&
+    (state === "verified" || state === "dropped")
+  ) {
     return err(
       `--verify-after-merge doesn't apply to ${state} — ${
         state === "verified"
@@ -717,20 +768,26 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     ]);
   }
   if (state === "ready" && !risk) {
-    return err("ready requires --risk low|medium|high — how confident are you in it?", [
-      "risk is your residual uncertainty AFTER testing, not the size of the diff:",
-      `${bold("low")} = verified in a real environment (or logic with tests that fail`,
-      `against the old code) · ${bold("medium")} = unit-tested but never exercised for real`,
-      `· ${bold("high")} = something material is unverified AND it isn't a plain revert.`,
-      `medium/high also require ${bold("-m")} saying what's unverified.`,
-    ]);
+    return err(
+      "ready requires --risk low|medium|high — how confident are you in it?",
+      [
+        "risk is your residual uncertainty AFTER testing, not the size of the diff:",
+        `${bold("low")} = verified in a real environment (or logic with tests that fail`,
+        `against the old code) · ${bold("medium")} = unit-tested but never exercised for real`,
+        `· ${bold("high")} = something material is unverified AND it isn't a plain revert.`,
+        `medium/high also require ${bold("-m")} saying what's unverified.`,
+      ],
+    );
   }
   if (state === "ready" && risk !== "low" && !note) {
-    return err(`ready --risk ${risk} requires -m: what's unverified, and what would it cost?`, [
-      `e.g. "migration applied on dev but the backfill path was never run", or`,
-      `"not reasonably testable outside prod". If everything material IS verified,`,
-      `the honest answer is ${bold("--risk low")} — don't hedge a tested change to medium.`,
-    ]);
+    return err(
+      `ready --risk ${risk} requires -m: what's unverified, and what would it cost?`,
+      [
+        `e.g. "migration applied on dev but the backfill path was never run", or`,
+        `"not reasonably testable outside prod". If everything material IS verified,`,
+        `the honest answer is ${bold("--risk low")} — don't hedge a tested change to medium.`,
+      ],
+    );
   }
   if (state === "needs-human" && !note) {
     return err(
@@ -749,7 +806,16 @@ export function parseStatusArgs(argv: readonly string[]): StatusArgs {
     ]);
   }
 
-  return { kind: "set", slugArg, state, note, risk, append, blockedOn, verifyAfterMerge };
+  return {
+    kind: "set",
+    slugArg,
+    state,
+    note,
+    risk,
+    append,
+    blockedOn,
+    verifyAfterMerge,
+  };
 }
 
 /**
@@ -816,383 +882,447 @@ function hint(lines: string[]): void {
 }
 
 function findWorktree(wts: Worktree[], slugOrBranch: string): Worktree | null {
-  return wts.find((w) => w.slug === slugOrBranch || w.branch === slugOrBranch) ?? null;
+  return (
+    wts.find((w) => w.slug === slugOrBranch || w.branch === slugOrBranch) ??
+    null
+  );
 }
 
-export async function run(argv: string[]): Promise<number> {
-  const args = parseStatusArgs(argv);
+export function run(argv: string[]): Effect.Effect<number, StatusCommandError> {
+  return Effect.gen(function* () {
+    const args = parseStatusArgs(argv);
 
-  if (args.kind === "help") {
-    console.log(VOCAB);
-    return 0;
-  }
-  if (args.kind === "error") {
-    console.error(red(args.message));
-    if (args.hints) hint(args.hints);
-    if (args.showVocab) console.log(VOCAB);
-    return 2;
-  }
-
-  const wts = (await listWorktrees()).filter((w) => !w.isMain);
-  const state = readWtState();
-
-  if (args.kind === "all") {
-    // One revParse per worktree, shared by both output shapes.
-    const entries = await Promise.all(
-      wts.map(async (w) => ({
-        w,
-        record: state.slugs[w.slug]?.work,
-        headSha: await revParse("HEAD", w.path),
-        // Same helper as the write path, so both sides share one
-        // reference frame. Computed anywhere else they would disagree.
-        baseSha: await baseTipSha(state.slugs[w.slug]?.baseBranch ?? null),
-      })),
-    );
-    if (args.json) {
-      // Recently-destroyed rows (≤48h) ride along in the same shape
-      // `wt ls --json` appends (`kind: "merged"|"removed"`), so the
-      // manager can tell "everything landed" from "nothing exists".
-      const removed = recentlyRemovedWorktrees(new Set(wts.map((w) => w.slug)));
-      console.log(
-        JSON.stringify(
-          [
-            ...entries.map(({ w, record, headSha, baseSha }) => ({
-              slug: w.slug,
-              branch: w.branch,
-              // Positive discriminator, so branching on it doesn't come
-              // out as "kind is absent". Live and archived rows carry
-              // different keys — only live ones have `state`/`risk`/
-              // `note` — and with live rows unlabelled the only way to
-              // pick them out was a negative test, which reads like a
-              // missing field rather than a deliberate one. A consumer
-              // that iterated and read `.state` threw on the first
-              // archived row instead.
-              kind: "live" as const,
-              // Manual TUI section (human grouping intent); null = inbox.
-              section:
-                config.instance.role === "worker"
-                  ? null
-                  : state.slugs[w.slug]?.section ?? null,
-              state: record?.state ?? null,
-              note: record?.note ?? null,
-              risk: record?.risk ?? null,
-              // The external gate that must clear before this may be
-              // merged (`wt status --blocked-on`). Non-null means DO
-              // NOT MERGE, whatever `state` says — a consumer that
-              // reads `state == "ready"` alone repeats the failure the
-              // field was added for. Flat here, against
-              // `.work.blockedOn` on `wt fleet --json`, matching how
-              // `by`/`.work.by` already differ between these surfaces.
-              blocked_on: record?.blockedOn ?? null,
-              // A check that can only run once this is DEPLOYED, still
-              // outstanding. Non-null on a merged row means the
-              // worktree is deliberately being kept alive and the
-              // verification has not happened — the opposite reading
-              // from `blocked_on`, which means do not merge. Flat here,
-              // against `.work.verifyAfterMerge` on `wt fleet --json`.
-              verify_after_merge: record?.verifyAfterMerge ?? null,
-              at: record?.at ?? null,
-              // The last fleet-level verdict, and whether it still
-              // applies. `examined_current` is the field a sweep keys
-              // its early-out on: false or null means look properly.
-              examined: state.slugs[w.slug]?.examined ?? null,
-              // True only when NEITHER the row nor its base has moved.
-              // A record with no base anchor (written before that
-              // existed) cannot prove the base held still, so it reads
-              // as not-current — the failure direction stays "look
-              // properly", never "skip a row that just went conflicted".
-              examined_current: examinedCurrent(
-                state.slugs[w.slug]?.examined,
-                headSha,
-                baseSha,
-              ),
-              // Agent identity that asserted it (`manager` when triage
-              // did); null = the human, or a plain shell.
-              by: record?.by ?? null,
-              stale: !!(record?.sha && headSha && record.sha !== headSha),
-            })),
-            ...removed.map(removedJsonEntry),
-          ],
-          null,
-          2,
-        ),
-      );
+    if (args.kind === "help") {
+      console.log(VOCAB);
       return 0;
     }
-    for (const { w, record, headSha } of entries) {
-      console.log(describe(w.slug, record, headSha));
+    if (args.kind === "error") {
+      console.error(red(args.message));
+      if (args.hints) hint(args.hints);
+      if (args.showVocab) console.log(VOCAB);
+      return 2;
     }
-    return 0;
-  }
 
-  const target = args.slugArg
-    ? findWorktree(wts, args.slugArg)
-    : worktreeAtCwd(wts);
-  if (!target) {
-    if (args.slugArg) {
-      console.error(red(`no worktree (and no such status): ${args.slugArg}`));
-      console.log(VOCAB);
+    const wts = (yield* tryCommand("list worktrees", () =>
+      listWorktrees(),
+    )).filter((w) => !w.isMain);
+    const state = yield* commandIo("read wt state", () => readWtState());
+
+    if (args.kind === "all") {
+      // One revParse per worktree, shared by both output shapes.
+      const entries = yield* Effect.all(
+        wts.map((w) =>
+          Effect.all(
+            {
+              headSha: tryCommand(`resolve HEAD for ${w.slug}`, () =>
+                revParse("HEAD", w.path),
+              ),
+              // Same helper as the write path, so both sides share one
+              // reference frame. Computed anywhere else they would disagree.
+              baseSha: tryCommand(`resolve base for ${w.slug}`, () =>
+                baseTipSha(state.slugs[w.slug]?.baseBranch ?? null),
+              ),
+            },
+            { concurrency: "unbounded" },
+          ).pipe(
+            Effect.map(({ headSha, baseSha }) => ({
+              w,
+              record: state.slugs[w.slug]?.work,
+              headSha,
+              baseSha,
+            })),
+          ),
+        ),
+        { concurrency: 8 },
+      );
+      if (args.json) {
+        // Recently-destroyed rows (≤48h) ride along in the same shape
+        // `wt ls --json` appends (`kind: "merged"|"removed"`), so the
+        // manager can tell "everything landed" from "nothing exists".
+        const removed = yield* commandIo(
+          "read recently removed worktrees",
+          () => recentlyRemovedWorktrees(new Set(wts.map((w) => w.slug))),
+        );
+        console.log(
+          JSON.stringify(
+            [
+              ...entries.map(({ w, record, headSha, baseSha }) => ({
+                slug: w.slug,
+                branch: w.branch,
+                // Positive discriminator, so branching on it doesn't come
+                // out as "kind is absent". Live and archived rows carry
+                // different keys — only live ones have `state`/`risk`/
+                // `note` — and with live rows unlabelled the only way to
+                // pick them out was a negative test, which reads like a
+                // missing field rather than a deliberate one. A consumer
+                // that iterated and read `.state` threw on the first
+                // archived row instead.
+                kind: "live" as const,
+                // Manual TUI section (human grouping intent); null = inbox.
+                section:
+                  config.instance.role === "worker"
+                    ? null
+                    : (state.slugs[w.slug]?.section ?? null),
+                state: record?.state ?? null,
+                note: record?.note ?? null,
+                risk: record?.risk ?? null,
+                // The external gate that must clear before this may be
+                // merged (`wt status --blocked-on`). Non-null means DO
+                // NOT MERGE, whatever `state` says — a consumer that
+                // reads `state == "ready"` alone repeats the failure the
+                // field was added for. Flat here, against
+                // `.work.blockedOn` on `wt fleet --json`, matching how
+                // `by`/`.work.by` already differ between these surfaces.
+                blocked_on: record?.blockedOn ?? null,
+                // A check that can only run once this is DEPLOYED, still
+                // outstanding. Non-null on a merged row means the
+                // worktree is deliberately being kept alive and the
+                // verification has not happened — the opposite reading
+                // from `blocked_on`, which means do not merge. Flat here,
+                // against `.work.verifyAfterMerge` on `wt fleet --json`.
+                verify_after_merge: record?.verifyAfterMerge ?? null,
+                at: record?.at ?? null,
+                // The last fleet-level verdict, and whether it still
+                // applies. `examined_current` is the field a sweep keys
+                // its early-out on: false or null means look properly.
+                examined: state.slugs[w.slug]?.examined ?? null,
+                // True only when NEITHER the row nor its base has moved.
+                // A record with no base anchor (written before that
+                // existed) cannot prove the base held still, so it reads
+                // as not-current — the failure direction stays "look
+                // properly", never "skip a row that just went conflicted".
+                examined_current: examinedCurrent(
+                  state.slugs[w.slug]?.examined,
+                  headSha,
+                  baseSha,
+                ),
+                // Agent identity that asserted it (`manager` when triage
+                // did); null = the human, or a plain shell.
+                by: record?.by ?? null,
+                stale: !!(record?.sha && headSha && record.sha !== headSha),
+              })),
+              ...removed.map(removedJsonEntry),
+            ],
+            null,
+            2,
+          ),
+        );
+        return 0;
+      }
+      for (const { w, record, headSha } of entries) {
+        console.log(describe(w.slug, record, headSha));
+      }
+      return 0;
+    }
+
+    const target = args.slugArg
+      ? findWorktree(wts, args.slugArg)
+      : worktreeAtCwd(wts);
+    if (!target) {
+      if (args.slugArg) {
+        console.error(red(`no worktree (and no such status): ${args.slugArg}`));
+        console.log(VOCAB);
+        return 1;
+      }
+      if (args.kind === "show") {
+        // Bare `wt status` outside any worktree isn't an error — it's how
+        // agents (and the skills' promises) discover the vocabulary. Teach,
+        // then say how to address a worktree.
+        console.log(VOCAB);
+        hint([
+          `not inside a worktree — pass a slug (${bold("wt status <slug> [<state>]")}),`,
+          `or ${bold("wt status --all")} for the fleet overview`,
+        ]);
+        return 0;
+      }
+      console.error(red("not inside a worktree — pass a slug, or cd into one"));
       return 1;
     }
-  if (args.kind === "show") {
-      // Bare `wt status` outside any worktree isn't an error — it's how
-      // agents (and the skills' promises) discover the vocabulary. Teach,
-      // then say how to address a worktree.
-      console.log(VOCAB);
+
+    if (args.kind === "examined") {
+      // Two anchors, and the second is the one that keeps this honest.
+      // HEAD is obvious. The BASE head matters because the transition
+      // most worth catching — behind becoming conflicted — is caused by
+      // the base moving and leaves this row's own head untouched, so a
+      // row-only anchor would keep a verdict valid across exactly the
+      // event that voids it.
+      const sha = yield* tryCommand(`resolve HEAD for ${target.slug}`, () =>
+        revParse("HEAD", target.path),
+      );
+      if (!sha) {
+        console.error(red(`could not resolve HEAD for ${target.slug}`));
+        return 2;
+      }
+      const baseBranch = state.slugs[target.slug]?.baseBranch ?? null;
+      const baseSha = yield* tryCommand(`resolve base for ${target.slug}`, () =>
+        baseTipSha(baseBranch),
+      );
+      const by = agentIdentity();
+      yield* commandIo("set examined verdict", () =>
+        setSlugExamined(target.slug, {
+          sha,
+          ...(baseSha ? { baseSha } : {}),
+          verdict: args.verdict,
+          at: new Date().toISOString(),
+          ...(by ? { by } : {}),
+        }),
+      );
+      console.log(
+        `${green("✓")} ${cyan(target.slug)} ${dim("examined at")} ${sha.slice(0, 7)}${
+          baseSha
+            ? dim(` on ${baseBranch ?? "trunk"} ${baseSha.slice(0, 7)}`)
+            : ""
+        }${by ? dim(` by ${by}`) : ""}`,
+      );
+      console.log(`  ${dim("verdict:")} ${args.verdict}`);
       hint([
-        `not inside a worktree — pass a slug (${bold("wt status <slug> [<state>]")}),`,
-        `or ${bold("wt status --all")} for the fleet overview`,
+        `a SKIP HINT for the next fleet sweep, not a status — ${bold(target.slug)}'s own`,
+        `lifecycle state is untouched. It voids itself when this branch moves OR`,
+        `when its base does; a PR goes conflicted because the BASE moved, which`,
+        `leaves this row's head alone.`,
       ]);
       return 0;
     }
-    console.error(red("not inside a worktree — pass a slug, or cd into one"));
-    return 1;
-  }
 
-  if (args.kind === "examined") {
-    // Two anchors, and the second is the one that keeps this honest.
-    // HEAD is obvious. The BASE head matters because the transition
-    // most worth catching — behind becoming conflicted — is caused by
-    // the base moving and leaves this row's own head untouched, so a
-    // row-only anchor would keep a verdict valid across exactly the
-    // event that voids it.
-    const sha = await revParse("HEAD", target.path);
-    if (!sha) {
-      console.error(red(`could not resolve HEAD for ${target.slug}`));
-      return 2;
+    if (args.kind === "clear") {
+      yield* commandIo("clear work status", () =>
+        setSlugWorkStatus(target.slug, null),
+      );
+      console.log(green(`✓ ${target.slug} status cleared`));
+      return 0;
     }
-    const baseBranch = state.slugs[target.slug]?.baseBranch ?? null;
-    const baseSha = await baseTipSha(baseBranch);
-    const by = agentIdentity();
-    setSlugExamined(target.slug, {
-      sha,
-      ...(baseSha ? { baseSha } : {}),
-      verdict: args.verdict,
-      at: new Date().toISOString(),
-      ...(by ? { by } : {}),
+
+    if (args.kind === "amend") {
+      const prev = state.slugs[target.slug]?.work;
+      if (!prev) {
+        console.error(
+          red(
+            `${target.slug} has no status asserted — amending edits an existing record; set a state first`,
+          ),
+        );
+        return 2;
+      }
+      if (args.risk && prev.state !== "ready") {
+        console.error(
+          red(`--risk only applies to ready (${target.slug} is ${prev.state})`),
+        );
+        hint([
+          `assert the state and the risk together: ${bold(`wt status ready --risk <r>`)}`,
+        ]);
+        return 2;
+      }
+      if (
+        args.blockedOn !== undefined &&
+        args.blockedOn !== null &&
+        prev.state !== "ready" &&
+        prev.state !== "todo"
+      ) {
+        console.error(
+          red(
+            `--blocked-on applies to ready and todo (${target.slug} is ${prev.state})`,
+          ),
+        );
+        hint([
+          `a gate says an EXTERNAL condition must clear first — before merging`,
+          `(${bold("ready")}) or before starting (${bold("todo")}). Assert that state first.`,
+        ]);
+        return 2;
+      }
+      if (args.blockedOn === null && !prev.blockedOn) {
+        console.error(red(`${target.slug} has no gate to clear`));
+        return 2;
+      }
+      if (
+        args.verifyAfterMerge !== undefined &&
+        (prev.state === "verified" || prev.state === "dropped")
+      ) {
+        console.error(
+          red(
+            `--verify-after-merge doesn't apply to ${prev.state} (${target.slug} is ${prev.state})`,
+          ),
+        );
+        hint([
+          prev.state === "verified"
+            ? `that state IS the discharge — assert a live state first if this branch owes something new.`
+            : `a branch that will never land has nothing deployed to check.`,
+        ]);
+        return 2;
+      }
+      const { note, replaced } = resolveNote(
+        prev.note ?? null,
+        args.note,
+        args.append,
+      );
+      // Same rule as asserting: a non-low risk without a note is an
+      // unexplained hedge. An existing note satisfies it.
+      if (args.risk && args.risk !== "low" && !note) {
+        console.error(
+          red(
+            `--risk ${args.risk} requires -m: what's unverified, and what would it cost?`,
+          ),
+        );
+        return 2;
+      }
+      // Spread keeps state/at/sha/by byte-identical: the record still
+      // describes the same assertion, just better judged — so no timestamp
+      // bump, no re-narration of an unchanged state, and no re-attribution
+      // (`by` names who ASSERTED, and amending is not asserting).
+      const next: WorkStatusRecord = { ...prev };
+      if (args.risk) next.risk = args.risk;
+      if (note) next.note = note;
+      if (args.blockedOn !== undefined) {
+        if (args.blockedOn === null) delete next.blockedOn;
+        else next.blockedOn = args.blockedOn;
+      }
+      if (args.verifyAfterMerge !== undefined) {
+        next.verifyAfterMerge = args.verifyAfterMerge;
+      }
+      const wrote = yield* commandIo("amend work status", () =>
+        setSlugWorkStatus(target.slug, next),
+      );
+      const changed = [
+        args.risk ? "risk" : null,
+        args.note ? "note" : null,
+        args.blockedOn === undefined
+          ? null
+          : args.blockedOn === null
+            ? "gate cleared"
+            : "gate",
+        args.verifyAfterMerge === undefined ? null : "post-merge verification",
+      ].filter(Boolean);
+      const what = changed.join(" + ") || "note";
+      // Report what was STORED, never the argument. The old guard silently
+      // dropped writes that touched only a gate or only the post-merge
+      // steps, and this line confirmed them anyway — so the only way to
+      // find out was to read the row back, which nobody does after a tick.
+      yield* commandIo("write work status log", () =>
+        createLogger(target.slug).info(
+          wrote
+            ? `work status ${what} amended${workStatusSuffix(next)}`
+            : `work status ${what} amend was a no-op (already that value)`,
+        ),
+      );
+      const color = stateColor(prev.state);
+      console.log(
+        `${green("✓")} ${cyan(target.slug)} ${color(prev.state)}${
+          next.risk ? `  ${dim("risk:")} ${color(next.risk)}` : ""
+        }  ${dim(wrote ? `${what} amended (state + timestamp kept)` : `${what} already had that value — nothing changed`)}`,
+      );
+      if (next.blockedOn)
+        console.log(`  ${red("blocked on:")} ${next.blockedOn}`);
+      if (next.verifyAfterMerge) {
+        console.log(
+          `  ${yellow("verify after merge:")} ${next.verifyAfterMerge}`,
+        );
+      }
+      if (next.note) console.log(`  ${dim("note:")} ${next.note}`);
+      reportReplacedNote(replaced, args.note !== null);
+      noteBudgetHint(prev.state, next.note ?? null);
+      if (args.blockedOn === null) hint(unblockedGuidance());
+      else if (args.blockedOn) hint(blockedGuidance(prev.state));
+      else if (args.verifyAfterMerge)
+        hint(verifyGuidance(args.verifyAfterMerge));
+      return 0;
+    }
+
+    if (args.kind === "show") {
+      const headSha = yield* tryCommand(`resolve HEAD for ${target.slug}`, () =>
+        revParse("HEAD", target.path),
+      );
+      console.log(
+        describe(target.slug, state.slugs[target.slug]?.work, headSha),
+      );
+      if (!HINTS_OFF) {
+        console.log("");
+        console.log(VOCAB);
+      }
+      return 0;
+    }
+
+    // A new assertion still starts from a clean note when none is given —
+    // notes are scoped to the assertion they explain, and carrying a
+    // "blocked on dev login" note forward into `ready` would be worse than
+    // losing it. What changes is that losing it is no longer SILENT.
+    const prevRecord = state.slugs[target.slug]?.work;
+    const prevNote = prevRecord?.note ?? null;
+    const { note, replaced } = resolveNote(prevNote, args.note, args.append, {
+      keepWhenAbsent: false,
     });
-    console.log(
-      `${green("✓")} ${cyan(target.slug)} ${dim("examined at")} ${sha.slice(0, 7)}${
-        baseSha ? dim(` on ${baseBranch ?? "trunk"} ${baseSha.slice(0, 7)}`) : ""
-      }${by ? dim(` by ${by}`) : ""}`,
+    const record: WorkStatusRecord = {
+      state: args.state,
+      at: new Date().toISOString(),
+    };
+    if (note) record.note = note;
+    if (args.risk) record.risk = args.risk;
+    if (args.blockedOn) record.blockedOn = args.blockedOn;
+    // The one field a fresh assertion CARRIES rather than drops. Note,
+    // risk and gate are claims made by this assertion, so replacing the
+    // assertion replaces them. A post-merge verification is a standing
+    // obligation about the BRANCH: it outlives the state that recorded
+    // it, and dropping it on the next `wt status working` would silently
+    // release the merged worktree back to the clean sweep — a failure
+    // with no output at all, on the exact path this exists to close.
+    // The two states that end it end it here too.
+    const carried =
+      args.verifyAfterMerge ??
+      (args.state === "verified" || args.state === "dropped"
+        ? null
+        : (prevRecord?.verifyAfterMerge ?? null));
+    if (carried) record.verifyAfterMerge = carried;
+    const discharged =
+      args.state === "verified" && !!prevRecord?.verifyAfterMerge
+        ? prevRecord.verifyAfterMerge
+        : null;
+    // Who is claiming this. Usually the worktree's own agent; the manager
+    // playbook also has it assert on a worker's behalf after triage, and
+    // that difference is what keeps a `status.*` automation from briefing
+    // the session that just wrote the record.
+    const by = agentIdentity();
+    if (by) record.by = by;
+    const sha = yield* tryCommand(`resolve HEAD for ${target.slug}`, () =>
+      revParse("HEAD", target.path),
     );
-    console.log(`  ${dim("verdict:")} ${args.verdict}`);
-    hint([
-      `a SKIP HINT for the next fleet sweep, not a status — ${bold(target.slug)}'s own`,
-      `lifecycle state is untouched. It voids itself when this branch moves OR`,
-      `when its base does; a PR goes conflicted because the BASE moved, which`,
-      `leaves this row's head alone.`,
-    ]);
-    return 0;
-  }
+    if (sha) record.sha = sha;
+    const wrote = yield* commandIo("set work status", () =>
+      setSlugWorkStatus(target.slug, record),
+    );
 
-  if (args.kind === "clear") {
-    setSlugWorkStatus(target.slug, null);
-    console.log(green(`✓ ${target.slug} status cleared`));
-    return 0;
-  }
+    // File-only audit trail (the TUI derives its own attention-feed
+    // entries from the wtstate change; this line is for grepping).
+    yield* commandIo("write work status log", () =>
+      createLogger(target.slug).info(
+        `work status → ${args.state}${workStatusSuffix(record)}`,
+      ),
+    );
 
-  if (args.kind === "amend") {
-    const prev = state.slugs[target.slug]?.work;
-    if (!prev) {
-      console.error(
-        red(
-          `${target.slug} has no status asserted — amending edits an existing record; set a state first`,
-        ),
-      );
-      return 2;
-    }
-    if (args.risk && prev.state !== "ready") {
-      console.error(
-        red(`--risk only applies to ready (${target.slug} is ${prev.state})`),
-      );
-      hint([
-        `assert the state and the risk together: ${bold(`wt status ready --risk <r>`)}`,
-      ]);
-      return 2;
-    }
-    if (
-      args.blockedOn !== undefined &&
-      args.blockedOn !== null &&
-      prev.state !== "ready" &&
-      prev.state !== "todo"
-    ) {
-      console.error(
-        red(
-          `--blocked-on applies to ready and todo (${target.slug} is ${prev.state})`,
-        ),
-      );
-      hint([
-        `a gate says an EXTERNAL condition must clear first — before merging`,
-        `(${bold("ready")}) or before starting (${bold("todo")}). Assert that state first.`,
-      ]);
-      return 2;
-    }
-    if (args.blockedOn === null && !prev.blockedOn) {
-      console.error(red(`${target.slug} has no gate to clear`));
-      return 2;
-    }
-    if (
-      args.verifyAfterMerge !== undefined &&
-      (prev.state === "verified" || prev.state === "dropped")
-    ) {
-      console.error(
-        red(
-          `--verify-after-merge doesn't apply to ${prev.state} (${target.slug} is ${prev.state})`,
-        ),
-      );
-      hint([
-        prev.state === "verified"
-          ? `that state IS the discharge — assert a live state first if this branch owes something new.`
-          : `a branch that will never land has nothing deployed to check.`,
-      ]);
-      return 2;
-    }
-    const { note, replaced } = resolveNote(
-      prev.note ?? null,
-      args.note,
-      args.append,
-    );
-    // Same rule as asserting: a non-low risk without a note is an
-    // unexplained hedge. An existing note satisfies it.
-    if (args.risk && args.risk !== "low" && !note) {
-      console.error(
-        red(`--risk ${args.risk} requires -m: what's unverified, and what would it cost?`),
-      );
-      return 2;
-    }
-    // Spread keeps state/at/sha/by byte-identical: the record still
-    // describes the same assertion, just better judged — so no timestamp
-    // bump, no re-narration of an unchanged state, and no re-attribution
-    // (`by` names who ASSERTED, and amending is not asserting).
-    const next: WorkStatusRecord = { ...prev };
-    if (args.risk) next.risk = args.risk;
-    if (note) next.note = note;
-    if (args.blockedOn !== undefined) {
-      if (args.blockedOn === null) delete next.blockedOn;
-      else next.blockedOn = args.blockedOn;
-    }
-    if (args.verifyAfterMerge !== undefined) {
-      next.verifyAfterMerge = args.verifyAfterMerge;
-    }
-    const wrote = setSlugWorkStatus(target.slug, next);
-    const changed = [
-      args.risk ? "risk" : null,
-      args.note ? "note" : null,
-      args.blockedOn === undefined ? null : args.blockedOn === null ? "gate cleared" : "gate",
-      args.verifyAfterMerge === undefined ? null : "post-merge verification",
-    ].filter(Boolean);
-    const what = changed.join(" + ") || "note";
-    // Report what was STORED, never the argument. The old guard silently
-    // dropped writes that touched only a gate or only the post-merge
-    // steps, and this line confirmed them anyway — so the only way to
-    // find out was to read the row back, which nobody does after a tick.
-    createLogger(target.slug).info(
-      wrote
-        ? `work status ${what} amended${workStatusSuffix(next)}`
-        : `work status ${what} amend was a no-op (already that value)`,
-    );
-    const color = stateColor(prev.state);
+    const color = stateColor(args.state);
     console.log(
-      `${green("✓")} ${cyan(target.slug)} ${color(prev.state)}${
-        next.risk ? `  ${dim("risk:")} ${color(next.risk)}` : ""
-      }  ${dim(wrote ? `${what} amended (state + timestamp kept)` : `${what} already had that value — nothing changed`)}`,
+      `${green("✓")} ${cyan(target.slug)} → ${color(args.state)}${
+        args.risk ? `  ${dim("risk:")} ${color(args.risk)}` : ""
+      }${wrote ? "" : `  ${dim("(unchanged — same claim, original timestamp kept)")}`}`,
     );
-    if (next.blockedOn) console.log(`  ${red("blocked on:")} ${next.blockedOn}`);
-    if (next.verifyAfterMerge) {
-      console.log(`  ${yellow("verify after merge:")} ${next.verifyAfterMerge}`);
+    if (record.blockedOn)
+      console.log(`  ${red("blocked on:")} ${record.blockedOn}`);
+    if (record.verifyAfterMerge) {
+      console.log(
+        `  ${yellow("verify after merge:")} ${record.verifyAfterMerge}`,
+      );
     }
-    if (next.note) console.log(`  ${dim("note:")} ${next.note}`);
+    if (discharged) {
+      console.log(`  ${green("verified:")} ${dim(discharged)}`);
+    }
+    if (record.note) console.log(`  ${dim("note:")} ${record.note}`);
     reportReplacedNote(replaced, args.note !== null);
-    noteBudgetHint(prev.state, next.note ?? null);
-    if (args.blockedOn === null) hint(unblockedGuidance());
-    else if (args.blockedOn) hint(blockedGuidance(prev.state));
-    else if (args.verifyAfterMerge) hint(verifyGuidance(args.verifyAfterMerge));
-    return 0;
-  }
-
-  if (args.kind === "show") {
-    const headSha = await revParse("HEAD", target.path);
-    console.log(describe(target.slug, state.slugs[target.slug]?.work, headSha));
-    if (!HINTS_OFF) {
-      console.log("");
-      console.log(VOCAB);
+    noteBudgetHint(args.state, record.note ?? null);
+    if (record.blockedOn) hint(blockedGuidance(args.state));
+    else {
+      hint(guidance(args.state));
+      // After the state's own footer, not instead of it: `ready` still
+      // needs to say "don't merge it yourself", and this adds what
+      // happens once someone does.
+      if (record.verifyAfterMerge)
+        hint(verifyGuidance(record.verifyAfterMerge));
     }
     return 0;
-  }
-
-  // A new assertion still starts from a clean note when none is given —
-  // notes are scoped to the assertion they explain, and carrying a
-  // "blocked on dev login" note forward into `ready` would be worse than
-  // losing it. What changes is that losing it is no longer SILENT.
-  const prevRecord = state.slugs[target.slug]?.work;
-  const prevNote = prevRecord?.note ?? null;
-  const { note, replaced } = resolveNote(prevNote, args.note, args.append, {
-    keepWhenAbsent: false,
   });
-  const record: WorkStatusRecord = {
-    state: args.state,
-    at: new Date().toISOString(),
-  };
-  if (note) record.note = note;
-  if (args.risk) record.risk = args.risk;
-  if (args.blockedOn) record.blockedOn = args.blockedOn;
-  // The one field a fresh assertion CARRIES rather than drops. Note,
-  // risk and gate are claims made by this assertion, so replacing the
-  // assertion replaces them. A post-merge verification is a standing
-  // obligation about the BRANCH: it outlives the state that recorded
-  // it, and dropping it on the next `wt status working` would silently
-  // release the merged worktree back to the clean sweep — a failure
-  // with no output at all, on the exact path this exists to close.
-  // The two states that end it end it here too.
-  const carried =
-    args.verifyAfterMerge ??
-    (args.state === "verified" || args.state === "dropped"
-      ? null
-      : (prevRecord?.verifyAfterMerge ?? null));
-  if (carried) record.verifyAfterMerge = carried;
-  const discharged =
-    args.state === "verified" && !!prevRecord?.verifyAfterMerge
-      ? prevRecord.verifyAfterMerge
-      : null;
-  // Who is claiming this. Usually the worktree's own agent; the manager
-  // playbook also has it assert on a worker's behalf after triage, and
-  // that difference is what keeps a `status.*` automation from briefing
-  // the session that just wrote the record.
-  const by = agentIdentity();
-  if (by) record.by = by;
-  const sha = await revParse("HEAD", target.path);
-  if (sha) record.sha = sha;
-  const wrote = setSlugWorkStatus(target.slug, record);
-
-  // File-only audit trail (the TUI derives its own attention-feed
-  // entries from the wtstate change; this line is for grepping).
-  const log = createLogger(target.slug);
-  log.info(`work status → ${args.state}${workStatusSuffix(record)}`);
-
-  const color = stateColor(args.state);
-  console.log(
-    `${green("✓")} ${cyan(target.slug)} → ${color(args.state)}${
-      args.risk ? `  ${dim("risk:")} ${color(args.risk)}` : ""
-    }${wrote ? "" : `  ${dim("(unchanged — same claim, original timestamp kept)")}`}`,
-  );
-  if (record.blockedOn) console.log(`  ${red("blocked on:")} ${record.blockedOn}`);
-  if (record.verifyAfterMerge) {
-    console.log(`  ${yellow("verify after merge:")} ${record.verifyAfterMerge}`);
-  }
-  if (discharged) {
-    console.log(`  ${green("verified:")} ${dim(discharged)}`);
-  }
-  if (record.note) console.log(`  ${dim("note:")} ${record.note}`);
-  reportReplacedNote(replaced, args.note !== null);
-  noteBudgetHint(args.state, record.note ?? null);
-  if (record.blockedOn) hint(blockedGuidance(args.state));
-  else {
-    hint(guidance(args.state));
-    // After the state's own footer, not instead of it: `ready` still
-    // needs to say "don't merge it yourself", and this adds what
-    // happens once someone does.
-    if (record.verifyAfterMerge) hint(verifyGuidance(record.verifyAfterMerge));
-  }
-  return 0;
 }

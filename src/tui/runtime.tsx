@@ -1,6 +1,8 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { Cause, Data, Deferred, Effect, Fiber } from "effect";
+import type * as EffectScope from "effect/Scope";
 
 import { actionRegistry } from "../core/actions.ts";
 import { reapArchived } from "../core/archive.ts";
@@ -15,7 +17,7 @@ import { startCodexEventPolling } from "../core/harness/codex/events.ts";
 import { disposeCodexDiscoveryWorker } from "../core/harness/codex/discovery.ts";
 import { harnessTailRegistry } from "../core/harness/tail.ts";
 import { startOpencodeEventPolling } from "../core/harness/opencode/events.ts";
-import { createLogger, flushLogger, setEventSink } from "../core/logger.ts";
+import { createLogger, flushLoggerEffect, setEventSink } from "../core/logger.ts";
 import { ensureManagerClaudeName, MANAGER_SLUG } from "../core/manager.ts";
 import { killHarnessSession, listAllSessionsRaw } from "../core/tmux.ts";
 import { reapDevServerFiles } from "../core/dev-server.ts";
@@ -43,7 +45,11 @@ import { listWorktrees } from "../core/worktree.ts";
 import { readWtState, reapWtState } from "../core/wtstate.ts";
 import { createWtQueryClient } from "../state/index.ts";
 import { qk } from "../state/keys.ts";
-import { fetchOriginNow, fetchOriginQuery, type TmuxSessionsData } from "../state/queries.ts";
+import {
+  fetchOriginNow,
+  fetchOriginQuery,
+  type TmuxSessionsData,
+} from "../state/queries.ts";
 import type { Worktree } from "../core/types.ts";
 import type { QueryClient } from "@tanstack/react-query";
 
@@ -52,6 +58,7 @@ import { TuiErrorBoundary } from "./error-boundary.tsx";
 import { installProcessErrorCapture } from "./error-store.ts";
 import { backfillActivityLog } from "./activity-backfill.ts";
 import { events } from "./activity-log.ts";
+import { cancelAllAutoMergeRetries } from "./flows/auto-merge-retry.ts";
 import { attachFetchLogs } from "./fetch-log.ts";
 import { SLOT_SLUGS } from "./sessions/slots.ts";
 import { attachLoggerToasts } from "./toast.ts";
@@ -60,14 +67,110 @@ const startupLog = createLogger("[startup]");
 
 const INVALIDATION_FLUSH_MS = 50;
 
+class TuiRendererError extends Data.TaggedError("TuiRendererError")<{
+  readonly cause: unknown;
+  readonly message: string;
+}> {}
+
+class RuntimeCleanupError extends Data.TaggedError("RuntimeCleanupError")<{
+  readonly kind: "resource" | "finalizer";
+  readonly cause: unknown;
+}> {}
+
+/**
+ * Attach a resource to the current Effect scope. Cleanup failures are defects
+ * of the cleanup itself, not a reason to abandon the rest of the scope: every
+ * independently registered finalizer must still get its turn during shutdown.
+ */
+export function acquireRuntimeResource<A, E, R>(
+  acquire: Effect.Effect<A, E, R>,
+  release: (resource: A) => void | Promise<void>,
+): Effect.Effect<A, E, R | EffectScope.Scope> {
+  return Effect.acquireRelease(acquire, (resource) =>
+    Effect.tryPromise({
+      try: async () => {
+        await release(resource);
+      },
+      catch: (cause) => new RuntimeCleanupError({ kind: "resource", cause }),
+    }).pipe(
+      Effect.catchAll((cause) =>
+        Effect.sync(() => {
+          startupLog.warn("runtime resource cleanup failed", {
+            err:
+              cause.cause instanceof Error
+                ? cause.cause.message
+                : String(cause.cause),
+          });
+        }),
+      ),
+    ),
+  );
+}
+
+function acquireSyncResource<A>(
+  acquire: () => A,
+  release: (resource: A) => void | Promise<void>,
+): Effect.Effect<A, never, EffectScope.Scope> {
+  return acquireRuntimeResource(Effect.sync(acquire), release);
+}
+
+function addRuntimeFinalizer(
+  release: () => void | Promise<void>,
+): Effect.Effect<void, never, EffectScope.Scope> {
+  return Effect.addFinalizer(() =>
+    Effect.tryPromise({
+      try: async () => {
+        await release();
+      },
+      catch: (cause) => new RuntimeCleanupError({ kind: "finalizer", cause }),
+    }).pipe(
+      Effect.catchAll((cause) =>
+        Effect.sync(() => {
+          startupLog.warn("runtime finalizer failed", {
+            err:
+              cause.cause instanceof Error
+                ? cause.cause.message
+                : String(cause.cause),
+          });
+        }),
+      ),
+    ),
+  );
+}
+
 type InvalidationJob =
   | { kind: "key"; key: readonly unknown[] }
   | { kind: "claudeHarnessSessions" }
   | { kind: "fetchOrigin"; force: boolean };
 
+class InvalidationError extends Data.TaggedError("InvalidationError")<{
+  readonly cause: unknown;
+}> {}
+
+class StartupReapError extends Data.TaggedError("StartupReapError")<{
+  readonly operation: string;
+  readonly cause: unknown;
+}> {}
+
+function startupReapPromise<A>(operation: string, run: () => Promise<A>) {
+  return Effect.tryPromise({
+    try: run,
+    catch: (cause) => new StartupReapError({ operation, cause }),
+  });
+}
+
+const forkBestEffort = (run: () => Promise<unknown>): void => {
+  Effect.runFork(
+    Effect.tryPromise({
+      try: run,
+      catch: (cause) => new InvalidationError({ cause }),
+    }).pipe(Effect.ignore),
+  );
+};
+
 class InvalidationScheduler {
   private readonly jobs = new Map<string, InvalidationJob>();
-  private timer: Timer | null = null;
+  private timer: Fiber.RuntimeFiber<void, never> | null = null;
   private disposed = false;
 
   constructor(private readonly client: QueryClient) {}
@@ -81,12 +184,15 @@ class InvalidationScheduler {
   }
 
   fetchOrigin(opts: { force?: boolean } = {}): void {
-    this.enqueue({ kind: "fetchOrigin", force: opts.force ?? false }, "fetchOrigin");
+    this.enqueue(
+      { kind: "fetchOrigin", force: opts.force ?? false },
+      "fetchOrigin",
+    );
   }
 
   dispose(): void {
     this.disposed = true;
-    if (this.timer !== null) clearTimeout(this.timer);
+    if (this.timer !== null) Effect.runFork(Fiber.interrupt(this.timer));
     this.timer = null;
     this.jobs.clear();
   }
@@ -95,29 +201,45 @@ class InvalidationScheduler {
     if (this.disposed) return;
     this.jobs.set(id, job);
     if (this.timer !== null) return;
-    this.timer = setTimeout(() => this.flush(), INVALIDATION_FLUSH_MS);
+    let timer: Fiber.RuntimeFiber<void, never>;
+    timer = Effect.runFork(
+      Effect.sleep(`${INVALIDATION_FLUSH_MS} millis`).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            if (this.timer === timer) this.timer = null;
+            this.flush();
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (this.timer === timer) this.timer = null;
+          }),
+        ),
+      ),
+    );
+    this.timer = timer;
   }
 
   private flush(): void {
-    this.timer = null;
     if (this.disposed) return;
     const jobs = [...this.jobs.values()];
     this.jobs.clear();
     for (const job of jobs) {
       if (job.kind === "key") {
-        this.client.invalidateQueries({ queryKey: job.key }).catch(() => {});
+        forkBestEffort(() =>
+          this.client.invalidateQueries({ queryKey: job.key }),
+        );
       } else if (job.kind === "claudeHarnessSessions") {
-        this.client
-          .invalidateQueries({
+        forkBestEffort(() =>
+          this.client.invalidateQueries({
             predicate: (q) =>
-              q.queryKey[0] === "harnessSessions" &&
-              q.queryKey[1] === "claude",
-          })
-          .catch(() => {});
+              q.queryKey[0] === "harnessSessions" && q.queryKey[1] === "claude",
+          }),
+        );
       } else if (job.force) {
-        fetchOriginNow().catch(() => {});
+        forkBestEffort(fetchOriginNow);
       } else {
-        this.client.fetchQuery(fetchOriginQuery()).catch(() => {});
+        forkBestEffort(() => this.client.fetchQuery(fetchOriginQuery()));
       }
     }
   }
@@ -133,9 +255,8 @@ class InvalidationScheduler {
  * destroys whose target slug never gets re-created. Errors are
  * swallowed; a stale entry is a worse outcome than blocking startup.
  */
-async function reapStartup(): Promise<void> {
-  try {
-    const wts = await listWorktrees();
+const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
+    const wts = yield* startupReapPromise("list worktrees", listWorktrees);
     const live = new Set(wts.map((w) => w.slug));
     const liveHarnessSlugs = new Set(live);
     for (const slug of SLOT_SLUGS) liveHarnessSlugs.add(slug);
@@ -159,7 +280,8 @@ async function reapStartup(): Promise<void> {
     for (const slug of actionRegistry.persistedRemoteActionKeys()) {
       protectedSlugs.add(slug);
     }
-    await reapOrphanedSessions(protectedSlugs);
+    yield* startupReapPromise("reap orphaned sessions", () =>
+      reapOrphanedSessions(protectedSlugs));
     // One-time migration: the manager now lives as a NAMED claude
     // session (`manager~manager`) with its own conversation UUID —
     // the old bare `manager` primary shared main's conversation (same
@@ -167,10 +289,17 @@ async function reapStartup(): Promise<void> {
     // would linger protected forever and confuse `m` (which no longer
     // attaches it), so kill it here. New code never creates it.
     ensureManagerClaudeName();
-    const tmuxLive = await listAllSessionsRaw().catch(() => new Set<string>());
+    const tmuxLive = yield* startupReapPromise("list tmux sessions", listAllSessionsRaw).pipe(
+      Effect.catchAll(() => Effect.succeed(new Set<string>())),
+    );
     if (tmuxLive.has(MANAGER_SLUG)) {
-      startupLog.warn("killing legacy primary-form manager session (shared main's conversation)");
-      await killHarnessSession(MANAGER_SLUG, "claude", null).catch(() => {});
+      startupLog.warn(
+        "killing legacy primary-form manager session (shared main's conversation)",
+      );
+      yield* startupReapPromise("kill legacy manager session", () =>
+        killHarnessSession(MANAGER_SLUG, "claude", null)).pipe(
+          Effect.catchAll(() => Effect.void),
+        );
     }
     // Drop terminal action run dirs whose slug is gone OR that fall
     // beyond the rehydration window. Ordered before `boot` so the
@@ -181,13 +310,34 @@ async function reapStartup(): Promise<void> {
     // session that was running when the previous wt exited (or
     // crashed) and re-attaches a live tail; finalizes runs whose
     // wrapper exited while wt was down.
-    await actionRegistry.boot(live);
-  } catch (err) {
-    startupLog.warn("reap failed", { err: err instanceof Error ? err.message : String(err) });
-  }
-}
+    yield* startupReapPromise("rehydrate action runs", () => actionRegistry.boot(live));
+}).pipe(
+  // Reaping is maintenance and must not prevent first paint. Keep the
+  // failure policy from the legacy helper, but represent every async leg as
+  // a typed Effect operation before applying that policy once at the edge.
+  Effect.catchAllCause((cause) => Effect.sync(() => {
+    startupLog.warn("reap failed", {
+      err: Cause.pretty(cause),
+    });
+  })),
+);
 
-export async function runTui(): Promise<TuiExit> {
+export const runTuiEffect = Effect.gen(function* () {
+  // These process-wide registries may acquire handles lazily while the UI is
+  // alive. Register their shutdown before startup begins so a later startup
+  // failure still drains anything acquired in the meantime.
+  yield* Effect.addFinalizer(() => flushLoggerEffect);
+  yield* addRuntimeFinalizer(() => {
+    sessionTailRegistry.stopAll();
+    shellTailRegistry.stopAll();
+    harnessTailRegistry.stopAll();
+  });
+  yield* addRuntimeFinalizer(() => actionRegistry.shutdown());
+  yield* addRuntimeFinalizer(cancelAllAutoMergeRetries);
+  yield* addRuntimeFinalizer(closeOpencodeDb);
+  yield* addRuntimeFinalizer(disposeCodexDiscoveryWorker);
+  yield* addRuntimeFinalizer(disposeDiffPool);
+
   // Restore the pane feeds from the daily logs FIRST (a restart must
   // not wipe the attention trail), then forward live logger.event.*
   // into the store. CLI runs leave the sink unset, so event-style log
@@ -197,54 +347,75 @@ export async function runTui(): Promise<TuiExit> {
   // events come back from the daily logs, the watermark from wtstate,
   // so already-handled lines re-appear dim instead of bright.
   events.markSeen(readWtState().attentionSeenTs);
-  setEventSink((e) => {
-    events.append(e);
-  });
+  yield* acquireSyncResource(
+    () => {
+      setEventSink((e) => {
+        events.append(e);
+      });
+    },
+    () => setEventSink(null),
+  );
   // Logger emits carrying `{ toast: true }` also flash in the footer.
-  const detachToasts = attachLoggerToasts();
+  yield* acquireSyncResource(attachLoggerToasts, (detach) => detach());
 
-  const wtClient = createWtQueryClient();
-  const invalidations = new InvalidationScheduler(wtClient.client);
-  const detachFetchLogs = attachFetchLogs(wtClient.client);
+  const wtClient = yield* acquireSyncResource(createWtQueryClient, (client) =>
+    client.shutdown(),
+  );
+  const invalidations = yield* acquireSyncResource(
+    () => new InvalidationScheduler(wtClient.client),
+    (scheduler) => scheduler.dispose(),
+  );
+  yield* acquireSyncResource(
+    () => attachFetchLogs(wtClient.client),
+    (detach) => detach(),
+  );
   // fs-watch the claude session registry so the per-session "busy /
   // idle" indicator in the claude row flips the instant claude rewrites
   // its state file, without waiting for the 5s polling backstop on
   // `claudeRegistryQuery`. Cheap: a single FSEvents subscription on the
   // top-level dir, no recursion. `.catch(noop)` swallows rejections
   // from invalidations that race a torn-down client during shutdown.
-  const stopRegistryWatch = watchRegistry(() => {
-    invalidations.key(qk.claudeRegistry());
-    // Claude's working/asking/waiting state is baked into the
-    // `harnessSessions` discovery cache (it reads the registry inside
-    // its queryFn), and that cache — not `claudeRegistry` — now drives
-    // the list-pane glyph tint and the details AI row. The registry
-    // write that just fired IS that state changing, so refresh the
-    // claude discovery too; otherwise the tint would only update on
-    // spawn/kill/manual-refresh. Scoped to claude + active observers
-    // (the live-slug fan-out), so it stays cheap.
-    invalidations.claudeHarnessSessions();
-    // A registry write also means a claude process started or exited,
-    // which is exactly when the tmux session set changes — refresh it
-    // here so the session badges flip on the event instead of the
-    // (now slower) polling backstop.
-    invalidations.key(qk.tmuxSessions());
-    // A registry rewrite IS claude activity (turn start/end) — exactly
-    // when Anthropic API utilization changes. `claudeUsage` was
-    // otherwise poll-only; this rides the same fs.watch as everything
-    // else in this callback instead of waiting out its 60s interval.
-    invalidations.key(qk.claudeUsage());
-  });
+  yield* acquireSyncResource(
+    () =>
+      watchRegistry(() => {
+        invalidations.key(qk.claudeRegistry());
+        // Claude's working/asking/waiting state is baked into the
+        // `harnessSessions` discovery cache (it reads the registry inside
+        // its queryFn), and that cache — not `claudeRegistry` — now drives
+        // the list-pane glyph tint and the details AI row. The registry
+        // write that just fired IS that state changing, so refresh the
+        // claude discovery too; otherwise the tint would only update on
+        // spawn/kill/manual-refresh. Scoped to claude + active observers
+        // (the live-slug fan-out), so it stays cheap.
+        invalidations.claudeHarnessSessions();
+        // A registry write also means a claude process started or exited,
+        // which is exactly when the tmux session set changes — refresh it
+        // here so the session badges flip on the event instead of the
+        // (now slower) polling backstop.
+        invalidations.key(qk.tmuxSessions());
+        // A registry rewrite IS claude activity (turn start/end) — exactly
+        // when Anthropic API utilization changes. `claudeUsage` was
+        // otherwise poll-only; this rides the same fs.watch as everything
+        // else in this callback instead of waiting out its 60s interval.
+        invalidations.key(qk.claudeUsage());
+      }),
+    (stop) => stop(),
+  );
   // Local git activity → query invalidations. Coarse refs watcher fires
   // on commits, fetches, pushes, branch creates/deletes (anything that
   // touches `<main>/.git/refs/`). Per-worktree dir watchers fire on
   // working-tree edits and flip the dirty badge without waiting for
   // staleTime. Active observers refetch; cold queries stay cold.
-  const stopRefsWatch = watchRefs(config.paths.mainClone, () => {
-    invalidations.key(["github"]);
-    invalidations.key(qk.reviewRequests());
-    invalidations.key(["wt"]);
-    invalidations.key(qk.wtState());
-  });
+  yield* acquireSyncResource(
+    () =>
+      watchRefs(config.paths.mainClone, () => {
+        invalidations.key(["github"]);
+        invalidations.key(qk.reviewRequests());
+        invalidations.key(["wt"]);
+        invalidations.key(qk.wtState());
+      }),
+    (stop) => stop(),
+  );
   // GitHub webhook deliveries → query invalidation. The `wt events` daemon
   // rewrites a marker file after each refetch; watching it is the push
   // counterpart to the refs watcher above, scoped to PR / check / merge-
@@ -257,33 +428,39 @@ export async function runTui(): Promise<TuiExit> {
   // merged/gone badges sit on stale local refs until a manual `r`. The
   // fetch's ref updates then flow back through the refs watcher above — one
   // push event drives the whole cascade.
-  const stopGithubEventsWatch = config.github.events
-    ? watchGithubEvents(() => {
-        invalidations.key(["github"]);
-        invalidations.key(qk.reviewRequests());
-        invalidations.fetchOrigin({ force: true });
-      })
-    : null;
+  if (config.github.events) {
+    yield* acquireSyncResource(
+      () =>
+        watchGithubEvents(() => {
+          invalidations.key(["github"]);
+          invalidations.key(qk.reviewRequests());
+          invalidations.fetchOrigin({ force: true });
+        }),
+      (stop) => stop(),
+    );
+  }
   // Worktree membership changes (`git worktree add/remove` from any
   // process — `wt new` in a shell, `/split` in a Claude session, the
   // detached destroy finishing) → refresh the worktree list. The refs
   // watcher can't see these: worktree admin lives under `.git/worktrees/`,
   // not `refs/`.
-  const stopWorktreesAdminWatch = watchWorktreesAdmin(
-    config.paths.mainClone,
-    () => {
-      invalidations.key(qk.worktrees());
-    },
+  yield* acquireSyncResource(
+    () =>
+      watchWorktreesAdmin(config.paths.mainClone, () => {
+        invalidations.key(qk.worktrees());
+      }),
+    (stop) => stop(),
   );
   // Rift checkouts are independent clones that never touch
   // `.git/worktrees/`, so the admin watcher above can't see them. Watch
   // the worktree root itself for create/remove (harmlessly redundant for
   // git worktrees, which also land as subdirs there).
-  const stopWorktreeRootWatch = watchWorktreeRoot(
-    config.paths.worktreeRoot,
-    () => {
-      invalidations.key(qk.worktrees());
-    },
+  yield* acquireSyncResource(
+    () =>
+      watchWorktreeRoot(config.paths.worktreeRoot, () => {
+        invalidations.key(qk.worktrees());
+      }),
+    (stop) => stop(),
   );
   // Rebase state appearing/disappearing in a worktree (`rebase-merge/`
   // under its `.git/worktrees/<slug>/` admin dir) → refresh that slug's
@@ -292,28 +469,37 @@ export async function runTui(): Promise<TuiExit> {
   // `/restack` conflict resolution, a hand rebase): refs don't move
   // until it finishes, and the engine's own runs are covered by the
   // lock watcher instead. Covers LINKED worktrees only.
-  const stopRebaseStateWatch = watchRebaseState(
-    config.paths.mainClone,
-    (slug) => {
-      invalidations.key(qk.wt(slug).conflictAny());
-    },
+  yield* acquireSyncResource(
+    () =>
+      watchRebaseState(config.paths.mainClone, (slug) => {
+        invalidations.key(qk.wt(slug).conflictAny());
+      }),
+    (stop) => stop(),
   );
   // A rift checkout is an independent clone, so its rebase control dir is
   // `<slice>/.git/rebase-*` — invisible to the main-clone watcher above.
   // One watcher per rift slice on its own `.git`, reconciled below against
   // the rift subset of the worktree list, so the mid-rebase glyph flips on
   // a hand / `/restack` rebase there too.
-  const riftRebaseWatchSet = new RiftRebaseWatchSet((slug) => {
-    invalidations.key(qk.wt(slug).conflictAny());
-  });
+  const riftRebaseWatchSet = yield* acquireSyncResource(
+    () =>
+      new RiftRebaseWatchSet((slug) => {
+        invalidations.key(qk.wt(slug).conflictAny());
+      }),
+    (watchSet) => watchSet.dispose(),
+  );
   // Cross-process state.json / archive.json writes (CLI stack ops, `wt
   // base set`, another wt instance) → refresh the matching query so
   // sections, fork-base records, and the archived set track external
   // mutations live.
-  const stopWtStateWatch = watchWtStateFiles((file) => {
-    const key = file === "state" ? qk.wtState() : qk.archive();
-    invalidations.key(key);
-  });
+  yield* acquireSyncResource(
+    () =>
+      watchWtStateFiles((file) => {
+        const key = file === "state" ? qk.wtState() : qk.archive();
+        invalidations.key(key);
+      }),
+    (stop) => stop(),
+  );
   // Per-slug lock churn → refresh that slug's lock query. Acquire /
   // phase writes / release all land here, so the busy state is push-
   // based in both directions: a create's "pnpm install" phase appears
@@ -322,36 +508,43 @@ export async function runTui(): Promise<TuiExit> {
   // the lock appears after the query last fetched null. The release
   // side then chains through `useLockReleasedInvalidator`, which
   // refreshes the released slug's field queries.
-  const stopLockWatch = watchLockDir(config.paths.lockDir, (slug) => {
-    if (slug === "*") {
-      // Event without a filename — can't target one slug; refresh the
-      // whole per-worktree namespace rather than risk a stuck "busy". A
-      // create/destroy may also have completed, so refresh the list too.
-      invalidations.key(["wt"]);
-      invalidations.key(qk.worktrees());
-      return;
-    }
-    invalidations.key(qk.wt(slug).lock());
-    // A lock that's now GONE means a create or destroy just finished, so
-    // worktree membership may have changed — refresh the list. This is the
-    // completion signal the fs-dir watchers can't give for a rift create:
-    // its `.rift` marker (what makes the row discoverable) is written INSIDE
-    // the new dir, after the worktree-root watcher already fired on the bare
-    // dir appearing — so without this a CLI `wt new` row would only surface
-    // on the next interval. Gated on release (lock gone) so mid-op phase
-    // writes during a long restack don't churn the list.
-    if (!lockStatus(slug)) invalidations.key(qk.worktrees());
-  });
-  const worktreeWatchSet = new WorktreeWatchSet((slug, area) => {
-    // `.sst/` writes flip the deploy badge (deploys + removes always
-    // write there); everything else is a working-tree edit → dirty.
-    const key =
-      area === "sst" ? qk.wt(slug).deploy() : qk.wt(slug).dirty();
-    invalidations.key(key);
-    // Feed the automations engine's settle window: any observed write
-    // (tree edit or deploy churn) counts as "someone is working here".
-    recordWorktreeEdit(slug);
-  });
+  yield* acquireSyncResource(
+    () =>
+      watchLockDir(config.paths.lockDir, (slug) => {
+        if (slug === "*") {
+          // Event without a filename — can't target one slug; refresh the
+          // whole per-worktree namespace rather than risk a stuck "busy". A
+          // create/destroy may also have completed, so refresh the list too.
+          invalidations.key(["wt"]);
+          invalidations.key(qk.worktrees());
+          return;
+        }
+        invalidations.key(qk.wt(slug).lock());
+        // A lock that's now GONE means a create or destroy just finished, so
+        // worktree membership may have changed — refresh the list. This is the
+        // completion signal the fs-dir watchers can't give for a rift create:
+        // its `.rift` marker (what makes the row discoverable) is written INSIDE
+        // the new dir, after the worktree-root watcher already fired on the bare
+        // dir appearing — so without this a CLI `wt new` row would only surface
+        // on the next interval. Gated on release (lock gone) so mid-op phase
+        // writes during a long restack don't churn the list.
+        if (!lockStatus(slug)) invalidations.key(qk.worktrees());
+      }),
+    (stop) => stop(),
+  );
+  const worktreeWatchSet = yield* acquireSyncResource(
+    () =>
+      new WorktreeWatchSet((slug, area) => {
+        // `.sst/` writes flip the deploy badge (deploys + removes always
+        // write there); everything else is a working-tree edit → dirty.
+        const key = area === "sst" ? qk.wt(slug).deploy() : qk.wt(slug).dirty();
+        invalidations.key(key);
+        // Feed the automations engine's settle window: any observed write
+        // (tree edit or deploy churn) counts as "someone is working here".
+        recordWorktreeEdit(slug);
+      }),
+    (watchSet) => watchSet.dispose(),
+  );
   // Reconcile the per-worktree watcher set against the worktrees query.
   // Skip `isMain` — the main clone's tree is heavy (node_modules) and
   // the user works in worktrees, not trunk. Subscribe first so we never
@@ -367,11 +560,15 @@ export async function runTui(): Promise<TuiExit> {
     // marker probe keeps the watcher set to the clones that need it.
     riftRebaseWatchSet.reconcile(targets.filter((t) => isRiftWorktree(t.path)));
   };
-  const unsubWorktrees = wtClient.client.getQueryCache().subscribe((event) => {
-    if (event.type !== "updated") return;
-    if (event.query.queryKey[0] !== "worktrees") return;
-    reconcileWatchers(event.query.state.data as Worktree[] | undefined);
-  });
+  yield* acquireSyncResource(
+    () =>
+      wtClient.client.getQueryCache().subscribe((event) => {
+        if (event.type !== "updated") return;
+        if (event.query.queryKey[0] !== "worktrees") return;
+        reconcileWatchers(event.query.state.data as Worktree[] | undefined);
+      }),
+    (unsubscribe) => unsubscribe(),
+  );
   reconcileWatchers(wtClient.client.getQueryData<Worktree[]>(qk.worktrees()));
   // Wait briefly for the SQLite cache to hydrate so the first paint
   // shows stale data instead of empty. If hydration takes longer than
@@ -379,46 +576,63 @@ export async function runTui(): Promise<TuiExit> {
   // racing concurrently — it doesn't gate the first paint, but
   // resolving it before the wtState query observer kicks in saves an
   // immediate refetch.
-  await Promise.all([
-    Promise.race([
-      wtClient.restored,
-      new Promise<void>((r) => setTimeout(r, 150)),
-    ]),
-    reapStartup(),
-  ]);
+  yield* Effect.all(
+    [
+      Effect.race(
+        Effect.promise(() => wtClient.restored),
+        Effect.sleep("150 millis"),
+      ),
+      reapStartupEffect,
+    ],
+    { concurrency: "unbounded" },
+  );
 
   // Start Codex activity-event polling. Same pattern as opencode: the
   // getter reads from the query cache imperatively (no React) and is
   // safe to call from the interval callback outside the render tree.
   // `onActivity` invalidates `codexUsage` — a push trigger riding the
   // same worker-tick sensor instead of leaving that query poll-only.
-  const stopCodexEvents = startCodexEventPolling(
-    () => {
-      const worktrees = wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
-      const tmux = wtClient.client.getQueryData<TmuxSessionsData>(qk.tmuxSessions());
-      const liveCodex = new Set(tmux?.slugsByHarness.codex ?? []);
-      return worktrees
-        .filter((wt) => liveCodex.has(wt.slug))
-        .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
-    },
-    () => invalidations.key(qk.codexUsage()),
+  yield* acquireSyncResource(
+    () =>
+      startCodexEventPolling(
+        () => {
+          const worktrees =
+            wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
+          const tmux = wtClient.client.getQueryData<TmuxSessionsData>(
+            qk.tmuxSessions(),
+          );
+          const liveCodex = new Set(tmux?.slugsByHarness.codex ?? []);
+          return worktrees
+            .filter((wt) => liveCodex.has(wt.slug))
+            .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
+        },
+        () => invalidations.key(qk.codexUsage()),
+      ),
+    (stop) => stop(),
   );
 
   // Start OpenCode activity-event polling. The getter reads from the
   // query cache imperatively (no React) so it's safe to call from the
   // interval callback outside the render tree. `onActivity` invalidates
   // `opencodeCost` for the same reason as codex above.
-  const stopOpencodeEvents = startOpencodeEventPolling(
-    () => {
-      const worktrees = wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
-      const tmux = wtClient.client.getQueryData<TmuxSessionsData>(qk.tmuxSessions());
-      // Only scan slugs that have a live opencode tmux session.
-      const liveOpecode = new Set(tmux?.slugsByHarness.opencode ?? []);
-      return worktrees
-        .filter((wt) => liveOpecode.has(wt.slug))
-        .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
-    },
-    () => invalidations.key(qk.opencodeCost()),
+  yield* acquireSyncResource(
+    () =>
+      startOpencodeEventPolling(
+        () => {
+          const worktrees =
+            wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
+          const tmux = wtClient.client.getQueryData<TmuxSessionsData>(
+            qk.tmuxSessions(),
+          );
+          // Only scan slugs that have a live opencode tmux session.
+          const liveOpecode = new Set(tmux?.slugsByHarness.opencode ?? []);
+          return worktrees
+            .filter((wt) => liveOpecode.has(wt.slug))
+            .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
+        },
+        () => invalidations.key(qk.opencodeCost()),
+      ),
+    (stop) => stop(),
   );
 
   // Wire the session tail's refresh triggers to the query cache. The
@@ -427,20 +641,28 @@ export async function runTui(): Promise<TuiExit> {
   // refresh target here and we invalidate the matching query right
   // away instead of waiting out its slow staleTime. `.catch` swallows
   // the race against a torn-down client during shutdown.
-  setSessionTriggerSink((target) => {
-    if (target === "github") {
-      invalidations.key(["github"]);
-      invalidations.key(qk.reviewRequests());
-    }
-  });
+  yield* acquireSyncResource(
+    () =>
+      setSessionTriggerSink((target) => {
+        if (target === "github") {
+          invalidations.key(["github"]);
+          invalidations.key(qk.reviewRequests());
+        }
+      }),
+    () => setSessionTriggerSink(null),
+  );
   // The session tail already watches every live claude jsonl for the
   // activity pane; this sink piggybacks on it to invalidate just the
   // affected slug's claude query so the row's last-activity age + queue
   // count snap on turn end instead of waiting out the 5s poll. Scoped
   // tightly — only `qk.wt(slug).claude()`, nothing global.
-  setSessionSlugChangeSink((slug) => {
-    invalidations.key(qk.wt(slug).claude());
-  });
+  yield* acquireSyncResource(
+    () =>
+      setSessionSlugChangeSink((slug) => {
+        invalidations.key(qk.wt(slug).claude());
+      }),
+    () => setSessionSlugChangeSink(null),
+  );
 
   // Evict orphaned cache entries whose key shape changed across a wt
   // upgrade. Without this, an entry persisted under an old key sits in
@@ -467,22 +689,28 @@ export async function runTui(): Promise<TuiExit> {
   // data for first paint; if the branch set changed while wt was down
   // this converges on the next boot) plus anything actively observed.
   // After `restored` so the sweep sees the fully hydrated set.
-  void wtClient.restored.then(() => {
-    const githubEntries = wtClient.client
-      .getQueryCache()
-      .findAll({ queryKey: ["github"] })
-      .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt);
-    const stale = githubEntries
-      .slice(1)
-      .filter((q) => q.getObserversCount() === 0);
-    for (const query of stale) wtClient.evict(query.queryKey);
-    if (stale.length > 0) {
-      startupLog.debug("pruned superseded github cache entries", {
-        pruned: stale.length,
-        kept: githubEntries.length - stale.length,
-      });
-    }
-  });
+  yield* Effect.forkScoped(
+    Effect.promise(() => wtClient.restored).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          const githubEntries = wtClient.client
+            .getQueryCache()
+            .findAll({ queryKey: ["github"] })
+            .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt);
+          const stale = githubEntries
+            .slice(1)
+            .filter((q) => q.getObserversCount() === 0);
+          for (const query of stale) wtClient.evict(query.queryKey);
+          if (stale.length > 0) {
+            startupLog.debug("pruned superseded github cache entries", {
+              pruned: stale.length,
+              kept: githubEntries.length - stale.length,
+            });
+          }
+        }),
+      ),
+    ),
+  );
 
   // Periodic `git fetch origin` backstop so origin-relative state
   // (behind counts, merged/gone badges) tracks the remote without a
@@ -494,64 +722,86 @@ export async function runTui(): Promise<TuiExit> {
   // no extra plumbing here. Errors (offline, transient network) are
   // swallowed; the next tick retries.
   const FETCH_ORIGIN_INTERVAL_MS = 3 * 60 * 1000;
-  const fetchOriginTimer = setInterval(() => {
-    fetchOriginNow().catch(() => {});
-  }, FETCH_ORIGIN_INTERVAL_MS);
 
   // Opt-in (`WT_PERF=1`) probe that logs whenever the single JS thread
   // is blocked long enough to drop a frame / stall a keypress. Used to
   // confirm the diff-pool offload actually unblocked the render thread.
-  const stopLoopLagProbe = startLoopLagProbe();
+  // The probe needs the renderer to attach, but renderer.destroy() must run
+  // first so its final painted-frame callback cannot race a detached probe.
+  // Register the later-acquired probe's slot before the renderer resource to
+  // retain that teardown order while still covering renderer startup failure.
+  let detachInputLatency: (() => void) | null = null;
+  yield* addRuntimeFinalizer(() => detachInputLatency?.());
+
+  yield* acquireSyncResource(startLoopLagProbe, (stop) => stop());
+  yield* Effect.forkScoped(
+    Effect.forever(
+      Effect.sleep(`${FETCH_ORIGIN_INTERVAL_MS} millis`).pipe(
+        Effect.andThen(
+          Effect.tryPromise({
+            try: fetchOriginNow,
+            catch: (cause) => new InvalidationError({ cause }),
+          }),
+        ),
+        Effect.ignore,
+      ),
+    ),
+  );
 
   // From the moment the renderer owns the terminal, Bun's default
   // uncaughtException/unhandledRejection reporters would print raw
   // stack traces over the panes. Install the capture (ring + file log +
   // error overlay; keep-alive semantics documented in error-store.ts)
-  // for exactly the renderer's lifetime — detached in the finally after
+  // for exactly the renderer's lifetime — detached by the scope after
   // `renderer.destroy()`, so late-teardown errors fall through to plain
   // stderr and main.ts's catch (the crash-rollback path) as before.
-  const detachErrorCapture = installProcessErrorCapture();
-  let renderer;
-  try {
-    renderer = await createCliRenderer({
-      exitOnCtrlC: false,
-      // No targetFps override: it only applies in the renderer's "live"
-      // (continuous) mode, which wt never enters now that no Timeline /
-      // requestAnimationFrame users exist (see spinner.tsx). If some
-      // future dependency re-arms live mode, the default 30fps halves
-      // the damage vs the 60 this used to pass. On-demand keypress
-      // frames are throttled by maxFps (60), not this.
-      // OpenTUI installs its own uncaughtException/unhandledRejection
-      // hook that console.errors the stack and (by default) pops its
-      // debug console overlay over the panes — the error overlay above
-      // owns that surface now, so keep OpenTUI's from fighting it.
-      openConsoleOnError: false,
-      // wt owns its keyboard entirely (`useKeyboard` → the dispatch
-      // chain in tui/keyboard/) and has no focusable widgets — every
-      // text input is drawn and keyed by hand. OpenTUI's autoFocus,
-      // left on, focuses the first focusable ANCESTOR of whatever gets
-      // left-clicked, which is always a scrollbox, and a focused
-      // scrollbox installs a GLOBAL keypress handler that scrolls 1/5
-      // of a viewport on j/k/h/l/arrows/PgUp/PgDn — modifiers ignored,
-      // so Ctrl+J/K hit it too. One stray click (focusing the terminal
-      // window is enough) and from then on every j moves the cursor
-      // AND jerks some pane four rows, often a pane the key has
-      // nothing to do with. That's the "it gets weird after a while"
-      // bug: the trigger is a mouse click long since forgotten.
-      autoFocus: false,
-    });
-  } catch (err) {
-    // Renderer setup failed before the teardown .finally exists — the
-    // capture MUST detach here or the listeners outlive the TUI and
-    // silently eat errors during main.ts's crash handling.
-    detachErrorCapture();
-    throw err;
-  }
+  yield* acquireSyncResource(installProcessErrorCapture, (detach) => detach());
+  const renderer = yield* acquireRuntimeResource(
+    Effect.tryPromise({
+      try: () =>
+        createCliRenderer({
+          exitOnCtrlC: false,
+          // No targetFps override: it only applies in the renderer's "live"
+          // (continuous) mode, which wt never enters now that no Timeline /
+          // requestAnimationFrame users exist (see spinner.tsx). If some
+          // future dependency re-arms live mode, the default 30fps halves
+          // the damage vs the 60 this used to pass. On-demand keypress
+          // frames are throttled by maxFps (60), not this.
+          // OpenTUI installs its own uncaughtException/unhandledRejection
+          // hook that console.errors the stack and (by default) pops its
+          // debug console overlay over the panes — the error overlay above
+          // owns that surface now, so keep OpenTUI's from fighting it.
+          openConsoleOnError: false,
+          // wt owns its keyboard entirely (`useKeyboard` → the dispatch
+          // chain in tui/keyboard/) and has no focusable widgets — every
+          // text input is drawn and keyed by hand. OpenTUI's autoFocus,
+          // left on, focuses the first focusable ANCESTOR of whatever gets
+          // left-clicked, which is always a scrollbox, and a focused
+          // scrollbox installs a GLOBAL keypress handler that scrolls 1/5
+          // of a viewport on j/k/h/l/arrows/PgUp/PgDn — modifiers ignored,
+          // so Ctrl+J/K hit it too. One stray click (focusing the terminal
+          // window is enough) and from then on every j moves the cursor
+          // AND jerks some pane four rows, often a pane the key has
+          // nothing to do with. That's the "it gets weird after a while"
+          // bug: the trigger is a mouse click long since forgotten.
+          autoFocus: false,
+      }),
+      catch: (cause) =>
+        new TuiRendererError({
+          cause,
+          message: cause instanceof Error ? cause.message : String(cause),
+        }),
+    }),
+    (activeRenderer) => activeRenderer.destroy(),
+  );
   // Frame-side half of the WT_PERF input-latency probe (the keypress
   // side is `markKeypress()` in App's keyboard dispatch). No-op pair
   // when the env var is unset.
-  const detachInputLatency = attachInputLatencyProbe(renderer);
-  const root = createRoot(renderer);
+  detachInputLatency = attachInputLatencyProbe(renderer);
+  const root = yield* acquireSyncResource(
+    () => createRoot(renderer),
+    (activeRoot) => activeRoot.unmount(),
+  );
   // A dying terminal (tmux kill-session/-server, window close, SSH drop)
   // delivers SIGHUP — without an explicit handler this process SURVIVES
   // it (opentui's raw-mode stdin keeps the loop alive), reparents to
@@ -561,21 +811,33 @@ export async function runTui(): Promise<TuiExit> {
   // so the full teardown below runs; the unref'd force-exit backstop
   // covers a teardown that wedges (which would re-create the leak this
   // handler exists to prevent).
-  let onHangup: (() => void) | null = null;
-  return new Promise<TuiExit>((resolve) => {
-    onHangup = () => {
-      // File-log the reason first: distinguishing a hangup exit from a
-      // normal quit is exactly what post-mortems of the orphan leak
-      // needed. The graceful path flushes this in the finally below;
-      // if only the force-exit lands there'll be no flush — acceptable,
-      // the absence of a subsequent clean-shutdown line IS the signal.
-      startupLog.warn("terminal hangup (SIGHUP/SIGTERM) — tearing down");
-      const force = setTimeout(() => process.exit(129), 2500);
-      force.unref();
-      resolve({ kind: "quit" });
-    };
-    process.on("SIGHUP", onHangup);
-    process.on("SIGTERM", onHangup);
+  const exit = yield* Deferred.make<TuiExit>();
+  const resolve = (value: TuiExit): void => {
+    Deferred.unsafeDone(exit, Effect.succeed(value));
+  };
+  yield* acquireSyncResource(
+    () => {
+      const onHangup = () => {
+        // File-log the reason first: distinguishing a hangup exit from a
+        // normal quit is exactly what post-mortems of the orphan leak
+        // needed. The graceful path flushes this when the scope closes;
+        // if only the force-exit lands there'll be no flush — acceptable,
+        // the absence of a subsequent clean-shutdown line IS the signal.
+        startupLog.warn("terminal hangup (SIGHUP/SIGTERM) — tearing down");
+        const force = setTimeout(() => process.exit(129), 2500);
+        force.unref();
+        resolve({ kind: "quit" });
+      };
+      process.on("SIGHUP", onHangup);
+      process.on("SIGTERM", onHangup);
+      return onHangup;
+    },
+    (onHangup) => {
+      process.off("SIGHUP", onHangup);
+      process.off("SIGTERM", onHangup);
+    },
+  );
+  yield* Effect.sync(() => {
     root.render(
       <QueryClientProvider client={wtClient.client}>
         {/* Render-error capture: a crash in the app tree lands in the
@@ -587,76 +849,6 @@ export async function runTui(): Promise<TuiExit> {
         </TuiErrorBoundary>
       </QueryClientProvider>,
     );
-  }).finally(async () => {
-    if (onHangup) {
-      process.off("SIGHUP", onHangup);
-      process.off("SIGTERM", onHangup);
-    }
-    // Tear down listeners, timers, and the SQLite handle so the
-    // process can exit cleanly. Each step may throw if an earlier
-    // one already disposed state — we swallow so all three run.
-    try {
-      root.unmount();
-    } catch (err) {
-      void err;
-    }
-    try {
-      renderer.destroy();
-    } catch (err) {
-      void err;
-    }
-    // Renderer is gone — raw stderr is safe (and wanted) again.
-    detachErrorCapture();
-    detachFetchLogs();
-    invalidations.dispose();
-    clearInterval(fetchOriginTimer);
-    stopLoopLagProbe();
-    detachInputLatency();
-    disposeDiffPool();
-    disposeCodexDiscoveryWorker();
-    stopRegistryWatch();
-    stopRefsWatch();
-    stopGithubEventsWatch?.();
-    stopWorktreesAdminWatch();
-    stopWorktreeRootWatch();
-    stopRebaseStateWatch();
-    riftRebaseWatchSet.dispose();
-    stopWtStateWatch();
-    stopLockWatch();
-    unsubWorktrees();
-    worktreeWatchSet.dispose();
-    stopCodexEvents();
-    stopOpencodeEvents();
-    setEventSink(null);
-    detachToasts();
-    // Must null the trigger sink BEFORE `wtClient.shutdown()`: a
-    // debounce timer can still be pending here, and nulling the sink
-    // first makes its late fire a no-op. Reordering these two lines
-    // reintroduces a window where the timer invalidates queries on a
-    // torn-down client (the `.catch(() => {})` on the sink only papers
-    // over it).
-    setSessionTriggerSink(null);
-    setSessionSlugChangeSink(null);
-    wtClient.shutdown();
-    // Close the harness-owned read handles (opencode's read-only
-    // SQLite handle is the only one today). No-op for harnesses
-    // without persistent handles.
-    try {
-      closeOpencodeDb();
-    } catch (err) {
-      void err;
-    }
-    // Detach from in-flight actions: close tails + done watchers so
-    // we don't dangle file handles, but leave the tmux-supervised
-    // wrappers running. The next `wt` invocation rehydrates them via
-    // `actionRegistry.boot` — that's the whole point of moving
-    // actions onto tmux.
-    await actionRegistry.shutdown();
-    // Close all jsonl + pipe-pane watchers + drop tailer state.
-    sessionTailRegistry.stopAll();
-    shellTailRegistry.stopAll();
-    harnessTailRegistry.stopAll();
-    // Drain queued log writes before main.ts hits process.exit.
-    await flushLogger();
   });
-}
+  return yield* Deferred.await(exit);
+}).pipe(Effect.scoped);

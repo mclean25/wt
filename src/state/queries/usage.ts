@@ -1,13 +1,39 @@
 import { queryOptions } from "@tanstack/react-query";
+import { Data, Effect } from "effect";
 
-import { readClaudeUsage, type ClaudeUsage } from "../../core/harness/claude/usage.ts";
-import { readCodexUsage, type CodexUsage } from "../../core/harness/codex/usage.ts";
+import {
+  readClaudeUsage,
+  type ClaudeUsage,
+} from "../../core/harness/claude/usage.ts";
+import {
+  readCodexUsage,
+  type CodexUsage,
+} from "../../core/harness/codex/usage.ts";
 import {
   readOpencodeCost,
   type OpencodeCost,
 } from "../../core/harness/opencode/usage.ts";
 
 import { qk } from "../keys.ts";
+
+class UsageQueryError extends Data.TaggedError("UsageQueryError")<{
+  operation: string;
+  cause: unknown;
+}> {
+  override get message(): string {
+    return this.cause instanceof Error
+      ? this.cause.message
+      : String(this.cause);
+  }
+}
+
+const querySync = <A>(operation: string, evaluate: () => A) =>
+  Effect.runPromise(
+    Effect.try({
+      try: evaluate,
+      catch: (cause) => new UsageQueryError({ operation, cause }),
+    }),
+  );
 
 /**
  * Anthropic API utilization read from the Claude Code statusline's
@@ -19,7 +45,8 @@ import { qk } from "../keys.ts";
 export const claudeUsageQuery = () =>
   queryOptions({
     queryKey: qk.claudeUsage(),
-    queryFn: async (): Promise<ClaudeUsage | null> => readClaudeUsage(),
+    queryFn: (): Promise<ClaudeUsage | null> =>
+      querySync("read Claude usage", () => readClaudeUsage()),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -32,7 +59,8 @@ export const claudeUsageQuery = () =>
 export const codexUsageQuery = () =>
   queryOptions({
     queryKey: qk.codexUsage(),
-    queryFn: async (): Promise<CodexUsage | null> => readCodexUsage(),
+    queryFn: (): Promise<CodexUsage | null> =>
+      querySync("read Codex usage", () => readCodexUsage()),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -45,8 +73,8 @@ export const codexUsageQuery = () =>
 export const opencodeCostQuery = () =>
   queryOptions({
     queryKey: qk.opencodeCost(),
-    queryFn: async (): Promise<OpencodeCost | null> =>
-      readOpencodeCost(Date.now()),
+    queryFn: (): Promise<OpencodeCost | null> =>
+      querySync("read OpenCode cost", () => readOpencodeCost(Date.now())),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

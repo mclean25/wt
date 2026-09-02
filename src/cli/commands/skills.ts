@@ -10,8 +10,9 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Data, Effect } from "effect";
 
-import { run as sh } from "../../core/proc.ts";
+import { runEffect as shEffect } from "../../core/proc.ts";
 import {
   buildReports,
   clearSkillsMemory,
@@ -27,7 +28,7 @@ import {
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 import { isInteractive } from "../prompt.ts";
-import { runSkillsSync } from "../skills-sync.ts";
+import { runSkillsSyncEffect } from "../skills-sync.ts";
 
 const USAGE = `usage: wt skills [status|sync|diff|reset] [options]
 
@@ -65,12 +66,10 @@ const STATE_STYLE: Record<UnitState, { glyph: string; label: string }> = {
 
 function targetName(r: UnitReport): string {
   const harnesses = r.target.harnesses.join(", ");
-  return r.target.kind === "rulesync"
-    ? `rulesync ${r.target.rulesync.root} (${harnesses})`
-    : `${harnesses}`;
+  return r.target.kind === "rulesync" ? `rulesync ${r.target.rulesync.root} (${harnesses})` : `${harnesses}`;
 }
 
-async function status(): Promise<number> {
+function status(): number {
   const targets = detectTargets();
   if (targets.harnesses.length === 0) {
     console.log(dim("no agent harness dirs found (~/.claude, ~/.codex, ~/.config/opencode)"));
@@ -106,57 +105,68 @@ async function status(): Promise<number> {
   return 0;
 }
 
-async function diff(name: string | undefined): Promise<number> {
+class SkillsCommandError extends Data.TaggedError("SkillsCommandError")<{
+  readonly operation: "diff" | "sync";
+  readonly cause: unknown;
+}> {}
+
+function diff(name: string | undefined): Effect.Effect<number, SkillsCommandError> {
   if (!name || hasHelpFlag([name])) {
-    console.log(name ? USAGE : red("usage: wt skills diff <name>"));
-    return name ? 0 : 2;
+    return Effect.sync(() => {
+      console.log(name ? USAGE : red("usage: wt skills diff <name>"));
+      return name ? 0 : 2;
+    });
   }
   const targets = detectTargets();
-  const reports = buildReports(targets, readSkillsMemory()).filter(
-    (r) => r.unit.name === name,
-  );
+  const reports = buildReports(targets, readSkillsMemory()).filter((r) => r.unit.name === name);
   if (reports.length === 0) {
-    console.error(red(`unknown unit: ${name} (have: ${UNITS.map((u) => u.name).join(", ")})`));
-    return 2;
+    return Effect.sync(() => {
+      console.error(red(`unknown unit: ${name} (have: ${UNITS.map((u) => u.name).join(", ")})`));
+      return 2;
+    });
   }
-  const tmpDir = mkdtempSync(join(tmpdir(), "wt-skills-diff-"));
-  try {
-    for (const r of reports) {
-      if (r.state === "fresh") {
-        console.log(`${green("✓")} ${targetName(r)}: up to date`);
-        continue;
-      }
-      if (r.state === "blocked") {
-        console.log(`${red("✗")} ${targetName(r)}: ${r.detail ?? "unmanageable"}`);
-        continue;
-      }
-      const expectedFile = join(tmpDir, `${name}.expected`);
-      writeFileSync(expectedFile, r.expected);
-      console.log(bold(`--- ${targetName(r)} (${r.state})`));
-      // What the diff runs against: the installed skill file, or the
-      // current managed block extracted from the instructions file.
-      let installedFile: string | null = null;
-      if (r.unit.kind === "skill") {
-        installedFile = existsSync(r.path) ? r.path : null;
-      } else if (existsSync(r.path)) {
-        const block = extractInstructionsBlock(readFileSync(r.path, "utf8"));
-        if (block !== null) {
-          installedFile = join(tmpDir, `${name}.installed`);
-          writeFileSync(installedFile, block.body);
+  return Effect.acquireUseRelease(
+    Effect.sync(() => mkdtempSync(join(tmpdir(), "wt-skills-diff-"))),
+    (tmpDir) =>
+      Effect.gen(function* () {
+        for (const r of reports) {
+          if (r.state === "fresh") {
+            console.log(`${green("✓")} ${targetName(r)}: up to date`);
+            continue;
+          }
+          if (r.state === "blocked") {
+            console.log(`${red("✗")} ${targetName(r)}: ${r.detail ?? "unmanageable"}`);
+            continue;
+          }
+          const expectedFile = join(tmpDir, `${name}.expected`);
+          writeFileSync(expectedFile, r.expected);
+          console.log(bold(`--- ${targetName(r)} (${r.state})`));
+          // What the diff runs against: the installed skill file, or the
+          // current managed block extracted from the instructions file.
+          let installedFile: string | null = null;
+          if (r.unit.kind === "skill") {
+            installedFile = existsSync(r.path) ? r.path : null;
+          } else if (existsSync(r.path)) {
+            const block = extractInstructionsBlock(readFileSync(r.path, "utf8"));
+            if (block !== null) {
+              installedFile = join(tmpDir, `${name}.installed`);
+              writeFileSync(installedFile, block.body);
+            }
+          }
+          if (installedFile === null) {
+            // Nothing installed yet — the "diff" is the whole expected content.
+            console.log(r.expected);
+            continue;
+          }
+          const d = yield* shEffect(["diff", "-u", installedFile, expectedFile]).pipe(
+            Effect.mapError((cause) => new SkillsCommandError({ operation: "diff", cause })),
+          );
+          console.log(d.stdout.trim() === "" ? dim("(differs only by stamp)") : d.stdout);
         }
-      }
-      if (installedFile === null) {
-        // Nothing installed yet — the "diff" is the whole expected content.
-        console.log(r.expected);
-        continue;
-      }
-      const d = await sh(["diff", "-u", installedFile, expectedFile]);
-      console.log(d.stdout.trim() === "" ? dim("(differs only by stamp)") : d.stdout);
-    }
-  } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
-  }
-  return 0;
+        return 0;
+      }),
+    (tmpDir) => Effect.sync(() => rmSync(tmpDir, { recursive: true, force: true })),
+  );
 }
 
 function reset(argv: string[]): number {
@@ -179,18 +189,18 @@ function reset(argv: string[]): number {
     declines = true;
   }
   clearSkillsMemory({ answers, declines });
-  const what = [answers ? "answers" : null, declines ? "declines" : null]
-    .filter(Boolean)
-    .join(" + ");
+  const what = [answers ? "answers" : null, declines ? "declines" : null].filter(Boolean).join(" + ");
   console.log(`${green("✓")} cleared ${what} ${dim(`(${SKILLS_MEMORY_FILE})`)}`);
   if (declines) console.log(dim("previously declined updates will be offered again"));
   return 0;
 }
 
-async function sync(argv: string[]): Promise<number> {
+function sync(argv: string[]): Effect.Effect<number, SkillsCommandError> {
   if (hasHelpFlag(argv)) {
-    console.log(USAGE);
-    return 0;
+    return Effect.sync(() => {
+      console.log(USAGE);
+      return 0;
+    });
   }
   let yes = false;
   let force = false;
@@ -201,10 +211,10 @@ async function sync(argv: string[]): Promise<number> {
     else if (a.startsWith("-")) {
       console.error(red(`unknown flag: ${a}\n`));
       console.error(USAGE);
-      return 2;
+      return Effect.succeed(2);
     } else names.push(a);
   }
-  return runSkillsSync({
+  return runSkillsSyncEffect({
     // Both ends must be a TTY: a redirected stdout would print the
     // prompts into the redirect while the terminal looks hung.
     interactive: isInteractive() && !yes,
@@ -212,29 +222,33 @@ async function sync(argv: string[]): Promise<number> {
     force,
     names: names.length > 0 ? names : null,
     startup: false,
-  });
+  }).pipe(Effect.mapError((cause) => new SkillsCommandError({ operation: "sync", cause })));
 }
 
-export async function run(argv: string[]): Promise<number> {
+export function run(argv: string[]): Effect.Effect<number, SkillsCommandError> {
   const [sub, ...rest] = argv;
   if (hasHelpFlag([sub ?? ""])) {
-    console.log(USAGE);
-    return 0;
+    return Effect.sync(() => {
+      console.log(USAGE);
+      return 0;
+    });
   }
   switch (sub) {
     case undefined:
     case "status":
-      return status();
+      return Effect.sync(status);
     case "sync":
     case "install": // legacy alias
       return sync(rest);
     case "diff":
       return diff(rest[0]);
     case "reset":
-      return reset(rest);
+      return Effect.sync(() => reset(rest));
     default:
-      console.error(red(`unknown skills subcommand: ${sub}\n`));
-      console.error(USAGE);
-      return 2;
+      return Effect.sync(() => {
+        console.error(red(`unknown skills subcommand: ${sub}\n`));
+        console.error(USAGE);
+        return 2;
+      });
   }
 }

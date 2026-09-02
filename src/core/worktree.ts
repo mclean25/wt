@@ -1,23 +1,38 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { Data, Effect, Schedule } from "effect";
 
 import { listRiftWorktreePaths } from "./backend.ts";
 import { config } from "./config.ts";
-import { git, branchIsGone, branchIsMerged, effectiveBaseOrTrunk, freshBaseRev, gitQuiet, gitRun, invalidateMainFirstParents, localBranchExists, originBranchExists, revParse } from "./git.ts";
+import { branchIsGoneEffect, branchIsMergedEffect, effectiveBaseOrTrunkEffect, freshBaseRevEffect, gitEffect, gitQuietEffect, gitRunEffect, invalidateMainFirstParents, localBranchExistsEffect, originBranchExistsEffect, revParseEffect } from "./git.ts";
 import { resolveMainSyncInstall } from "./install.ts";
 import { lockAge, lockLabel, lockStatus, tryAcquireLock, type LockHandle } from "./locks.ts";
 import { createLogger } from "./logger.ts";
 import { latestLogFor } from "./logs.ts";
-import { runOk, runQuiet, runStreaming } from "./proc.ts";
+import { runOkEffect, runQuietEffect, runStreamingEffect, type ProcError } from "./proc.ts";
 import { computeStage } from "./stage.ts";
 import { type Status, StatusKind, type Worktree } from "./types.ts";
 
 const log = createLogger("[worktree]");
 const FETCH_ORIGIN_LOCK = "__fetch_origin__";
 let fetchOriginInFlight: Promise<void> | null = null;
+export class WorktreeError extends Data.TaggedError("WorktreeError")<{
+  readonly operation: "list" | "fetch-origin";
+  readonly cause: unknown;
+}> {
+  override get message(): string { return this.cause instanceof Error ? this.cause.message : String(this.cause); }
+}
 
-export async function listWorktrees(): Promise<Worktree[]> {
-  const out = await git(["worktree", "list", "--porcelain"]);
+export function listWorktreesEffect(): Effect.Effect<Worktree[], WorktreeError> {
+  return gitEffect(["worktree", "list", "--porcelain"]).pipe(
+    Effect.map(parseWorktrees),
+    Effect.mapError((cause) => new WorktreeError({ operation: "list", cause })),
+  );
+}
+
+export const listWorktrees = (): Promise<Worktree[]> => Effect.runPromise(listWorktreesEffect());
+
+function parseWorktrees(out: string): Worktree[] {
   const lines = [...out.split("\n"), ""];
   const worktrees: Worktree[] = [];
   let block: Record<string, string> = {};
@@ -228,23 +243,15 @@ export type SyncState = {
   remote: SyncCounts | null;
 };
 
-async function countsFor(
-  wtPath: string,
-  range: string,
-): Promise<SyncCounts> {
-  const out = await runOk(
-    ["git", "rev-list", "--left-right", "--count", range],
-    { cwd: wtPath },
+function countsForEffect(wtPath: string, range: string): Effect.Effect<SyncCounts, ProcError | WorktreeError> {
+  return runOkEffect(["git", "rev-list", "--left-right", "--count", range], { cwd: wtPath }).pipe(
+    Effect.flatMap((out) => {
+      const match = out.trim().match(/^(\d+)\s+(\d+)$/);
+      return match
+        ? Effect.succeed({ behind: Number.parseInt(match[1]!, 10), ahead: Number.parseInt(match[2]!, 10) })
+        : Effect.fail(new WorktreeError({ operation: "list", cause: new Error(`unexpected rev-list output for ${range}: ${out}`) }));
+    }),
   );
-  // Output format: `<behind>\t<ahead>`. Validate strictly so a git
-  // error or malformed output surfaces as a thrown query rather than
-  // silently reporting "in sync".
-  const match = out.trim().match(/^(\d+)\s+(\d+)$/);
-  if (!match) throw new Error(`unexpected rev-list output for ${range}: ${out}`);
-  return {
-    behind: Number.parseInt(match[1]!, 10),
-    ahead: Number.parseInt(match[2]!, 10),
-  };
 }
 
 /**
@@ -266,25 +273,21 @@ async function countsFor(
  * read as "vs your actual base" rather than "vs main." Mirrors the
  * effective-base resolution used by the diff context.
  */
-export async function syncState(
-  wtPath: string,
-  effectiveBase?: string | null,
-): Promise<SyncState> {
-  const base = await freshBaseRev(wtPath, await effectiveBaseOrTrunk(wtPath, effectiveBase));
-  const main = await countsFor(wtPath, `${base}...HEAD`);
-  const branch = (
-    await runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
-  ).trim();
-  // Detached HEAD reports the literal "HEAD" — no branch, no counterpart.
-  if (!branch || branch === "HEAD") return { main, remote: null };
-  const originRef = `origin/${branch}`;
-  const originExists = await runQuiet(
-    ["git", "rev-parse", "--verify", "--quiet", originRef],
-    { cwd: wtPath },
-  );
-  if (!originExists) return { main, remote: null };
-  const remote = await countsFor(wtPath, `${originRef}...HEAD`);
-  return { main, remote };
+export const syncState = (wtPath: string, effectiveBase?: string | null): Promise<SyncState> =>
+  Effect.runPromise(syncStateEffect(wtPath, effectiveBase));
+
+export function syncStateEffect(wtPath: string, effectiveBase?: string | null) {
+  return Effect.gen(function* () {
+    const resolved = yield* effectiveBaseOrTrunkEffect(wtPath, effectiveBase);
+    const base = yield* freshBaseRevEffect(wtPath, resolved);
+    const main = yield* countsForEffect(wtPath, `${base}...HEAD`);
+    const branch = (yield* runOkEffect(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })).trim();
+    if (!branch || branch === "HEAD") return { main, remote: null };
+    const originRef = `origin/${branch}`;
+    const exists = yield* runQuietEffect(["git", "rev-parse", "--verify", "--quiet", originRef], { cwd: wtPath });
+    if (!exists) return { main, remote: null };
+    return { main, remote: yield* countsForEffect(wtPath, `${originRef}...HEAD`) };
+  });
 }
 
 /**
@@ -295,13 +298,13 @@ export async function syncState(
  * new` payload (which callers comparing against a known path will
  * naturally fall through on).
  */
-export async function worktreeDirtyFiles(wtPath: string): Promise<string[]> {
-  const porcelain = await runOk(["git", "status", "--porcelain"], { cwd: wtPath });
-  return porcelain
-    .split("\n")
-    .filter((l) => l.length > 0)
-    .map((l) => l.slice(3));
-}
+export const worktreeDirtyFiles = (wtPath: string): Promise<string[]> =>
+  Effect.runPromise(worktreeDirtyFilesEffect(wtPath));
+
+export const worktreeDirtyFilesEffect = (wtPath: string) =>
+  runOkEffect(["git", "status", "--porcelain"], { cwd: wtPath }).pipe(
+    Effect.map((porcelain) => porcelain.split("\n").filter((line) => line.length > 0).map((line) => line.slice(3))),
+  );
 
 /**
  * True when the working tree has uncommitted changes — matches git's
@@ -309,9 +312,10 @@ export async function worktreeDirtyFiles(wtPath: string): Promise<string[]> {
  * `syncState`; callers that want to guard against losing *any* kind of
  * work (e.g. `wt rm`) should check both.
  */
-export async function worktreeIsDirty(wtPath: string): Promise<boolean> {
-  return (await worktreeDirtyFiles(wtPath)).length > 0;
-}
+export const worktreeIsDirty = (wtPath: string): Promise<boolean> =>
+  Effect.runPromise(worktreeIsDirtyEffect(wtPath));
+export const worktreeIsDirtyEffect = (wtPath: string) =>
+  worktreeDirtyFilesEffect(wtPath).pipe(Effect.map((files) => files.length > 0));
 
 /**
  * Tracked-file changes only (staged or unstaged); untracked files don't
@@ -320,13 +324,12 @@ export async function worktreeIsDirty(wtPath: string): Promise<boolean> {
  * workflow itself drops files like `prompt.txt` into slice worktrees by
  * convention, so blocking a replay on them is self-inflicted friction.
  */
-export async function worktreeHasTrackedChanges(wtPath: string): Promise<boolean> {
-  const porcelain = await runOk(
-    ["git", "status", "--porcelain", "--untracked-files=no"],
-    { cwd: wtPath },
+export const worktreeHasTrackedChanges = (wtPath: string): Promise<boolean> =>
+  Effect.runPromise(worktreeHasTrackedChangesEffect(wtPath));
+export const worktreeHasTrackedChangesEffect = (wtPath: string) =>
+  runOkEffect(["git", "status", "--porcelain", "--untracked-files=no"], { cwd: wtPath }).pipe(
+    Effect.map((porcelain) => porcelain.split("\n").some((line) => line.trim().length > 0)),
   );
-  return porcelain.split("\n").some((l) => l.trim().length > 0);
-}
 
 /**
  * Count of commits on HEAD that aren't on the branch's upstream (or on
@@ -336,33 +339,36 @@ export async function worktreeHasTrackedChanges(wtPath: string): Promise<boolean
  * "couldn't determine" must never masquerade as "nothing to lose";
  * callers treat null as unpushed-work-unknown and stay cautious.
  */
-export async function unpushedCommits(wtPath: string): Promise<number | null> {
-  try {
+export function unpushedCommitsEffect(wtPath: string) {
+  return Effect.gen(function* () {
     // `@{u}` is resolved to its ref NAME rather than used directly, so
     // the trunk case is recognizable to `freshBaseRev` — wt points a
     // worktree's upstream at its base, so for an unstacked worktree
     // `@{u}` IS `origin/<trunk>`, and that is exactly the ref a rift
     // clone holds a stale copy of.
-    const upstream = (await runQuiet(
+    const hasUpstream = yield* runQuietEffect(
       ["git", "rev-parse", "--abbrev-ref", "@{u}"],
       { cwd: wtPath },
-    ))
-      ? (await runOk(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wtPath })).trim()
+    );
+    const upstream = hasUpstream
+      ? (yield* runOkEffect(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wtPath })).trim()
       : "";
-    const base = await freshBaseRev(
+    const base = yield* freshBaseRevEffect(
       wtPath,
       upstream || `origin/${config.branch.base}`,
     );
-    const ahead = await runOk(
+    const ahead = yield* runOkEffect(
       ["git", "rev-list", "--count", `${base}..HEAD`],
       { cwd: wtPath },
     );
     return parseInt(ahead, 10) || 0;
-  } catch (err) {
+  }).pipe(Effect.catchAll((err) => Effect.sync(() => {
     log.error(err instanceof Error ? err : String(err), { wtPath });
     return null;
-  }
+  })));
 }
+export const unpushedCommits = (wtPath: string): Promise<number | null> =>
+  Effect.runPromise(unpushedCommitsEffect(wtPath));
 
 export type PushCounts = {
   /**
@@ -391,98 +397,100 @@ export type PushCounts = {
  * against `origin/<branch>` when that ref exists (true unpushed), and
  * `aheadOfBase` carries the old measurement.
  */
-export async function pushCounts(wtPath: string): Promise<PushCounts> {
-  const aheadOfBase = await unpushedCommits(wtPath);
-  try {
-    const branch = (
-      await runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
-    ).trim();
-    // Detached HEAD reports the literal "HEAD" — no branch, no counterpart.
-    if (branch && branch !== "HEAD") {
-      const originRef = `origin/${branch}`;
-      const originExists = await runQuiet(
-        ["git", "rev-parse", "--verify", "--quiet", originRef],
-        { cwd: wtPath },
-      );
-      if (originExists) {
-        const count = await runOk(
-          ["git", "rev-list", "--count", `${originRef}..HEAD`],
+export function pushCountsEffect(wtPath: string) {
+  return Effect.gen(function* () {
+    const aheadOfBase = yield* unpushedCommitsEffect(wtPath);
+    return yield* Effect.gen(function* () {
+      const branch = (
+        yield* runOkEffect(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
+      ).trim();
+      // Detached HEAD reports the literal "HEAD" — no branch, no counterpart.
+      if (branch && branch !== "HEAD") {
+        const originRef = `origin/${branch}`;
+        const originExists = yield* runQuietEffect(
+          ["git", "rev-parse", "--verify", "--quiet", originRef],
           { cwd: wtPath },
         );
-        return { unpushed: parseInt(count, 10) || 0, aheadOfBase, pushed: true };
+        if (originExists) {
+          const count = yield* runOkEffect(
+            ["git", "rev-list", "--count", `${originRef}..HEAD`],
+            { cwd: wtPath },
+          );
+          return { unpushed: parseInt(count, 10) || 0, aheadOfBase, pushed: true };
+        }
       }
-    }
-    return { unpushed: aheadOfBase, aheadOfBase, pushed: false };
-  } catch (err) {
-    log.error(err instanceof Error ? err : String(err), { wtPath });
-    return { unpushed: null, aheadOfBase, pushed: null };
-  }
+      return { unpushed: aheadOfBase, aheadOfBase, pushed: false };
+    }).pipe(Effect.catchAll((err) => Effect.sync(() => {
+      log.error(err instanceof Error ? err : String(err), { wtPath });
+      return { unpushed: null, aheadOfBase, pushed: null };
+    })));
+  });
 }
+export const pushCounts = (wtPath: string): Promise<PushCounts> =>
+  Effect.runPromise(pushCountsEffect(wtPath));
 
-export async function worktreeStatus(wt: Worktree): Promise<Status> {
+export function worktreeStatusEffect(wt: Worktree): Effect.Effect<Status, ProcError> {
   const lock = lockStatus(wt.slug);
   if (lock) {
-    return {
+    return Effect.succeed({
       kind: StatusKind.Busy,
       label: lockLabel(lock),
       age: lockAge(lock) ?? undefined,
       log: latestLogFor(wt.slug) ?? undefined,
       pid: lock.pid,
       op: lock.op,
-    };
+    });
   }
   if (!existsSync(wt.path)) {
-    return { kind: StatusKind.Missing, label: "missing" };
+    return Effect.succeed({ kind: StatusKind.Missing, label: "missing" });
   }
-  if (wt.branch) {
-    if (await branchIsGone(wt.branch, wt.path)) {
-      return { kind: StatusKind.Gone, label: "gone (squash-merged or deleted)" };
+  return Effect.gen(function* () {
+    if (wt.branch) {
+      if (yield* branchIsGoneEffect(wt.branch, wt.path)) {
+        return { kind: StatusKind.Gone, label: "gone (squash-merged or deleted)" } as Status;
+      }
+      if (yield* branchIsMergedEffect({ slug: wt.slug, branch: wt.branch, path: wt.path })) {
+        return { kind: StatusKind.Merged, label: "merged into origin/main" } as Status;
+      }
     }
-    if (await branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path })) {
-      return { kind: StatusKind.Merged, label: "merged into origin/main" };
-    }
-  }
-  if (await worktreeIsDirty(wt.path)) {
-    return { kind: StatusKind.Dirty, label: "dirty" };
-  }
-  return { kind: StatusKind.Clean, label: "clean" };
+    if (yield* worktreeIsDirtyEffect(wt.path)) return { kind: StatusKind.Dirty, label: "dirty" } as Status;
+    return { kind: StatusKind.Clean, label: "clean" } as Status;
+  });
 }
+export const worktreeStatus = (wt: Worktree): Promise<Status> => Effect.runPromise(worktreeStatusEffect(wt));
 
-async function acquireFetchOriginLock(): Promise<LockHandle> {
-  const deadline = Date.now() + 15_000;
-  for (;;) {
+function acquireFetchOriginLockEffect(): Effect.Effect<LockHandle, WorktreeError> {
+  return Effect.suspend(() => {
     const handle = tryAcquireLock(FETCH_ORIGIN_LOCK, "fetch-origin", {
       phase: "fetch origin",
     });
-    if (handle) return handle;
-    if (Date.now() >= deadline) {
-      throw new Error("another origin fetch is still running");
-    }
-    await Bun.sleep(250);
-  }
+    return handle
+      ? Effect.succeed(handle)
+      : Effect.fail(new WorktreeError({ operation: "fetch-origin", cause: new Error("another origin fetch is still running") }));
+  }).pipe(Effect.retry(Schedule.intersect(Schedule.spaced("250 millis"), Schedule.recurs(59))));
 }
 
-async function fetchOriginLocked(opts: { onWarn?: (msg: string) => void } = {}): Promise<void> {
-  const handle = await acquireFetchOriginLock();
-  try {
-    const fetch = await gitRun(["fetch", "origin", "--prune"]);
+function fetchOriginLockedEffect(opts: { onWarn?: (msg: string) => void } = {}) {
+  return Effect.acquireUseRelease(
+    acquireFetchOriginLockEffect(),
+    () => Effect.gen(function* () {
+    const fetch = yield* gitRunEffect(["fetch", "origin", "--prune"]);
     if (fetch.exitCode !== 0) {
-      throw new Error(
-        `git fetch origin failed: ${(fetch.stderr || fetch.stdout).trim() || `exit ${fetch.exitCode}`}`,
-      );
+      return yield* new WorktreeError({ operation: "fetch-origin", cause: new Error(
+        `git fetch origin failed: ${(fetch.stderr || fetch.stdout).trim() || `exit ${fetch.exitCode}`}`) });
     }
     const main = config.paths.mainClone;
     // Resolved ONCE, not per branch: at most one of them can be the
     // checked-out head, and only that one needs the dirty-tree dance.
     let head: string | null = null;
-    if (await gitQuiet(["symbolic-ref", "--quiet", "HEAD"], main)) {
-      head = (await git(["symbolic-ref", "--quiet", "--short", "HEAD"], main)).trim();
+    if (yield* gitQuietEffect(["symbolic-ref", "--quiet", "HEAD"], main)) {
+      head = (yield* gitEffect(["symbolic-ref", "--quiet", "--short", "HEAD"], main)).trim();
     }
     // Trunk first, then whatever else the user wants current. Deduped,
     // so naming the base in `keep_fresh` is redundant rather than a
     // double fast-forward.
     for (const branch of new Set([config.branch.base, ...config.branch.keepFresh])) {
-      await syncLocalBranch(branch, {
+      yield* syncLocalBranchEffect(branch, {
         main,
         checkedOut: head === branch,
         // `base` keeps its historical skip-if-absent semantics — it is a
@@ -495,10 +503,10 @@ async function fetchOriginLocked(opts: { onWarn?: (msg: string) => void } = {}):
         onWarn: opts.onWarn,
       });
     }
-    await freshenWorktreeTrunkRefs(main);
-  } finally {
-    handle.release();
-  }
+    yield* freshenWorktreeTrunkRefsEffect(main);
+    }),
+    (handle) => Effect.sync(() => handle.release()),
+  ).pipe(Effect.mapError((cause) => cause instanceof WorktreeError ? cause : new WorktreeError({ operation: "fetch-origin", cause })));
 }
 
 /**
@@ -534,22 +542,20 @@ async function fetchOriginLocked(opts: { onWarn?: (msg: string) => void } = {}):
  * GitHub's merge-queue branches in ahead of the merge — so it is a ref
  * write, not a transfer (0 of 19 live checkouts needed the fetch).
  */
-async function freshenWorktreeTrunkRefs(main: string): Promise<void> {
-  const trunk = config.branch.base;
-  const tip = await revParse(`origin/${trunk}`, main);
-  if (!tip) return;
-  let worktrees: Worktree[];
-  try {
-    worktrees = (await listWorktrees()).filter((w) => !w.isMain);
-  } catch (err) {
-    log.debug(`could not list worktrees to freshen origin/${trunk}`, {
-      err: err instanceof Error ? err.message : String(err),
-    });
-    return;
-  }
-  await Promise.all(
-    worktrees.map((wt) => freshenTrunkRef(wt, trunk, tip, main)),
-  );
+function freshenWorktreeTrunkRefsEffect(main: string) {
+  return Effect.gen(function* () {
+    const trunk = config.branch.base;
+    const tip = yield* revParseEffect(`origin/${trunk}`, main);
+    if (!tip) return;
+    const worktrees = yield* listWorktreesEffect().pipe(
+      Effect.map((items) => items.filter((w) => !w.isMain)),
+      Effect.catchAll((err) => Effect.sync(() => {
+        log.debug(`could not list worktrees to freshen origin/${trunk}`, { err: err.message });
+        return [];
+      })),
+    );
+    yield* Effect.all(worktrees.map((wt) => freshenTrunkRefEffect(wt, trunk, tip, main)), { concurrency: 8 });
+  });
 }
 
 /**
@@ -557,20 +563,20 @@ async function freshenWorktreeTrunkRefs(main: string): Promise<void> {
  * out-of-band between the listing and here must not fail the fetch that
  * every caller of `fetchOrigin` is actually waiting on.
  */
-async function freshenTrunkRef(
+function freshenTrunkRefEffect(
   wt: Worktree,
   trunk: string,
   tip: string,
   main: string,
-): Promise<void> {
+): Effect.Effect<void> {
   const ref = `refs/remotes/origin/${trunk}`;
-  try {
-    const have = await revParse(`origin/${trunk}`, wt.path);
+  return Effect.gen(function* () {
+    const have = yield* revParseEffect(`origin/${trunk}`, wt.path);
     if (have === tip) return;
-    if (!(await gitQuiet(["cat-file", "-e", `${tip}^{commit}`], wt.path))) {
+    if (!(yield* gitQuietEffect(["cat-file", "-e", `${tip}^{commit}`], wt.path))) {
       // Not here yet. The fetch brings the object and moves the ref in
       // one step, over the filesystem from the main clone — no network.
-      await gitRun(
+      yield* gitRunEffect(
         ["fetch", "--no-tags", "--quiet", main, `+refs/remotes/origin/${trunk}:${ref}`],
         wt.path,
       );
@@ -579,17 +585,17 @@ async function freshenTrunkRef(
     // Fast-forward only. A clone that ran its own `git fetch` can be
     // AHEAD of the main clone's last one, and rewinding its ref is the
     // same lie pointing the other way.
-    if (have && !(await gitQuiet(["merge-base", "--is-ancestor", have, tip], wt.path))) {
+    if (have && !(yield* gitQuietEffect(["merge-base", "--is-ancestor", have, tip], wt.path))) {
       return;
     }
-    await gitRun(["update-ref", ref, tip], wt.path);
+    yield* gitRunEffect(["update-ref", ref, tip], wt.path);
     log.debug(`freshened ${ref}`, { slug: wt.slug, from: have ?? "(none)", to: tip });
-  } catch (err) {
+  }).pipe(Effect.catchAll((err) => Effect.sync(() => {
     log.debug(`could not freshen ${ref}`, {
       slug: wt.slug,
       err: err instanceof Error ? err.message : String(err),
     });
-  }
+  })));
 }
 
 /**
@@ -611,7 +617,7 @@ async function freshenTrunkRef(
  * every few minutes — the one thing it must never do is decide which
  * copy wins.
  */
-async function syncLocalBranch(
+function syncLocalBranchEffect(
   branch: string,
   opts: {
     main: string;
@@ -619,12 +625,13 @@ async function syncLocalBranch(
     create: boolean;
     onWarn?: (msg: string) => void;
   },
-): Promise<void> {
+): Effect.Effect<void, ProcError> {
+  return Effect.gen(function* () {
   const { main, checkedOut, create } = opts;
   const remoteRef = `origin/${branch}`;
-  const exists = await localBranchExists(branch, main);
+  const exists = yield* localBranchExistsEffect(branch, main);
   if (!exists && !create) return;
-  if (!(await originBranchExists(branch, main))) {
+  if (!(yield* originBranchExistsEffect(branch, main))) {
     // Only worth saying for a branch the user named: a missing
     // `origin/<base>` is a broken clone that everything else already
     // shouts about, while a typo in `keep_fresh` has no other symptom.
@@ -635,7 +642,7 @@ async function syncLocalBranch(
   }
   if (
     exists &&
-    !(await gitQuiet(["merge-base", "--is-ancestor", branch, remoteRef], main))
+    !(yield* gitQuietEffect(["merge-base", "--is-ancestor", branch, remoteRef], main))
   ) {
     const msg = `Local ${branch} has diverged from ${remoteRef}; not updating.`;
     opts.onWarn?.(msg);
@@ -649,18 +656,19 @@ async function syncLocalBranch(
     // checkout nobody is looking at. wt's own worktrees carry
     // `branch.prefix` names so this can't collide with them, but a
     // hand-made one on `main` is exactly what `keep_fresh` invites.
-    const r = await gitRun(["branch", "--force", branch, remoteRef], main);
+    const r = yield* gitRunEffect(["branch", "--force", branch, remoteRef], main);
     if (r.exitCode !== 0) {
       log.warn(`could not advance ${branch}: ${(r.stderr || r.stdout).trim()}`, { branch });
     }
     return;
   }
-  await restoreAutoRegen(main);
-  const status = await runOk(["git", "status", "--porcelain"], { cwd: main });
+  yield* restoreAutoRegenEffect(main);
+  const status = yield* runOkEffect(["git", "status", "--porcelain"], { cwd: main });
   if (status.trim()) return;
-  const before = (await runOk(["git", "rev-parse", "HEAD"], { cwd: main })).trim();
-  await gitRun(["merge", "--ff-only", "--quiet", remoteRef], main);
-  await syncMainDeps(main, before);
+  const before = (yield* runOkEffect(["git", "rev-parse", "HEAD"], { cwd: main })).trim();
+  yield* gitRunEffect(["merge", "--ff-only", "--quiet", remoteRef], main);
+  yield* syncMainDepsEffect(main, before);
+  });
 }
 
 /**
@@ -680,15 +688,14 @@ async function syncLocalBranch(
  * Invalidating here makes forgetting impossible rather than making it a
  * rule to remember.
  */
-export async function fetchOrigin(opts: { onWarn?: (msg: string) => void } = {}): Promise<void> {
+export const fetchOriginEffect = (opts: { onWarn?: (msg: string) => void } = {}) =>
+  fetchOriginLockedEffect(opts).pipe(Effect.ensuring(Effect.sync(invalidateMainFirstParents)));
+
+export const fetchOrigin = (opts: { onWarn?: (msg: string) => void } = {}): Promise<void> => {
   if (fetchOriginInFlight) return fetchOriginInFlight;
-  fetchOriginInFlight = fetchOriginLocked(opts)
-    .finally(() => {
-      invalidateMainFirstParents();
-      fetchOriginInFlight = null;
-    });
+  fetchOriginInFlight = Effect.runPromise(fetchOriginEffect(opts)).finally(() => { fetchOriginInFlight = null; });
   return fetchOriginInFlight;
-}
+};
 
 /**
  * After the main clone fast-forwards to fresh trunk, reinstall deps IF the
@@ -711,12 +718,13 @@ export async function fetchOrigin(opts: { onWarn?: (msg: string) => void } = {})
  * Best-effort: a failed install warns to the activity pane and never
  * fails the fetch.
  */
-async function syncMainDeps(cwd: string, beforeHead: string): Promise<void> {
-  const after = (await runOk(["git", "rev-parse", "HEAD"], { cwd })).trim();
+function syncMainDepsEffect(cwd: string, beforeHead: string): Effect.Effect<void, ProcError> {
+  return Effect.gen(function* () {
+  const after = (yield* runOkEffect(["git", "rev-parse", "HEAD"], { cwd })).trim();
   if (!after || after === beforeHead) return; // nothing was pulled
   const sync = resolveMainSyncInstall(cwd);
   if (!sync) return; // no lockfile, no override — nothing to keep in sync
-  const changed = await runOk(
+  const changed = yield* runOkEffect(
     ["git", "diff", "--name-only", beforeHead, after, "--", ...sync.gateLockfiles],
     { cwd },
   );
@@ -724,7 +732,7 @@ async function syncMainDeps(cwd: string, beforeHead: string): Promise<void> {
 
   const lockfile = changed.trim().split("\n")[0];
   log.event.info(`${lockfile} changed on trunk — syncing main clone deps (${sync.label})`);
-  const code = await runStreaming(sync.argv, { cwd });
+  const code = yield* runStreamingEffect(sync.argv, { cwd });
   if (code === 0) {
     log.event.ok("main clone deps synced", { toast: true });
   } else {
@@ -733,14 +741,17 @@ async function syncMainDeps(cwd: string, beforeHead: string): Promise<void> {
       toast: true,
     });
   }
+  });
 }
 
-async function restoreAutoRegen(cwd: string): Promise<void> {
-  for (const p of config.sst?.autoRegenPaths ?? []) {
+function restoreAutoRegenEffect(cwd: string): Effect.Effect<void, ProcError> {
+  return Effect.gen(function* () {
+    for (const p of config.sst?.autoRegenPaths ?? []) {
     if (!existsSync(join(cwd, p))) continue;
-    const porcelain = await runOk(["git", "status", "--porcelain", "--", p], { cwd });
+    const porcelain = yield* runOkEffect(["git", "status", "--porcelain", "--", p], { cwd });
     if (porcelain) {
-      await runQuiet(["git", "checkout", "HEAD", "--", p], { cwd });
+      yield* runQuietEffect(["git", "checkout", "HEAD", "--", p], { cwd });
     }
   }
+  });
 }

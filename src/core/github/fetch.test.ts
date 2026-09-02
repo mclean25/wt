@@ -1,8 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import { Cause, Effect } from "effect";
 
-import { buildQuery, chunkBranches, isTransientFailure } from "./fetch.ts";
+import {
+  buildQuery,
+  chunkBranches,
+  fetchChunkEffect,
+  fetchChunksEffect,
+  GithubRateLimitError,
+  GithubTransientError,
+  isTransientFailure,
+} from "./fetch.ts";
 
-const res = (over: Partial<{ stdout: string; stderr: string; exitCode: number }> = {}) => ({
+const res = (
+  over: Partial<{ stdout: string; stderr: string; exitCode: number }> = {},
+) => ({
   stdout: "",
   stderr: "",
   exitCode: 1,
@@ -44,12 +55,18 @@ describe("isTransientFailure", () => {
   test("never retries a rate limit", () => {
     // The load-bearing case: retrying is what escalates a brush with
     // the limit into a block.
-    expect(isTransientFailure(res({ stderr: "API rate limit exceeded for user" }))).toBe(false);
     expect(
-      isTransientFailure(res({ stdout: '{"errors":[{"type":"RATE_LIMITED"}]}' })),
+      isTransientFailure(res({ stderr: "API rate limit exceeded for user" })),
     ).toBe(false);
     expect(
-      isTransientFailure(res({ stderr: "You have exceeded a secondary rate limit" })),
+      isTransientFailure(
+        res({ stdout: '{"errors":[{"type":"RATE_LIMITED"}]}' }),
+      ),
+    ).toBe(false);
+    expect(
+      isTransientFailure(
+        res({ stderr: "You have exceeded a secondary rate limit" }),
+      ),
     ).toBe(false);
   });
 
@@ -57,16 +74,26 @@ describe("isTransientFailure", () => {
     // Permanent patterns are tested first precisely so a body carrying
     // both can't be read as retryable.
     expect(
-      isTransientFailure(res({ stderr: "gh: HTTP 503", stdout: "API rate limit exceeded" })),
+      isTransientFailure(
+        res({ stderr: "gh: HTTP 503", stdout: "API rate limit exceeded" }),
+      ),
     ).toBe(false);
   });
 
   test("does not retry permanent failures", () => {
-    expect(isTransientFailure(res({ stderr: "gh: Bad credentials (HTTP 401)" }))).toBe(false);
     expect(
-      isTransientFailure(res({ stderr: "Could not resolve to a Repository with the name" })),
+      isTransientFailure(res({ stderr: "gh: Bad credentials (HTTP 401)" })),
     ).toBe(false);
-    expect(isTransientFailure(res({ stderr: 'Expected NAME, actual: LCURLY ("{")' }))).toBe(false);
+    expect(
+      isTransientFailure(
+        res({ stderr: "Could not resolve to a Repository with the name" }),
+      ),
+    ).toBe(false);
+    expect(
+      isTransientFailure(
+        res({ stderr: 'Expected NAME, actual: LCURLY ("{")' }),
+      ),
+    ).toBe(false);
     expect(isTransientFailure(res({ stderr: "gh: HTTP 404" }))).toBe(false);
   });
 });
@@ -114,5 +141,149 @@ describe("buildQuery", () => {
       expect(q).toContain("fragment PrFields on PullRequest");
       expect(q).toContain("...PrFields");
     }
+  });
+});
+
+const emptyGraphql = (branchCount: number) => ({
+  stdout: JSON.stringify({
+    data: {
+      repository: Object.fromEntries(
+        Array.from({ length: branchCount }, (_, index) => [
+          `wt_${index}`,
+          { nodes: [] },
+        ]),
+      ),
+    },
+  }),
+  stderr: "",
+  exitCode: 0,
+});
+
+describe("Effect chunk execution", () => {
+  test("cancellation is interruption, never successful empty data", async () => {
+    let started = false;
+    const controller = new AbortController();
+    const result = Effect.runPromiseExit(
+      fetchChunkEffect("owner", "repo", ["branch"], false, () =>
+        Effect.async((_resume, signal) => {
+          started = true;
+          signal.addEventListener("abort", () => {});
+        }),
+      ),
+      { signal: controller.signal },
+    );
+    while (!started) await Bun.sleep(0);
+    controller.abort();
+    const exit = await result;
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(Cause.isInterruptedOnly(exit.cause)).toBe(true);
+    }
+  });
+
+  test("retries a transient chunk and then succeeds", async () => {
+    let calls = 0;
+    const data = await Effect.runPromise(
+      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+        calls += 1;
+        return Effect.succeed(
+          calls < 2 ? res({ stderr: "gh: HTTP 502" }) : emptyGraphql(1),
+        );
+      }),
+    );
+    expect(calls).toBe(2);
+    expect(data.prs.size).toBe(0);
+  });
+
+  test("never retries a rate limit", async () => {
+    let calls = 0;
+    const exit = await Effect.runPromiseExit(
+      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+        calls += 1;
+        return Effect.succeed(
+          res({ stderr: "API rate limit exceeded for user" }),
+        );
+      }),
+    );
+    expect(calls).toBe(1);
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(String(exit.cause)).toContain(GithubRateLimitError.name);
+    }
+  });
+
+  test("a truncated success body is transient and retried", async () => {
+    let calls = 0;
+    const exit = await Effect.runPromiseExit(
+      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+        calls += 1;
+        return Effect.succeed({ stdout: '{"data":', stderr: "", exitCode: 0 });
+      }),
+    );
+    expect(calls).toBe(3);
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(String(exit.cause)).toContain(GithubTransientError.name);
+    }
+  });
+
+  test("partial GraphQL data with errors fails the whole chunk", async () => {
+    let calls = 0;
+    const exit = await Effect.runPromiseExit(
+      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+        calls += 1;
+        return Effect.succeed({
+          stdout: JSON.stringify({
+            data: { repository: { wt_0: { nodes: [] } } },
+            errors: [{ type: "INTERNAL", message: "internal server error" }],
+          }),
+          stderr: "",
+          exitCode: 0,
+        });
+      }),
+    );
+    expect(calls).toBe(3);
+    expect(exit._tag).toBe("Failure");
+  });
+
+  test("a transient GraphQL error response is retried", async () => {
+    let calls = 0;
+    const data = await Effect.runPromise(
+      fetchChunkEffect("owner", "repo", ["branch"], false, () => {
+        calls += 1;
+        return Effect.succeed(
+          calls === 1
+            ? {
+                stdout: JSON.stringify({
+                  errors: [{ type: "INTERNAL", message: "internal server error" }],
+                }),
+                stderr: "",
+                exitCode: 0,
+              }
+            : emptyGraphql(1),
+        );
+      }),
+    );
+    expect(calls).toBe(2);
+    expect(data.prs.size).toBe(0);
+  });
+
+  test("one failed chunk fails the whole batch and merge queue rides only the first", async () => {
+    const seen: string[][] = [];
+    const exit = await Effect.runPromiseExit(
+      fetchChunksEffect("owner", "repo", [["a"], ["b"]], (args) => {
+        seen.push([...args]);
+        const branch = args.find((arg) => arg.startsWith("b0="));
+        return branch === "b0=b"
+          ? Effect.succeed(res({ stderr: "gh: HTTP 502" }))
+          : Effect.succeed(emptyGraphql(1));
+      }),
+    );
+    expect(exit._tag).toBe("Failure");
+    expect(
+      seen.filter((args) =>
+        args.some((arg) => arg.startsWith("mergeQueueBranch=")),
+      ),
+    ).toHaveLength(1);
   });
 });

@@ -10,6 +10,7 @@
  * the daily app log for `event-loop blocked` to compare before/after.
  */
 import { createLogger } from "../logger.ts";
+import { Effect, Fiber } from "effect";
 
 const log = createLogger("[perf]");
 const SAMPLE_MS = 100;
@@ -21,17 +22,27 @@ const LAG_THRESHOLD_MS = 20;
 export function startLoopLagProbe(): () => void {
   if (!process.env.WT_PERF) return () => {};
   let last = performance.now();
-  const timer = setInterval(() => {
-    const now = performance.now();
-    const lag = now - last - SAMPLE_MS;
-    last = now;
-    if (lag > LAG_THRESHOLD_MS) {
-      log.warn("event-loop blocked", { lagMs: Math.round(lag) });
-    }
-  }, SAMPLE_MS);
+  const fiber = Effect.runFork(
+    Effect.forever(
+      Effect.sleep(`${SAMPLE_MS} millis`).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            const now = performance.now();
+            const lag = now - last - SAMPLE_MS;
+            last = now;
+            if (lag > LAG_THRESHOLD_MS) {
+              log.warn("event-loop blocked", { lagMs: Math.round(lag) });
+            }
+          }),
+        ),
+      ),
+    ),
+  );
   log.info("loop-lag probe armed", {
     sampleMs: SAMPLE_MS,
     thresholdMs: LAG_THRESHOLD_MS,
   });
-  return () => clearInterval(timer);
+  return () => {
+    Effect.runFork(Fiber.interrupt(fiber));
+  };
 }

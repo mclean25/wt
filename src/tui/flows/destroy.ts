@@ -6,6 +6,7 @@
  * semantics as when these lived inline).
  */
 import { existsSync } from "node:fs";
+import { Data, Effect } from "effect";
 
 import { actionRegistry } from "../../core/actions.ts";
 import type { RemoteConfig } from "../../core/config.ts";
@@ -44,6 +45,10 @@ import { theme } from "../theme.ts";
 import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 
 const appLog = createLogger("[app]");
+
+class RemovalRefreshError extends Data.TaggedError("RemovalRefreshError")<{
+  readonly cause: unknown;
+}> {}
 
 /**
  * Rich removed-history snapshot taken at destroy DISPATCH, while the
@@ -137,6 +142,28 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     restackBusyRef,
     primaryHarness,
   } = ctx;
+
+  const scheduleRemovalRefresh = (): Promise<void> =>
+    Effect.runPromise(
+      Effect.sleep("600 millis").pipe(
+        Effect.andThen(
+          Effect.tryPromise({
+            try: refreshAfterRemoval,
+            catch: (cause) => new RemovalRefreshError({ cause }),
+          }),
+        ),
+        Effect.catchAll((error) =>
+          Effect.sync(() => {
+            appLog.warn("post-removal refresh failed", {
+              err:
+                error.cause instanceof Error
+                  ? error.cause.message
+                  : String(error.cause),
+            });
+          }),
+        ),
+      ),
+    );
 
   async function doRemoteRemove(
     remote: RemoteConfig,
@@ -266,7 +293,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // deleted out from under them, so re-running ten git probes in a
     // vanishing directory buys errors, not freshness. The busy glyph
     // comes from the lock watcher either way.
-    setTimeout(() => void refreshAfterRemoval(), 600);
+    await scheduleRemovalRefresh();
   }
 
   /** One removal entrypoint; location is resolved only at execution. */
@@ -302,12 +329,19 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       );
       return false;
     });
-    await Promise.all([
-      doCleanRows(localCandidates),
-      ...safeRemoteCandidates.map((entry) =>
-        doRemoteRemove(entry.remote, entry.slug),
+    // Keep the independent local/remote removals concurrent, but let Effect
+    // own the fan-out so interruption and failure semantics stay explicit.
+    await Effect.runPromise(
+      Effect.all(
+        [
+          Effect.tryPromise(() => doCleanRows(localCandidates)),
+          ...safeRemoteCandidates.map((entry) =>
+            Effect.tryPromise(() => doRemoteRemove(entry.remote, entry.slug)),
+          ),
+        ],
+        { concurrency: "unbounded", discard: true },
       ),
-    ]);
+    );
   }
 
   /**
@@ -375,8 +409,18 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     advanceCursorPast(candidates.map((r) => r.wt.slug));
     recordRemovedSnapshots(candidates);
     for (const row of candidates) void actionRegistry.kill(row.wt.slug);
-    await Promise.allSettled(
-      candidates.map((row) => killAllSessionsFor(row.wt.slug)),
+    // This is intentionally all-settled: one already-dead or inaccessible
+    // tmux session must not prevent the remaining candidates from entering
+    // the destroy queue. Effect makes that best-effort policy explicit.
+    await Effect.runPromise(
+      Effect.forEach(
+        candidates,
+        (row) =>
+          Effect.tryPromise(() => killAllSessionsFor(row.wt.slug)).pipe(
+            Effect.catchAll(() => Effect.void),
+          ),
+        { concurrency: "unbounded", discard: true },
+      ),
     );
     void refreshTmuxSessions();
     for (const row of candidates) {
@@ -397,7 +441,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // triggers `reparentBaseReferences`, anchors preserved), so no
     // TUI-side bookkeeping is needed here. The actual replay (rebasing
     // commits off the squashed parent) stays an explicit `R`/`/restack`.
-    setTimeout(() => void refreshAfterRemoval(), 600);
+    await scheduleRemovalRefresh();
   }
 
   /**

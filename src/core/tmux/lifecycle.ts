@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { Data, Effect } from "effect";
 
 import {
   getHarness,
@@ -8,9 +9,9 @@ import {
 import { createLogger } from "../logger.ts";
 import { buildInnerArgs, sessionsDir, tmuxClientCwd } from "./attach.ts";
 import { ensureConfig } from "./config.ts";
-import { prepareInspectorSocket, wrapInnerArgs } from "./inner-process.ts";
+import { prepareInspectorSocketEffect, wrapInnerArgs } from "./inner-process.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
-import { listAllSessionsRaw } from "./process.ts";
+import { listAllSessionsRawEffect } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
@@ -29,6 +30,11 @@ export type StartHarnessSessionResult =
   | { ok: true; adopted?: boolean }
   | { ok: false; reason: string };
 
+class HarnessStartError extends Data.TaggedError("HarnessStartError")<{
+  readonly operation: "discover" | "spawn" | "wait";
+  readonly cause: unknown;
+}> {}
+
 /**
  * Create a worktree harness session detached, without attaching a tmux
  * client. This is the same session `attachOrCreate` would make: it uses
@@ -39,12 +45,13 @@ export type StartHarnessSessionResult =
  * start as successful rather than surfacing tmux's duplicate-session
  * error.
  */
-export async function startHarnessSessionDetached(
+export function startHarnessSessionDetachedEffect(
   slug: string,
   cwd: string,
   harnessId: HarnessId,
   managedName: string | null = null,
-): Promise<StartHarnessSessionResult> {
+): Effect.Effect<StartHarnessSessionResult> {
+  return Effect.gen(function* () {
   const harness = getHarness(harnessId);
   const name = sessionName(slug, harnessId, managedName);
   // ensureConfig, NOT writeConfig: this can run from inside the wt tmux
@@ -53,11 +60,13 @@ export async function startHarnessSessionDetached(
   const stderrPath = join(sessionsDir(), `${name}.err`);
   let resumeSessionId: string | null = null;
   if (harness.singleSlot) {
-    let sessions;
-    try {
-      sessions = await harness.discoverSessions({ slug, wtPath: cwd });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+    const discovered = yield* Effect.either(Effect.tryPromise({
+      try: () => harness.discoverSessions({ slug, wtPath: cwd }),
+      catch: (cause) => new HarnessStartError({ operation: "discover", cause }),
+    }));
+    if (discovered._tag === "Left") {
+      const cause = discovered.left.cause;
+      const reason = cause instanceof Error ? cause.message : String(cause);
       log.error("detached harness resume discovery failed", {
         slug,
         harnessId,
@@ -68,6 +77,7 @@ export async function startHarnessSessionDetached(
         reason: `could not resolve ${harness.label} primary session: ${reason}`,
       };
     }
+    const sessions = discovered.right;
     resumeSessionId = primarySingleSlotSession(sessions)?.sessionId ?? null;
   }
   // buildInnerArgs also calls harness.ensureTrusted?.(cwd).
@@ -81,10 +91,10 @@ export async function startHarnessSessionDetached(
   });
   // Before the spawn, so a leftover socket from a dead session of the
   // same name can't cost this one its inspector (see the helper).
-  await prepareInspectorSocket(harnessId, name);
-  let proc: Bun.Subprocess;
-  try {
-    proc = Bun.spawn(
+  yield* prepareInspectorSocketEffect(harnessId, name);
+  const outcome = yield* Effect.either(Effect.acquireUseRelease(
+    Effect.try({
+      try: () => Bun.spawn(
       [
         "tmux",
         "-L",
@@ -122,19 +132,33 @@ export async function startHarnessSessionDetached(
           FORCE_COLOR: process.env.FORCE_COLOR ?? "3",
         },
       },
-    );
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+      ),
+      catch: (cause) => new HarnessStartError({ operation: "spawn", cause }),
+    }),
+    (proc) => Effect.tryPromise({
+      try: async () => {
+        const [code, stderr] = await Promise.all([
+          proc.exited,
+          new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+        ]);
+        return { code, stderr };
+      },
+      catch: (cause) => new HarnessStartError({ operation: "wait", cause }),
+    }),
+    (proc) => Effect.promise(async () => {
+      if (proc.exitCode === null) proc.kill("SIGKILL");
+      await proc.exited.catch(() => -1);
+    }),
+  ));
+  if (outcome._tag === "Left") {
+    const cause = outcome.left.cause;
+    const reason = cause instanceof Error ? cause.message : String(cause);
     log.error("detached harness start spawn failed", { slug, harnessId, reason });
     return { ok: false, reason };
   }
-
-  const [code, stderr] = await Promise.all([
-    proc.exited,
-    new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-  ]);
+  const { code, stderr } = outcome.right;
   if (code !== 0) {
-    const nowExists = (await listAllSessionsRaw().catch(() => new Set<string>())).has(name);
+    const nowExists = (yield* listAllSessionsRawEffect()).has(name);
     if (nowExists) {
       log.warn("detached harness start adopted an existing session", {
         slug,
@@ -148,4 +172,13 @@ export async function startHarnessSessionDetached(
     return { ok: false, reason };
   }
   return { ok: true };
+  });
 }
+
+export const startHarnessSessionDetached = (
+  slug: string,
+  cwd: string,
+  harnessId: HarnessId,
+  managedName: string | null = null,
+): Promise<StartHarnessSessionResult> =>
+  Effect.runPromise(startHarnessSessionDetachedEffect(slug, cwd, harnessId, managedName));

@@ -163,6 +163,31 @@ test("a restores a remote worktree to Inbox through the shared mutation", async 
   expect(sections).toEqual([["remote-task", null]]);
 });
 
+test("async row action failures use the normal action error channel", async () => {
+  const reported: Array<{ label: string; error: unknown }> = [];
+  const ctx = {
+    focusedOutputId: null,
+    consumePrTargetChord: () => false,
+    handleGlobalKey: () => false,
+    current: undefined,
+    currentItem: undefined,
+    selectedPr: undefined,
+    selectedRemote: { hostLabel: "dellserver" },
+    selectedWorktree: remoteModel(),
+    selectedSection: undefined,
+    toggleArchived: async () => { throw new Error("write failed"); },
+    setSel: () => {},
+    toast: () => {},
+    reportActionError: (label: string, error: unknown) => reported.push({ label, error }),
+  } as unknown as NormalKeysCtx;
+
+  handleNormalKey(plainKey("a"), ctx);
+  await Bun.sleep(0);
+
+  expect(reported[0]?.label).toBe("archive");
+  expect(reported[0]?.error).toBeInstanceOf(Error);
+});
+
 test("! opens the same action picker for a remote worktree", () => {
   const opened: unknown[] = [];
   const target = {

@@ -128,6 +128,7 @@ export type GqlRepo = {
 
 export type GqlResponse = {
   data?: { repository?: GqlRepo };
+  errors?: Array<{ message?: string; type?: string }>;
 };
 
 export type GithubData = {

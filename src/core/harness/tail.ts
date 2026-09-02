@@ -24,6 +24,7 @@
 import { statSync } from "node:fs";
 
 import type { Statement } from "bun:sqlite";
+import { Effect, Fiber } from "effect";
 
 import {
   type ActionLine,
@@ -509,7 +510,7 @@ export class HarnessTailRegistry {
   private runs: ReadonlyMap<string, HarnessRun> = new Map();
   private state = new Map<string, Entry>();
   private listeners = new Set<Listener>();
-  private poller: ReturnType<typeof setInterval> | null = null;
+  private poller: Fiber.RuntimeFiber<never, never> | null = null;
   private codexWorker: CodexTailWorker | null = null;
   private codexInFlight: number | null = null;
   private codexPumpAgain = false;
@@ -595,17 +596,20 @@ export class HarnessTailRegistry {
 
   private ensurePoller(): void {
     if (this.poller) return;
-    this.poller = setInterval(() => {
+    const tick = Effect.sync(() => {
       this.requestCodexPump();
       for (const [key, entry] of this.state) {
         if (entry.harnessId === "opencode") this.pumpOpencode(key);
       }
-    }, POLL_INTERVAL_MS);
+    });
+    this.poller = Effect.runFork(
+      Effect.sleep(POLL_INTERVAL_MS).pipe(Effect.andThen(tick), Effect.forever),
+    );
   }
 
   private stopPoller(): void {
     if (!this.poller) return;
-    clearInterval(this.poller);
+    Effect.runFork(Fiber.interrupt(this.poller));
     this.poller = null;
   }
 

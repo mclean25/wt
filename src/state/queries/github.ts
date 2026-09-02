@@ -1,9 +1,10 @@
 import { queryOptions } from "@tanstack/react-query";
+import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
 import { snapshotForBranches } from "../../core/events/store.ts";
 import {
-  fetchGithub,
+  fetchGithubEffect,
   fetchRepoContributors,
   fetchReviewRequests,
   type ReviewRequestPr,
@@ -16,6 +17,26 @@ import type {
 
 import { qk } from "../keys.ts";
 import { KEEP_PREV, STALE } from "./shared.ts";
+
+class GithubQueryError extends Data.TaggedError("GithubQueryError")<{
+  operation: string;
+  cause: unknown;
+}> {
+  override get message(): string {
+    return this.cause instanceof Error
+      ? this.cause.message
+      : String(this.cause);
+  }
+}
+
+const queryPromise = <A, E>(effect: Effect.Effect<A, E>, signal: AbortSignal) =>
+  Effect.runPromise(effect, { signal });
+
+const promiseEffect = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new GithubQueryError({ operation, cause }),
+  });
 
 // WT_GITHUB=off pins the github source to whatever the persisted cache
 // holds — no gh round-trips at all. Set by the TUI probe harness
@@ -54,22 +75,26 @@ export type GithubData = {
 export const githubQuery = (branches: readonly string[]) =>
   queryOptions({
     queryKey: qk.github(branches),
-    queryFn: async ({ signal }): Promise<GithubData> => {
-      // Events mode: serve the daemon's warm snapshot when it's fresh and
-      // covers these branches, skipping the gh round-trip entirely. The
-      // marker watcher (runtime.tsx) drives invalidation; this read is the
-      // payoff. Falls back to a live fetch when the snapshot is stale or a
-      // worktree was just added (see `snapshotForBranches`).
-      if (config.github.events) {
-        const snap = snapshotForBranches(branches);
-        if (snap) return snap;
-      }
-      const { prs, mergeQueue } = await fetchGithub([...branches], signal);
-      return {
-        prs: Object.fromEntries(prs),
-        mergeQueue: Object.fromEntries(mergeQueue),
-      };
-    },
+    queryFn: ({ signal }): Promise<GithubData> =>
+      queryPromise(
+        Effect.gen(function* () {
+          // Events mode: serve the daemon's warm snapshot when it's fresh and
+          // covers these branches, skipping the gh round-trip entirely. The
+          // marker watcher (runtime.tsx) drives invalidation; this read is the
+          // payoff. Falls back to a live fetch when the snapshot is stale or a
+          // worktree was just added (see `snapshotForBranches`).
+          if (config.github.events) {
+            const snap = snapshotForBranches(branches);
+            if (snap) return snap;
+          }
+          const { prs, mergeQueue } = yield* fetchGithubEffect([...branches]);
+          return {
+            prs: Object.fromEntries(prs),
+            mergeQueue: Object.fromEntries(mergeQueue),
+          };
+        }),
+        signal,
+      ),
     // With events configured the webhook marker is the freshness driver, so
     // relax the staleTime to a backstop. The `refetchInterval` is a genuine
     // periodic safety net: a dropped fs event (FSEvents coalescing the
@@ -99,8 +124,13 @@ export type { ReviewRequestPr };
 export const reviewRequestsQuery = () =>
   queryOptions({
     queryKey: qk.reviewRequests(),
-    queryFn: async ({ signal }): Promise<ReviewRequestPr[]> =>
-      fetchReviewRequests(signal),
+    queryFn: ({ signal }): Promise<ReviewRequestPr[]> =>
+      queryPromise(
+        promiseEffect("fetch review requests", () =>
+          fetchReviewRequests(signal),
+        ),
+        signal,
+      ),
     // Same freshness model as `githubQuery`: with the webhook daemon
     // configured the marker drives invalidation, so relax staleTime to the
     // backstop and keep a periodic safety net so a dropped fs event or
@@ -109,7 +139,9 @@ export const reviewRequestsQuery = () =>
     // setups keep the 60s staleTime and no interval.
     staleTime: config.github.events?.backstopPollMs ?? STALE.slow,
     refetchInterval:
-      !GITHUB_OFF && config.github.events ? config.github.events.backstopPollMs : false,
+      !GITHUB_OFF && config.github.events
+        ? config.github.events.backstopPollMs
+        : false,
     enabled: !GITHUB_OFF && config.github.reviewers,
     ...KEEP_PREV,
   });
@@ -126,7 +158,13 @@ export const reviewRequestsQuery = () =>
 export const contributorsQuery = () =>
   queryOptions({
     queryKey: qk.contributors(),
-    queryFn: async ({ signal }): Promise<Contributor[]> => fetchRepoContributors(signal),
+    queryFn: ({ signal }): Promise<Contributor[]> =>
+      queryPromise(
+        promiseEffect("fetch contributors", () =>
+          fetchRepoContributors(signal),
+        ),
+        signal,
+      ),
     staleTime: 7 * 24 * 60 * 60 * 1000,
     gcTime: Number.POSITIVE_INFINITY,
   });

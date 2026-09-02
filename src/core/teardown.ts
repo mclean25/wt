@@ -20,7 +20,8 @@
  * use it without dragging a config import into their module graph.
  */
 import { createLogger } from "./logger.ts";
-import { runStreaming } from "./proc.ts";
+import { Effect } from "effect";
+import { runStreamingEffect } from "./proc.ts";
 
 const log = createLogger("[teardown]");
 
@@ -66,7 +67,7 @@ export function resolveTeardownCommand(
  * exist to fix is a leak, and refusing the destroy (or the stop) turns
  * one leak into a bigger one.
  */
-export async function runTeardownCommand(opts: {
+export function runTeardownCommandEffect(opts: {
   /** Config key name, used verbatim in log lines: `destroy_command`, … */
   label: string;
   command: string;
@@ -74,25 +75,30 @@ export async function runTeardownCommand(opts: {
   cwd: string;
   slug: string;
   onLog?: (line: string) => void;
-}): Promise<boolean> {
+}): Effect.Effect<boolean> {
   const { label, command, cwd, slug, onLog } = opts;
   onLog?.(`${label}: ${command}`);
-  try {
-    const exit = await runStreaming([process.env.SHELL || "bash", "-lc", command], {
-      cwd,
-      onLine: (line) => onLog?.(line),
-      killAfterMs: TEARDOWN_TIMEOUT_MS,
-    });
-    if (exit !== 0) {
-      onLog?.(`${label} failed (exit ${exit}) — continuing`);
-      log.warn(`${label} failed`, { slug, exit });
+  return runStreamingEffect([process.env.SHELL || "bash", "-lc", command], {
+    cwd,
+    onLine: (line) => onLog?.(line),
+    killAfterMs: TEARDOWN_TIMEOUT_MS,
+  }).pipe(
+    Effect.map((exit) => {
+      if (exit !== 0) {
+        onLog?.(`${label} failed (exit ${exit}) — continuing`);
+        log.warn(`${label} failed`, { slug, exit });
+        return false;
+      }
+      return true;
+    }),
+    Effect.catchAll((err) => Effect.sync(() => {
+      onLog?.(
+        `${label} errored: ${err instanceof Error ? err.message : String(err)} — continuing`,
+      );
       return false;
-    }
-    return true;
-  } catch (err) {
-    onLog?.(
-      `${label} errored: ${err instanceof Error ? err.message : String(err)} — continuing`,
-    );
-    return false;
-  }
+    })),
+  );
 }
+
+export const runTeardownCommand = (opts: Parameters<typeof runTeardownCommandEffect>[0]): Promise<boolean> =>
+  Effect.runPromise(runTeardownCommandEffect(opts));

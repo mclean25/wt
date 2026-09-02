@@ -215,8 +215,9 @@ test("a branch with no commits of its own counts 0 ahead through a stale clone r
     root,
     cfg,
     `const g = await import(${GIT_MOD});
-     const base = await g.freshBaseRev(${JSON.stringify(wt)}, "origin/staging");
-     console.log(JSON.stringify(await g.firstCommitSubject(${JSON.stringify(wt)}, base)));`,
+     const { Effect } = await import("effect");
+     const base = await Effect.runPromise(g.freshBaseRevEffect(${JSON.stringify(wt)}, "origin/staging"));
+     console.log(JSON.stringify(await Effect.runPromise(g.firstCommitSubjectEffect(${JSON.stringify(wt)}, base))));`,
   );
   expect(JSON.parse(title.trim())).toBeNull();
 });
@@ -261,8 +262,10 @@ test("the BARE trunk name normalizes to the remote ref, not a frozen local branc
     root,
     cfg,
     `const g = await import(${GIT_MOD});
+     const { Effect } = await import("effect");
      const eff = await g.effectiveBaseOrTrunk(${JSON.stringify(wt)}, "staging");
-     const title = await g.firstCommitSubject(${JSON.stringify(wt)}, await g.freshBaseRev(${JSON.stringify(wt)}, eff));
+     const base = await Effect.runPromise(g.freshBaseRevEffect(${JSON.stringify(wt)}, eff));
+     const title = await Effect.runPromise(g.firstCommitSubjectEffect(${JSON.stringify(wt)}, base));
      console.log(JSON.stringify({ eff, title }));`,
   );
   expect(JSON.parse(out.trim())).toEqual({ eff: "origin/staging", title: null });

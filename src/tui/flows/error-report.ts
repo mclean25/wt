@@ -10,6 +10,7 @@
  * terminal handoff when the overlay was dismissed mid-send.
  */
 import type { Dispatch, SetStateAction } from "react";
+import { Data, Effect } from "effect";
 
 import type { HarnessId } from "../../core/harness/index.ts";
 import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
@@ -27,6 +28,10 @@ const log = createLogger(WT_SOURCE_SLOT.label);
 
 let inFlight = false;
 let cancelled = false;
+
+class ErrorReportSendError extends Data.TaggedError("ErrorReportSendError")<{
+  readonly cause: unknown;
+}> {}
 
 /**
  * Called when the error overlay closes. A send already in flight still
@@ -66,45 +71,69 @@ export function makeErrorFlows(ctx: ErrorFlowCtx): {
     inFlight = true;
     cancelled = false;
     patchInject({ kind: "sending" });
-    void (async () => {
-      // Same tmux session `,` attaches to — the prompt lands in the
-      // conversation the user is about to be dropped into.
-      const result = await sendSessionMessage({
-        slug: WT_SOURCE_SLOT.slug,
-        cwd: WT_SOURCE_SLOT.path,
-        harnessId: primaryHarness,
-        text: buildErrorInvestigationPrompt(captured),
-      });
-      inFlight = false;
-      if (!result.ok) {
-        patchInject({ kind: "failed", reason: result.reason });
-        log.event.err(`error-report send failed: ${result.reason}`);
-        return;
-      }
+    Effect.runFork(
+      Effect.tryPromise({
+        // Same tmux session `,` attaches to. The prompt lands in the
+        // conversation the user is about to enter.
+        try: () =>
+          sendSessionMessage({
+            slug: WT_SOURCE_SLOT.slug,
+            cwd: WT_SOURCE_SLOT.path,
+            harnessId: primaryHarness,
+            text: buildErrorInvestigationPrompt(captured),
+          }),
+        catch: (cause) => new ErrorReportSendError({ cause }),
+      }).pipe(
+        Effect.match({
+          onFailure: (error) => {
+            const reason =
+              error.cause instanceof Error
+                ? error.cause.message
+                : String(error.cause);
+            patchInject({ kind: "failed", reason });
+            log.event.err(`error-report send failed: ${reason}`);
+          },
+          onSuccess: (result) => {
+            if (!result.ok) {
+              patchInject({ kind: "failed", reason: result.reason });
+              log.event.err(`error-report send failed: ${result.reason}`);
+              return;
+            }
       // `ok` is not delivery. It used to be, for Claude: the old
       // transport only resolved ok once the prompt was in the
       // transcript. Now `delivered: false` is a real outcome, and
       // treating it as success here would ALSO mark the errors seen —
       // burying a captured crash whose investigation prompt never
       // arrived.
-      if (result.delivered === false) {
-        patchInject({ kind: "failed", reason: "the session never received it" });
-        log.event.err("error-report send was not received by the session");
-        return;
-      }
-      if (cancelled) {
-        log.event.info("error report sent (overlay closed — not entering)");
-        return;
-      }
-      log.event.ok("error report sent — entering session");
+            if (result.delivered === false) {
+              patchInject({
+                kind: "failed",
+                reason: "the session never received it",
+              });
+              log.event.err("error-report send was not received by the session");
+              return;
+            }
+            if (cancelled) {
+              log.event.info("error report sent (overlay closed — not entering)");
+              return;
+            }
+            log.event.ok("error report sent — entering session");
       // Handing off counts as acknowledging: don't re-pop this error
       // on return from the session.
-      markErrorsSeen();
+            markErrorsSeen();
       // Close before seizing the terminal — an overlay left open would
       // paint back over the session view on return.
-      setModal(null);
-      doEnterSlotSession(WT_SOURCE_SLOT);
-    })();
+            setModal(null);
+            doEnterSlotSession(WT_SOURCE_SLOT);
+          },
+        }),
+        Effect.ensuring(
+          Effect.sync(() => {
+            inFlight = false;
+          }),
+        ),
+      ),
+    );
   }
 
   return { doErrorInvestigate };

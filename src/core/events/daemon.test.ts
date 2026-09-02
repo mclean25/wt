@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { Clock, Deferred, Duration, Effect, Exit, Scope, TestClock, TestContext } from "effect";
 
-import { nextFetchAt } from "./daemon.ts";
+import type { GithubEventsConfig } from "../config.ts";
+import {
+  type DaemonDependencies,
+  makeDaemonCore,
+  nextFetchAt,
+} from "./daemon.ts";
 
 const DEBOUNCE = 1_500;
 const FLOOR = 30_000;
@@ -89,5 +95,159 @@ describe("nextFetchAt", () => {
     }
     expect(arms).toBe(1);
     expect(pending).toBe(now + DEBOUNCE);
+  });
+});
+
+const events: GithubEventsConfig = {
+  port: 32123,
+  host: "127.0.0.1",
+  secret: "test",
+  secretFile: null,
+  backstopPollMs: 600_000,
+};
+
+function testDependencies(options: {
+  fetchGithub?: DaemonDependencies["fetchGithub"];
+  fetchStarts: number[];
+  snapshotWrites: number[];
+  markerWrites: number[];
+  stateWrites?: Array<{ eventCount: number; lastEventAt: number | null }>;
+}): DaemonDependencies {
+  return {
+    ensureEventsDir: () => {},
+    currentBranches: () => Effect.succeed(["feature"]),
+    fetchOrigin: Effect.void,
+    fetchGithub: options.fetchGithub ?? (() => Effect.gen(function* () {
+      options.fetchStarts.push(yield* Clock.currentTimeMillis);
+      return { prs: new Map(), mergeQueue: new Map() };
+    })),
+    writeSnapshot: (snapshot) => { options.snapshotWrites.push(snapshot.updatedAt); },
+    touchMarker: (at) => { options.markerWrites.push(at); },
+    writeState: (state) => {
+      options.stateWrites?.push({ eventCount: state.eventCount, lastEventAt: state.lastEventAt });
+    },
+    sourceMoved: () => false,
+    exitForUpgrade: Effect.never,
+  };
+}
+
+const runTest = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  Effect.runPromise(effect.pipe(Effect.scoped, Effect.provide(TestContext.TestContext)));
+
+describe("Effect daemon lifecycle", () => {
+  test("event counters include only parsed events relevant to this fleet", async () => {
+    const dependencies = testDependencies({
+      fetchStarts: [],
+      snapshotWrites: [],
+      markerWrites: [],
+    });
+
+    await runTest(Effect.gen(function* () {
+      const core = yield* makeDaemonCore(events, dependencies);
+      yield* core.accept("check_suite", "not json");
+      yield* core.accept("check_suite", JSON.stringify({ check_suite: { head_branch: "other" } }));
+      yield* Effect.yieldNow();
+      yield* Effect.yieldNow();
+      expect((yield* core.state).eventCount).toBe(0);
+
+      yield* core.accept("check_suite", JSON.stringify({ check_suite: { head_branch: "feature" } }));
+      yield* Effect.yieldNow();
+      yield* Effect.yieldNow();
+      expect((yield* core.state).eventCount).toBe(1);
+    }));
+  });
+
+  test("closing during a fetch interrupts and joins it with no late writes", async () => {
+    const fetchStarts: number[] = [];
+    const snapshotWrites: number[] = [];
+    const markerWrites: number[] = [];
+    const gate = await Effect.runPromise(Deferred.make<void>());
+    const dependencies = testDependencies({
+      fetchStarts,
+      snapshotWrites,
+      markerWrites,
+      fetchGithub: () => Effect.gen(function* () {
+        fetchStarts.push(yield* Clock.currentTimeMillis);
+        yield* Deferred.await(gate);
+        return { prs: new Map(), mergeQueue: new Map() };
+      }),
+    });
+
+    await Effect.runPromise(Effect.gen(function* () {
+      yield* TestClock.setTime(1_000_000);
+      const scope = yield* Scope.make();
+      yield* makeDaemonCore(events, dependencies).pipe(Scope.extend(scope));
+      yield* Effect.yieldNow();
+      expect(fetchStarts).toEqual([1_000_000]);
+      yield* Scope.close(scope, Exit.void);
+      yield* Deferred.succeed(gate, undefined);
+      yield* TestClock.adjust(Duration.minutes(2));
+      yield* Effect.yieldNow();
+    }).pipe(Effect.provide(TestContext.TestContext)));
+
+    expect(snapshotWrites).toEqual([]);
+    expect(markerWrites).toEqual([]);
+  });
+
+  test("a trailing delivery cannot rearm after scope close", async () => {
+    const fetchStarts: number[] = [];
+    const snapshotWrites: number[] = [];
+    const markerWrites: number[] = [];
+    const stateWrites: Array<{ eventCount: number; lastEventAt: number | null }> = [];
+    const dependencies = testDependencies({ fetchStarts, snapshotWrites, markerWrites, stateWrites });
+
+    await Effect.runPromise(Effect.gen(function* () {
+      yield* TestClock.setTime(1_000_000);
+      const scope = yield* Scope.make();
+      const core = yield* makeDaemonCore(events, dependencies).pipe(Scope.extend(scope));
+      yield* Effect.yieldNow();
+      yield* core.accept("pull_request", "{}");
+      yield* Effect.yieldNow();
+      yield* Scope.close(scope, Exit.void);
+      yield* TestClock.adjust(Duration.minutes(2));
+      yield* Effect.yieldNow();
+    }).pipe(Effect.provide(TestContext.TestContext)));
+
+    expect(fetchStarts).toEqual([1_000_000]);
+    expect(snapshotWrites).toHaveLength(1);
+    expect(stateWrites.some((state) => state.eventCount === 1 && state.lastEventAt === 1_000_000)).toBeTrue();
+  });
+
+  test("continuous deliveries do not starve the pending fetch", async () => {
+    const fetchStarts: number[] = [];
+    const dependencies = testDependencies({ fetchStarts, snapshotWrites: [], markerWrites: [] });
+
+    await runTest(Effect.gen(function* () {
+      yield* TestClock.setTime(1_000_000);
+      const core = yield* makeDaemonCore(events, dependencies);
+      yield* Effect.yieldNow();
+      for (let elapsed = 0; elapsed < FLOOR; elapsed += 1_400) {
+        yield* core.accept("pull_request", "{}");
+        yield* Effect.yieldNow();
+        yield* TestClock.adjust(1_400);
+      }
+      yield* Effect.yieldNow();
+      expect(fetchStarts.length).toBeGreaterThanOrEqual(2);
+      expect(fetchStarts[1]).toBe(1_030_000);
+    }));
+  });
+
+  test("minimum interval remains measured from fetch start", async () => {
+    const fetchStarts: number[] = [];
+    const dependencies = testDependencies({ fetchStarts, snapshotWrites: [], markerWrites: [] });
+
+    await runTest(Effect.gen(function* () {
+      yield* TestClock.setTime(1_000_000);
+      const core = yield* makeDaemonCore(events, dependencies);
+      yield* Effect.yieldNow();
+      yield* TestClock.adjust(2_000);
+      yield* core.accept("pull_request", "{}");
+      yield* Effect.yieldNow();
+      yield* TestClock.adjust(27_999);
+      expect(fetchStarts).toEqual([1_000_000]);
+      yield* TestClock.adjust(1);
+      yield* Effect.yieldNow();
+      expect(fetchStarts).toEqual([1_000_000, 1_030_000]);
+    }));
   });
 });

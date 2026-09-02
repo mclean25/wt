@@ -2,7 +2,13 @@
  * Repo-state probes and the pure offer/gate decisions for the
  * self-update system. Config-free (see exec.ts).
  */
-import { gitOk, logSafe, runIn, WT_REPO_ROOT } from "./exec.ts";
+import { Effect } from "effect";
+import {
+  gitOkEffect,
+  logSafe,
+  runInEffect,
+  WT_REPO_ROOT,
+} from "./exec.ts";
 import type { UpdateMemory } from "./memory.ts";
 
 export type RepoUpdateState = {
@@ -20,34 +26,67 @@ export type RepoUpdateState = {
 };
 
 /** Null when the source tree isn't a git checkout (or git is missing). */
-export async function repoUpdateState(): Promise<RepoUpdateState | null> {
-  const headSha = await gitOk(["rev-parse", "HEAD"]);
-  if (headSha === null) return null;
-  const status = await gitOk(["status", "--porcelain"]);
-  const dirty = status !== null && status.length > 0;
-  const upstream = await gitOk(["rev-parse", "--abbrev-ref", "@{u}"]);
-  if (upstream === null) {
-    return { dirty, upstream: null, ahead: 0, behind: 0, headSha, remoteSha: "" };
-  }
-  const counts = (await gitOk(["rev-list", "--left-right", "--count", "@{u}...HEAD"])) ?? "0 0";
-  const [behindRaw, aheadRaw] = counts.split(/\s+/);
-  const remoteSha = (await gitOk(["rev-parse", "@{u}"])) ?? "";
-  return {
-    dirty,
-    upstream,
-    ahead: parseInt(aheadRaw ?? "0", 10) || 0,
-    behind: parseInt(behindRaw ?? "0", 10) || 0,
-    headSha,
-    remoteSha,
-  };
-}
+export const repoUpdateStateEffect: Effect.Effect<RepoUpdateState | null> =
+  Effect.gen(function* () {
+    const headSha = yield* gitOkEffect(["rev-parse", "HEAD"]);
+    if (headSha === null) return null;
+    const status = yield* gitOkEffect(["status", "--porcelain"]);
+    const dirty = status !== null && status.length > 0;
+    const upstream = yield* gitOkEffect([
+      "rev-parse",
+      "--abbrev-ref",
+      "@{u}",
+    ]);
+    if (upstream === null) {
+      return {
+        dirty,
+        upstream: null,
+        ahead: 0,
+        behind: 0,
+        headSha,
+        remoteSha: "",
+      };
+    }
+    const counts =
+      (yield* gitOkEffect([
+        "rev-list",
+        "--left-right",
+        "--count",
+        "@{u}...HEAD",
+      ])) ?? "0 0";
+    const [behindRaw, aheadRaw] = counts.split(/\s+/);
+    const remoteSha = (yield* gitOkEffect(["rev-parse", "@{u}"])) ?? "";
+    return {
+      dirty,
+      upstream,
+      ahead: parseInt(aheadRaw ?? "0", 10) || 0,
+      behind: parseInt(behindRaw ?? "0", 10) || 0,
+      headSha,
+      remoteSha,
+    };
+  });
 
 /** One bounded fetch of the clone's default remote. False on failure (offline, auth). */
-export async function fetchWtOrigin(): Promise<boolean> {
-  const r = await runIn(["git", "fetch", "--quiet"], { cwd: WT_REPO_ROOT, timeoutMs: 20_000 });
-  if (r.exitCode !== 0) logSafe("warn", `git fetch failed: ${r.stderr.trim() || `exit ${r.exitCode}`}`);
-  return r.exitCode === 0;
-}
+export const fetchWtOriginEffect: Effect.Effect<boolean> = runInEffect(
+  ["git", "fetch", "--quiet"],
+  { cwd: WT_REPO_ROOT, timeoutMs: 20_000 },
+).pipe(
+  Effect.match({
+    onFailure: (error) => {
+      logSafe("warn", `git fetch failed: ${error.operation}`);
+      return false;
+    },
+    onSuccess: (result) => {
+      if (result.exitCode !== 0) {
+        logSafe(
+          "warn",
+          `git fetch failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`,
+        );
+      }
+      return result.exitCode === 0;
+    },
+  }),
+);
 
 export type PendingCommit = { sha: string; subject: string };
 
@@ -59,19 +98,27 @@ export type PendingCommit = { sha: string; subject: string };
 const CONTROL_RE = /[\x00-\x1f\x7f]/g;
 
 /** Commits an update would bring in (`HEAD..<ref>`, default @{u}), newest first. */
-export async function pendingCommits(ref = "@{u}"): Promise<PendingCommit[]> {
-  const out = await gitOk(["log", "--format=%H %s", `HEAD..${ref}`]);
-  if (!out) return [];
-  return out
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const sp = line.indexOf(" ");
-      return sp === -1
-        ? { sha: line, subject: "" }
-        : { sha: line.slice(0, sp), subject: line.slice(sp + 1).replace(CONTROL_RE, " ") };
-    });
-}
+export const pendingCommitsEffect = (
+  ref = "@{u}",
+): Effect.Effect<PendingCommit[]> =>
+  gitOkEffect(["log", "--format=%H %s", `HEAD..${ref}`]).pipe(
+    Effect.map((out) =>
+      out
+        ? out
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => {
+              const sp = line.indexOf(" ");
+              return sp === -1
+                ? { sha: line, subject: "" }
+                : {
+                    sha: line.slice(0, sp),
+                    subject: line.slice(sp + 1).replace(CONTROL_RE, " "),
+                  };
+            })
+        : [],
+    ),
+  );
 
 // ── Decisions (pure — tested in update.test.ts) ────────────────────────
 
@@ -137,18 +184,25 @@ export function selectOffer(args: {
  * path to verify, and a false positive only adds an informational
  * line).
  */
-export async function listRunningWtInstances(): Promise<number[]> {
-  const r = await runIn(["ps", "-axo", "pid=,command="], { cwd: WT_REPO_ROOT, timeoutMs: 10_000 });
-  if (r.exitCode !== 0) return [];
-  const pids: number[] = [];
-  for (const line of r.stdout.split("\n")) {
-    const m = line.match(/^\s*(\d+)\s+(.*)$/);
-    if (!m?.[1] || m[2] === undefined) continue;
-    const pid = parseInt(m[1], 10);
-    if (pid === process.pid) continue;
-    const cmd = m[2].trim();
-    const isThisClone = cmd.endsWith("/src/main.ts") && cmd.includes(WT_REPO_ROOT);
-    if (isThisClone || /^bun src\/main\.ts$/.test(cmd)) pids.push(pid);
-  }
-  return pids;
-}
+export const listRunningWtInstancesEffect: Effect.Effect<number[]> =
+  runInEffect(["ps", "-axo", "pid=,command="], {
+    cwd: WT_REPO_ROOT,
+    timeoutMs: 10_000,
+  }).pipe(
+    Effect.map((result) => {
+      if (result.exitCode !== 0) return [];
+      const pids: number[] = [];
+      for (const line of result.stdout.split("\n")) {
+        const match = line.match(/^\s*(\d+)\s+(.*)$/);
+        if (!match?.[1] || match[2] === undefined) continue;
+        const pid = parseInt(match[1], 10);
+        if (pid === process.pid) continue;
+        const command = match[2].trim();
+        const isThisClone =
+          command.endsWith("/src/main.ts") && command.includes(WT_REPO_ROOT);
+        if (isThisClone || /^bun src\/main\.ts$/.test(command)) pids.push(pid);
+      }
+      return pids;
+    }),
+    Effect.orElseSucceed(() => []),
+  );

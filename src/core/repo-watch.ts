@@ -45,6 +45,7 @@
  */
 import { mkdirSync, watch, type FSWatcher } from "node:fs";
 import { basename, join } from "node:path";
+import { Effect, Exit, Fiber, Ref, Runtime, Scope } from "effect";
 
 import { createLogger } from "./logger.ts";
 import { closeSilent } from "./tail-util.ts";
@@ -62,32 +63,73 @@ const REFS_DEBOUNCE_MS = 300;
  *  window than refs so we don't refetch dirty mid-burst. */
 const WT_DEBOUNCE_MS = 500;
 
-export type Debounced = { trigger: () => void; cancel: () => void };
+export type Debounced = {
+  trigger: () => void;
+  cancel: () => void;
+  /** Effect-native cancellation for scoped owners and deterministic tests. */
+  cancelEffect: Effect.Effect<void>;
+};
 
 /**
  * Trailing-edge debounce shared by the fs watchers in this module and the
  * github-events marker watcher (`core/events/store.ts`) — FSEvents bursts,
  * one invalidation pass per burst is enough.
  */
-export function makeDebounced(onChange: () => void, ms: number): Debounced {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let disposed = false;
+export const makeDebouncedEffect = (
+  onChange: () => void,
+  ms: number,
+): Effect.Effect<Debounced, never, Scope.Scope> => Effect.gen(function* () {
+  const runtime = yield* Effect.runtime<never>();
+  const scope = yield* Effect.scope;
+  const disposed = yield* Ref.make(false);
+  const current = yield* Ref.make<Fiber.RuntimeFiber<void, never> | null>(null);
+
+  const cancelCurrent = Effect.gen(function* () {
+    const fiber = yield* Ref.getAndSet(current, null);
+    if (fiber) yield* Fiber.interrupt(fiber);
+  });
+  const cancelCurrentFromCallback = (): void => {
+    const fiber = Runtime.runSync(runtime)(Ref.getAndSet(current, null));
+    if (fiber) Runtime.runSync(runtime)(Fiber.interruptFork(fiber));
+  };
+  const cancelEffect = Ref.set(disposed, true).pipe(Effect.andThen(cancelCurrent));
+  yield* Effect.addFinalizer(() => cancelEffect);
+
   return {
     trigger: () => {
-      if (disposed) return;
-      if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        if (!disposed) onChange();
-      }, ms);
+      if (Runtime.runSync(runtime)(Ref.get(disposed))) return;
+      cancelCurrentFromCallback();
+      const fiber = Runtime.runSync(runtime)(
+        Effect.sleep(ms).pipe(
+          Effect.andThen(Effect.sync(() => {
+            if (!Runtime.runSync(runtime)(Ref.get(disposed))) onChange();
+          })),
+          Effect.forkIn(scope),
+        ),
+      );
+      Runtime.runSync(runtime)(Ref.set(current, fiber));
     },
     cancel: () => {
-      disposed = true;
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
+      Runtime.runSync(runtime)(Ref.set(disposed, true));
+      cancelCurrentFromCallback();
     },
+    cancelEffect,
+  };
+});
+
+export function makeDebounced(onChange: () => void, ms: number): Debounced {
+  const scope = Effect.runSync(Scope.make());
+  const debounced = Effect.runSync(makeDebouncedEffect(onChange, ms).pipe(Scope.extend(scope)));
+  let cancelled = false;
+  return {
+    trigger: debounced.trigger,
+    cancel: () => {
+      if (cancelled) return;
+      cancelled = true;
+      debounced.cancel();
+      Effect.runFork(Scope.close(scope, Exit.void));
+    },
+    cancelEffect: Scope.close(scope, Exit.void),
   };
 }
 

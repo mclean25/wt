@@ -12,16 +12,17 @@
  * state, mirroring the F12 claude-session model.
  */
 import type { CliRenderer } from "@opentui/core";
+import { Effect } from "effect";
 
 import {
-  enterWorktreeSession,
+  enterWorktreeSessionEffect,
   type HarnessRoute,
   type WorktreeSessionResult,
 } from "./worktree.ts";
 
 export type DiffResult = WorktreeSessionResult;
 
-export async function enterDiffSession(opts: {
+export type EnterDiffSessionOptions = {
   renderer: CliRenderer;
   slug: string;
   cwd: string;
@@ -34,11 +35,16 @@ export async function enterDiffSession(opts: {
    */
   base: string;
   harness: HarnessRoute;
-}): Promise<DiffResult> {
+};
+
+export function enterDiffSessionEffect(opts: EnterDiffSessionOptions) {
   const { base, ...rest } = opts;
-  return await enterWorktreeSession({
+  return enterWorktreeSessionEffect({
     ...rest,
     initial: "diff",
     diffBase: base,
   });
 }
+
+export const enterDiffSession = (opts: EnterDiffSessionOptions): Promise<DiffResult> =>
+  Effect.runPromise(enterDiffSessionEffect(opts));

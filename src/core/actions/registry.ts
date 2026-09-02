@@ -45,6 +45,7 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
+import { Deferred, Effect, Fiber } from "effect";
 
 import {
   type ActionLine,
@@ -77,11 +78,11 @@ import {
   worktreeActionKey,
   type WorktreeTarget,
 } from "../worktree-target.ts";
+import { listSessionsEffect } from "../tmux/admin.ts";
 import {
-  killActionSession as killActionTmuxSession,
-  listSessions,
-  startActionSession,
-} from "../tmux.ts";
+  killActionSessionEffect as killActionTmuxSessionEffect,
+  startActionSessionEffect,
+} from "../tmux/action-sessions.ts";
 import { CUSTOM_ACTION_ID, MAX_RETAINED_RUNS, RECENT_WINDOW_MS } from "./builtins.ts";
 import {
   actionsDir,
@@ -129,7 +130,7 @@ class ActionRegistry {
   /** Per slug: tail + done watcher + parser state for the in-flight run. */
   private liveHandles = new Map<string, LiveHandles>();
   private listeners = new Set<Listener>();
-  private cleanupTimer: Timer | null = null;
+  private cleanupFiber: Fiber.RuntimeFiber<void, never> | null = null;
   /**
    * Registry-global monotonic line id. Every ActionLine emitted by this
    * registry — across all runs, all slugs — pulls from this counter.
@@ -140,10 +141,11 @@ class ActionRegistry {
    */
   private nextId = 1;
   private nextLineId = (): number => this.nextId++;
-  /** Per runDir: serialized meta.json write chain. Concurrent updates
+  /** Per runDir: serialized meta.json writes. Concurrent updates
    *  (status flip + result-event metadata) would otherwise race and
    *  one would lose. */
-  private metaChains = new Map<string, Promise<void>>();
+  private metaLocks = new Map<string, Effect.Semaphore>();
+  private pendingMetaWrites = new Set<Fiber.RuntimeFiber<void, never>>();
   /** Slugs with a `start()` in flight but not yet committed to `runs`.
    *  `start()` awaits `startActionSession` now, so the "one running per
    *  slug" guard can no longer rely on check-then-commit being atomic —
@@ -152,7 +154,35 @@ class ActionRegistry {
    *  guard meaningful across that await. */
   private starting = new Set<string>();
 
-  async start(
+  startEffect(
+    def: ActionDef,
+    slug: string,
+    cwd: string,
+    extras: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+    opts: StartOpts = {},
+  ): Effect.Effect<ActionStartResult> {
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const existing = this.runs.get(slug);
+        if (existing?.status === "running" || this.starting.has(slug)) return false;
+        this.starting.add(slug);
+        return true;
+      }),
+      (reserved) => reserved
+        ? this.startInnerEffect(def, slug, cwd, extras, vars, harnessId, opts)
+        : Effect.succeed({
+            ok: false as const,
+            reason: "an action is already running for this worktree",
+          }),
+      (reserved) => Effect.sync(() => {
+        if (reserved) this.starting.delete(slug);
+      }),
+    );
+  }
+
+  start(
     def: ActionDef,
     slug: string,
     cwd: string,
@@ -161,23 +191,11 @@ class ActionRegistry {
     harnessId: HarnessId = "claude",
     opts: StartOpts = {},
   ): Promise<ActionStartResult> {
-    const existing = this.runs.get(slug);
-    if (existing?.status === "running" || this.starting.has(slug)) {
-      return { ok: false, reason: "an action is already running for this worktree" };
-    }
-    // Reserve the slug synchronously across the async `startActionSession`
-    // inside `startInner` so a second concurrent start() can't slip past
-    // the guard above before this run lands in `runs`.
-    this.starting.add(slug);
-    try {
-      return await this.startInner(def, slug, cwd, extras, vars, harnessId, opts);
-    } finally {
-      this.starting.delete(slug);
-    }
+    return Effect.runPromise(this.startEffect(def, slug, cwd, extras, vars, harnessId, opts));
   }
 
   /** Location-neutral entrypoint used by the TUI action dispatcher. */
-  startForWorktree(
+  startForWorktreeEffect(
     def: ActionDef,
     target: WorktreeTarget,
     supervisorCwd: string,
@@ -185,9 +203,9 @@ class ActionRegistry {
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
     opts: { autoFireKeys?: readonly string[] } = {},
-  ): Promise<ActionStartResult> {
+  ): Effect.Effect<ActionStartResult> {
     if (isRemoteWorktreeTarget(target)) {
-      return this.startRemote(
+      return this.startRemoteEffect(
         def,
         worktreeActionKey(target),
         supervisorCwd,
@@ -200,7 +218,7 @@ class ActionRegistry {
         opts,
       );
     }
-    return this.start(
+    return this.startEffect(
       def,
       target.slug,
       target.path,
@@ -211,13 +229,27 @@ class ActionRegistry {
     );
   }
 
+  startForWorktree(
+    def: ActionDef,
+    target: WorktreeTarget,
+    supervisorCwd: string,
+    extras: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+    opts: { autoFireKeys?: readonly string[] } = {},
+  ): Promise<ActionStartResult> {
+    return Effect.runPromise(this.startForWorktreeEffect(
+      def, target, supervisorCwd, extras, vars, harnessId, opts,
+    ));
+  }
+
   /**
    * Start an action whose process lives in a remote checkout while this
    * registry remains the supervisor. The local tmux wrapper captures the SSH
    * stream, so output, cancellation, recent-run visibility, and restart
    * recovery are identical to a local action.
    */
-  async startRemote(
+  startRemoteEffect(
     def: ActionDef,
     actionKey: string,
     supervisorCwd: string,
@@ -228,12 +260,7 @@ class ActionRegistry {
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
     opts: { autoFireKeys?: readonly string[] } = {},
-  ): Promise<ActionStartResult> {
-    const existing = this.runs.get(actionKey);
-    if (existing?.status === "running" || this.starting.has(actionKey)) {
-      return { ok: false, reason: "an action is already running for this worktree" };
-    }
-
+  ): Effect.Effect<ActionStartResult> {
     const remoteAction = prepareRemoteAction(
       def,
       remote,
@@ -250,9 +277,14 @@ class ActionRegistry {
       prompt: remoteAction.prompt,
     };
 
-    this.starting.add(actionKey);
-    try {
-      return await this.startInner(
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const existing = this.runs.get(actionKey);
+        if (existing?.status === "running" || this.starting.has(actionKey)) return false;
+        this.starting.add(actionKey);
+        return true;
+      }),
+      (reserved) => reserved ? this.startInnerEffect(
         def,
         actionKey,
         supervisorCwd,
@@ -260,13 +292,35 @@ class ActionRegistry {
         vars,
         harnessId,
         { execution, worktreeRef, autoFireKeys: opts.autoFireKeys },
-      );
-    } finally {
-      this.starting.delete(actionKey);
-    }
+      ) : Effect.succeed({
+        ok: false as const,
+        reason: "an action is already running for this worktree",
+      }),
+      (reserved) => Effect.sync(() => {
+        if (reserved) this.starting.delete(actionKey);
+      }),
+    );
   }
 
-  private async startInner(
+  startRemote(
+    def: ActionDef,
+    actionKey: string,
+    supervisorCwd: string,
+    remoteCwd: string,
+    remote: RemoteConfig,
+    worktreeRef: Extract<WorktreeRef, { kind: "remote" }>,
+    extras: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+    opts: { autoFireKeys?: readonly string[] } = {},
+  ): Promise<ActionStartResult> {
+    return Effect.runPromise(this.startRemoteEffect(
+      def, actionKey, supervisorCwd, remoteCwd, remote, worktreeRef,
+      extras, vars, harnessId, opts,
+    ));
+  }
+
+  private startInnerEffect(
     def: ActionDef,
     slug: string,
     cwd: string,
@@ -274,7 +328,8 @@ class ActionRegistry {
     vars: ActionVars,
     harnessId: HarnessId,
     opts: StartOpts,
-  ): Promise<ActionStartResult> {
+  ): Effect.Effect<ActionStartResult> {
+    return Effect.gen(this, function* () {
     // `kill()` synchronously closes the prior run's tail + done
     // watcher and tmux-kills the session, so by the time we reach
     // here `liveHandles[slug]` should be empty. Defense-in-depth:
@@ -350,12 +405,27 @@ class ActionRegistry {
       return { ok: false, reason: `write meta: ${msg}` };
     }
 
-    const spawnResult = await startActionSession({
+    const spawnResult = yield* startActionSessionEffect({
       slug,
       cwd: opts.execution?.cwd ?? cwd,
       runDir,
       argv,
-    });
+    }).pipe(Effect.onInterrupt(() => Effect.sync(() => {
+      const endedAt = Date.now();
+      writeDoneSentinelBestEffort(runDir, -1);
+      const existing = readMetaSafe(runDir);
+      if (existing) {
+        try {
+          writeMetaSync(runDir, { ...existing, status: "failed", endedAt });
+        } catch (err) {
+          log.warn("interrupted start meta persist failed", {
+            slug,
+            runDir,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    })));
     if (!spawnResult.ok) {
       // Persist a failed sentinel so a later boot doesn't see a
       // "running" run with no tmux session.
@@ -398,16 +468,17 @@ class ActionRegistry {
     this.attachLive(slug, runDir, runKind, false);
     this.scheduleCleanup();
     return { ok: true, run };
+    });
   }
 
-  startCustom(
+  startCustomEffect(
     slug: string,
     cwd: string,
     prompt: string,
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
-  ): Promise<ActionStartResult> {
-    return this.start(
+  ): Effect.Effect<ActionStartResult> {
+    return this.startEffect(
       {
         kind: "claude",
         id: CUSTOM_ACTION_ID,
@@ -427,7 +498,17 @@ class ActionRegistry {
     );
   }
 
-  startCustomRemote(
+  startCustom(
+    slug: string,
+    cwd: string,
+    prompt: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+  ): Promise<ActionStartResult> {
+    return Effect.runPromise(this.startCustomEffect(slug, cwd, prompt, vars, harnessId));
+  }
+
+  startCustomRemoteEffect(
     actionKey: string,
     supervisorCwd: string,
     remoteCwd: string,
@@ -436,8 +517,8 @@ class ActionRegistry {
     prompt: string,
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
-  ): Promise<ActionStartResult> {
-    return this.startRemote(
+  ): Effect.Effect<ActionStartResult> {
+    return this.startRemoteEffect(
       {
         kind: "claude",
         id: CUSTOM_ACTION_ID,
@@ -460,15 +541,30 @@ class ActionRegistry {
     );
   }
 
-  startCustomForWorktree(
+  startCustomRemote(
+    actionKey: string,
+    supervisorCwd: string,
+    remoteCwd: string,
+    remote: RemoteConfig,
+    worktreeRef: Extract<WorktreeRef, { kind: "remote" }>,
+    prompt: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+  ): Promise<ActionStartResult> {
+    return Effect.runPromise(this.startCustomRemoteEffect(
+      actionKey, supervisorCwd, remoteCwd, remote, worktreeRef, prompt, vars, harnessId,
+    ));
+  }
+
+  startCustomForWorktreeEffect(
     target: WorktreeTarget,
     supervisorCwd: string,
     prompt: string,
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
-  ): Promise<ActionStartResult> {
+  ): Effect.Effect<ActionStartResult> {
     if (isRemoteWorktreeTarget(target)) {
-      return this.startCustomRemote(
+      return this.startCustomRemoteEffect(
         worktreeActionKey(target),
         supervisorCwd,
         target.path,
@@ -479,13 +575,25 @@ class ActionRegistry {
         harnessId,
       );
     }
-    return this.startCustom(
+    return this.startCustomEffect(
       target.slug,
       target.path,
       prompt,
       vars,
       harnessId,
     );
+  }
+
+  startCustomForWorktree(
+    target: WorktreeTarget,
+    supervisorCwd: string,
+    prompt: string,
+    vars: ActionVars = {},
+    harnessId: HarnessId = "claude",
+  ): Promise<ActionStartResult> {
+    return Effect.runPromise(this.startCustomForWorktreeEffect(
+      target, supervisorCwd, prompt, vars, harnessId,
+    ));
   }
 
   /**
@@ -507,7 +615,8 @@ class ActionRegistry {
    * `-A`) fails loudly rather than corrupting state — the intended
    * backstop, not dead code.
    */
-  async kill(slug: string): Promise<boolean> {
+  killEffect(slug: string): Effect.Effect<boolean> {
+    return Effect.gen(this, function* () {
     const run = this.runs.get(slug);
     if (!run || run.status !== "running") return false;
 
@@ -567,11 +676,16 @@ class ActionRegistry {
     // awaited last, after the in-memory teardown above. The wrapper's
     // EXIT trap fires once the session dies and writes done.json, but
     // no one watches it — the run is already terminal here.
-    await killActionTmuxSession(slug);
+    yield* killActionTmuxSessionEffect(slug);
 
     log.event.warn(`${slug}: ${cur.actionName} killed (${dur})`);
     this.scheduleCleanup();
     return true;
+    });
+  }
+
+  kill(slug: string): Promise<boolean> {
+    return Effect.runPromise(this.killEffect(slug));
   }
 
   /**
@@ -582,7 +696,8 @@ class ActionRegistry {
    * mtime, dropping older runs from the in-memory cache (their files
    * stay on disk).
    */
-  async boot(liveSlugs: ReadonlySet<string>): Promise<void> {
+  bootEffect(liveSlugs: ReadonlySet<string>): Effect.Effect<void> {
+    return Effect.gen(this, function* () {
     const dir = actionsDir();
     if (!existsSync(dir)) return;
     let names: string[];
@@ -609,7 +724,7 @@ class ActionRegistry {
     const keep = candidates.slice(0, MAX_RETAINED_RUNS);
     if (keep.length === 0) return;
 
-    const sessions = await listSessions();
+    const sessions = yield* listSessionsEffect();
     const liveActionSlugs = sessions.action;
 
     let restored = 0;
@@ -711,6 +826,11 @@ class ActionRegistry {
       log.info("boot rehydrated runs", { restored, orphans });
     }
     this.scheduleCleanup();
+    });
+  }
+
+  boot(liveSlugs: ReadonlySet<string>): Promise<void> {
+    return Effect.runPromise(this.bootEffect(liveSlugs));
   }
 
   /**
@@ -837,23 +957,27 @@ class ActionRegistry {
    * is that running actions outlive wt restarts. The next `wt`
    * invocation rehydrates them via `boot`.
    */
-  async shutdown(): Promise<void> {
-    for (const handles of this.liveHandles.values()) {
-      try {
-        handles.tail.close();
-      } catch {
-        // best-effort
+  shutdownEffect(): Effect.Effect<void> {
+    return Effect.gen(this, function* () {
+      for (const handles of this.liveHandles.values()) {
+        yield* Effect.sync(() => {
+          try { handles.tail.close(); } catch { /* best-effort */ }
+          try { handles.done.close(); } catch { /* best-effort */ }
+        });
       }
-      try {
-        handles.done.close();
-      } catch {
-        // best-effort
-      }
-    }
-    this.liveHandles.clear();
-    if (this.cleanupTimer) clearTimeout(this.cleanupTimer);
-    this.cleanupTimer = null;
-    await Promise.allSettled(this.metaChains.values());
+      this.liveHandles.clear();
+      if (this.cleanupFiber) yield* Fiber.interrupt(this.cleanupFiber);
+      this.cleanupFiber = null;
+      yield* Effect.forEach(
+        [...this.pendingMetaWrites],
+        (fiber) => Fiber.await(fiber),
+        { concurrency: "unbounded", discard: true },
+      );
+    });
+  }
+
+  shutdown(): Promise<void> {
+    return Effect.runPromise(this.shutdownEffect());
   }
 
   // ---------- internals ----------
@@ -1102,13 +1226,17 @@ class ActionRegistry {
     this.scheduleCleanup();
   }
 
-  private persistMetaUpdate(
+  private persistMetaUpdateEffect(
     runDir: string,
     patch: Partial<ActionMeta>,
-  ): Promise<void> {
-    const cur = this.metaChains.get(runDir) ?? Promise.resolve();
-    const next = cur
-      .then(async () => {
+  ): Effect.Effect<void> {
+    let lock = this.metaLocks.get(runDir);
+    if (!lock) {
+      lock = Effect.unsafeMakeSemaphore(1);
+      this.metaLocks.set(runDir, lock);
+    }
+    return lock.withPermits(1)(
+      Effect.sync(() => {
         const existing = readMetaSafe(runDir);
         if (!existing) return;
         const merged: ActionMeta = { ...existing, ...patch };
@@ -1120,21 +1248,27 @@ class ActionRegistry {
             err: err instanceof Error ? err.message : String(err),
           });
         }
-      })
-      .catch((err) => {
-        log.warn("meta chain error", {
-          runDir,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      });
-    this.metaChains.set(runDir, next);
-    return next;
+      }),
+    );
+  }
+
+  private persistMetaUpdate(runDir: string, patch: Partial<ActionMeta>): void {
+    const tracked = Effect.runSync(Deferred.make<void>());
+    let fiber: Fiber.RuntimeFiber<void, never>;
+    fiber = Effect.runFork(
+      Deferred.await(tracked).pipe(
+        Effect.andThen(this.persistMetaUpdateEffect(runDir, patch)),
+        Effect.ensuring(Effect.sync(() => this.pendingMetaWrites.delete(fiber))),
+      ),
+    );
+    this.pendingMetaWrites.add(fiber);
+    Effect.runSync(Deferred.succeed(tracked, undefined));
   }
 
   private scheduleCleanup(): void {
-    if (this.cleanupTimer) return;
-    this.cleanupTimer = setTimeout(() => {
-      this.cleanupTimer = null;
+    if (this.cleanupFiber) return;
+    const cleanup = Effect.sync(() => {
+      this.cleanupFiber = null;
       let changed = false;
       const next = new Map(this.runs);
       // Cap by total non-running count: completed runs stay visible
@@ -1154,11 +1288,11 @@ class ActionRegistry {
         const drop = finished.slice(0, finished.length - MAX_RETAINED_RUNS);
         for (const { slug, runDir } of drop) {
           next.delete(slug);
-          // The run's chain has long settled by the time it's evicted
+          // The run's pending write has long settled by the time it's evicted
           // here (terminal status, on a 60s timer) and nothing will
-          // write to this runDir again — drop it so `metaChains` doesn't
+          // write to this runDir again — drop it so `metaLocks` doesn't
           // grow forever like `runs` used to before MAX_RETAINED_RUNS.
-          this.metaChains.delete(runDir);
+          this.metaLocks.delete(runDir);
           changed = true;
         }
       }
@@ -1167,7 +1301,10 @@ class ActionRegistry {
         this.notify();
       }
       if (next.size > 0) this.scheduleCleanup();
-    }, 60 * 1000);
+    });
+    this.cleanupFiber = Effect.runFork(
+      Effect.sleep(60_000).pipe(Effect.andThen(cleanup)),
+    );
   }
 }
 

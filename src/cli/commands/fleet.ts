@@ -13,7 +13,12 @@
  */
 import { branchIsGone, branchIsMerged, revParse } from "../../core/git.ts";
 import { config } from "../../core/config.ts";
-import { fetchGithub, hasGh, pickPrForWorktree, repoSlug } from "../../core/github.ts";
+import {
+  fetchGithubEffect,
+  hasGh,
+  pickPrForWorktree,
+  repoSlug,
+} from "../../core/github.ts";
 import { readRegistry } from "../../core/harness/claude/registry.ts";
 import { edgeIsStaleBySha, type MergeEdge } from "../../core/merge-edges.ts";
 import { listSessions } from "../../core/tmux.ts";
@@ -41,6 +46,26 @@ import {
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { cyan, dim, green, magenta, red, yellow } from "../colors.ts";
 import { renderTable } from "../render.ts";
+import { Data, Effect } from "effect";
+
+export class FleetCommandError extends Data.TaggedError("FleetCommandError")<{
+  operation: string;
+  cause: unknown;
+}> {}
+
+function tryCommand<A>(operation: string, evaluate: () => PromiseLike<A>) {
+  return Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new FleetCommandError({ operation, cause }),
+  });
+}
+
+function commandIo<A>(operation: string, evaluate: () => A) {
+  return Effect.try({
+    try: evaluate,
+    catch: (cause) => new FleetCommandError({ operation, cause }),
+  });
+}
 
 const USAGE = `usage: wt fleet [--json]
 
@@ -114,14 +139,18 @@ function sessionInfoFor(
   if (!alive) return { alive: false, busy: null, last_activity: null };
   const match = registry
     .filter(
-      (r) => r.cwd === wt.path && (r.name === wt.slug || r.name === "primary" || r.name === null),
+      (r) =>
+        r.cwd === wt.path &&
+        (r.name === wt.slug || r.name === "primary" || r.name === null),
     )
     .sort((a, b) => b.updatedAt - a.updatedAt)[0];
   return {
     alive: true,
     busy: match ? match.status === "busy" || match.status === "shell" : null,
     last_activity:
-      match && match.updatedAt > 0 ? new Date(match.updatedAt).toISOString() : null,
+      match && match.updatedAt > 0
+        ? new Date(match.updatedAt).toISOString()
+        : null,
   };
 }
 
@@ -132,26 +161,34 @@ function sessionInfoFor(
  * indistinguishable from "no PRs"), and a thrown fetch (auth, rate
  * limit, network) becomes its first error line. Rows always emit.
  */
-async function fetchFleetPrs(
+function fetchFleetPrs(
   branches: string[],
-): Promise<{ prs: Map<string, PullRequest>; note: string | null }> {
-  if (!(await hasGh())) {
-    return { prs: new Map(), note: "gh CLI not installed — PR data omitted" };
-  }
-  if (!(await repoSlug())) {
-    return {
-      prs: new Map(),
-      note: "GitHub repo unresolvable (gh not authenticated, or no GitHub remote) — PR data omitted",
-    };
-  }
-  try {
-    return { prs: (await fetchGithub(branches)).prs, note: null };
-  } catch (err) {
-    return {
-      prs: new Map(),
-      note: err instanceof Error ? err.message : String(err),
-    };
-  }
+): Effect.Effect<{ prs: Map<string, PullRequest>; note: string | null }> {
+  return Effect.gen(function* () {
+    if (!(yield* tryCommand("check gh availability", () => hasGh()))) {
+      return { prs: new Map(), note: "gh CLI not installed — PR data omitted" };
+    }
+    if (!(yield* tryCommand("resolve GitHub repository", () => repoSlug()))) {
+      return {
+        prs: new Map(),
+        note: "GitHub repo unresolvable (gh not authenticated, or no GitHub remote) — PR data omitted",
+      };
+    }
+    const github = yield* fetchGithubEffect(branches);
+    return { prs: github.prs, note: null };
+  }).pipe(
+    Effect.catchAll((error) =>
+      Effect.succeed({
+        prs: new Map<string, PullRequest>(),
+        note:
+          error._tag === "FleetCommandError"
+            ? error.cause instanceof Error
+              ? error.cause.message
+              : String(error.cause)
+            : error.message,
+      }),
+    ),
+  );
 }
 
 type FleetRow = {
@@ -273,271 +310,322 @@ function ciCell(row: FleetRow): string {
   }
 }
 
-export async function run(argv: string[]): Promise<number> {
-  if (hasHelpFlag(argv)) {
-    console.log(USAGE);
-    return 0;
-  }
-  const unknown = firstUnknownFlag(argv, KNOWN_FLAGS);
-  if (unknown) {
-    console.error(red(`unknown flag: ${unknown}`));
-    return 2;
-  }
-  const json = argv.includes("--json");
+export function run(argv: string[]): Effect.Effect<number, FleetCommandError> {
+  return Effect.gen(function* () {
+    if (hasHelpFlag(argv)) {
+      console.log(USAGE);
+      return 0;
+    }
+    const unknown = firstUnknownFlag(argv, KNOWN_FLAGS);
+    if (unknown) {
+      console.error(red(`unknown flag: ${unknown}`));
+      return 2;
+    }
+    const unexpected = argv.find((arg) => !arg.startsWith("-"));
+    if (unexpected) {
+      console.error(red(`unexpected argument: ${unexpected}`));
+      return 2;
+    }
+    const json = argv.includes("--json");
 
-  const wts = (await listWorktrees()).filter((w) => !w.isMain);
-  const wtState = readWtState();
-  const slugStates = wtState.slugs;
-  const removed = recentlyRemovedWorktrees(new Set(wts.map((w) => w.slug)));
-  const branches = wts.filter((w) => w.branch).map((w) => w.branch);
+    const wts = (yield* tryCommand("list worktrees", () =>
+      listWorktrees(),
+    )).filter((w) => !w.isMain);
+    const wtState = yield* commandIo("read wt state", () => readWtState());
+    const slugStates = wtState.slugs;
+    const removed = yield* commandIo("read recently removed worktrees", () =>
+      recentlyRemovedWorktrees(new Set(wts.map((w) => w.slug))),
+    );
+    const branches = wts.filter((w) => w.branch).map((w) => w.branch);
 
-  // Independent realities in parallel: the batched GitHub round trip,
-  // tmux session list, and one HEAD resolve per worktree (for status
-  // staleness, same signal `wt status --all` uses).
-  const [{ prs, note }, sessions, heads, landedFlags] = await Promise.all([
-    fetchFleetPrs(branches),
-    listSessions(),
-    Promise.all(wts.map((w) => revParse("HEAD", w.path))),
-    Promise.all(
-      wts.map(async (w) =>
-        w.branch
-          ? (await branchIsMerged({ slug: w.slug, branch: w.branch, path: w.path })) ||
-            (await branchIsGone(w.branch, w.path))
-          : false,
-      ),
-    ),
-  ]);
-  const registry = readRegistry();
-  const liveClaudeSlugs = new Set(
-    sessions.claude.filter((e) => e.name === null).map((e) => e.slug),
-  );
+    // Independent realities in parallel: the batched GitHub round trip,
+    // tmux session list, and one HEAD resolve per worktree (for status
+    // staleness, same signal `wt status --all` uses).
+    const [{ prs, note }, sessions, heads, landedFlags] = yield* Effect.all(
+      [
+        fetchFleetPrs(branches),
+        tryCommand("list sessions", () => listSessions()),
+        Effect.all(
+          wts.map((w) =>
+            tryCommand(`resolve HEAD for ${w.slug}`, () =>
+              revParse("HEAD", w.path),
+            ),
+          ),
+          { concurrency: 8 },
+        ),
+        Effect.all(
+          wts.map((w) =>
+            w.branch
+              ? tryCommand(`check merge state for ${w.slug}`, () =>
+                  branchIsMerged({
+                    slug: w.slug,
+                    branch: w.branch,
+                    path: w.path,
+                  }),
+                ).pipe(
+                  Effect.flatMap((merged) =>
+                    merged
+                      ? Effect.succeed(true)
+                      : tryCommand(`check branch existence for ${w.slug}`, () =>
+                          branchIsGone(w.branch, w.path),
+                        ),
+                  ),
+                )
+              : Effect.succeed(false),
+          ),
+          { concurrency: 8 },
+        ),
+      ],
+      { concurrency: "unbounded" },
+    );
+    const registry = yield* commandIo("read session registry", () =>
+      readRegistry(),
+    );
+    const liveClaudeSlugs = new Set(
+      sessions.claude.filter((e) => e.name === null).map((e) => e.slug),
+    );
 
-  // Staleness for edges reuses the HEADs already resolved above (one
-  // per live worktree). An endpoint that is not a live worktree maps
-  // to null, which `edgeIsStaleBySha` reads as "unknown, not stale by
-  // this side" — the same treatment `wt edge` gives it.
-  const headBySlug = new Map<string, string | null>(
-    wts.map((w, i) => [w.slug, heads[i] ?? null]),
-  );
-  const edges = wtState.edges.map((e) => ({
-    ...e,
-    stale: edgeIsStaleBySha(e, (slug) => headBySlug.get(slug) ?? null),
-  }));
+    // Staleness for edges reuses the HEADs already resolved above (one
+    // per live worktree). An endpoint that is not a live worktree maps
+    // to null, which `edgeIsStaleBySha` reads as "unknown, not stale by
+    // this side" — the same treatment `wt edge` gives it.
+    const headBySlug = new Map<string, string | null>(
+      wts.map((w, i) => [w.slug, heads[i] ?? null]),
+    );
+    const edges = wtState.edges.map((e) => ({
+      ...e,
+      stale: edgeIsStaleBySha(e, (slug) => headBySlug.get(slug) ?? null),
+    }));
 
-  const rows: FleetRow[] = wts.map((w, i) => {
-    const record = slugStates[w.slug]?.work;
-    const headSha = heads[i] ?? null;
-    return {
-      wt: w,
-      base: slugStates[w.slug]?.baseBranch ?? config.branch.base,
-      edges: edges.filter((e) => e.from === w.slug || e.to === w.slug),
-      section:
-        config.instance.role === "worker"
-          ? null
-          : slugStates[w.slug]?.section ?? null,
-      work: record
-        ? { ...record, stale: !!(record.sha && headSha && record.sha !== headSha) }
-        : null,
-      landed: (landedFlags[i] ?? false) || pickPrForWorktree(w, prs)?.state === "MERGED",
-      session: sessionInfoFor(w, liveClaudeSlugs, registry),
-      pr: pickPrForWorktree(w, prs),
-    };
-  });
-  // Urgency order, derived at render time (same ranking the TUI sorts
-  // by): ready first, then needs-human, todo last.
-  // A landed branch still owing a deployed-environment check ranks as
-  // what it now is — needs-testing — rather than as the `ready` it
-  // still asserts. Same derivation the TUI's `rowWorkRank` makes, and
-  // for the same reason: this is the moment the check became runnable,
-  // so it is the wrong moment for the row to go quiet.
-  const rank = (r: FleetRow): number =>
-    owesPostMergeVerification(r.work, r.landed)
-      ? workStateRank("needs-testing")
-      : workRecordRank(r.work);
-  rows.sort((a, b) => rank(a) - rank(b) || a.wt.slug.localeCompare(b.wt.slug));
-
-  if (json) {
-    const payload = [
-      ...rows.map((r) => ({
-        slug: r.wt.slug,
-        branch: r.wt.branch,
-        // The effective merge target, never null — trunk when nothing
-        // is recorded. Reading a stack off this surface needs it: two
-        // rows whose `base` names another row's branch ARE a chain.
-        base: r.base,
-        path: r.wt.path,
-        // Positive discriminator, same value and meaning on every JSON
-        // surface that appends removed history — see ls.ts.
-        kind: "live" as const,
-        // The human's manual grouping in the TUI ("Merge after Release",
-        // …) — asserted intent the manager should weigh; null = inbox.
-        // Inferred stack groupings deliberately don't appear here: they
-        // are derivable reality (base records + PRs), not assertion.
-        section: r.section,
-        // Pairwise ordering assertions touching this slug, in either
-        // direction, verbatim from `wt edge --json` plus `stale`.
-        // Spread rather than rebuilt field-by-field: this row schema
-        // has already dropped a field that way, and an edge that reads
-        // differently depending on which command printed it is the
-        // same failure one level down. `stale` means an endpoint moved
-        // past its anchor — ignore those for ordering.
-        edges: r.edges,
-        work: r.work
+    const rows: FleetRow[] = wts.map((w, i) => {
+      const record = slugStates[w.slug]?.work;
+      const headSha = heads[i] ?? null;
+      return {
+        wt: w,
+        base: slugStates[w.slug]?.baseBranch ?? config.branch.base,
+        edges: edges.filter((e) => e.from === w.slug || e.to === w.slug),
+        section:
+          config.instance.role === "worker"
+            ? null
+            : (slugStates[w.slug]?.section ?? null),
+        work: record
           ? {
-              state: r.work.state,
-              note: r.work.note ?? null,
-              risk: r.work.risk ?? null,
-              // The external merge gate. Non-null means DO NOT MERGE
-              // whatever `state` says — this row is the manager's
-              // primary sense, and reading `ready` off a gated branch
-              // here is the exact failure the field was added for.
-              blockedOn: r.work.blockedOn ?? null,
-              // A check that can only run once this is DEPLOYED. Read
-              // it the OPPOSITE way from `blockedOn`: this row should
-              // be merged, and on a merged row a non-null value means
-              // the worktree is being held back deliberately and the
-              // check has not happened yet.
-              verifyAfterMerge: r.work.verifyAfterMerge ?? null,
-              at: r.work.at,
-              // Agent identity that asserted it — the worktree's own
-              // slug normally, `manager` when triage did, null for the
-              // human. "Already triaged" is otherwise unreadable.
-              by: r.work.by ?? null,
-              stale: r.work.stale,
+              ...record,
+              stale: !!(record.sha && headSha && record.sha !== headSha),
             }
           : null,
-        session: r.session,
-        pr: r.pr
-          ? {
-              number: r.pr.number,
-              url: r.pr.url,
-              title: r.pr.title,
-              state: r.pr.state,
-              draft: r.pr.isDraft,
-              merge_state: mergeField(r.pr.mergeStateStatus, r.pr.state),
-              mergeable: mergeField(r.pr.mergeable, r.pr.state),
-              checks: r.pr.checks,
-              // Open review work, in three separate numbers, because
-              // collapsing them is what made this field lie. A `ready`
-              // status with anything outstanding is a status/reality
-              // mismatch of the family this surface exists to audit —
-              // agents have been observed replying via `gh pr comment`
-              // (a top-level comment, NOT a thread reply) and leaving
-              // every thread open while believing findings addressed.
-              //
-              // `unresolved_threads` is every open thread, matching the
-              // count GitHub's own PR page shows and what a hand-rolled
-              // `reviewThreads` query returns. `unresolved_human_threads`
-              // excludes bot-opened ones: on a repo where all review is
-              // done by a bot that number is permanently 0, so reporting
-              // ONLY it reads as "nothing to chase" while the bot sits
-              // on unaddressed findings.
-              unresolved_threads: r.pr.unresolvedThreadsTotal,
-              unresolved_human_threads: r.pr.unresolvedThreads,
-              // The review bot's own rollup — in `checklist` mode this
-              // is the unticked-box count from its summary comment,
-              // which is the number the PR page surfaces and which
-              // thread resolution does NOT affect. A PR can show zero
-              // unresolved threads and still read as having open
-              // findings; this is that other half.
-              review_bot: r.pr.reviewBot
-                ? {
-                    state: r.pr.reviewBot.state,
-                    unresolved: r.pr.reviewBot.unresolved,
-                    // Whether the bot has reviewed THIS head. Without it
-                    // `clean` is two different answers wearing one word —
-                    // "looked at your latest push and found nothing" and
-                    // "looked at an older commit" — and the TUI already
-                    // refuses to paint the second one green. Dropping the
-                    // flag here handed every JSON reader exactly the green
-                    // reading the badge withholds, which matters most to
-                    // the caller that acts on it: an agent iterating a
-                    // bot's follow-up reviews stops at the first stale
-                    // clean, believing its newest commit came back empty.
-                    // Checklist mode only; `false` elsewhere, matching
-                    // what every existing reader already infers from the
-                    // absent field.
-                    stale: r.pr.reviewBot.stale ?? false,
-                  }
-                : null,
-            }
-          : null,
-        // Distinguishes "no PR" (pr null, pr_note null) from "GitHub
-        // unavailable" (pr null, pr_note says why).
-        pr_note: r.pr ? null : note,
-      })),
-      ...removed.map(removedJsonEntry),
-    ];
-    console.log(JSON.stringify(payload, null, 2));
-    return 0;
-  }
+        landed:
+          (landedFlags[i] ?? false) ||
+          pickPrForWorktree(w, prs)?.state === "MERGED",
+        session: sessionInfoFor(w, liveClaudeSlugs, registry),
+        pr: pickPrForWorktree(w, prs),
+      };
+    });
+    // Urgency order, derived at render time (same ranking the TUI sorts
+    // by): ready first, then needs-human, todo last.
+    // A landed branch still owing a deployed-environment check ranks as
+    // what it now is — needs-testing — rather than as the `ready` it
+    // still asserts. Same derivation the TUI's `rowWorkRank` makes, and
+    // for the same reason: this is the moment the check became runnable,
+    // so it is the wrong moment for the row to go quiet.
+    const rank = (r: FleetRow): number =>
+      owesPostMergeVerification(r.work, r.landed)
+        ? workStateRank("needs-testing")
+        : workRecordRank(r.work);
+    rows.sort(
+      (a, b) => rank(a) - rank(b) || a.wt.slug.localeCompare(b.wt.slug),
+    );
 
-  if (rows.length === 0 && removed.length === 0) {
-    console.log(dim("No worktrees."));
-    return 0;
-  }
-  if (rows.length > 0) {
-    const table = renderTable(rows as unknown[], [
-      { header: "slug", getter: (r) => cyan((r as FleetRow).wt.slug) },
-      {
-        header: "section",
-        getter: (r) => dim((r as FleetRow).section ?? "—"),
-      },
-      { header: "work", getter: (r) => workCell(r as FleetRow) },
-      { header: "agent", getter: (r) => agentCell(r as FleetRow) },
-      { header: "pr", getter: (r) => prCell(r as FleetRow) },
-      { header: "merge", getter: (r) => mergeCell(r as FleetRow) },
-      { header: "ci", getter: (r) => ciCell(r as FleetRow) },
-    ]);
-    console.log(table);
-  }
-  // The ordering constraints, on the surface that plans merges. An
-  // edge whose endpoint is not a live row says nothing about this
-  // fleet; a stale one is ignored by ordering everywhere else, so it
-  // is counted rather than listed.
-  const liveSlugs = new Set(rows.map((r) => r.wt.slug));
-  const fleetEdges = edges.filter(
-    (e) => liveSlugs.has(e.from) && liveSlugs.has(e.to),
-  );
-  if (fleetEdges.length > 0) {
-    const fresh = fleetEdges.filter((e) => !e.stale);
-    console.log("");
-    console.log(dim("merge edges:"));
-    for (const e of fresh) {
-      const arrow = e.kind === "conflicts" ? "\u00d7" : "\u25b6";
-      const strength = e.strength === "blocks" ? red("blocks") : dim("prefer");
-      const why = e.why ? dim(` \u00b7 ${e.why}`) : "";
-      console.log(
-        `  ${cyan(e.from)} ${dim(`\u2500${e.kind}\u2500${arrow}`)} ${cyan(e.to)}   ${strength}${why}`,
-      );
+    if (json) {
+      const payload = [
+        ...rows.map((r) => ({
+          slug: r.wt.slug,
+          branch: r.wt.branch,
+          // The effective merge target, never null — trunk when nothing
+          // is recorded. Reading a stack off this surface needs it: two
+          // rows whose `base` names another row's branch ARE a chain.
+          base: r.base,
+          path: r.wt.path,
+          // Positive discriminator, same value and meaning on every JSON
+          // surface that appends removed history — see ls.ts.
+          kind: "live" as const,
+          // The human's manual grouping in the TUI ("Merge after Release",
+          // …) — asserted intent the manager should weigh; null = inbox.
+          // Inferred stack groupings deliberately don't appear here: they
+          // are derivable reality (base records + PRs), not assertion.
+          section: r.section,
+          // Pairwise ordering assertions touching this slug, in either
+          // direction, verbatim from `wt edge --json` plus `stale`.
+          // Spread rather than rebuilt field-by-field: this row schema
+          // has already dropped a field that way, and an edge that reads
+          // differently depending on which command printed it is the
+          // same failure one level down. `stale` means an endpoint moved
+          // past its anchor — ignore those for ordering.
+          edges: r.edges,
+          work: r.work
+            ? {
+                state: r.work.state,
+                note: r.work.note ?? null,
+                risk: r.work.risk ?? null,
+                // The external merge gate. Non-null means DO NOT MERGE
+                // whatever `state` says — this row is the manager's
+                // primary sense, and reading `ready` off a gated branch
+                // here is the exact failure the field was added for.
+                blockedOn: r.work.blockedOn ?? null,
+                // A check that can only run once this is DEPLOYED. Read
+                // it the OPPOSITE way from `blockedOn`: this row should
+                // be merged, and on a merged row a non-null value means
+                // the worktree is being held back deliberately and the
+                // check has not happened yet.
+                verifyAfterMerge: r.work.verifyAfterMerge ?? null,
+                at: r.work.at,
+                // Agent identity that asserted it — the worktree's own
+                // slug normally, `manager` when triage did, null for the
+                // human. "Already triaged" is otherwise unreadable.
+                by: r.work.by ?? null,
+                stale: r.work.stale,
+              }
+            : null,
+          session: r.session,
+          pr: r.pr
+            ? {
+                number: r.pr.number,
+                url: r.pr.url,
+                title: r.pr.title,
+                state: r.pr.state,
+                draft: r.pr.isDraft,
+                merge_state: mergeField(r.pr.mergeStateStatus, r.pr.state),
+                mergeable: mergeField(r.pr.mergeable, r.pr.state),
+                checks: r.pr.checks,
+                // Open review work, in three separate numbers, because
+                // collapsing them is what made this field lie. A `ready`
+                // status with anything outstanding is a status/reality
+                // mismatch of the family this surface exists to audit —
+                // agents have been observed replying via `gh pr comment`
+                // (a top-level comment, NOT a thread reply) and leaving
+                // every thread open while believing findings addressed.
+                //
+                // `unresolved_threads` is every open thread, matching the
+                // count GitHub's own PR page shows and what a hand-rolled
+                // `reviewThreads` query returns. `unresolved_human_threads`
+                // excludes bot-opened ones: on a repo where all review is
+                // done by a bot that number is permanently 0, so reporting
+                // ONLY it reads as "nothing to chase" while the bot sits
+                // on unaddressed findings.
+                unresolved_threads: r.pr.unresolvedThreadsTotal,
+                unresolved_human_threads: r.pr.unresolvedThreads,
+                // The review bot's own rollup — in `checklist` mode this
+                // is the unticked-box count from its summary comment,
+                // which is the number the PR page surfaces and which
+                // thread resolution does NOT affect. A PR can show zero
+                // unresolved threads and still read as having open
+                // findings; this is that other half.
+                review_bot: r.pr.reviewBot
+                  ? {
+                      state: r.pr.reviewBot.state,
+                      unresolved: r.pr.reviewBot.unresolved,
+                      // Whether the bot has reviewed THIS head. Without it
+                      // `clean` is two different answers wearing one word —
+                      // "looked at your latest push and found nothing" and
+                      // "looked at an older commit" — and the TUI already
+                      // refuses to paint the second one green. Dropping the
+                      // flag here handed every JSON reader exactly the green
+                      // reading the badge withholds, which matters most to
+                      // the caller that acts on it: an agent iterating a
+                      // bot's follow-up reviews stops at the first stale
+                      // clean, believing its newest commit came back empty.
+                      // Checklist mode only; `false` elsewhere, matching
+                      // what every existing reader already infers from the
+                      // absent field.
+                      stale: r.pr.reviewBot.stale ?? false,
+                    }
+                  : null,
+              }
+            : null,
+          // Distinguishes "no PR" (pr null, pr_note null) from "GitHub
+          // unavailable" (pr null, pr_note says why).
+          pr_note: r.pr ? null : note,
+        })),
+        ...removed.map(removedJsonEntry),
+      ];
+      console.log(JSON.stringify(payload, null, 2));
+      return 0;
     }
-    const staleCount = fleetEdges.length - fresh.length;
-    if (staleCount > 0) {
-      console.log(
-        dim(`  ${staleCount} stale (endpoint moved) \u2014 \`wt edge\` lists them`),
-      );
+
+    if (rows.length === 0 && removed.length === 0) {
+      console.log(dim("No worktrees."));
+      return 0;
     }
-  }
-  if (note) console.log(dim(`note: ${note}`));
-  if (removed.length > 0) {
-    console.log("");
-    console.log(dim("recently removed:"));
-    for (const e of removed) {
-      const entry = removedJsonEntry(e);
-      const pr = entry.pr !== null ? ` #${entry.pr}` : "";
-      const age = workAge(entry.archived_at);
-      console.log(
-        dim(`  ${entry.slug}  ${entry.kind}${pr}${age ? `, ${age} ago` : ""}`),
-      );
-      // Loud, and only here: a row whose checkout is gone while a
-      // deployed-environment check was still owed has nowhere else left
-      // to be reported.
-      if (entry.verification_owed) {
+    if (rows.length > 0) {
+      const table = renderTable(rows as unknown[], [
+        { header: "slug", getter: (r) => cyan((r as FleetRow).wt.slug) },
+        {
+          header: "section",
+          getter: (r) => dim((r as FleetRow).section ?? "—"),
+        },
+        { header: "work", getter: (r) => workCell(r as FleetRow) },
+        { header: "agent", getter: (r) => agentCell(r as FleetRow) },
+        { header: "pr", getter: (r) => prCell(r as FleetRow) },
+        { header: "merge", getter: (r) => mergeCell(r as FleetRow) },
+        { header: "ci", getter: (r) => ciCell(r as FleetRow) },
+      ]);
+      console.log(table);
+    }
+    // The ordering constraints, on the surface that plans merges. An
+    // edge whose endpoint is not a live row says nothing about this
+    // fleet; a stale one is ignored by ordering everywhere else, so it
+    // is counted rather than listed.
+    const liveSlugs = new Set(rows.map((r) => r.wt.slug));
+    const fleetEdges = edges.filter(
+      (e) => liveSlugs.has(e.from) && liveSlugs.has(e.to),
+    );
+    if (fleetEdges.length > 0) {
+      const fresh = fleetEdges.filter((e) => !e.stale);
+      console.log("");
+      console.log(dim("merge edges:"));
+      for (const e of fresh) {
+        const arrow = e.kind === "conflicts" ? "\u00d7" : "\u25b6";
+        const strength =
+          e.strength === "blocks" ? red("blocks") : dim("prefer");
+        const why = e.why ? dim(` \u00b7 ${e.why}`) : "";
         console.log(
-          yellow(`    UNVERIFIED — owed: ${verifyStepsHeadline(entry.verify_after_merge!)}`),
+          `  ${cyan(e.from)} ${dim(`\u2500${e.kind}\u2500${arrow}`)} ${cyan(e.to)}   ${strength}${why}`,
+        );
+      }
+      const staleCount = fleetEdges.length - fresh.length;
+      if (staleCount > 0) {
+        console.log(
+          dim(
+            `  ${staleCount} stale (endpoint moved) \u2014 \`wt edge\` lists them`,
+          ),
         );
       }
     }
-  }
-  return 0;
+    if (note) console.log(dim(`note: ${note}`));
+    if (removed.length > 0) {
+      console.log("");
+      console.log(dim("recently removed:"));
+      for (const e of removed) {
+        const entry = removedJsonEntry(e);
+        const pr = entry.pr !== null ? ` #${entry.pr}` : "";
+        const age = workAge(entry.archived_at);
+        console.log(
+          dim(
+            `  ${entry.slug}  ${entry.kind}${pr}${age ? `, ${age} ago` : ""}`,
+          ),
+        );
+        // Loud, and only here: a row whose checkout is gone while a
+        // deployed-environment check was still owed has nowhere else left
+        // to be reported.
+        if (entry.verification_owed) {
+          console.log(
+            yellow(
+              `    UNVERIFIED — owed: ${verifyStepsHeadline(entry.verify_after_merge!)}`,
+            ),
+          );
+        }
+      }
+    }
+    return 0;
+  });
 }

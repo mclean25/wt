@@ -1,3 +1,5 @@
+import { Data, Effect } from "effect";
+
 import { formatPerfReport, samplePerf } from "../../core/perf.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { red } from "../colors.ts";
@@ -19,24 +21,29 @@ pressure, not an instantaneous profile.`;
 
 const KNOWN = new Set(["--json"]);
 
-export async function run(argv: string[]): Promise<number> {
-  if (hasHelpFlag(argv)) {
-    console.log(USAGE);
+class PerfSampleError extends Data.TaggedError("PerfSampleError")<{
+  readonly cause: unknown;
+}> {}
+
+export function run(argv: string[]): Effect.Effect<number, PerfSampleError> {
+  return Effect.gen(function* () {
+    if (hasHelpFlag(argv)) {
+      console.log(USAGE);
+      return 0;
+    }
+    const unknown = firstUnknownFlag(argv, KNOWN);
+    if (unknown) {
+      console.error(red(`unknown flag: ${unknown}\n`));
+      console.error(USAGE);
+      return 2;
+    }
+    // Unlike the overlay (where the TUI is `process.pid`), this one-shot
+    // process is nobody's ancestor — root at live wt instances too.
+    const snap = yield* Effect.tryPromise({
+      try: () => samplePerf(undefined, { rootAtWtInstances: true }),
+      catch: (cause) => new PerfSampleError({ cause }),
+    });
+    console.log(argv.includes("--json") ? JSON.stringify(snap, null, 2) : formatPerfReport(snap));
     return 0;
-  }
-  const unknown = firstUnknownFlag(argv, KNOWN);
-  if (unknown) {
-    console.error(red(`unknown flag: ${unknown}\n`));
-    console.error(USAGE);
-    return 2;
-  }
-  // Unlike the overlay (where the TUI is `process.pid`), this one-shot
-  // process is nobody's ancestor — root at live wt instances too.
-  const snap = await samplePerf(undefined, { rootAtWtInstances: true });
-  console.log(
-    argv.includes("--json")
-      ? JSON.stringify(snap, null, 2)
-      : formatPerfReport(snap),
-  );
-  return 0;
+  });
 }

@@ -1,36 +1,53 @@
 import type { CliRenderer } from "@opentui/core";
+import { Data, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
 import type { HarnessId } from "../../core/harness/index.ts";
 import type { WorktreeTarget } from "../../core/worktree-target.ts";
-import { runWorktreeWt } from "../../core/worktree-executor.ts";
-import { setWezTermTabTitle } from "../../core/wezterm.ts";
+import { runWorktreeWtEffect } from "../../core/worktree-executor.ts";
+import { setWezTermTabTitleEffect } from "../../core/wezterm.ts";
 import { NF } from "../icons.ts";
-import { handoffTerminal } from "./renderer-handoff.ts";
+import { handoffTerminalEffect } from "./renderer-handoff.ts";
 
-/** Hand the terminal to one selected remote worktree's tmux session. */
-export async function enterRemoteWorktreeSession(opts: {
+export class RemoteSessionTargetError extends Data.TaggedError("RemoteSessionTargetError")<{
+  readonly message: string;
+}> {}
+
+export type EnterRemoteWorktreeSessionOptions = {
   renderer: CliRenderer;
   worktree: WorktreeTarget;
   target: "shell" | "diff" | "harness";
   harnessId: HarnessId;
-}): Promise<number> {
-  const { renderer, worktree, target, harnessId } = opts;
-  if (worktree.location.kind !== "remote") {
-    throw new Error("remote session requires a remote worktree target");
-  }
-  const remote = worktree.location.endpoint;
-  await setWezTermTabTitle(
-    `${NF.remote} ${worktree.slug} · ${remote.label}`,
-    config.paths.weztermCli,
-  );
-  try {
-    return await handoffTerminal(renderer, process.cwd(), () =>
-      runWorktreeWt(worktree, ["_session", worktree.slug, target, harnessId], {
-        interactive: true,
-      }),
+};
+
+/** Hand the terminal to one selected remote worktree's tmux session. */
+export function enterRemoteWorktreeSessionEffect(opts: EnterRemoteWorktreeSessionOptions) {
+  return Effect.gen(function* () {
+    const { renderer, worktree, target, harnessId } = opts;
+    if (worktree.location.kind !== "remote") {
+      return yield* new RemoteSessionTargetError({
+        message: "remote session requires a remote worktree target",
+      });
+    }
+    const remote = worktree.location.endpoint;
+    return yield* setWezTermTabTitleEffect(
+      `${NF.remote} ${worktree.slug} · ${remote.label}`,
+      config.paths.weztermCli,
+    ).pipe(
+      Effect.andThen(handoffTerminalEffect(
+        renderer,
+        process.cwd(),
+        runWorktreeWtEffect(worktree, ["_session", worktree.slug, target, harnessId], {
+          interactive: true,
+        }),
+      )),
+      Effect.ensuring(
+        setWezTermTabTitleEffect("wt", config.paths.weztermCli).pipe(Effect.ignore),
+      ),
     );
-  } finally {
-    await setWezTermTabTitle("wt", config.paths.weztermCli);
-  }
+  });
 }
+
+export const enterRemoteWorktreeSession = (
+  opts: EnterRemoteWorktreeSessionOptions,
+): Promise<number> => Effect.runPromise(enterRemoteWorktreeSessionEffect(opts));

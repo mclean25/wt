@@ -1,8 +1,14 @@
-import { branchExists } from "../git.ts";
-import { viewPrInfo } from "../github.ts";
+import { Data, Effect } from "effect";
+
+import { branchExistsEffect } from "../git.ts";
+import { viewPrInfoEffect } from "../github/mutations.ts";
 import { setSlugBase } from "../wtstate.ts";
 import { type ChainStep, type RestackChain } from "./chain.ts";
-import { lockChain, STACK_BUSY, type Logger } from "./shared.ts";
+import { STACK_BUSY, type Logger, withLockedChainEffect } from "./shared.ts";
+
+export class StackReconcileError extends Data.TaggedError("StackReconcileError")<{
+  readonly cause: unknown;
+}> {}
 
 /**
  * Reconcile the fork-base records of the stack containing `branch`
@@ -17,29 +23,37 @@ import { lockChain, STACK_BUSY, type Logger } from "./shared.ts";
  * GitHub/git state but never rewrites branches — so `/restack` can run
  * it on its own before deciding to replay.
  */
-export async function reconcileStack(
+export function reconcileStackEffect(
+  branch: string,
+  trunk: string,
+  onLog: Logger,
+): Effect.Effect<Set<string>, StackReconcileError> {
+  return withLockedChainEffect(branch, "reconcile", (locked) => {
+  if (locked.status === "busy") {
+    onLog(`skipped reconcile of ${branch} — ${STACK_BUSY}`);
+    return Effect.succeed(new Set<string>());
+  }
+  if (locked.status === "gone") return Effect.succeed(new Set<string>());
+  return reconcileStackLockedEffect(locked.chain, trunk, onLog);
+  }).pipe(
+    Effect.mapError((cause) => new StackReconcileError({ cause })),
+  );
+}
+
+export function reconcileStack(
   branch: string,
   trunk: string,
   onLog: Logger,
 ): Promise<Set<string>> {
-  const locked = await lockChain(branch, "reconcile");
-  if (locked.status === "busy") {
-    onLog(`skipped reconcile of ${branch} — ${STACK_BUSY}`);
-    return new Set();
-  }
-  if (locked.status === "gone") return new Set();
-  try {
-    return await reconcileStackLocked(locked.chain, trunk, onLog);
-  } finally {
-    for (const h of locked.handles) h.release();
-  }
+  return Effect.runPromise(reconcileStackEffect(branch, trunk, onLog));
 }
 
-async function reconcileStackLocked(
+function reconcileStackLockedEffect(
   chain: RestackChain,
   trunk: string,
   onLog: Logger,
-): Promise<Set<string>> {
+): Effect.Effect<Set<string>, StackReconcileError> {
+  return Effect.gen(function* () {
   const stepByBranch = new Map<string, ChainStep>(
     chain.steps.map((s) => [s.branch, s]),
   );
@@ -52,8 +66,10 @@ async function reconcileStackLocked(
         .filter((p): p is string => p !== null),
     ),
   ];
-  const probed = await Promise.all(
-    parents.map(async (p) => ({ parent: p, live: await viewPrInfo(p) })),
+  const probed = yield* Effect.forEach(
+    parents,
+    (p) => viewPrInfoEffect(p).pipe(Effect.map((live) => ({ parent: p, live }))),
+    { concurrency: 4 },
   );
 
   const landed = new Set<string>();
@@ -71,7 +87,7 @@ async function reconcileStackLocked(
     // transient gh failure exactly as it does for "no PR", and without
     // the second check a gh hiccup would reparent a member whose parent
     // is alive.
-    if (!live && !stepByBranch.has(parent) && !(await branchExists(parent))) {
+    if (!live && !stepByBranch.has(parent) && !(yield* branchExistsEffect(parent))) {
       landed.add(parent);
       onLog(`parent ${parent} is gone`);
     }
@@ -102,4 +118,7 @@ async function reconcileStackLocked(
     onLog(`reparented ${s.branch} onto ${newParent}`);
   }
   return landed;
+  }).pipe(
+    Effect.mapError((cause) => new StackReconcileError({ cause })),
+  );
 }

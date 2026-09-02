@@ -1,5 +1,6 @@
 import { browserSessionName } from "../browser.ts";
 import { delimiter, join } from "node:path";
+import { Effect } from "effect";
 import {
   clearInspectorSocket,
   ensureInspectorDir,
@@ -9,7 +10,7 @@ import {
 } from "../harness/claude/inject.ts";
 import { createLogger } from "../logger.ts";
 import { harnessIdForKind, type SessionKind } from "./naming.ts";
-import { probeSessionNames } from "./process.ts";
+import { probeSessionNamesEffect } from "./process.ts";
 
 const log = createLogger("[tmux]");
 const SOURCE_WT_BIN_DIR = join(import.meta.dir, "..", "..", "..", "bin");
@@ -94,21 +95,30 @@ function inspectorPathIsUrlSafe(path: string): boolean {
  * (tmux spawn refused under fork pressure, an unreachable socket), and
  * that is precisely the moment this runs most often.
  */
-export async function prepareInspectorSocket(
+export function prepareInspectorSocketEffect(
   kind: InnerSessionKind,
   tmuxName: string,
-): Promise<void> {
-  if (kind !== "claude") return;
-  ensureInspectShims();
-  const running = await probeSessionNames().catch(() => null);
-  if (running === null) {
-    log.warn("tmux liveness unknown; leaving the inspector socket alone", { tmuxName });
-    return;
-  }
-  if (running.has(tmuxName)) return;
-  ensureInspectorDir();
-  clearInspectorSocket(tmuxName);
+): Effect.Effect<void> {
+  if (kind !== "claude") return Effect.void;
+  return Effect.gen(function* () {
+    yield* Effect.sync(ensureInspectShims);
+    const running = yield* probeSessionNamesEffect();
+    if (running === null) {
+      log.warn("tmux liveness unknown; leaving the inspector socket alone", { tmuxName });
+      return;
+    }
+    if (running.has(tmuxName)) return;
+    yield* Effect.sync(() => {
+      ensureInspectorDir();
+      clearInspectorSocket(tmuxName);
+    });
+  });
 }
+
+export const prepareInspectorSocket = (
+  kind: InnerSessionKind,
+  tmuxName: string,
+): Promise<void> => Effect.runPromise(prepareInspectorSocketEffect(kind, tmuxName));
 
 /**
  * Strip tmux identity from every inner process, and capture stderr only

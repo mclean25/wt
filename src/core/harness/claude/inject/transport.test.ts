@@ -8,6 +8,7 @@
  * the same message twice.
  */
 import { describe, expect, test } from "bun:test";
+import { Effect, Exit, Fiber } from "effect";
 
 import type { InspectorClient } from "./client.ts";
 import { createClaudeInjector } from "./transport.ts";
@@ -28,6 +29,7 @@ type StubOpts = {
 function injector(opts: StubOpts & { connectFails?: boolean; noSocket?: boolean } = {}) {
   const results = [...(opts.results ?? [])];
   let calls = 0;
+  let closes = 0;
   let routines = 0;
   const client: InspectorClient = {
     async call(method) {
@@ -51,22 +53,19 @@ function injector(opts: StubOpts & { connectFails?: boolean; noSocket?: boolean 
       const next = results.shift() ?? { ok: true, submitted: true, draftLen: 0, cursor: null };
       return { result: { value: JSON.stringify(next) } };
     },
-    close() {},
+    close() { closes += 1; },
   };
   return {
     calls: () => calls,
+    closes: () => closes,
     injector: createClaudeInjector({
       socketExists: () => !opts.noSocket,
       connect: async () => {
         if (opts.connectFails) throw new Error("connection refused");
         return client;
       },
-      // Real clock, tiny budgets. A virtual clock can't work here: the
-      // timeouts are `Promise.race`s against a sleep, and a sleep that
-      // resolves instantly wins every race.
       now: Date.now,
-      sleep: (ms) => Bun.sleep(ms),
-      attemptTimeoutMs: 60,
+      attemptTimeoutMs: 250,
       pollMs: 1,
       locateRetryMs: 1,
     }),
@@ -123,9 +122,11 @@ describe("failure classification", () => {
     // onSubmit is already on the wire and closing our socket doesn't
     // cancel it in the target — so the caller must confirm against the
     // transcript rather than fall back and type the same text again.
-    const { injector: inj } = injector({ results: [READY], hangAfterRoutines: 1 });
+    const stub = injector({ results: [READY], hangAfterRoutines: 1 });
+    const { injector: inj } = stub;
     const out = await inj.deliverClaudeMessage("eng-1", "hi", { readyBudgetMs: 50 });
     expect(out).toMatchObject({ ok: false, kind: "submitted-unknown" });
+    expect(stub.closes()).toBe(1);
   });
 
   test("a hang on the PROBE is an ordinary failure — nothing was submitted", async () => {
@@ -192,4 +193,17 @@ describe("selftest", () => {
       kind: "not-ready",
     });
   });
+});
+
+test("interrupting a hanging probe closes the inspector exactly once", async () => {
+  const stub = injector({ hangAfterRoutines: 0 });
+  const exit = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const fiber = yield* Effect.forkScoped(
+      stub.injector.deliverClaudeMessageEffect("eng-1", "hi", { readyBudgetMs: 5_000 }),
+    );
+    while (stub.calls() < 2) yield* Effect.sleep(1);
+    return yield* Fiber.interrupt(fiber);
+  })));
+  expect(Exit.isInterrupted(exit)).toBe(true);
+  expect(stub.closes()).toBe(1);
 });

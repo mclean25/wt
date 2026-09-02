@@ -13,6 +13,7 @@
  */
 import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 import type { RefObject } from "react";
+import { Data, Effect } from "effect";
 
 import { actionRegistry } from "../../core/actions.ts";
 import { emptyEdit } from "../text-edit.tsx";
@@ -54,7 +55,7 @@ import type { makeGithubPrFlows } from "../flows/github-pr.ts";
 import { REVIEW_SECTION } from "../flows/new-worktree.ts";
 import type { makeSectionFlows } from "../flows/sections.ts";
 import type { makeSessionFlows } from "../flows/sessions.ts";
-import { openUrlHidingTerminal } from "../../core/macos.ts";
+import { openUrlHidingTerminalEffect } from "../../core/macos.ts";
 import { openInEditor } from "../../core/editor.ts";
 import {
   isSyntheticLiveSessionId,
@@ -72,6 +73,17 @@ import type { WorktreeModel } from "../worktree-model.ts";
 
 const appLog = createLogger("[app]");
 const newLog = createLogger("[new]");
+
+class NormalKeyActionError extends Data.TaggedError("NormalKeyActionError")<{
+  readonly label: string;
+  readonly cause: unknown;
+}> {}
+
+const keyPromise = <A>(label: string, evaluate: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new NormalKeyActionError({ label, cause }),
+  });
 
 type VisualItems = ReturnType<typeof useVisualItems>;
 type OutputFocus = ReturnType<typeof useOutputFocus>;
@@ -210,6 +222,19 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     toast,
     reportActionError,
   } = ctx;
+
+  const runAction = <A>(
+    label: string,
+    evaluate: () => Promise<A>,
+  ): void => {
+    Effect.runFork(
+      keyPromise(label, evaluate).pipe(
+        Effect.catchAll((error) =>
+          Effect.sync(() => reportActionError(error.label, error.cause)),
+        ),
+      ),
+    );
+  };
 
   const f12Route = (): HarnessRoute => {
     const target = currentHarnessSessions.f12Target;
@@ -402,15 +427,18 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toast("select a worktree first", theme.warn, 1500);
         return;
       }
-      void (async () => {
-        try {
+      Effect.runFork(
+        Effect.gen(function* () {
           if (stackId) {
             const memberSlugs = visualItems.flatMap((v) =>
               v.kind === "wt" && v.row.stack?.stackId === stackId
                 ? [v.row.wt.slug]
                 : [],
             );
-            const nowPaused = await toggleStackAutomationsPaused(stackId, memberSlugs);
+            const nowPaused = yield* keyPromise(
+              "automations toggle",
+              () => toggleStackAutomationsPaused(stackId, memberSlugs),
+            );
             appLog.event.info(
               nowPaused
                 ? `automations paused for stack ${stackId}`
@@ -426,7 +454,10 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
             return;
           }
           const slug = current!.wt.slug;
-          const nowPaused = await toggleAutomationsPaused(slug);
+          const nowPaused = yield* keyPromise(
+            "automations toggle",
+            () => toggleAutomationsPaused(slug),
+          );
           createLogger(slug).event.info(
             nowPaused ? "automations paused for this worktree" : "automations resumed for this worktree",
           );
@@ -435,10 +466,12 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
             nowPaused ? theme.warn : theme.ok,
             2000,
           );
-        } catch (err) {
-          reportActionError("automations toggle", err);
-        }
-      })();
+        }).pipe(
+          Effect.catchAll((error) =>
+            Effect.sync(() => reportActionError(error.label, error.cause)),
+          ),
+        ),
+      );
       return;
     }
     // Ctrl+Shift+J / Ctrl+Shift+K scroll the BOTTOM pane's event feed.
@@ -577,7 +610,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // the whole stack, a standalone worktree rebases onto its recorded
     // base or trunk (algorithmic; escalates to /restack on a conflict bail).
     if (k.sequence === "R") {
-      void doReplayStack();
+      runAction("stack replay", doReplayStack);
       return;
     }
     if (k.sequence === "N") {
@@ -776,7 +809,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
               : `remote:${remoteEntryKey(first.entry)}`
             : `section:${item.sectionKey}`,
         );
-        void toggleSectionFold(item.sectionKey);
+        runAction("section fold", () => toggleSectionFold(item.sectionKey));
         return;
       }
       if (item?.kind === "wt") {
@@ -785,7 +818,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         // the one group nobody chose to have and everybody accumulates.
         const key = item.row.archived ? GROUP_ARCHIVED : item.row.section ?? GROUP_INBOX;
         setSel(`section:${key}`);
-        void toggleSectionFold(key);
+        runAction("section fold", () => toggleSectionFold(key));
         return;
       }
       if (item?.kind === "remote") {
@@ -795,7 +828,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
             ? item.entry.section ?? GROUP_INBOX
             : GROUP_INBOX;
         setSel(`section:${key}`);
-        void toggleSectionFold(key);
+        runAction("section fold", () => toggleSectionFold(key));
         return;
       }
       toast("no section here to fold", theme.fgDim, 1500);
@@ -842,7 +875,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           );
           return;
         }
-        void openUrlHidingTerminal(url);
+        Effect.runFork(openUrlHidingTerminalEffect(url).pipe(Effect.ignore));
         modelLog.event.info(
           selectedWorktree.githubIssue
             ? `opened gh issue #${selectedWorktree.githubIssue}`
@@ -858,7 +891,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           );
           return;
         }
-        void openUrlHidingTerminal(url);
+        Effect.runFork(openUrlHidingTerminalEffect(url).pipe(Effect.ignore));
         modelLog.event.info("opened issue");
         return;
       }
@@ -877,13 +910,24 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         if (!selectedWorktree.archived && currentItem) {
           advanceCursorPast([visualKey(currentItem)]);
         }
-        const prepareRestore = selectedWorktree.archived
-          ? setWorktreeSection(selectedWorktree.target, null)
-          : Promise.resolve();
-        prepareRestore
-          .then(() => toggleArchived(selectedWorktree.key))
-          .then(async ({ archived }) => {
-            if (archived) await setSectionFolded(GROUP_ARCHIVED, true);
+        Effect.runFork(
+          Effect.gen(function* () {
+            if (selectedWorktree.archived) {
+              yield* keyPromise(
+                "archive",
+                () => setWorktreeSection(selectedWorktree.target, null),
+              );
+            }
+            const { archived } = yield* keyPromise(
+              "archive",
+              () => toggleArchived(selectedWorktree.key),
+            );
+            if (archived) {
+              yield* keyPromise(
+                "archive",
+                () => setSectionFolded(GROUP_ARCHIVED, true),
+              );
+            }
             if (!archived && currentItem) setSel(visualKey(currentItem));
             modelLog.event.info(
               archived ? "archived" : "restored to Inbox",
@@ -895,8 +939,12 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
               theme.info,
               2000,
             );
-          })
-          .catch((err) => reportActionError("archive", err));
+          }).pipe(
+            Effect.catchAll((error) =>
+              Effect.sync(() => reportActionError(error.label, error.cause)),
+            ),
+          ),
+        );
         return;
       }
       if (isPlainLetter(k, "l")) {
@@ -976,13 +1024,17 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     if (!current) return;
     const rowLog = createLogger(current.wt.slug);
     if (isPlainLetter(k, "o")) {
-      void openInEditor(current.wt.path)
-        .then(() => rowLog.event.info("opened in the editor"))
-        .catch((err: unknown) =>
-          rowLog.event.err(
-            `editor open failed: ${err instanceof Error ? err.message : String(err)}`,
-          ),
-        );
+      Effect.runFork(
+        keyPromise("editor open", () => openInEditor(current.wt.path)).pipe(
+          Effect.tap(() => Effect.sync(() => rowLog.event.info("opened in the editor"))),
+          Effect.catchAll((error) => Effect.sync(() => {
+            const cause = error.cause;
+            rowLog.event.err(
+              `editor open failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            );
+          })),
+        ),
+      );
       return;
     }
     if (isPlainLetter(k, "s")) {
@@ -995,13 +1047,13 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           rowLog.event.warn("no stage domain configured");
           return;
         }
-        void openUrlHidingTerminal(url);
+        Effect.runFork(openUrlHidingTerminalEffect(url).pipe(Effect.ignore));
         rowLog.event.info(`opened ${current.wt.stage}`);
         return;
       }
       const dev = current.fields.dev.data;
       if (dev?.running && dev.url) {
-        void openUrlHidingTerminal(dev.url);
+        Effect.runFork(openUrlHidingTerminalEffect(dev.url).pipe(Effect.ignore));
         rowLog.event.info(`opened dev server (${dev.url})`);
         return;
       }
@@ -1066,7 +1118,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       return;
     }
     if (isPlainLetter(k, "v")) {
-      void openReviewerPicker(current.wt.slug);
+      runAction("reviewer picker", () => openReviewerPicker(current.wt.slug));
       return;
     }
     if (isPlainLetter(k, "e")) {
@@ -1129,7 +1181,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     if (isPlainLetter(k, "f")) {
       // Tail the failing PR's `--log-failed` CI logs into the activity
       // pane. The flow refuses cleanly when checks aren't red.
-      void doTailFailedChecks(current.wt.slug);
+      runAction("tail failed checks", () => doTailFailedChecks(current.wt.slug));
       return;
     }
     if (isPlainLetter(k, "l")) {
@@ -1170,11 +1222,17 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         return;
       }
       const slug = current.wt.slug;
-      void (async () => {
-        const ok = await refreshAiSummary(slug);
-        if (ok) rowLog.event.dim("regenerating worktree summary");
-        else toast("no diff context yet", theme.warn, 2000);
-      })();
+      Effect.runFork(
+        keyPromise("refresh AI summary", () => refreshAiSummary(slug)).pipe(
+          Effect.tap((ok) => Effect.sync(() => {
+            if (ok) rowLog.event.dim("regenerating worktree summary");
+            else toast("no diff context yet", theme.warn, 2000);
+          })),
+          Effect.catchAll((error) =>
+            Effect.sync(() => reportActionError(error.label, error.cause)),
+          ),
+        ),
+      );
       return;
     }
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -8,6 +8,23 @@ import { REPOSITORY_CONFIG_ENV } from "./config-layer.ts";
 import { git, trackedTmpDirs } from "./test-fixtures.ts";
 
 const { tmp } = trackedTmpDirs();
+
+test("remove teardown keeps checkout-dependent cleanup before removal and browser cleanup after", () => {
+  const source = readFileSync(join(import.meta.dir, "lifecycle.ts"), "utf8");
+  const teardown = source.indexOf(
+    "const destroyCommand = resolveTeardownCommand",
+  );
+  const reaper = source.indexOf("const reaped = yield* lifecyclePromise");
+  const backend = source.indexOf("const removed = yield* backend.id");
+  const browser = source.indexOf(
+    "const browser = yield* lifecyclePromise",
+    backend,
+  );
+  expect(teardown).toBeGreaterThan(0);
+  expect(reaper).toBeGreaterThan(teardown);
+  expect(backend).toBeGreaterThan(reaper);
+  expect(browser).toBeGreaterThan(backend);
+}, 20_000);
 
 test("createWorktree copies configured glob matches from the main clone", () => {
   const root = tmp("wt-copy-globs-");
@@ -32,7 +49,9 @@ test("createWorktree copies configured glob matches from the main clone", () => 
   mkdirSync(join(main, ".cache"), { recursive: true });
   writeFileSync(join(main, ".cache", "private.txt"), "do not copy\n");
 
-  writeFileSync(configPath, `
+  writeFileSync(
+    configPath,
+    `
 [paths]
 main_clone = ${JSON.stringify(main)}
 worktree_root = ${JSON.stringify(worktrees)}
@@ -47,17 +66,116 @@ base = "main"
 [lifecycle]
 env_files_to_copy = []
 copy_globs = [".agents/**", ".git/**", "./.git/**"]
-`);
+install_command = ${JSON.stringify(`touch ${join(root, "install-started")}; exec sleep 3`)}
+`,
+  );
 
-  const lifecycleModule = pathToFileURL(join(import.meta.dir, "lifecycle.ts")).href;
+  const fakeBin = join(root, "bin");
+  mkdirSync(fakeBin);
+  const gitWrapper = join(fakeBin, "git");
+  const realGit = Bun.which("git")!;
+  writeFileSync(gitWrapper, `#!/bin/sh
+case "$*" in
+  *backend-interrupted*) touch ${JSON.stringify(join(root, "backend-create-started"))}; exec sleep 3 ;;
+  "worktree remove "*) touch ${JSON.stringify(join(root, "backend-remove-started"))}; exec sleep 3 ;;
+esac
+exec ${JSON.stringify(realGit)} "$@"
+`);
+  chmodSync(gitWrapper, 0o755);
+  const pnpmWrapper = join(fakeBin, "pnpm");
+  writeFileSync(pnpmWrapper, `#!/bin/sh
+touch ${JSON.stringify(join(root, "sst-remove-started"))}
+exec sleep 3
+`);
+  chmodSync(pnpmWrapper, 0o755);
+
+  const lifecycleModule = pathToFileURL(
+    join(import.meta.dir, "lifecycle.ts"),
+  ).href;
   const script = `
-    const { createWorktree } = await import(${JSON.stringify(lifecycleModule)});
+    const { Effect } = await import("effect");
+    const { createWorktree, createWorktreeEffect } = await import(${JSON.stringify(lifecycleModule)});
+    const { lockStatus } = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "locks.ts")).href)});
     const result = await createWorktree("test/copy-agents", { runInstall: false });
-    console.log(JSON.stringify(result));
+    const failed = await createWorktree("test/bad-base", {
+      runInstall: false,
+      base: "missing-ref-that-does-not-exist",
+    });
+    const controller = new AbortController();
+    const interrupted = await Effect.runPromiseExit(
+      createWorktreeEffect("test/interrupted", {
+        runInstall: false,
+        onPhase: () => controller.abort(),
+      }),
+      { signal: controller.signal },
+    );
+    const backendController = new AbortController();
+    const backendInterrupted = await Effect.runPromiseExit(
+      createWorktreeEffect("test/backend-interrupted", {
+        runInstall: false,
+        onLog: (line) => {
+          if (line.includes("new branch test/backend-interrupted")) {
+            setTimeout(() => backendController.abort(), 40);
+          }
+        },
+      }),
+      { signal: backendController.signal },
+    );
+    const installController = new AbortController();
+    const installInterrupted = await Effect.runPromiseExit(
+      createWorktreeEffect("test/install-interrupted", {
+        onLog: (line) => {
+          if (line.includes("install-started")) setTimeout(() => installController.abort(), 40);
+        },
+      }),
+      { signal: installController.signal },
+    );
+    const removeController = new AbortController();
+    const removeInterrupted = await Effect.runPromiseExit(
+      (await import(${JSON.stringify(lifecycleModule)})).removeWorktreeEffect(
+        { ...result, isMain: false },
+        { onPhase: (phase) => {
+          if (phase.startsWith("worktree remove")) setTimeout(() => removeController.abort(), 40);
+        } },
+      ),
+      { signal: removeController.signal },
+    );
+    const sstCreated = await createWorktree("test/sst-interrupted", { runInstall: false });
+    (await import("node:fs")).mkdirSync(${JSON.stringify(join(worktrees, "sst-interrupted", ".sst"))}, { recursive: true });
+    await Bun.write(${JSON.stringify(join(worktrees, "sst-interrupted", ".sst", "stage"))}, ${JSON.stringify("test-owned\n")});
+    const sstController = new AbortController();
+    const sstInterrupted = await Effect.runPromiseExit(
+      (await import(${JSON.stringify(lifecycleModule)})).removeWorktreeEffect(
+        { ...sstCreated, isMain: false },
+        { destroyStage: true, onPhase: (phase) => {
+          if (phase === "sst remove") setTimeout(() => sstController.abort(), 40);
+        } },
+      ),
+      { signal: sstController.signal },
+    );
+    console.log(JSON.stringify({
+      result,
+      failed,
+      interrupted: interrupted._tag,
+      backendInterrupted: backendInterrupted._tag,
+      installInterrupted: installInterrupted._tag,
+      removeInterrupted: removeInterrupted._tag,
+      sstInterrupted: sstInterrupted._tag,
+      locks: {
+        success: lockStatus("copy-agents"),
+        failure: lockStatus("bad-base"),
+        interruption: lockStatus("interrupted"),
+        backend: lockStatus("backend-interrupted"),
+        install: lockStatus("install-interrupted"),
+        remove: lockStatus("copy-agents"),
+        sst: lockStatus("sst-interrupted"),
+      },
+    }));
   `;
   const env: Record<string, string | undefined> = {
     ...process.env,
     WT_CONFIG: configPath,
+    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_SYSTEM: "/dev/null",
     GIT_AUTHOR_NAME: "wt test",
@@ -74,8 +192,34 @@ copy_globs = [".agents/**", ".git/**", "./.git/**"]
   });
 
   expect(result.exitCode, result.stderr.toString()).toBe(0);
-  expect(JSON.parse(result.stdout.toString())).toMatchObject({ ok: true });
-  const copied = join(worktrees, "copy-agents", ".agents", "skills", "example", "SKILL.md");
+  expect(JSON.parse(result.stdout.toString())).toMatchObject({
+    result: { ok: true },
+    failed: { ok: false },
+    interrupted: "Failure",
+    backendInterrupted: "Failure",
+    installInterrupted: "Failure",
+    removeInterrupted: "Failure",
+    sstInterrupted: "Failure",
+    locks: { success: null, failure: null, interruption: null, backend: null, install: null, remove: null, sst: null },
+  });
+  expect(existsSync(join(root, "backend-create-started"))).toBe(true);
+  expect(existsSync(join(worktrees, "backend-interrupted"))).toBe(false);
+  expect(existsSync(join(root, "install-started"))).toBe(true);
+  expect(existsSync(join(root, "install-finished"))).toBe(false);
+  expect(existsSync(join(root, "backend-remove-started"))).toBe(true);
+  expect(existsSync(join(worktrees, "copy-agents"))).toBe(true);
+  expect(existsSync(join(root, "sst-remove-started"))).toBe(true);
+  expect(existsSync(join(worktrees, "sst-interrupted"))).toBe(true);
+  const copied = join(
+    worktrees,
+    "copy-agents",
+    ".agents",
+    "skills",
+    "example",
+    "SKILL.md",
+  );
   expect(readFileSync(copied, "utf8")).toBe("agent skill\n");
-  expect(existsSync(join(worktrees, "copy-agents", ".cache", "private.txt"))).toBe(false);
-});
+  expect(
+    existsSync(join(worktrees, "copy-agents", ".cache", "private.txt")),
+  ).toBe(false);
+}, 20_000);

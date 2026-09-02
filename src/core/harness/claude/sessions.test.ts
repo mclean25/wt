@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Effect, Fiber } from "effect";
 
 import { wtSessionUuid } from "./jsonl.ts";
 import type { RegistrySession } from "./registry.ts";
@@ -103,6 +104,33 @@ describe("Claude sessions", () => {
     await Promise.all([sessions.ensure(target), sessions.ensure(target)]);
 
     expect(fake.starts()).toBe(1);
+  });
+
+  test("interrupting a cold start releases the per-session lock", async () => {
+    let calls = 0;
+    let entries: RegistrySession[] = [];
+    const sessions = createClaudeSessions({
+      readNative: () => entries,
+      startDetached: async () => {
+        calls += 1;
+        if (calls === 1) return await new Promise(() => {});
+        entries = [native()];
+        return { ok: true as const };
+      },
+      kill: async () => {},
+      peekPane: async () => null,
+      now: Date.now,
+      sleep: async () => {},
+    });
+
+    await Effect.runPromise(Effect.gen(function* () {
+      const first = yield* Effect.fork(sessions.ensureInfoEffect(target));
+      while (calls === 0) yield* Effect.yieldNow();
+      yield* Fiber.interrupt(first);
+      const second = yield* sessions.ensureInfoEffect(target);
+      expect(second.session.sessionId).toBe(sessionId);
+      expect(calls).toBe(2);
+    }));
   });
 
   test("rejects duplicate live processes for the same stable session", () => {

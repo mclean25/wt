@@ -9,8 +9,9 @@
  * format that's robust to small-model formatting drift. Co-generation
  * shares one round trip and one diff-context build per cache key.
  */
+import { Data, Effect, Schedule } from "effect";
 import { config } from "./config.ts";
-import { runHarnessCompletion } from "./harness/completion.ts";
+import { runHarnessCompletionEffect, type HarnessCompletionError } from "./harness/completion.ts";
 
 const SYSTEM_PROMPT = `You summarise git changes for a developer scanning their worktrees.
 
@@ -56,6 +57,14 @@ export type AiSummary = {
   description: string;
 };
 
+export class AiNamingError extends Data.TaggedError("AiNamingError")<{
+  readonly kind: "not-configured" | "completion" | "invalid-title";
+  readonly detail: string;
+  readonly cause?: unknown;
+}> {
+  override get message(): string { return this.detail; }
+}
+
 /**
  * Call the configured naming harness with the prepared diff context.
  * Throws on process / parse errors so react-query surfaces
@@ -68,13 +77,10 @@ export type AiSummary = {
  * megabyte-prompt process running to completion,
  * burning latency on a result nobody sees.
  */
-export async function summarizeDiff(
-  prompt: string,
-  external?: AbortSignal,
-): Promise<AiSummary> {
-  const content = await callNamingHarness(SYSTEM_PROMPT, prompt, external);
-  return parseTitleDescription(content);
-}
+export const summarizeDiffEffect = (prompt: string) =>
+  callNamingHarnessEffect(SYSTEM_PROMPT, prompt).pipe(Effect.map(parseTitleDescription));
+export const summarizeDiff = (prompt: string, external?: AbortSignal): Promise<AiSummary> =>
+  Effect.runPromise(summarizeDiffEffect(prompt), { signal: external });
 
 /**
  * Stack-naming round trip. Same client as `summarizeDiff` but a
@@ -87,10 +93,9 @@ export async function summarizeDiff(
  * transport / HTTP errors; if the model emits a non-TITLE response
  * the whole content is used as a last-resort fallback.
  */
-export async function summarizeStack(
+export function summarizeStackEffect(
   members: ReadonlyArray<{ branch: string; brief: string }>,
-  external?: AbortSignal,
-): Promise<string> {
+): Effect.Effect<string, AiNamingError> {
   const userPrompt = `Branches in this stack:\n${members
     .map((m) => `- ${m.branch}: ${m.brief}`)
     .join("\n")}`;
@@ -102,25 +107,28 @@ export async function summarizeStack(
   // rejected text quoted back, and if it still won't name the work,
   // throw — the section falls back to its bare issue label (ENG-5202)
   // rather than baking in junk.
+  return Effect.gen(function* () {
   let lastRejected: string | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
-    external?.throwIfAborted();
-    const prompt = lastRejected
+    const prompt: string = lastRejected
       ? `${userPrompt}\n\nYour previous answer "${lastRejected}" just echoed words from the instructions. Name the actual WORK these branches do, not the tool or the grouping.`
       : userPrompt;
-    const content = await callNamingHarness(STACK_SYSTEM_PROMPT, prompt, external);
-    const titleMatch = content.match(/^TITLE:\s*(.+?)\s*$/m);
-    const raw = (titleMatch?.[1] ?? content).trim();
+    const content: string = yield* callNamingHarnessEffect(STACK_SYSTEM_PROMPT, prompt);
+    const titleMatch: RegExpMatchArray | null = content.match(/^TITLE:\s*(.+?)\s*$/m);
+    const raw: string = (titleMatch?.[1] ?? content).trim();
     const cleaned = cleanInline(raw);
     // Hard ceiling — 4 prompted, slight slack for small-model drift.
     const capped = cleaned.split(/\s+/).slice(0, 6).join(" ");
     if (capped && !isStackTitleMetaOnly(capped)) return capped;
     lastRejected = capped || raw;
   }
-  throw new Error(
-    `stack title: model only echoed meta-vocabulary ("${lastRejected}")`,
-  );
+  return yield* new AiNamingError({ kind: "invalid-title", detail:
+    `stack title: model only echoed meta-vocabulary ("${lastRejected}")` });
+  });
 }
+export const summarizeStack = (
+  members: ReadonlyArray<{ branch: string; brief: string }>, external?: AbortSignal,
+): Promise<string> => Effect.runPromise(summarizeStackEffect(members), { signal: external });
 
 /**
  * Words the stack-naming prompt uses to describe *itself* (the tool, the
@@ -157,13 +165,11 @@ export function isStackTitleMetaOnly(title: string): boolean {
  * boring. Tasks run on settled predecessors, so one failure doesn't poison
  * the queue.
  */
-let namingQueueTail: Promise<unknown> = Promise.resolve();
+const namingSemaphore = Effect.unsafeMakeSemaphore(1);
 
-function enqueueNaming<T>(task: () => Promise<T>): Promise<T> {
-  const next = namingQueueTail.then(task, task);
-  namingQueueTail = next.catch(noop);
-  return next;
-}
+/** Test seam for the cancellation semantics of the shared naming queue. */
+export const withNamingPermitEffect = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  namingSemaphore.withPermits(1)(effect);
 
 /**
  * One ephemeral CLI turn through the selected harness. Shared by diff and
@@ -176,34 +182,25 @@ function enqueueNaming<T>(task: () => Promise<T>): Promise<T> {
  * model-swapping server recover on the spot); an external abort — the
  * observer was cancelled, nobody wants the result — does not.
  */
-async function callNamingHarness(
+function callNamingHarnessEffect(
   systemPrompt: string,
   userPrompt: string,
-  external?: AbortSignal,
-): Promise<string> {
+): Effect.Effect<string, AiNamingError> {
   const naming = config.naming;
   if (!naming) {
-    throw new Error("naming is not configured ([naming] missing in config.toml)");
+    return Effect.fail(new AiNamingError({ kind: "not-configured", detail: "naming is not configured ([naming] missing in config.toml)" }));
   }
-  return enqueueNaming(async () => {
-    let lastErr: unknown;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      external?.throwIfAborted();
-      if (attempt > 0) await sleep(500);
-      try {
-        return await runHarnessCompletion(
+  const attempt = runHarnessCompletionEffect(
           naming,
           `${systemPrompt}\n\nINPUT:\n${userPrompt}`,
           config.paths.mainClone,
-          external,
+        ).pipe(
+          Effect.mapError((cause: HarnessCompletionError) => new AiNamingError({ kind: "completion", detail: cause.message, cause })),
+          Effect.retry(Schedule.intersect(Schedule.recurs(1), Schedule.spaced("500 millis"))),
         );
-      } catch (err) {
-        if (external?.aborted) throw err;
-        lastErr = err;
-      }
-    }
-    throw lastErr;
-  });
+  // Semaphore acquisition is interruptible. A query cancelled while queued
+  // is removed from the waiter set and never invokes the harness.
+  return withNamingPermitEffect(attempt);
 }
 
 /**
@@ -251,11 +248,6 @@ export function parseTitleDescription(text: string): AiSummary {
 
   return { title, brief, description };
 }
-
-const noop = (): void => {};
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
 
 function cleanInline(t: string): string {
   return t

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Effect } from "effect";
 
 import { config } from "./config.ts";
-import { createLogger, flushLog } from "./logger.ts";
+import { createLogger, flushLoggerEffect } from "./logger.ts";
 
 /**
  * Writes are chained asynchronously, so anything that logs and then exits
@@ -12,18 +13,33 @@ import { createLogger, flushLog } from "./logger.ts";
  * events daemon's self-restart notice was lost exactly this way, leaving a
  * pid change with a clean gap in the log.
  */
-describe("flushLog", () => {
+describe("flushLoggerEffect", () => {
   test("a line logged immediately before it is on disk after it", async () => {
     const marker = `flushLog-probe-${process.pid}-${performance.now()}`;
     createLogger("[logger-test]").debug(marker);
-    await flushLog();
+    await Effect.runPromise(flushLoggerEffect);
     const day = new Date().toISOString().slice(0, 10);
     const body = readFileSync(join(config.paths.appLogDir, `wt-${day}.log`), "utf8");
     expect(body).toContain(marker);
   });
 
   test("it resolves rather than throwing when nothing is queued", async () => {
-    await flushLog();
-    await flushLog();
+    await Effect.runPromise(flushLoggerEffect);
+    await Effect.runPromise(flushLoggerEffect);
+  });
+
+  test("concurrent producers retain queue order through a flush barrier", async () => {
+    const prefix = `logger-order-${process.pid}-${performance.now()}`;
+    const logger = createLogger("[logger-test]");
+    for (let index = 0; index < 20; index++) logger.debug(`${prefix}-${index}`);
+    await Effect.runPromise(flushLoggerEffect);
+    const day = new Date().toISOString().slice(0, 10);
+    const body = readFileSync(join(config.paths.appLogDir, `wt-${day}.log`), "utf8");
+    let previous = -1;
+    for (let index = 0; index < 20; index++) {
+      const at = body.indexOf(`${prefix}-${index}`);
+      expect(at).toBeGreaterThan(previous);
+      previous = at;
+    }
   });
 });

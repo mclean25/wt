@@ -9,6 +9,25 @@ import { SESSION_SLOTS } from "../sessions/slots.ts";
 import { applyEditKey, emptyEdit, insertText } from "../text-edit.tsx";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleListPickerKey } from "./list-picker.ts";
+import { Data, Effect } from "effect";
+
+class ActionsModalError extends Data.TaggedError("ActionsModalError")<{
+  cause: unknown;
+}> {}
+const actionEffect = <A>(evaluate: () => A | PromiseLike<A>) =>
+  Effect.try({
+    try: evaluate,
+    catch: (cause) => new ActionsModalError({ cause }),
+  }).pipe(
+    Effect.flatMap((value) =>
+      value && typeof (value as PromiseLike<A>).then === "function"
+        ? Effect.tryPromise({
+            try: () => value as PromiseLike<A>,
+            catch: (cause) => new ActionsModalError({ cause }),
+          })
+        : Effect.succeed(value as A),
+    ),
+  );
 
 export function handleActionPickerKey(
   k: KeyEvent,
@@ -50,7 +69,11 @@ export function handleActionPickerKey(
         // Direct toggle, no confirm — `!` + `m` is already deliberate,
         // matching the `; x` direct-kill convention.
         setModal(null);
-        void doAutoMerge(ap.slug, item.armed ? "disable" : "enable", ap.target);
+        Effect.runFork(
+          actionEffect(() =>
+            doAutoMerge(ap.slug, item.armed ? "disable" : "enable", ap.target),
+          ).pipe(Effect.catchAll(() => Effect.void)),
+        );
         return;
       }
       if (item.kind === "openEditor") {
@@ -60,13 +83,20 @@ export function handleActionPickerKey(
         const slot = SESSION_SLOTS.find((s) => s.slug === ap.slug);
         if (!slot) return;
         const editorLog = createLogger(slot.label);
-        void openInEditor(slot.path)
-          .then(() => editorLog.event.info(`opened ${slot.path}`))
-          .catch((err: unknown) =>
-            editorLog.event.err(
-              `editor open failed: ${err instanceof Error ? err.message : String(err)}`,
+        Effect.runFork(
+          actionEffect(() => openInEditor(slot.path)).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => editorLog.event.info(`opened ${slot.path}`)),
             ),
-          );
+            Effect.catchAll((error) =>
+              Effect.sync(() =>
+                editorLog.event.err(
+                  `editor open failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
+                ),
+              ),
+            ),
+          ),
+        );
         return;
       }
       if (item.kind === "devLogs") {
@@ -81,7 +111,11 @@ export function handleActionPickerKey(
         // must NOT route here (it'd silently address the palette's
         // slot session).
         setModal(null);
-        void launchSlotCommand(ap.slug, item.def, "");
+        Effect.runFork(
+          actionEffect(() => launchSlotCommand(ap.slug, item.def, "")).pipe(
+            Effect.catchAll(() => Effect.void),
+          ),
+        );
         return;
       }
       // Fleet defs never take the argPicker: its launch path is
@@ -111,7 +145,18 @@ export function handleActionPickerKey(
       }
       if (item.kind === "action" && item.def.kind === "shell") {
         setModal(null);
-        void launchAction(ap.slug, item.def, "", undefined, undefined, ap.target);
+        Effect.runFork(
+          actionEffect(() =>
+            launchAction(
+              ap.slug,
+              item.def,
+              "",
+              undefined,
+              undefined,
+              ap.target,
+            ),
+          ).pipe(Effect.catchAll(() => Effect.void)),
+        );
         return;
       }
       const def = item.kind === "action" ? item.def : null;
@@ -162,7 +207,7 @@ export function handleActionPickerKey(
     // handler's sequence match covers them like `M` and `!`.
     const confirmKey =
       ap.surface === "slot"
-        ? SESSION_SLOTS.find((s) => s.slug === ap.slug)?.paletteKey ?? null
+        ? (SESSION_SLOTS.find((s) => s.slug === ap.slug)?.paletteKey ?? null)
         : manager
           ? "M"
           : "!";
@@ -227,11 +272,32 @@ export function handleActionPickerKey(
       // user `target = "manager"` actions) ride the normal launch path
       // against the captured row so they get template vars and the
       // `[re: <slug>]` prefix.
-      if (def === null || def.fleet) void launchSlotCommand(slug, def, extras.value);
-      else if (rowSlug) void launchAction(rowSlug, def, extras.value);
+      if (def === null || def.fleet)
+        Effect.runFork(
+          actionEffect(() => launchSlotCommand(slug, def, extras.value)).pipe(
+            Effect.catchAll(() => Effect.void),
+          ),
+        );
+      else if (rowSlug)
+        Effect.runFork(
+          actionEffect(() => launchAction(rowSlug, def, extras.value)).pipe(
+            Effect.catchAll(() => Effect.void),
+          ),
+        );
       else toast("no row selected", warnColor, 2000);
     } else {
-      void launchAction(slug, def, extras.value, undefined, undefined, ap.target);
+      Effect.runFork(
+        actionEffect(() =>
+          launchAction(
+            slug,
+            def,
+            extras.value,
+            undefined,
+            undefined,
+            ap.target,
+          ),
+        ).pipe(Effect.catchAll(() => Effect.void)),
+      );
     }
     return true;
   }
@@ -263,13 +329,17 @@ export function handleArgPickerKey(
     const trimmed = value.trim();
     if (!trimmed) return;
     setModal(null);
-    void launchAction(
-      modal.slug,
-      modal.def,
-      "",
-      trimmed,
-      undefined,
-      modal.target,
+    Effect.runFork(
+      actionEffect(() =>
+        launchAction(
+          modal.slug,
+          modal.def,
+          "",
+          trimmed,
+          undefined,
+          modal.target,
+        ),
+      ).pipe(Effect.catchAll(() => Effect.void)),
     );
   };
   if (k.ctrl && k.name === "c") {
@@ -278,7 +348,8 @@ export function handleArgPickerKey(
   }
   if (isInput) {
     if (k.name === "escape") {
-      if (modal.history.length > 0) setModal({ ...modal, input: null, index: 0 });
+      if (modal.history.length > 0)
+        setModal({ ...modal, input: null, index: 0 });
       else setModal(null);
       return true;
     }
@@ -292,7 +363,8 @@ export function handleArgPickerKey(
       return true;
     }
     const text = printableMultiline(k.sequence);
-    if (text) setModal({ ...modal, input: insertText(modal.input ?? emptyEdit, text) });
+    if (text)
+      setModal({ ...modal, input: insertText(modal.input ?? emptyEdit, text) });
     return true;
   }
   return handleListPickerKey(k, {

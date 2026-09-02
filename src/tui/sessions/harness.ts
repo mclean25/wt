@@ -10,16 +10,17 @@
  * and the result types the keyboard handler needs.
  */
 import type { CliRenderer } from "@opentui/core";
+import { Effect } from "effect";
 
 import type { HarnessId } from "../../core/harness/index.ts";
 import {
-  enterWorktreeSession,
+  enterWorktreeSessionEffect,
   type WorktreeSessionResult,
 } from "./worktree.ts";
 
 export type EnterResult = WorktreeSessionResult;
 
-export async function enterHarnessSession(opts: {
+export type EnterHarnessSessionOptions = {
   renderer: CliRenderer;
   slug: string;
   cwd: string;
@@ -59,7 +60,9 @@ export async function enterHarnessSession(opts: {
   /** False for session slots: F10/F11/F12 return to wt instead of
    *  switching to shell/diff siblings (see `enterWorktreeSession`). */
   switchable?: boolean;
-}): Promise<EnterResult> {
+};
+
+export function enterHarnessSessionEffect(opts: EnterHarnessSessionOptions) {
   const {
     renderer,
     slug,
@@ -72,7 +75,7 @@ export async function enterHarnessSession(opts: {
     diffBase,
     switchable,
   } = opts;
-  return await enterWorktreeSession({
+  return enterWorktreeSessionEffect({
     renderer,
     slug,
     cwd,
@@ -88,3 +91,6 @@ export async function enterHarnessSession(opts: {
     },
   });
 }
+
+export const enterHarnessSession = (opts: EnterHarnessSessionOptions): Promise<EnterResult> =>
+  Effect.runPromise(enterHarnessSessionEffect(opts));

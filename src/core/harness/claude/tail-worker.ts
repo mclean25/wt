@@ -153,6 +153,8 @@ function stopByKey(key: string): void {
 
 function ensurePoller(): void {
   if (poller) return;
+  // This isolated worker is the resource boundary: its owner terminates the
+  // entire event loop on scope close, so this interval cannot outlive it.
   poller = setInterval(() => {
     for (const [key, st] of tails) {
       // Skip tails still in `watchForCreation` mode — the dirWatcher
@@ -293,6 +295,8 @@ function scheduleRead(key: string): void {
   const st = tails.get(key);
   if (!st) return;
   if (st.debounce) return;
+  // Worker-local protocol debounce. stopTail clears it, and worker
+  // termination reclaims it even if the owner is interrupted mid-read.
   st.debounce = setTimeout(() => {
     st.debounce = null;
     try {

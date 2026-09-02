@@ -7,13 +7,14 @@
  * config-free (see core/update.ts): a rollback offer is most valuable
  * precisely when the new code can't even load the config.
  */
+import { Effect } from "effect";
+
 import {
-  cancelBootPromotion,
   gitSync,
-  listRunningWtInstances,
-  performRollback,
+  listRunningWtInstancesEffect,
+  performRollbackEffect,
   readUpdateMemory,
-  repoUpdateState,
+  repoUpdateStateEffect,
   shortSha,
   spawnFreshWt,
   wtVersion,
@@ -21,7 +22,7 @@ import {
 } from "../../core/update.ts";
 import { firstUnknownFlag, hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
-import { confirm as askYesNo, isInteractive } from "../prompt.ts";
+import { confirmEffect, isInteractive } from "../prompt.ts";
 
 const USAGE = `usage: wt rollback [<ref>]
 
@@ -45,68 +46,88 @@ function defaultTarget(): string | null {
 }
 
 /** Guards shared by the command and the offers. Null = fine to roll back. */
-async function rollbackBlocker(): Promise<string | null> {
-  const state = await repoUpdateState();
+const rollbackBlocker: Effect.Effect<string | null> = Effect.gen(function* () {
+  const state = yield* repoUpdateStateEffect;
   if (!state) return `${WT_REPO_ROOT} is not a git checkout (or git is missing)`;
   if (state.dirty) return "the wt clone has local changes — roll back by hand with git";
   if (state.ahead > 0) return `the wt clone is ${state.ahead} commit(s) ahead of ${state.upstream} — roll back by hand with git`;
   return null;
-}
+});
 
-async function rollBackTo(target: string): Promise<number> {
-  const result = await performRollback(target, Date.now());
-  if (!result.ok) {
-    console.error(red(`rollback failed: ${result.detail}`));
-    return 1;
-  }
-  if (result.depsWarning) console.error(yellow(`⚠ ${result.depsWarning}`));
-  console.log(green(`✓ rolled back ${shortSha(result.fromSha)} → ${wtVersion()}`));
-  console.log(dim(`${shortSha(result.fromSha)} is skipped until new commits land on origin (wt update can still re-apply it)`));
-  const pids = await listRunningWtInstances();
-  if (pids.length > 0) {
-    console.log(yellow(`${pids.length} running wt instance(s) (pid ${pids.join(", ")}) still on the rolled-back-from code — restart them`));
-  }
-  return 0;
-}
-
-export async function run(argv: string[]): Promise<number> {
-  if (hasHelpFlag(argv)) {
-    console.log(USAGE);
-    return 0;
-  }
-  const unknown = firstUnknownFlag(argv, new Set());
-  if (unknown) {
-    console.error(red(`unknown flag: ${unknown}\n`));
-    console.error(USAGE);
-    return 2;
-  }
-  const refArg = argv.find((a) => !a.startsWith("-")) ?? null;
-
-  const blocker = await rollbackBlocker();
-  if (blocker) {
-    console.error(yellow(blocker));
-    return 1;
-  }
-  const target = refArg ? gitSync(["rev-parse", "--verify", `${refArg}^{commit}`]) : defaultTarget();
-  if (!target) {
-    console.error(
-      refArg
-        ? red(`cannot resolve ${refArg} to a commit in the wt clone`)
-        : red("no rollback target on record (no healthy boot or update in the journal) — pass a <ref>"),
+function rollBackTo(target: string): Effect.Effect<number> {
+  return Effect.gen(function* () {
+    const result = yield* performRollbackEffect(target, Date.now());
+    if (!result.ok) {
+      console.error(red(`rollback failed: ${result.detail}`));
+      return 1;
+    }
+    if (result.depsWarning) console.error(yellow(`⚠ ${result.depsWarning}`));
+    console.log(green(`✓ rolled back ${shortSha(result.fromSha)} → ${wtVersion()}`));
+    console.log(
+      dim(
+        `${shortSha(result.fromSha)} is skipped until new commits land on origin (wt update can still re-apply it)`,
+      ),
     );
-    return 1;
-  }
-  const head = gitSync(["rev-parse", "HEAD"]);
-  if (head === target) {
-    console.log(dim(`already on ${shortSha(target)} — nothing to roll back`));
+    const pids = yield* listRunningWtInstancesEffect;
+    if (pids.length > 0) {
+      console.log(
+        yellow(
+          `${pids.length} running wt instance(s) (pid ${pids.join(", ")}) still on the rolled-back-from code — restart them`,
+        ),
+      );
+    }
     return 0;
-  }
-  const code = await rollBackTo(target);
-  if (code === 0 && refArg) {
-    // Default targets earned trust by booting; an arbitrary ref hasn't.
-    console.log(dim("(explicit target — it was never boot-probed; if it misbehaves, `wt update` re-applies forward)"));
-  }
-  return code;
+  });
+}
+
+export function run(argv: string[]): Effect.Effect<number> {
+  return Effect.gen(function* () {
+    if (hasHelpFlag(argv)) {
+      console.log(USAGE);
+      return 0;
+    }
+    const unknown = firstUnknownFlag(argv, new Set());
+    if (unknown) {
+      console.error(red(`unknown flag: ${unknown}\n`));
+      console.error(USAGE);
+      return 2;
+    }
+    const refArg = argv.find((a) => !a.startsWith("-")) ?? null;
+
+    const blocker = yield* rollbackBlocker;
+    if (blocker) {
+      console.error(yellow(blocker));
+      return 1;
+    }
+    const target = refArg
+      ? gitSync(["rev-parse", "--verify", `${refArg}^{commit}`])
+      : defaultTarget();
+    if (!target) {
+      console.error(
+        refArg
+          ? red(`cannot resolve ${refArg} to a commit in the wt clone`)
+          : red(
+              "no rollback target on record (no healthy boot or update in the journal) — pass a <ref>",
+            ),
+      );
+      return 1;
+    }
+    const head = gitSync(["rev-parse", "HEAD"]);
+    if (head === target) {
+      console.log(dim(`already on ${shortSha(target)} — nothing to roll back`));
+      return 0;
+    }
+    const code = yield* rollBackTo(target);
+    if (code === 0 && refArg) {
+      // Default targets earned trust by booting; an arbitrary ref hasn't.
+      console.log(
+        dim(
+          "(explicit target — it was never boot-probed; if it misbehaves, `wt update` re-applies forward)",
+        ),
+      );
+    }
+    return code;
+  });
 }
 
 // ── Automatic offers (main.ts) ─────────────────────────────────────────
@@ -122,32 +143,34 @@ function offersEnabled(): boolean {
  * healthy boot, the clone isn't being driven by hand, and there is a
  * target to go back to. Returns null when any of that fails.
  */
-async function offerContext(): Promise<{ head: string; target: string } | null> {
-  if (!offersEnabled()) return null;
-  const head = gitSync(["rev-parse", "HEAD"]);
-  if (!head) return null;
-  const mem = readUpdateMemory();
-  if (mem.lastGoodSha === head) return null;
-  // "A fresh update landed here": a journal entry, or an `applying`
-  // marker from an update that was killed before it could journal.
-  const freshUpdate =
-    mem.journal.some((e) => e.kind === "update" && e.toSha === head) ||
-    mem.applying?.toSha === head;
-  if (!freshUpdate) return null;
-  if (await rollbackBlocker()) return null;
-  const target = defaultTarget();
-  if (!target || target === head) return null;
-  // rev-parse prints the sha on success, so gitSync's null-on-failure
-  // maps cleanly to "no safe target".
-  if (!gitSync(["rev-parse", "--verify", `${target}^{commit}`])) return null;
-  return { head, target };
+function offerContext(): Effect.Effect<{ head: string; target: string } | null> {
+  return Effect.gen(function* () {
+    if (!offersEnabled()) return null;
+    const head = gitSync(["rev-parse", "HEAD"]);
+    if (!head) return null;
+    const mem = readUpdateMemory();
+    if (mem.lastGoodSha === head) return null;
+    // "A fresh update landed here": a journal entry, or an `applying`
+    // marker from an update that was killed before it could journal.
+    const freshUpdate =
+      mem.journal.some((e) => e.kind === "update" && e.toSha === head) ||
+      mem.applying?.toSha === head;
+    if (!freshUpdate) return null;
+    if (yield* rollbackBlocker) return null;
+    const target = defaultTarget();
+    if (!target || target === head) return null;
+    // rev-parse prints the sha on success, so gitSync's null-on-failure
+    // maps cleanly to "no safe target".
+    if (!gitSync(["rev-parse", "--verify", `${target}^{commit}`])) return null;
+    return { head, target };
+  });
 }
 
 /** Re-exec a fresh TUI after a successful offered rollback; never returns. */
-function reexecTui(): never {
+const reexecTuiEffect: Effect.Effect<never> = Effect.sync((): void => {
   console.log(dim("restarting wt …"));
   process.exit(spawnFreshWt());
-}
+}).pipe(Effect.andThen(Effect.never));
 
 /**
  * Called from main.ts's top-level catch: the process just crashed. If
@@ -157,18 +180,15 @@ function reexecTui(): never {
  * other case it returns so the caller can exit with the original
  * failure. Must never throw: it runs inside a crash handler.
  */
-export async function maybeOfferCrashRollback(): Promise<void> {
-  try {
-    // FIRST, synchronously: the 15s boot-health timer must not fire
-    // while we await the prompt below and stamp the crashed sha good.
-    cancelBootPromotion();
-    const ctx = await offerContext();
+export function maybeOfferCrashRollbackEffect(): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const ctx = yield* offerContext();
     if (!ctx) return;
     console.error("");
     console.error(
       bold(`wt crashed on ${shortSha(ctx.head)}, a fresh update that has not booted successfully before.`),
     );
-    const yes = await askYesNo(
+    const yes = yield* confirmEffect(
       `${cyan("•")} Roll back to ${shortSha(ctx.target)} — the last version that worked?`,
       true,
     );
@@ -176,10 +196,8 @@ export async function maybeOfferCrashRollback(): Promise<void> {
       console.error(dim(`  staying on ${shortSha(ctx.head)} (roll back later with \`wt rollback\`)`));
       return;
     }
-    if ((await rollBackTo(ctx.target)) === 0) reexecTui();
-  } catch {
-    // The offer must never mask the original crash.
-  }
+    if ((yield* rollBackTo(ctx.target)) === 0) return yield* reexecTuiEffect;
+  }).pipe(Effect.catchAllCause(() => Effect.void));
 }
 
 /**
@@ -189,22 +207,20 @@ export async function maybeOfferCrashRollback(): Promise<void> {
  * evidence than a live crash, so the offer defaults to NO; declining
  * just boots normally (and a healthy boot clears the suspicion).
  */
-export async function maybeOfferStaleBootRollback(): Promise<void> {
-  try {
+export function maybeOfferStaleBootRollbackEffect(): Effect.Effect<void> {
+  return Effect.gen(function* () {
     const mem = readUpdateMemory();
     // Root must match: another clone's sentinel is not our evidence.
     if (!mem.booting || mem.booting.root !== WT_REPO_ROOT) return;
-    const ctx = await offerContext();
+    const ctx = yield* offerContext();
     if (!ctx || mem.booting.sha !== ctx.head) return;
     console.log(
       yellow(`the last start of wt ${shortSha(ctx.head)} (a fresh update) never finished booting — it may have crashed.`),
     );
-    const yes = await askYesNo(
+    const yes = yield* confirmEffect(
       `${cyan("•")} Roll back to ${shortSha(ctx.target)} before starting?`,
       false,
     );
-    if (yes && (await rollBackTo(ctx.target)) === 0) reexecTui();
-  } catch {
-    // Never block a boot on the safety net itself.
-  }
+    if (yes && (yield* rollBackTo(ctx.target)) === 0) return yield* reexecTuiEffect;
+  }).pipe(Effect.catchAllCause(() => Effect.void));
 }

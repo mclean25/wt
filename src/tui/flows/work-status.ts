@@ -17,6 +17,11 @@ import { markSelfStatusWrite } from "../../state/self-writes.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { emptyEdit, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
+import { Data, Effect } from "effect";
+
+class WorkStatusFlowError extends Data.TaggedError("WorkStatusFlowError")<{
+  cause: unknown;
+}> {}
 
 export type { StatusPickerItem };
 
@@ -86,8 +91,11 @@ export const VERIFY_CHORD = "a";
  * using. Landed, because that is when the obligation is visible at all.
  */
 const VERIFY_GLYPH_STATE: WorkState =
-  effectiveWorkState({ state: "ready", at: "", verifyAfterMerge: "probe" }, undefined, true)
-    ?.state ?? "ready";
+  effectiveWorkState(
+    { state: "ready", at: "", verifyAfterMerge: "probe" },
+    undefined,
+    true,
+  )?.state ?? "ready";
 
 /**
  * The `u` picker's rows for a record. Pure, so the ready/ready+verify
@@ -165,7 +173,9 @@ export function statusTextRecord(
     state: pending.state,
     at,
     ...(trimmed ? { note: trimmed } : {}),
-    ...(pending.verifyAfterMerge ? { verifyAfterMerge: pending.verifyAfterMerge } : {}),
+    ...(pending.verifyAfterMerge
+      ? { verifyAfterMerge: pending.verifyAfterMerge }
+      : {}),
   };
 }
 
@@ -174,7 +184,10 @@ type WorkStatusFlowsCtx = {
   setModal: (m: Modal | null) => void;
   toast: (message: string, color?: string, ms?: number) => void;
   reportActionError: (label: string, err: unknown) => void;
-  setWorkStatus: (slug: string, record: WorkStatusRecord | null) => Promise<void>;
+  setWorkStatus: (
+    slug: string,
+    record: WorkStatusRecord | null,
+  ) => Promise<void>;
   setFooter: (f: FooterMode) => void;
   setPendingStatusText: (v: PendingStatusText | null) => void;
   /** Is the slug still a live worktree? Note-typing time is unbounded. */
@@ -253,15 +266,24 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     // line still lands in the pane feed). A clear writes no record, so
     // there's nothing to narrate or mute.
     if (record) markSelfStatusWrite(slug, record.at);
-    setWorkStatus(slug, record).then(
-      () => {
-        toast(
-          record ? `${slug} → ${record.state}` : `${slug} status cleared`,
-          theme.info,
-          2000,
-        );
-      },
-      (err) => reportActionError("set status", err),
+    Effect.runFork(
+      Effect.tryPromise({
+        try: () => setWorkStatus(slug, record),
+        catch: (cause) => new WorkStatusFlowError({ cause }),
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            toast(
+              record ? `${slug} → ${record.state}` : `${slug} status cleared`,
+              theme.info,
+              2000,
+            );
+          }),
+        ),
+        Effect.catchAll((error) =>
+          Effect.sync(() => reportActionError("set status", error.cause)),
+        ),
+      ),
     );
   }
 
@@ -328,29 +350,47 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     }
     const record = statusTextRecord(pending, text, new Date().toISOString());
     markSelfStatusWrite(pending.slug, record.at);
-    setWorkStatus(pending.slug, record).then(
-      () => {
-        if (pending.field !== "verifyAfterMerge") {
-          toast(`${pending.slug} → ${record.state}`, theme.info, 2000);
-          return;
-        }
-        // Say which happened. An empty box on the verify row is a real
-        // pick with no obligation attached, and the row it just wrote
-        // is one the `c` sweep may take — the difference is invisible
-        // on the board until the branch lands, so it gets said here.
-        if (record.verifyAfterMerge) {
-          toast(`${pending.slug} → ${record.state} · verification owed`, theme.info, 2000);
-        } else {
-          toast(
-            `${pending.slug} → ${record.state} — no steps, nothing held back`,
-            theme.warn,
-            3000,
-          );
-        }
-      },
-      (err) => reportActionError("set status", err),
+    Effect.runFork(
+      Effect.tryPromise({
+        try: () => setWorkStatus(pending.slug, record),
+        catch: (cause) => new WorkStatusFlowError({ cause }),
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (pending.field !== "verifyAfterMerge") {
+              toast(`${pending.slug} → ${record.state}`, theme.info, 2000);
+              return;
+            }
+            // Say which happened. An empty box on the verify row is a real
+            // pick with no obligation attached, and the row it just wrote
+            // is one the `c` sweep may take — the difference is invisible
+            // on the board until the branch lands, so it gets said here.
+            if (record.verifyAfterMerge) {
+              toast(
+                `${pending.slug} → ${record.state} · verification owed`,
+                theme.info,
+                2000,
+              );
+            } else {
+              toast(
+                `${pending.slug} → ${record.state} — no steps, nothing held back`,
+                theme.warn,
+                3000,
+              );
+            }
+          }),
+        ),
+        Effect.catchAll((error) =>
+          Effect.sync(() => reportActionError("set status", error.cause)),
+        ),
+      ),
     );
   }
 
-  return { openStatusPicker, commitStatusPick, beginStatusNote, commitStatusText };
+  return {
+    openStatusPicker,
+    commitStatusPick,
+    beginStatusNote,
+    commitStatusText,
+  };
 }

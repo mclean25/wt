@@ -4,15 +4,19 @@
  * the requested target without flashing the wt home screen in between.
  */
 import type { CliRenderer } from "@opentui/core";
+import { Effect } from "effect";
 
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { createLogger } from "../../core/logger.ts";
 import {
-  attachOrCreate,
-  killHarnessSession,
   type AttachResult,
 } from "../../core/tmux.ts";
-import { handoffTerminal } from "./renderer-handoff.ts";
+import {
+  AttachOperationError,
+  attachOrCreateEffect,
+} from "../../core/tmux/attach.ts";
+import { killHarnessSessionEffect } from "../../core/tmux/admin.ts";
+import { handoffTerminalEffect } from "./renderer-handoff.ts";
 
 export type HarnessRoute = {
   harnessId: HarnessId;
@@ -25,7 +29,7 @@ export type HarnessRoute = {
 export type WorktreeSessionTarget = "shell" | "diff" | "harness";
 export type WorktreeSessionResult = Exclude<AttachResult, { kind: "switch" }>;
 
-export async function enterWorktreeSession(opts: {
+export type EnterWorktreeSessionOptions = {
   renderer: CliRenderer;
   slug: string;
   cwd: string;
@@ -40,44 +44,50 @@ export async function enterWorktreeSession(opts: {
    * `manager-diff`-style sibling for a non-worktree slug.
    */
   switchable?: boolean;
-}): Promise<WorktreeSessionResult> {
+};
+
+export function enterWorktreeSessionEffect(opts: EnterWorktreeSessionOptions) {
   const { renderer, slug, cwd, diffBase, harness, switchable = true } = opts;
-  let target = opts.initial;
-  let harnessPrepared = false;
+  return handoffTerminalEffect(renderer, cwd, Effect.gen(function* () {
+    let target = opts.initial;
+    let harnessPrepared = false;
 
-  async function attachTarget(): Promise<AttachResult> {
-    if (target === "shell") {
-      return await attachOrCreate({ slug, cwd, kind: "shell" });
-    }
-    if (target === "diff") {
-      return await attachOrCreate({ slug, cwd, kind: "diff", base: diffBase });
-    }
-
-    if (!harnessPrepared) {
-      harnessPrepared = true;
-      if (harness.freshSlot && getHarness(harness.harnessId).singleSlot) {
-        createLogger(slug).event.warn(
-          `replacing ${getHarness(harness.harnessId).label} slot`,
-        );
-        await killHarnessSession(slug, harness.harnessId);
+    const attachTarget = (): Effect.Effect<AttachResult, AttachOperationError> => Effect.gen(function* () {
+      if (target === "shell") {
+        return yield* attachOrCreateEffect({ slug, cwd, kind: "shell" });
       }
-    }
-    return await attachOrCreate({
-      slug,
-      cwd,
-      kind: harness.harnessId,
-      managedName: harness.managedName,
-      resumeSessionId: harness.resumeSessionId,
-      claudeDisplayName: harness.claudeDisplayName,
-    });
-  }
+      if (target === "diff") {
+        return yield* attachOrCreateEffect({ slug, cwd, kind: "diff", base: diffBase });
+      }
 
-  return await handoffTerminal(renderer, cwd, async () => {
+      if (!harnessPrepared) {
+        harnessPrepared = true;
+        if (harness.freshSlot && getHarness(harness.harnessId).singleSlot) {
+          createLogger(slug).event.warn(
+            `replacing ${getHarness(harness.harnessId).label} slot`,
+          );
+          yield* killHarnessSessionEffect(slug, harness.harnessId);
+        }
+      }
+      return yield* attachOrCreateEffect({
+        slug,
+        cwd,
+        kind: harness.harnessId,
+        managedName: harness.managedName,
+        resumeSessionId: harness.resumeSessionId,
+        claudeDisplayName: harness.claudeDisplayName,
+      });
+    });
+
     for (;;) {
-      const result = await attachTarget();
+      const result = yield* attachTarget();
       if (result.kind !== "switch") return result;
-      if (!switchable) return { kind: "detached" };
+      if (!switchable) return { kind: "detached" } as const;
       target = result.target;
     }
-  });
+  }));
 }
+
+export const enterWorktreeSession = (
+  opts: EnterWorktreeSessionOptions,
+): Promise<WorktreeSessionResult> => Effect.runPromise(enterWorktreeSessionEffect(opts));

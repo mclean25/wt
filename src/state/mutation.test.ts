@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient } from "@tanstack/react-query";
 
-import { patchArchivedKeys, runOptimisticMutation } from "./hooks.ts";
+import {
+  patchArchivedKeys,
+  runOptimisticMutation,
+  shouldReapRemoteArchive,
+} from "./hooks.ts";
 
 /**
  * Behavioral pins for `runOptimisticMutation` — the TanStack-scoped
@@ -23,7 +27,11 @@ import { patchArchivedKeys, runOptimisticMutation } from "./hooks.ts";
 
 type Data = { v: string };
 
-function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: Error) => void } {
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (e: Error) => void;
+} {
   let resolve!: () => void;
   let reject!: (e: Error) => void;
   const promise = new Promise<void>((res, rej) => {
@@ -41,6 +49,18 @@ test("archive patches keep the intended state when the settle guard reapplies th
 
   const restored = patchArchivedKeys(archived, "new", false);
   expect(patchArchivedKeys(restored, "new", false)).toEqual(["existing"]);
+});
+
+test("remote archive reconciliation requires a successful fetch in this mount", () => {
+  expect(
+    shouldReapRemoteArchive({ isSuccess: true, isFetchedAfterMount: true }),
+  ).toBeTrue();
+  expect(
+    shouldReapRemoteArchive({ isSuccess: true, isFetchedAfterMount: false }),
+  ).toBeFalse();
+  expect(
+    shouldReapRemoteArchive({ isSuccess: false, isFetchedAfterMount: true }),
+  ).toBeFalse();
 });
 
 describe("runOptimisticMutation", () => {
@@ -217,6 +237,25 @@ describe("runOptimisticMutation", () => {
     });
     await tick();
     expect(qc.getQueryData<Data>(["github", "x"])?.v).toBe("server");
+  });
+
+  test("the settle deadline releases the subscription and stops pinning the patch", async () => {
+    const qc = new QueryClient();
+    qc.setQueryData<Data>(["github", "x"], { v: "server" });
+    await runOptimisticMutation<Data>(qc, {
+      filter: { queryKey: ["github"] },
+      patch: (prev) => (prev ? { v: "optimistic" } : prev),
+      run: async () => {},
+      settleGuardMs: 0,
+    });
+    await tick();
+    await qc.fetchQuery<Data>({
+      queryKey: ["github", "x"],
+      queryFn: async () => ({ v: "someone-else" }),
+      staleTime: 0,
+    });
+    await tick();
+    expect(qc.getQueryData<Data>(["github", "x"])?.v).toBe("someone-else");
   });
 
   test("non-matching entries are untouched by patch and guard", async () => {

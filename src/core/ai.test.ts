@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { Deferred, Effect, Exit, Fiber, Ref } from "effect";
 
 import {
   isStackTitleMetaOnly,
   parseTitleDescription,
+  withNamingPermitEffect,
 } from "./ai.ts";
 
 describe("isStackTitleMetaOnly", () => {
@@ -32,6 +34,24 @@ describe("isStackTitleMetaOnly", () => {
     expect(isStackTitleMetaOnly("stack.")).toBe(true);
     expect(isStackTitleMetaOnly("BRANCHES")).toBe(true);
   });
+});
+
+test("a queued naming request cancelled before its permit never runs", async () => {
+  const ran = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const release = yield* Deferred.make<void>();
+    const acquired = yield* Deferred.make<void>();
+    const count = yield* Ref.make(0);
+    const holder = yield* Effect.forkScoped(withNamingPermitEffect(
+      Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    ));
+    yield* Deferred.await(acquired);
+    const queued = yield* Effect.forkScoped(withNamingPermitEffect(Ref.update(count, (n) => n + 1)));
+    const queuedExit = yield* Fiber.interrupt(queued);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(holder);
+    return { count: yield* Ref.get(count), interrupted: Exit.isInterrupted(queuedExit) };
+  })));
+  expect(ran).toEqual({ count: 0, interrupted: true });
 });
 
 describe("parseTitleDescription", () => {

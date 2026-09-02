@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { dlopen, FFIType, suffix } from "bun:ffi";
+import { Data, Duration, Effect, Schedule } from "effect";
 
 import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
@@ -110,6 +111,7 @@ export function tryAcquireLock(
   const started = new Date().toISOString();
   let currentPhase = opts.phase ?? "";
   let phaseStarted = started;
+  let released = false;
 
   function write(): void {
     const payload: LockMeta = {
@@ -122,12 +124,19 @@ export function tryAcquireLock(
     };
     writeFileSync(path, JSON.stringify(payload));
   }
-  write();
+  try {
+    write();
+  } catch (cause) {
+    flock(fd, LOCK_UN);
+    closeSync(fd);
+    throw cause;
+  }
 
   return {
     path,
     fd,
     phase(description) {
+      if (released) return;
       if (description !== currentPhase) {
         currentPhase = description;
         phaseStarted = new Date().toISOString();
@@ -135,6 +144,8 @@ export function tryAcquireLock(
       write();
     },
     release() {
+      if (released) return;
+      released = true;
       try {
         unlinkSync(path);
       } catch (err) {
@@ -188,6 +199,71 @@ export function withFileLockAt<T>(lockFile: string, fn: () => T): T {
   }
 }
 
+export class AsyncLockError extends Data.TaggedError("AsyncLockError")<{
+  readonly name: string;
+  readonly operation: "open" | "wait" | "run";
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+export function withAsyncFileLockEffect<A, E, R>(
+  name: string,
+  effect: Effect.Effect<A, E, R>,
+  opts: { pollMs?: number; timeoutMs?: number } = {},
+): Effect.Effect<A, E | AsyncLockError, R> {
+  const pollMs = opts.pollMs ?? 150;
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  return Effect.acquireUseRelease(
+    Effect.try({
+      try: () => {
+        ensureLockDir();
+        return openSync(lockPath(name), "a+");
+      },
+      catch: (cause) =>
+        new AsyncLockError({
+          name,
+          operation: "open",
+          message: `could not open lock ${name}`,
+          cause,
+        }),
+    }),
+    (fd) =>
+      Effect.suspend(() =>
+        flock(fd, LOCK_EX | LOCK_NB) === 0
+          ? Effect.void
+          : Effect.fail(
+              new AsyncLockError({
+                name,
+                operation: "wait",
+                message: `lock ${name} is busy`,
+              }),
+            ),
+      ).pipe(
+        Effect.retry(
+          Schedule.spaced(Duration.millis(pollMs)).pipe(
+            Schedule.upTo(Duration.millis(timeoutMs)),
+          ),
+        ),
+        Effect.mapError((error) =>
+          error.operation === "wait"
+            ? new AsyncLockError({
+                name,
+                operation: "wait",
+                message: `timed out waiting for lock ${name}`,
+                cause: error,
+              })
+            : error,
+        ),
+        Effect.andThen(
+          effect.pipe(
+            Effect.ensuring(Effect.sync(() => void flock(fd, LOCK_UN))),
+          ),
+        ),
+      ),
+    (fd) => Effect.sync(() => closeSync(fd)),
+  );
+}
+
 /**
  * Async sibling of `withFileLock` for critical sections that AWAIT
  * (tmux round-trips, subprocess waits) and run inside an event loop
@@ -201,25 +277,29 @@ export async function withAsyncFileLock<T>(
   fn: () => Promise<T>,
   opts: { pollMs?: number; timeoutMs?: number } = {},
 ): Promise<T> {
-  ensureLockDir();
-  const fd = openSync(lockPath(name), "a+");
-  const pollMs = opts.pollMs ?? 150;
-  const timeoutMs = opts.timeoutMs ?? 120_000;
-  const start = Date.now();
   try {
-    while (flock(fd, LOCK_EX | LOCK_NB) !== 0) {
-      if (Date.now() - start > timeoutMs) {
-        throw new Error(`timed out waiting for lock ${name}`);
-      }
-      await new Promise((r) => setTimeout(r, pollMs));
+    return await Effect.runPromise(
+      withAsyncFileLockEffect(
+        name,
+        Effect.tryPromise({
+          try: fn,
+          catch: (cause) =>
+            new AsyncLockError({
+              name,
+              operation: "run",
+              message:
+                cause instanceof Error ? cause.message : String(cause),
+              cause,
+            }),
+        }),
+        opts,
+      ),
+    );
+  } catch (error) {
+    if (error instanceof AsyncLockError && error.operation === "run") {
+      throw error.cause;
     }
-    try {
-      return await fn();
-    } finally {
-      flock(fd, LOCK_UN);
-    }
-  } finally {
-    closeSync(fd);
+    throw error;
   }
 }
 

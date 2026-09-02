@@ -19,6 +19,7 @@ import { createLogger } from "../../core/logger.ts";
 import type { PullRequest } from "../../core/types.ts";
 import { patchPullRequest, type GithubData } from "../../state/index.ts";
 import type { QueryFilters } from "@tanstack/react-query";
+import { Data, Effect } from "effect";
 
 import { armedFromPr } from "../badges.ts";
 import {
@@ -30,6 +31,17 @@ import {
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import type { ActionSubject } from "../action-subject.ts";
 import { theme } from "../theme.ts";
+
+class GithubPrFlowError extends Data.TaggedError("GithubPrFlowError")<{
+  readonly operation: string;
+  readonly cause: unknown;
+}> {}
+
+const githubPromise = <A>(operation: string, run: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) => new GithubPrFlowError({ operation, cause }),
+  });
 
 export type GithubPrFlowsCtx = {
   rows: readonly WorktreeRow[];
@@ -198,7 +210,17 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
               log.event.ok(`merge when ready armed for #${prNumber} once its checks reported`, {
                 toast: true,
               });
-              void refreshGithub();
+              Effect.runFork(
+                githubPromise("refresh GitHub", refreshGithub).pipe(
+                  Effect.catchAll((error) =>
+                    Effect.sync(() =>
+                      log.event.err(
+                        `GitHub refresh failed after arming #${prNumber}: ${String(error.cause)}`,
+                      ),
+                    ),
+                  ),
+                ),
+              );
             },
             onFailed: (error) => {
               log.event.err(`auto-merge failed for #${prNumber}: ${error}`, { toast: true });
@@ -306,16 +328,22 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
         })
       : Promise.resolve();
 
-    const [readyRes, reviewerRes] = await Promise.allSettled([
-      markReadyP,
-      reviewerP,
-    ]);
+    const [readyRes, reviewerRes] = await Effect.runPromise(
+      Effect.all(
+        [
+          githubPromise("mark ready", () => markReadyP).pipe(Effect.either),
+          githubPromise("request reviewer", () => reviewerP).pipe(Effect.either),
+        ],
+        { concurrency: 2 },
+      ),
+    );
 
-    if (readyRes.status === "rejected") {
+    if (readyRes._tag === "Left") {
+      const reason = readyRes.left.cause;
       const msg =
-        readyRes.reason instanceof Error
-          ? readyRes.reason.message
-          : String(readyRes.reason);
+        reason instanceof Error
+          ? reason.message
+          : String(reason);
       log.event.err(`mark ready failed for #${prNumber}: ${msg}`);
       toast(`mark ready failed: ${msg}`, theme.err, 4000);
       // Bail: auto-merge would fail on the still-draft PR.
@@ -323,11 +351,12 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     }
     if (wasDraft) log.event.ok(`marked #${prNumber} ready`);
 
-    if (reviewerRes.status === "rejected") {
+    if (reviewerRes._tag === "Left") {
+      const reason = reviewerRes.left.cause;
       const msg =
-        reviewerRes.reason instanceof Error
-          ? reviewerRes.reason.message
-          : String(reviewerRes.reason);
+        reason instanceof Error
+          ? reason.message
+          : String(reason);
       log.event.err(
         `request reviewer ${reviewerToAdd} failed for #${prNumber}: ${msg}`,
       );
@@ -397,13 +426,25 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     toast("fetching failed CI logs…", theme.info, 2500);
     const CAP = 200;
     let emitted = 0;
-    const res = await streamFailedRunLog(branch, (line) => {
-      if (emitted < CAP) log.event.dim(line);
-      else if (emitted === CAP) {
-        log.event.dim(`… (truncated at ${CAP} lines; \`gh run view --log-failed\` for the rest)`);
-      }
-      emitted++;
-    });
+    let res: Awaited<ReturnType<typeof streamFailedRunLog>>;
+    try {
+      res = await Effect.runPromise(
+        githubPromise("stream failed CI logs", () =>
+          streamFailedRunLog(branch, (line) => {
+            if (emitted < CAP) log.event.dim(line);
+            else if (emitted === CAP) {
+              log.event.dim(`… (truncated at ${CAP} lines; \`gh run view --log-failed\` for the rest)`);
+            }
+            emitted++;
+          })),
+      );
+    } catch (error) {
+      const cause = error instanceof GithubPrFlowError ? error.cause : error;
+      const message = cause instanceof Error ? cause.message : String(cause);
+      log.event.err(`failed CI logs: ${message}`);
+      toast(`failed logs: ${message}`, theme.err, 4000);
+      return;
+    }
     if (!res.ok) {
       log.event.err(`failed CI logs: ${res.reason}`);
       toast(`failed logs: ${res.reason}`, theme.err, 4000);

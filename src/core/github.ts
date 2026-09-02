@@ -6,7 +6,12 @@ export type {
   GhActionResult,
   LivePrInfo,
 } from "./github/types.ts";
-export { fetchGithub, fetchPrs } from "./github/fetch.ts";
+export {
+  fetchGithub,
+  fetchGithubEffect,
+  fetchPrs,
+  fetchPrsEffect,
+} from "./github/fetch.ts";
 export { fetchReviewRequests } from "./github/review-requests.ts";
 export { fetchRepoContributors } from "./github/contributors.ts";
 export {

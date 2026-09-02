@@ -1,7 +1,14 @@
 import { join } from "node:path";
+import { Data, Effect } from "effect";
 
-import { run, runStreaming, type RunOptions, type RunResult } from "./proc.ts";
-import { sendSessionMessage } from "./harness/session-messaging.ts";
+import {
+  runEffect,
+  runStreamingEffect,
+  terminateSubprocessEffect,
+  type RunOptions,
+  type RunResult,
+} from "./proc.ts";
+import { sendSessionMessageEffect } from "./harness/session-messaging.ts";
 import type { HarnessId } from "./harness/index.ts";
 import { devServerLogs, readDevCrashLog } from "./dev-server.ts";
 import {
@@ -16,6 +23,11 @@ export type WorktreeRunOptions = {
   interactive?: boolean;
   onLine?: (line: string) => void;
 };
+
+export class WorktreeExecutorError extends Data.TaggedError("WorktreeExecutorError")<{
+  readonly operation: "spawn" | "wait" | "logs" | "message";
+  readonly cause: unknown;
+}> {}
 
 /**
  * The sole direct-versus-SSH transport decision for ordinary wt commands.
@@ -33,56 +45,88 @@ export function worktreeWtArgv(
     : remoteWtSshArgv(target.location.endpoint, args);
 }
 
-export async function runWorktreeWt(
+export function runWorktreeWtEffect(
   target: WorktreeTarget,
   args: readonly string[],
   opts: WorktreeRunOptions = {},
-): Promise<number> {
+): Effect.Effect<number, WorktreeExecutorError> {
   if (opts.interactive) {
-    const proc = Bun.spawn(worktreeWtArgv(target, args, true), {
-      cwd: target.location.kind === "local" ? target.path : process.cwd(),
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    return proc.exited;
+    return Effect.acquireUseRelease(
+      Effect.try({
+        try: () => Bun.spawn(worktreeWtArgv(target, args, true), {
+          cwd: target.location.kind === "local" ? target.path : process.cwd(),
+          stdin: "inherit",
+          stdout: "inherit",
+          stderr: "inherit",
+        }),
+        catch: (cause) => new WorktreeExecutorError({ operation: "spawn", cause }),
+      }),
+      (proc) => Effect.tryPromise({
+        try: () => proc.exited,
+        catch: (cause) => new WorktreeExecutorError({ operation: "wait", cause }),
+      }),
+      (proc) => terminateSubprocessEffect(proc),
+    );
   }
-  return runStreaming(worktreeWtArgv(target, args), {
+  return runStreamingEffect(worktreeWtArgv(target, args), {
     cwd: target.location.kind === "local" ? target.path : process.cwd(),
     onLine: opts.onLine,
-  });
+  }).pipe(
+    Effect.mapError((cause) => new WorktreeExecutorError({ operation: "wait", cause })),
+  );
 }
 
-export function captureWorktreeWt(
+export const runWorktreeWt = (
+  target: WorktreeTarget,
+  args: readonly string[],
+  opts: WorktreeRunOptions = {},
+): Promise<number> => Effect.runPromise(runWorktreeWtEffect(target, args, opts));
+
+export function captureWorktreeWtEffect(
   target: WorktreeTarget,
   args: readonly string[],
   opts: Omit<RunOptions, "cwd"> = {},
-): Promise<RunResult> {
-  return run(worktreeWtArgv(target, args), {
+): Effect.Effect<RunResult, WorktreeExecutorError> {
+  return runEffect(worktreeWtArgv(target, args), {
     ...opts,
     cwd: target.location.kind === "local" ? target.path : process.cwd(),
-  });
+  }).pipe(
+    Effect.mapError((cause) => new WorktreeExecutorError({ operation: "wait", cause })),
+  );
 }
 
-/** Read supervised dev output from the machine that owns the checkout. */
-export async function readWorktreeDevLogs(
+export const captureWorktreeWt = (
   target: WorktreeTarget,
-): Promise<string | null> {
+  args: readonly string[],
+  opts: Omit<RunOptions, "cwd"> = {},
+): Promise<RunResult> => Effect.runPromise(captureWorktreeWtEffect(target, args, opts));
+
+/** Read supervised dev output from the machine that owns the checkout. */
+export function readWorktreeDevLogsEffect(
+  target: WorktreeTarget,
+): Effect.Effect<string | null, WorktreeExecutorError> {
   if (target.location.kind === "local") {
-    return (
-      (await devServerLogs(target.slug).catch(() => null)) ??
-      readDevCrashLog(target.slug)
+    return Effect.tryPromise({
+      try: () => devServerLogs(target.slug),
+      catch: (cause) => new WorktreeExecutorError({ operation: "logs", cause }),
+    }).pipe(
+      Effect.orElseSucceed(() => null),
+      Effect.map((logs) => logs ?? readDevCrashLog(target.slug)),
     );
   }
-  const result = await captureWorktreeWt(
+  return captureWorktreeWtEffect(
     target,
     ["dev", "logs", target.slug],
     { timeoutMs: 8_000 },
+  ).pipe(
+    Effect.map((result) => result.exitCode === 0
+      ? result.stdout
+      : result.stderr.trim() || result.stdout.trim() || null),
   );
-  return result.exitCode === 0
-    ? result.stdout
-    : result.stderr.trim() || result.stdout.trim() || null;
 }
+
+export const readWorktreeDevLogs = (target: WorktreeTarget): Promise<string | null> =>
+  Effect.runPromise(readWorktreeDevLogsEffect(target));
 
 export type WorktreeMessageResult =
   | {
@@ -93,34 +137,45 @@ export type WorktreeMessageResult =
   | { ok: false; reason: string };
 
 /** Deliver to the target's primary worktree session at either location. */
-export async function sendWorktreeMessage(
+export function sendWorktreeMessageEffect(
   target: WorktreeTarget,
   harnessId: HarnessId,
   text: string,
   onLine?: (line: string) => void,
-): Promise<WorktreeMessageResult> {
+): Effect.Effect<WorktreeMessageResult, WorktreeExecutorError> {
   if (target.location.kind === "local") {
-    const result = await sendSessionMessage({
+    return sendSessionMessageEffect({
       slug: target.slug,
       cwd: target.path,
       harnessId,
       managedName: null,
       text,
-    });
-    return result.ok
+    }).pipe(
+      Effect.mapError((cause) => new WorktreeExecutorError({ operation: "message", cause })),
+      Effect.map((result) => result.ok
       ? {
           ok: true,
           coldStarted: result.coldStarted,
           delivered: result.delivered,
         }
-      : result;
+      : result),
+    );
   }
-  const code = await runWorktreeWt(
+  return runWorktreeWtEffect(
     target,
     ["agent", "send", target.slug, "--harness", harnessId, text],
     { onLine },
+  ).pipe(
+    Effect.map((code): WorktreeMessageResult => code === 0
+      ? { ok: true, coldStarted: null, delivered: null }
+      : { ok: false, reason: `remote send exited ${code}` }),
   );
-  return code === 0
-    ? { ok: true, coldStarted: null, delivered: null }
-    : { ok: false, reason: `remote send exited ${code}` };
 }
+
+export const sendWorktreeMessage = (
+  target: WorktreeTarget,
+  harnessId: HarnessId,
+  text: string,
+  onLine?: (line: string) => void,
+): Promise<WorktreeMessageResult> =>
+  Effect.runPromise(sendWorktreeMessageEffect(target, harnessId, text, onLine));
