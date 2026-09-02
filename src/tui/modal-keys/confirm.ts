@@ -26,7 +26,7 @@ export function handleKillActionConfirmKey(
       const { slug, actionName } = modal;
       setModal(null);
       Effect.runFork(
-        confirmPromise(() => actionRegistry.kill(slug)).pipe(
+        confirmPromise(() => actionRegistry.killPromise(slug)).pipe(
           Effect.tap((killed) =>
             Effect.sync(() => {
               if (killed) logWarn(`killed action "${actionName}" on ${slug}`);

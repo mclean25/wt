@@ -441,7 +441,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       return { launched: true };
     }
     const result = def
-      ? await Effect.runPromise(actionRegistry.startForWorktreeEffect(
+      ? await Effect.runPromise(actionRegistry.startForWorktree(
           def,
           subject.target,
           config.paths.mainClone,
@@ -450,7 +450,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
           primaryHarness,
           { autoFireKeys: launchOpts.autoFireKeys },
         ))
-      : await Effect.runPromise(actionRegistry.startCustomForWorktreeEffect(
+      : await Effect.runPromise(actionRegistry.startCustomForWorktree(
           subject.target,
           config.paths.mainClone,
           extras,

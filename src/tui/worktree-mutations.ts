@@ -13,7 +13,7 @@ export class WorktreeMutationError extends Data.TaggedError("WorktreeMutationErr
 
 /** Persistence boundary for controller-owned fleet layout. */
 export function makeWorktreeMutations(deps: WorktreeMutationDeps) {
-  function setSectionEffect(
+  function setSection(
     target: WorktreeTarget,
     section: string | null,
   ) {
@@ -27,8 +27,8 @@ export function makeWorktreeMutations(deps: WorktreeMutationDeps) {
     });
   }
 
-  const setSection = (target: WorktreeTarget, section: string | null): Promise<void> =>
-    Effect.runPromise(setSectionEffect(target, section));
+  const setSectionPromise = (target: WorktreeTarget, section: string | null): Promise<void> =>
+    Effect.runPromise(setSection(target, section));
 
-  return { setSection, setSectionEffect };
+  return { setSectionPromise, setSection };
 }

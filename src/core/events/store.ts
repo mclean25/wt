@@ -237,10 +237,10 @@ export function watchGithubEvents(onChange: () => void): () => void {
     });
   } catch (err) {
     log.warn("events watcher failed", { err: String(err), dir: EVENTS_DIR });
-    return () => debounced.cancel();
+    return () => debounced.cancelPromise();
   }
   return () => {
-    debounced.cancel();
+    debounced.cancelPromise();
     closeSilent(watcher);
   };
 }

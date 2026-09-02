@@ -50,7 +50,7 @@ export type ClaudeSessionInfo = {
 };
 
 export type ClaudeSession = ClaudeSessionInfo & {
-  stop(): Promise<void>;
+  stopPromise(): Promise<void>;
 };
 
 export class ClaudeSessionError extends Data.TaggedError("ClaudeSessionError")<{
@@ -312,7 +312,7 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     });
   }
 
-  function startEffect(target: ClaudeSessionTarget) {
+  function start(target: ClaudeSessionTarget) {
     const identity = targetIdentity(target);
     return withAsyncFileLock(
       `__claude_session__${identity.tmuxName}`,
@@ -337,7 +337,7 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
    * the same per-session lock the start path uses, so two concurrent
    * senders can't race two cold starts of one conversation.
    */
-  function ensureInfoEffect(
+  function ensureInfo(
     target: ClaudeSessionTarget,
   ) {
     const identity = targetIdentity(target);
@@ -354,11 +354,11 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     );
   }
 
-  const ensureEffect = (target: ClaudeSessionTarget) => ensureInfoEffect(target).pipe(
+  const ensure = (target: ClaudeSessionTarget) => ensureInfo(target).pipe(
     Effect.map(({ session }) => handle(target, session)),
   );
 
-  function stopEffect(target: ClaudeSessionTarget) {
+  function stop(target: ClaudeSessionTarget) {
     const identity = targetIdentity(target);
     return withAsyncFileLock(
       `__claude_session__${identity.tmuxName}`,
@@ -366,42 +366,42 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     );
   }
 
-  const start = (target: ClaudeSessionTarget): Promise<ClaudeSession> =>
-    Effect.runPromise(startEffect(target));
-  const ensureInfo = (target: ClaudeSessionTarget) =>
-    Effect.runPromise(ensureInfoEffect(target));
-  const ensure = (target: ClaudeSessionTarget): Promise<ClaudeSession> =>
-    Effect.runPromise(ensureEffect(target));
-  const stop = (target: ClaudeSessionTarget): Promise<void> =>
-    Effect.runPromise(stopEffect(target));
+  const startPromise = (target: ClaudeSessionTarget): Promise<ClaudeSession> =>
+    Effect.runPromise(start(target));
+  const ensureInfoPromise = (target: ClaudeSessionTarget) =>
+    Effect.runPromise(ensureInfo(target));
+  const ensurePromise = (target: ClaudeSessionTarget): Promise<ClaudeSession> =>
+    Effect.runPromise(ensure(target));
+  const stopPromise = (target: ClaudeSessionTarget): Promise<void> =>
+    Effect.runPromise(stop(target));
 
   function handle(target: ClaudeSessionTarget, info: ClaudeSessionInfo): ClaudeSession {
     const identity = targetIdentity(target);
     return {
       ...info,
-      stop: () => {
+      stopPromise: () => {
         if (info.sessionId !== identity.sessionId) {
           return Effect.runPromise(Effect.fail(new ClaudeSessionError({
             operation: "stop",
             message: "cannot stop a Claude process that was not started by wt",
           })));
         }
-        return stop(target);
+        return stopPromise(target);
       },
     };
   }
 
   return {
+    ensurePromise,
     ensure,
-    ensureEffect,
+    ensureInfoPromise,
     ensureInfo,
-    ensureInfoEffect,
     find,
     list,
+    startPromise,
     start,
-    startEffect,
+    stopPromise,
     stop,
-    stopEffect,
     tmuxNameFor: (target: ClaudeSessionTarget) => targetIdentity(target).tmuxName,
   };
 }

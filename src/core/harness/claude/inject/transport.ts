@@ -339,7 +339,7 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
    * Without re-asking, the caller would give up and type into that
    * dialog, answering it on the human's behalf.
    */
-  function deliverClaudeMessageEffect(
+  function deliverClaudeMessage(
     tmuxName: string,
     text: string,
     opts: { readyBudgetMs: number; abortIfBlocked?: () => string | null; signal?: AbortSignal },
@@ -416,7 +416,7 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
    * update broke something — wired into `wt doctor` and
    * `wt claude selftest`.
    */
-  function claudeInjectSelftestEffect(tmuxName: string): Effect.Effect<SelftestOutcome> {
+  function claudeInjectSelftest(tmuxName: string): Effect.Effect<SelftestOutcome> {
     return withClientEffect(deps, tmuxName, (client) => Effect.gen(function* () {
       yield* clientCallEffect(client, "Runtime.enable");
       const out = yield* deadlineEffect(runRoutineEffect(deps, client, "", true), deps.attemptTimeoutMs);
@@ -441,16 +441,18 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
     }));
   }
 
-  const deliverClaudeMessage = (
+  const deliverClaudeMessagePromise = (
     tmuxName: string, text: string,
     opts: { readyBudgetMs: number; abortIfBlocked?: () => string | null; signal?: AbortSignal },
-  ): Promise<InjectOutcome> => Effect.runPromise(deliverClaudeMessageEffect(tmuxName, text, opts), { signal: opts.signal });
-  const claudeInjectSelftest = (tmuxName: string): Promise<SelftestOutcome> =>
-    Effect.runPromise(claudeInjectSelftestEffect(tmuxName));
+  ): Promise<InjectOutcome> => Effect.runPromise(deliverClaudeMessage(tmuxName, text, opts), { signal: opts.signal });
+  const claudeInjectSelftestPromise = (tmuxName: string): Promise<SelftestOutcome> =>
+    Effect.runPromise(claudeInjectSelftest(tmuxName));
 
-  return { deliverClaudeMessageEffect, claudeInjectSelftestEffect, deliverClaudeMessage, claudeInjectSelftest };
+  return { deliverClaudeMessage, claudeInjectSelftest, deliverClaudeMessagePromise, claudeInjectSelftestPromise };
 }
 
 const injector = createClaudeInjector();
 export const deliverClaudeMessage = injector.deliverClaudeMessage;
 export const claudeInjectSelftest = injector.claudeInjectSelftest;
+/** Promise adapter for the messenger's DI seam; retire with that seam. */
+export const deliverClaudeMessagePromise = injector.deliverClaudeMessagePromise;

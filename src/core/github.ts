@@ -1,4 +1,11 @@
-export { hasGhPromise, repoSlugPromise, fetchAuthenticatedLoginPromise } from "./github/gh-cli.ts";
+export {
+  fetchAuthenticatedLogin,
+  fetchAuthenticatedLoginPromise,
+  hasGh,
+  hasGhPromise,
+  repoSlug,
+  repoSlugPromise,
+} from "./github/gh-cli.ts";
 export { pullRequestOpenUrl, pullRequestOpenUrlForTarget } from "./github/urls.ts";
 export type {
   GithubData,
@@ -12,18 +19,33 @@ export {
   fetchPrsPromise,
   fetchPrs,
 } from "./github/fetch.ts";
-export { fetchReviewRequestsPromise } from "./github/review-requests.ts";
-export { fetchRepoContributorsPromise } from "./github/contributors.ts";
+export {
+  fetchReviewRequests,
+  fetchReviewRequestsPromise,
+} from "./github/review-requests.ts";
+export {
+  fetchRepoContributors,
+  fetchRepoContributorsPromise,
+} from "./github/contributors.ts";
 export {
   AUTO_MERGE_METHOD,
+  closeGithubIssue,
   closeGithubIssuePromise,
+  deleteRemoteBranch,
   deleteRemoteBranchPromise,
-  enableAutoMergePromise,
+  disableAutoMerge,
   disableAutoMergePromise,
+  editReviewers,
   editReviewersPromise,
-  retargetPrBasePromise,
+  enableAutoMerge,
+  enableAutoMergePromise,
+  markPullRequestReady,
   markPullRequestReadyPromise,
+  retargetPrBase,
+  retargetPrBasePromise,
+  streamFailedRunLog,
   streamFailedRunLogPromise,
+  viewPrInfo,
   viewPrInfoPromise,
 } from "./github/mutations.ts";
 export { pickPrForWorktree } from "./github/pick.ts";

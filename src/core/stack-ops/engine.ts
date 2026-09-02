@@ -55,8 +55,7 @@ export interface RestackEngine {
    * `backup/...` branch at the pre-rebase tip, and returns it so the caller
    * hands resolution to a human / skill. wt never auto-resolves conflicts.
    */
-  replayStep(step: ReplayStep, onLog: ReplayLogger): Promise<ReplayOutcome>;
-  replayStepEffect?(
+  replayStep(
     step: ReplayStep,
     onLog: ReplayLogger,
   ): Effect.Effect<ReplayOutcome, RestackEngineError>;
@@ -76,11 +75,7 @@ export function replayStepEffect(
   step: ReplayStep,
   onLog: ReplayLogger,
 ): Effect.Effect<ReplayOutcome, RestackEngineError> {
-  if (engine.replayStepEffect) return engine.replayStepEffect(step, onLog);
-  return Effect.tryPromise({
-    try: () => engine.replayStep(step, onLog),
-    catch: (cause) => new RestackEngineError({ step, cause }),
-  });
+  return engine.replayStep(step, onLog);
 }
 
 /** Collapse git's multi-line / `\r`-laden stderr into one clean line so it
@@ -155,11 +150,7 @@ function abortRebaseWithRetryEffect(
 }
 
 export class NativeRestackEngine implements RestackEngine {
-  replayStep(step: ReplayStep, onLog: ReplayLogger): Promise<ReplayOutcome> {
-    return Effect.runPromise(this.replayStepEffect(step, onLog));
-  }
-
-  replayStepEffect(
+  replayStep(
     step: ReplayStep,
     onLog: ReplayLogger,
   ): Effect.Effect<ReplayOutcome, RestackEngineError> {

@@ -310,7 +310,7 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
     // session that was running when the previous wt exited (or
     // crashed) and re-attaches a live tail; finalizes runs whose
     // wrapper exited while wt was down.
-    yield* startupReapPromise("rehydrate action runs", () => actionRegistry.boot(live));
+    yield* startupReapPromise("rehydrate action runs", () => actionRegistry.bootPromise(live));
 }).pipe(
   // Reaping is maintenance and must not prevent first paint. Keep the
   // failure policy from the legacy helper, but represent every async leg as
@@ -332,7 +332,7 @@ export const runTui = Effect.gen(function* () {
     shellTailRegistry.stopAll();
     harnessTailRegistry.stopAll();
   });
-  yield* addRuntimeFinalizer(() => actionRegistry.shutdown());
+  yield* addRuntimeFinalizer(() => actionRegistry.shutdownPromise());
   yield* addRuntimeFinalizer(cancelAllAutoMergeRetries);
   yield* addRuntimeFinalizer(closeOpencodeDb);
   yield* addRuntimeFinalizer(disposeCodexDiscoveryWorker);

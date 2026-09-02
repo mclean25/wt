@@ -62,9 +62,6 @@ function syncEffect<A>(f: () => A): Effect.Effect<A, DoctorCommandError> {
   return Effect.try({ try: f, catch: (cause) => new DoctorCommandError({ cause }) });
 }
 
-function promiseEffect<A>(f: () => Promise<A>): Effect.Effect<A, DoctorCommandError> {
-  return Effect.tryPromise({ try: f, catch: (cause) => new DoctorCommandError({ cause }) });
-}
 
 function checkWorkingTree(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
   return procEffect(["git", "status", "--porcelain"], { cwd: wt.path }).pipe(Effect.map((r) => {
@@ -426,10 +423,7 @@ function checkMessageTransport(): Effect.Effect<Check, DoctorCommandError> {
     // so reporting "working across N" off a single probe would vouch
     // for sessions never connected to.
     const probes = yield* Effect.all(
-      names.map((name) => promiseEffect(() => claudeInjectSelftest(name).then((probe) => ({
-        name,
-        probe,
-      })))),
+      names.map((name) => claudeInjectSelftest(name).pipe(Effect.map((probe) => ({ name, probe })))),
       { concurrency: "unbounded" },
     );
     const bad = probes.filter((p) => !p.probe.ok);
@@ -479,7 +473,7 @@ function checkMessageTransport(): Effect.Effect<Check, DoctorCommandError> {
           : ""
       }`,
     );
-  }).pipe(Effect.catch((err) => Effect.succeed(mkCheck("messaging", "info", `check skipped (${err instanceof Error ? err.message : String(err)})`))));
+  });
 }
 
 /**

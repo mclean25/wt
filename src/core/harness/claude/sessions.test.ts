@@ -101,7 +101,7 @@ describe("Claude sessions", () => {
     const fake = fakes();
     const sessions = createClaudeSessions(fake.deps);
 
-    await Promise.all([sessions.ensure(target), sessions.ensure(target)]);
+    await Promise.all([sessions.ensurePromise(target), sessions.ensurePromise(target)]);
 
     expect(fake.starts()).toBe(1);
   });
@@ -124,10 +124,10 @@ describe("Claude sessions", () => {
     });
 
     await Effect.runPromise(Effect.gen(function* () {
-      const first = yield* Effect.forkChild(sessions.ensureInfoEffect(target));
+      const first = yield* Effect.forkChild(sessions.ensureInfo(target));
       while (calls === 0) yield* Effect.yieldNow;
       yield* Fiber.interrupt(first);
-      const second = yield* sessions.ensureInfoEffect(target);
+      const second = yield* sessions.ensureInfo(target);
       expect(second.session.sessionId).toBe(sessionId);
       expect(calls).toBe(2);
     }));
@@ -148,7 +148,7 @@ describe("Claude sessions", () => {
       startDetached: async () => ({ ok: true as const }),
     });
 
-    expect(sessions.ensureInfo(target)).rejects.toThrow("did not register within 20s");
+    expect(sessions.ensureInfoPromise(target)).rejects.toThrow("did not register within 20s");
   });
 });
 
@@ -204,7 +204,7 @@ describe("a pre-existing dead session", () => {
     const fake = stuckAdoption({ registersAfterKill: true });
     const sessions = createClaudeSessions(fake.deps);
 
-    await sessions.ensureInfo(target);
+    await sessions.ensureInfoPromise(target);
 
     expect(fake.killed).toBe(true);
     expect(fake.starts).toBe(2);
@@ -215,7 +215,7 @@ describe("a pre-existing dead session", () => {
     const fake = stuckAdoption({ registersAfterKill: true });
     const sessions = createClaudeSessions(fake.deps);
 
-    const { session } = await sessions.ensureInfo(target);
+    const { session } = await sessions.ensureInfoPromise(target);
     expect(session.cwd).toBe("/tmp/demo-wt");
   });
 
@@ -226,7 +226,7 @@ describe("a pre-existing dead session", () => {
     const fake = stuckAdoption({ registersAfterKill: false });
     const sessions = createClaudeSessions(fake.deps);
 
-    expect(sessions.ensureInfo(target)).rejects.toThrow(/recycling the pre-existing/);
+    expect(sessions.ensureInfoPromise(target)).rejects.toThrow(/recycling the pre-existing/);
   });
 
   // A session this call genuinely CREATED is a different failure: the
@@ -249,7 +249,7 @@ describe("a pre-existing dead session", () => {
       },
     });
 
-    expect(sessions.ensureInfo(target)).rejects.toThrow("did not register within 20s");
+    expect(sessions.ensureInfoPromise(target)).rejects.toThrow("did not register within 20s");
     expect(killed).toBe(false);
   });
 
@@ -269,6 +269,6 @@ describe("a pre-existing dead session", () => {
       },
     });
 
-    expect(sessions.ensureInfo(target)).rejects.toThrow(/pane is empty/);
+    expect(sessions.ensureInfoPromise(target)).rejects.toThrow(/pane is empty/);
   });
 });

@@ -657,7 +657,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // measured against.
     const range = fire.branchRange;
     if (range) {
-      const started = yield* automationPromise("start fleet action", () => actionRegistry.start(
+      const started = yield* automationPromise("start fleet action", () => actionRegistry.startPromise(
           def,
           FLEET_SLUG,
           config.paths.mainClone,
@@ -685,7 +685,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // exit code without having run.)
     const frozenVars = fire.frozenVars;
     if (frozenVars) {
-      const started = yield* automationPromise("start post-merge action", () => actionRegistry.start(
+      const started = yield* automationPromise("start post-merge action", () => actionRegistry.startPromise(
           def,
           slug,
           config.paths.mainClone,

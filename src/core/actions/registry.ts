@@ -154,7 +154,7 @@ class ActionRegistry {
    *  guard meaningful across that await. */
   private starting = new Set<string>();
 
-  startEffect(
+  start(
     def: ActionDef,
     slug: string,
     cwd: string,
@@ -182,7 +182,7 @@ class ActionRegistry {
     );
   }
 
-  start(
+  startPromise(
     def: ActionDef,
     slug: string,
     cwd: string,
@@ -191,11 +191,11 @@ class ActionRegistry {
     harnessId: HarnessId = "claude",
     opts: StartOpts = {},
   ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startEffect(def, slug, cwd, extras, vars, harnessId, opts));
+    return Effect.runPromise(this.start(def, slug, cwd, extras, vars, harnessId, opts));
   }
 
   /** Location-neutral entrypoint used by the TUI action dispatcher. */
-  startForWorktreeEffect(
+  startForWorktree(
     def: ActionDef,
     target: WorktreeTarget,
     supervisorCwd: string,
@@ -205,7 +205,7 @@ class ActionRegistry {
     opts: { autoFireKeys?: readonly string[] } = {},
   ): Effect.Effect<ActionStartResult> {
     if (isRemoteWorktreeTarget(target)) {
-      return this.startRemoteEffect(
+      return this.startRemote(
         def,
         worktreeActionKey(target),
         supervisorCwd,
@@ -218,7 +218,7 @@ class ActionRegistry {
         opts,
       );
     }
-    return this.startEffect(
+    return this.start(
       def,
       target.slug,
       target.path,
@@ -229,7 +229,7 @@ class ActionRegistry {
     );
   }
 
-  startForWorktree(
+  startForWorktreePromise(
     def: ActionDef,
     target: WorktreeTarget,
     supervisorCwd: string,
@@ -238,7 +238,7 @@ class ActionRegistry {
     harnessId: HarnessId = "claude",
     opts: { autoFireKeys?: readonly string[] } = {},
   ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startForWorktreeEffect(
+    return Effect.runPromise(this.startForWorktree(
       def, target, supervisorCwd, extras, vars, harnessId, opts,
     ));
   }
@@ -249,7 +249,7 @@ class ActionRegistry {
    * stream, so output, cancellation, recent-run visibility, and restart
    * recovery are identical to a local action.
    */
-  startRemoteEffect(
+  startRemote(
     def: ActionDef,
     actionKey: string,
     supervisorCwd: string,
@@ -302,7 +302,7 @@ class ActionRegistry {
     );
   }
 
-  startRemote(
+  startRemotePromise(
     def: ActionDef,
     actionKey: string,
     supervisorCwd: string,
@@ -314,7 +314,7 @@ class ActionRegistry {
     harnessId: HarnessId = "claude",
     opts: { autoFireKeys?: readonly string[] } = {},
   ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startRemoteEffect(
+    return Effect.runPromise(this.startRemote(
       def, actionKey, supervisorCwd, remoteCwd, remote, worktreeRef,
       extras, vars, harnessId, opts,
     ));
@@ -430,7 +430,7 @@ class ActionRegistry {
       // Persist a failed sentinel so a later boot doesn't see a
       // "running" run with no tmux session.
       writeDoneSentinelBestEffort(runDir, -1);
-      void this.persistMetaUpdate(runDir, {
+      void this.persistMetaUpdatePromise(runDir, {
         status: "failed",
         endedAt: Date.now(),
       });
@@ -471,14 +471,14 @@ class ActionRegistry {
     });
   }
 
-  startCustomEffect(
+  startCustom(
     slug: string,
     cwd: string,
     prompt: string,
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
   ): Effect.Effect<ActionStartResult> {
-    return this.startEffect(
+    return this.start(
       {
         kind: "claude",
         id: CUSTOM_ACTION_ID,
@@ -498,17 +498,17 @@ class ActionRegistry {
     );
   }
 
-  startCustom(
+  startCustomPromise(
     slug: string,
     cwd: string,
     prompt: string,
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
   ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startCustomEffect(slug, cwd, prompt, vars, harnessId));
+    return Effect.runPromise(this.startCustom(slug, cwd, prompt, vars, harnessId));
   }
 
-  startCustomRemoteEffect(
+  startCustomRemote(
     actionKey: string,
     supervisorCwd: string,
     remoteCwd: string,
@@ -518,7 +518,7 @@ class ActionRegistry {
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
   ): Effect.Effect<ActionStartResult> {
-    return this.startRemoteEffect(
+    return this.startRemote(
       {
         kind: "claude",
         id: CUSTOM_ACTION_ID,
@@ -541,7 +541,7 @@ class ActionRegistry {
     );
   }
 
-  startCustomRemote(
+  startCustomRemotePromise(
     actionKey: string,
     supervisorCwd: string,
     remoteCwd: string,
@@ -551,12 +551,12 @@ class ActionRegistry {
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
   ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startCustomRemoteEffect(
+    return Effect.runPromise(this.startCustomRemote(
       actionKey, supervisorCwd, remoteCwd, remote, worktreeRef, prompt, vars, harnessId,
     ));
   }
 
-  startCustomForWorktreeEffect(
+  startCustomForWorktree(
     target: WorktreeTarget,
     supervisorCwd: string,
     prompt: string,
@@ -564,7 +564,7 @@ class ActionRegistry {
     harnessId: HarnessId = "claude",
   ): Effect.Effect<ActionStartResult> {
     if (isRemoteWorktreeTarget(target)) {
-      return this.startCustomRemoteEffect(
+      return this.startCustomRemote(
         worktreeActionKey(target),
         supervisorCwd,
         target.path,
@@ -575,7 +575,7 @@ class ActionRegistry {
         harnessId,
       );
     }
-    return this.startCustomEffect(
+    return this.startCustom(
       target.slug,
       target.path,
       prompt,
@@ -584,14 +584,14 @@ class ActionRegistry {
     );
   }
 
-  startCustomForWorktree(
+  startCustomForWorktreePromise(
     target: WorktreeTarget,
     supervisorCwd: string,
     prompt: string,
     vars: ActionVars = {},
     harnessId: HarnessId = "claude",
   ): Promise<ActionStartResult> {
-    return Effect.runPromise(this.startCustomForWorktreeEffect(
+    return Effect.runPromise(this.startCustomForWorktree(
       target, supervisorCwd, prompt, vars, harnessId,
     ));
   }
@@ -615,7 +615,7 @@ class ActionRegistry {
    * `-A`) fails loudly rather than corrupting state — the intended
    * backstop, not dead code.
    */
-  killEffect(slug: string): Effect.Effect<boolean> {
+  kill(slug: string): Effect.Effect<boolean> {
     return Effect.gen({ self: this }, function* () {
     const run = this.runs.get(slug);
     if (!run || run.status !== "running") return false;
@@ -684,8 +684,8 @@ class ActionRegistry {
     });
   }
 
-  kill(slug: string): Promise<boolean> {
-    return Effect.runPromise(this.killEffect(slug));
+  killPromise(slug: string): Promise<boolean> {
+    return Effect.runPromise(this.kill(slug));
   }
 
   /**
@@ -696,7 +696,7 @@ class ActionRegistry {
    * mtime, dropping older runs from the in-memory cache (their files
    * stay on disk).
    */
-  bootEffect(liveSlugs: ReadonlySet<string>): Effect.Effect<void> {
+  boot(liveSlugs: ReadonlySet<string>): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
     const dir = actionsDir();
     if (!existsSync(dir)) return;
@@ -769,7 +769,7 @@ class ActionRegistry {
             endedAt: done.endedAt,
             exitCode: done.exitCode,
           };
-          void this.persistMetaUpdate(runDir, {
+          void this.persistMetaUpdatePromise(runDir, {
             status,
             endedAt: done.endedAt,
             exitCode: done.exitCode,
@@ -782,7 +782,7 @@ class ActionRegistry {
           // file shape as a normally-terminated run; -1 marks "exit
           // code unknown / wrapper bypassed its EXIT trap".
           writeDoneSentinelBestEffort(runDir, -1);
-          void this.persistMetaUpdate(runDir, { status: "failed", endedAt });
+          void this.persistMetaUpdatePromise(runDir, { status: "failed", endedAt });
         }
       }
 
@@ -829,8 +829,8 @@ class ActionRegistry {
     });
   }
 
-  boot(liveSlugs: ReadonlySet<string>): Promise<void> {
-    return Effect.runPromise(this.bootEffect(liveSlugs));
+  bootPromise(liveSlugs: ReadonlySet<string>): Promise<void> {
+    return Effect.runPromise(this.boot(liveSlugs));
   }
 
   /**
@@ -957,7 +957,7 @@ class ActionRegistry {
    * is that running actions outlive wt restarts. The next `wt`
    * invocation rehydrates them via `boot`.
    */
-  shutdownEffect(): Effect.Effect<void> {
+  shutdown(): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       for (const handles of this.liveHandles.values()) {
         yield* Effect.sync(() => {
@@ -976,8 +976,8 @@ class ActionRegistry {
     });
   }
 
-  shutdown(): Promise<void> {
-    return Effect.runPromise(this.shutdownEffect());
+  shutdownPromise(): Promise<void> {
+    return Effect.runPromise(this.shutdown());
   }
 
   // ---------- internals ----------
@@ -1196,7 +1196,7 @@ class ActionRegistry {
       this.commit((m) => m.set(slug, { ...cur, endedAt, status, lines }));
     }
 
-    void this.persistMetaUpdate(cur.runDir, {
+    void this.persistMetaUpdatePromise(cur.runDir, {
       status,
       endedAt,
       exitCode: done.exitCode,
@@ -1226,7 +1226,7 @@ class ActionRegistry {
     this.scheduleCleanup();
   }
 
-  private persistMetaUpdateEffect(
+  private persistMetaUpdate(
     runDir: string,
     patch: Partial<ActionMeta>,
   ): Effect.Effect<void> {
@@ -1252,12 +1252,12 @@ class ActionRegistry {
     );
   }
 
-  private persistMetaUpdate(runDir: string, patch: Partial<ActionMeta>): void {
+  private persistMetaUpdatePromise(runDir: string, patch: Partial<ActionMeta>): void {
     const tracked = Effect.runSync(Deferred.make<void>());
     let fiber: Fiber.Fiber<void, never>;
     fiber = Effect.runFork(
       Deferred.await(tracked).pipe(
-        Effect.andThen(this.persistMetaUpdateEffect(runDir, patch)),
+        Effect.andThen(this.persistMetaUpdate(runDir, patch)),
         Effect.ensuring(Effect.sync(() => this.pendingMetaWrites.delete(fiber))),
       ),
     );

@@ -103,7 +103,7 @@ export function useManagerReports(): void {
     );
     return () => {
       stopped = true;
-      debounced.cancel();
+      debounced.cancelPromise();
       closeSilent(watcher);
       Effect.runFork(Fiber.interrupt(poll));
     };

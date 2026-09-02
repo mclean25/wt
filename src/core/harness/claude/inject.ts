@@ -8,6 +8,7 @@ export {
   clearInspectorSocket,
   createClaudeInjector,
   deliverClaudeMessage,
+  deliverClaudeMessagePromise,
   ensureInspectorDir,
   inspectorDir,
   inspectorEnabled,

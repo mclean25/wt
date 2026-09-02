@@ -558,7 +558,7 @@ export function App({ onExit }: Props) {
     toast(`${label} failed: ${msg}`, theme.err, 3000);
   }
 
-  const { setSection: setWorktreeSection } = makeWorktreeMutations({
+  const { setSectionPromise: setWorktreeSection } = makeWorktreeMutations({
     setControllerSection: setSection,
   });
 

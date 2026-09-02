@@ -40,8 +40,8 @@ describe("makeDebounced", () => {
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const debounced = yield* makeDebounced(() => { calls++; }, 100);
       debounced.trigger();
-      yield* debounced.cancelEffect;
-      yield* debounced.cancelEffect;
+      yield* debounced.cancel;
+      yield* debounced.cancel;
       yield* TestClock.adjust(100);
       expect(calls).toBe(0);
     })).pipe(Effect.provide(TestClock.layer())));

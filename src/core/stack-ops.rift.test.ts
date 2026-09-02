@@ -8,6 +8,7 @@
  * work cross-clone: the Pass-1 anchor ref and the Pass-2 new base.
  */
 import { expect, test } from "bun:test";
+import { Effect } from "effect";
 
 import { effectiveBaseOrTrunkPromise } from "./git.ts";
 import { resolveAnchorPromise } from "./stack-ops.ts";
@@ -117,10 +118,10 @@ test("rift: the new base is brought over from the parent clone when absent local
   );
   expect(base).toBe(p1b);
 
-  const out = await restackEngine.replayStep(
+  const out = await Effect.runPromise(restackEngine.replayStep(
     { branch: "c", worktreePath: child, anchor: p1old, newBase: p1b },
     () => {},
-  );
+  ));
   expect(out.ok).toBe(true);
   if (out.ok) {
     expect(git(child, ["rev-parse", "c~1"])).toBe(p1b); // C sits on p1'

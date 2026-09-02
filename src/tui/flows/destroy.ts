@@ -187,7 +187,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     ];
     log.event.info(`removing ${slug}${force ? " (force)" : ""}`);
     try {
-      void actionRegistry.kill(remoteWorktreeActionKey(remote.host, slug));
+      void actionRegistry.killPromise(remoteWorktreeActionKey(remote.host, slug));
       await optimisticRemoveRemoteWorktree(remote, slug, async () => {
         const code = await runRemoteWtPromise(remote, args, {
           onLine: (line) => log.event.dim(line),
@@ -265,7 +265,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // kill() commits the "killed" status synchronously before its async
     // tmux teardown, so the status flip lands before killAllSessionsFor
     // below even though we don't await here.
-    void actionRegistry.kill(slug);
+    void actionRegistry.killPromise(slug);
     // Tear down any interactive sessions (claude, diff, shell) BEFORE
     // the worktree removal starts. Their cwds are inside the worktree;
     // letting the remove race against a live tmux child can leave it
@@ -418,7 +418,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // cursor can't land on the next row this sweep is about to destroy.
     advanceCursorPast(candidates.map((r) => r.wt.slug));
     recordRemovedSnapshots(candidates);
-    for (const row of candidates) void actionRegistry.kill(row.wt.slug);
+    for (const row of candidates) void actionRegistry.killPromise(row.wt.slug);
     // This is intentionally all-settled: one already-dead or inaccessible
     // tmux session must not prevent the remaining candidates from entering
     // the destroy queue. Effect makes that best-effort policy explicit.

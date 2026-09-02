@@ -226,7 +226,7 @@ function selftest(slugOrBranch: string | undefined): Effect.Effect<number, Claud
     const probes = yield* Effect.all(
       entries.map((entry) => {
         const tmuxSession = claudeTmuxName(entry.slug, entry.name);
-        return commandPromise("selftest", () => claudeInjectSelftest(tmuxSession)).pipe(
+        return claudeInjectSelftest(tmuxSession).pipe(
           Effect.map((probe) => ({ tmuxSession, probe })),
         );
       }),
@@ -320,13 +320,11 @@ function stop(slugOrBranch: string): Effect.Effect<number, ClaudeCommandError> {
       return 1;
     }
     const slug = slot ? slugOrBranch : wt!.slug;
-    yield* commandPromise("stop", () =>
-      claudeSessions.stop({
-        slug,
-        cwd: slot ? slot.cwd : wt!.path,
-        managedName: slot?.managedName ?? null,
-      }),
-    );
+    yield* claudeSessions.stop({
+      slug,
+      cwd: slot ? slot.cwd : wt!.path,
+      managedName: slot?.managedName ?? null,
+    }).pipe(Effect.mapError((cause) => new ClaudeCommandError({ operation: "stop", cause })));
     console.log(green(`✓ stopped ${slug}'s claude session`));
     return 0;
   });

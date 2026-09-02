@@ -53,7 +53,9 @@ export {
   type UnitState,
 } from "./skills/report.ts";
 export {
+  applyReport,
   applyReportPromise,
+  regenRulesync,
   regenRulesyncPromise,
   touchedRulesyncRoots,
   type RegenResult,

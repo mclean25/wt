@@ -47,7 +47,7 @@ import {
   type InjectResult,
 } from "../tmux/inject.ts";
 import {
-  deliverClaudeMessage,
+  deliverClaudeMessagePromise,
   inspectorEnabled,
   shimDir,
   staleShims,
@@ -176,7 +176,7 @@ type Dependencies = {
   }>;
   /** Fresh status, re-read during the readiness wait. */
   statusOf(target: { slug: string; cwd: string; managedName: string | null }): SessionSnapshot | null;
-  deliver: typeof deliverClaudeMessage;
+  deliver: typeof deliverClaudeMessagePromise;
   terminal(target: SessionMessageTarget, signal?: AbortSignal): Promise<InjectResult>;
   landed(cwd: string, managedName: string | null, text: string, sinceMs: number): boolean;
   warn(slug: string, message: string): void;
@@ -189,11 +189,11 @@ const defaults: Dependencies = {
   inspectorEnabled,
   ensureInfo: (target, signal) =>
     Effect.runPromise(
-      claudeSessions.ensureInfoEffect(target),
+      claudeSessions.ensureInfo(target),
       signal ? { signal } : undefined,
     ),
   statusOf: (target) => claudeSessions.find(target),
-  deliver: deliverClaudeMessage,
+  deliver: deliverClaudeMessagePromise,
   terminal: (target, signal) =>
     Effect.runPromise(
       target.harnessId === "claude"

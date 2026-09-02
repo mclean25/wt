@@ -65,9 +65,9 @@ const WT_DEBOUNCE_MS = 500;
 
 export type Debounced = {
   trigger: () => void;
-  cancel: () => void;
+  cancelPromise: () => void;
   /** Effect-native cancellation for scoped owners and deterministic tests. */
-  cancelEffect: Effect.Effect<void>;
+  cancel: Effect.Effect<void>;
 };
 
 /**
@@ -92,8 +92,8 @@ export const makeDebounced = (
     const fiber = Effect.runSyncWith(context)(Ref.getAndSet(current, null));
     if (fiber) fiber.interruptUnsafe();
   };
-  const cancelEffect = Ref.set(disposed, true).pipe(Effect.andThen(cancelCurrent));
-  yield* Effect.addFinalizer(() => cancelEffect);
+  const cancel = Ref.set(disposed, true).pipe(Effect.andThen(cancelCurrent));
+  yield* Effect.addFinalizer(() => cancel);
 
   return {
     trigger: () => {
@@ -109,11 +109,11 @@ export const makeDebounced = (
       );
       Effect.runSyncWith(context)(Ref.set(current, fiber));
     },
-    cancel: () => {
+    cancelPromise: () => {
       Effect.runSyncWith(context)(Ref.set(disposed, true));
       cancelCurrentFromCallback();
     },
-    cancelEffect,
+    cancel,
   };
 });
 
@@ -123,13 +123,13 @@ export function makeDebouncedPromise(onChange: () => void, ms: number): Debounce
   let cancelled = false;
   return {
     trigger: debounced.trigger,
-    cancel: () => {
+    cancelPromise: () => {
       if (cancelled) return;
       cancelled = true;
-      debounced.cancel();
+      debounced.cancelPromise();
       Effect.runFork(Scope.close(scope, Exit.void));
     },
-    cancelEffect: Scope.close(scope, Exit.void),
+    cancel: Scope.close(scope, Exit.void),
   };
 }
 
@@ -154,10 +154,10 @@ export function watchRefs(
     });
   } catch (err) {
     log.warn("refs watcher failed", { err: String(err), dir });
-    return () => debounced.cancel();
+    return () => debounced.cancelPromise();
   }
   return () => {
-    debounced.cancel();
+    debounced.cancelPromise();
     closeSilent(watcher);
   };
 }
@@ -190,8 +190,8 @@ export function watchWorktreeDir(
     sst: makeDebouncedPromise(() => onChange("sst"), WT_DEBOUNCE_MS),
   };
   const cancelAll = (): void => {
-    debouncers.tree.cancel();
-    debouncers.sst.cancel();
+    debouncers.tree.cancelPromise();
+    debouncers.sst.cancelPromise();
   };
   let watcher: FSWatcher | null = null;
   try {
@@ -255,10 +255,10 @@ export function watchWorktreesAdmin(
     });
   } catch (err) {
     log.warn("worktrees-admin watcher failed", { err: String(err), dir });
-    return () => debounced.cancel();
+    return () => debounced.cancelPromise();
   }
   return () => {
-    debounced.cancel();
+    debounced.cancelPromise();
     closeSilent(watcher);
   };
 }
@@ -289,10 +289,10 @@ export function watchWorktreeRoot(
     });
   } catch (err) {
     log.warn("worktree-root watcher failed", { err: String(err), worktreeRoot });
-    return () => debounced.cancel();
+    return () => debounced.cancelPromise();
   }
   return () => {
-    debounced.cancel();
+    debounced.cancelPromise();
     closeSilent(watcher);
   };
 }
@@ -333,7 +333,7 @@ export function watchRebaseState(
   };
   const cancelAll = (): void => {
     disposed = true;
-    for (const d of debouncers.values()) d.cancel();
+    for (const d of debouncers.values()) d.cancelPromise();
     debouncers.clear();
   };
   let watcher: FSWatcher | null = null;
@@ -388,8 +388,8 @@ export function watchWtStateFiles(
     archive: makeDebouncedPromise(() => onChange("archive"), REFS_DEBOUNCE_MS),
   };
   const cancelAll = (): void => {
-    debouncers.state.cancel();
-    debouncers.archive.cancel();
+    debouncers.state.cancelPromise();
+    debouncers.archive.cancelPromise();
   };
   let watcher: FSWatcher | null = null;
   try {
@@ -457,7 +457,7 @@ export function watchLockDir(
   };
   const cancelAll = (): void => {
     disposed = true;
-    for (const d of debouncers.values()) d.cancel();
+    for (const d of debouncers.values()) d.cancelPromise();
     debouncers.clear();
   };
   let watcher: FSWatcher | null = null;
@@ -521,10 +521,10 @@ export function watchRiftRebaseDir(
     });
   } catch (err) {
     log.warn("rift rebase watcher failed", { err: String(err), gitDir });
-    return () => debounced.cancel();
+    return () => debounced.cancelPromise();
   }
   return () => {
-    debounced.cancel();
+    debounced.cancelPromise();
     closeSilent(watcher);
   };
 }
