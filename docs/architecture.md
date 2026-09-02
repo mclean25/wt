@@ -38,7 +38,8 @@ the runtime boundaries runs them:
 Naming: the Effect takes the plain name. A Promise-returning adapter exists
 only where an external contract requires one (the TanStack persister, a
 `Harness` interface method, a worker message) and is named `fooPromise`, beside
-the Effect it runs. Untyped boundaries — a synchronous call that may throw, a
+the Effect it runs; a synchronous adapter that forks a fiber and returns at once
+(an `fs.watch` callback's `cancelUnsafe`) takes Effect's `Unsafe` suffix. Untyped boundaries — a synchronous call that may throw, a
 Promise API, a dynamic `import()` — are wrapped once with `operationErrors(source)`
 from `core/errors.ts`, whose `OperationError` carries `source`, `operation` and
 `cause` and renders as `operation: cause`. Domain failures keep their own
