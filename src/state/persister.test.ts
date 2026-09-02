@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Effect } from "effect";
 
 import { clearPersistedCache, createSqliteAsyncStorage } from "./persister.ts";
 
@@ -35,7 +36,7 @@ describe("SQLite query persistence", () => {
     storage.setItem("key", "value");
     storage.close();
 
-    clearPersistedCache(path);
+    Effect.runSync(clearPersistedCache(path));
     const reopened = createSqliteAsyncStorage(path);
     expect(reopened.entries()).toEqual([]);
     reopened.close();

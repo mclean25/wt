@@ -7,7 +7,7 @@
  * reconcile-then-replay convenience. The genuinely hard part (anchored
  * rebase replay) lives in `RestackEngine`.
  */
-import { Clock, Data, Effect } from "effect";
+import { Data, Effect, Schedule } from "effect";
 
 import { config } from "../config.ts";
 import { tryAcquireLock, type LockHandle } from "../locks.ts";
@@ -42,6 +42,11 @@ export class StackLockError extends Data.TaggedError("StackLockError")<{
     return causeMessage(this.cause);
   }
 }
+
+/** Internal retry signal: membership grew, or a member's lock is currently
+ *  held by another operation. Never escapes `lockChain` — it's caught into
+ *  `{status: "busy"}` once the retry budget is spent. */
+class ChainLockContention extends Data.TaggedError("ChainLockContention")<Record<string, never>> {}
 
 function releaseHandles(handles: readonly LockHandle[]): void {
   for (const handle of handles) handle.release();
@@ -91,71 +96,82 @@ export function withLockHandles<A, E, R>(
  * reconcile re-derives. The wtstate file itself stays consistent via
  * its own `__wtstate__` flock.
  */
-export function lockChain(
+/**
+ * One acquire attempt: resolve the chain, take every member's per-slug
+ * lock in sorted order, then re-verify membership under lock. Everything
+ * between the first acquire and a successful return runs under
+ * `Effect.ensuring`: a throw (an I/O error in `tryAcquireLock`, a
+ * transient git failure in the verification resolve) with locks already
+ * held would otherwise leak them for the life of the process — flock
+ * only drops on fd close — wedging those slugs' restack/destroy until a
+ * restart. Fails with `ChainLockContention` (retried by `lockChain`) when
+ * a member's lock is held elsewhere or membership grew under us; any
+ * other failure is a genuine `StackLockError` and propagates uncaught.
+ */
+const attemptChainLock = Effect.fnUntraced(function* (
   branch: string,
   phase: string,
-): Effect.Effect<ChainLockResult, StackLockError> {
-  return Effect.gen(function* () {
-  const deadline = (yield* Clock.currentTimeMillis) + 5_000;
-  for (;;) {
-    const probe = yield* resolveChain(branch).pipe(
-      Effect.mapError((cause) => new StackLockError({ cause })),
-    );
-    if (!probe) return { status: "gone" } as const;
-    const slugs = [...new Set(probe.steps.map((s) => s.slug))].sort();
-    const handles: LockHandle[] = [];
-    // Everything between the first acquire and the successful return
-    // runs under try/catch: a throw (an I/O error in tryAcquireLock, a
-    // transient git failure in the verification resolve) with locks
-    // already held would otherwise leak them for the life of the
-    // process — flock only drops on fd close — wedging those slugs'
-    // restack/destroy until a restart.
-    let keep = false;
-    const attempt = Effect.gen(function* () {
-      let refused = false;
-      for (const slug of slugs) {
-        const h = yield* Effect.try({
-          try: () => tryAcquireLock(slug, "restack", { phase }),
-          catch: (cause) => new StackLockError({ cause }),
-        });
-        if (!h) {
-          refused = true;
-          break;
-        }
-        handles.push(h);
+): Effect.fn.Return<
+  { status: "gone" } | { status: "ok"; chain: RestackChain; handles: readonly LockHandle[] },
+  StackLockError | ChainLockContention
+> {
+  const probe = yield* resolveChain(branch).pipe(
+    Effect.mapError((cause) => new StackLockError({ cause })),
+  );
+  if (!probe) return { status: "gone" } as const;
+  const slugs = [...new Set(probe.steps.map((s) => s.slug))].sort();
+  const handles: LockHandle[] = [];
+  let keep = false;
+  return yield* Effect.gen(function* () {
+    let refused = false;
+    for (const slug of slugs) {
+      const h = yield* Effect.try({
+        try: () => tryAcquireLock(slug, "restack", { phase }),
+        catch: (cause) => new StackLockError({ cause }),
+      });
+      if (!h) {
+        refused = true;
+        break;
       }
-      if (!refused) {
-        const chain = yield* resolveChain(branch).pipe(
-          Effect.mapError((cause) => new StackLockError({ cause })),
-        );
-        if (!chain) {
-          return { status: "gone" } as const;
-        }
-        const locked = new Set(slugs);
-        if (chain.steps.every((s) => locked.has(s.slug))) {
-          keep = true;
-          return { status: "ok", chain, handles } as const;
-        }
-        // Membership grew under us — release and retry against the new shape.
-      }
-      return null;
-    }).pipe(
-      Effect.ensuring(Effect.sync(() => {
-        if (!keep) releaseHandles(handles);
-      })),
-    );
-    const result = yield* attempt;
-    if (result) return result;
-    if ((yield* Clock.currentTimeMillis) >= deadline) {
-      return { status: "busy" } as const;
+      handles.push(h);
     }
+    if (!refused) {
+      const chain = yield* resolveChain(branch).pipe(
+        Effect.mapError((cause) => new StackLockError({ cause })),
+      );
+      if (!chain) {
+        return { status: "gone" } as const;
+      }
+      const locked = new Set(slugs);
+      if (chain.steps.every((s) => locked.has(s.slug))) {
+        keep = true;
+        return { status: "ok", chain, handles } as const;
+      }
+      // Membership grew under us — release and retry against the new shape.
+    }
+    return yield* new ChainLockContention({});
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => {
+      if (!keep) releaseHandles(handles);
+    })),
+  );
+});
+
+export const lockChain = Effect.fn("lockChain")(function* (
+  branch: string,
+  phase: string,
+): Effect.fn.Return<ChainLockResult, StackLockError> {
+  return yield* attemptChainLock(branch, phase).pipe(
     // Jitter so two chains repeatedly colliding on a shared member (a
     // stack-on-stack boundary) don't retry in lockstep for the whole
     // deadline (same rationale as the engine's lockBackoff).
-    yield* Effect.sleep(250 + Math.floor(Math.random() * 250));
-  }
-  });
-}
+    Effect.retry({
+      schedule: Schedule.spaced("250 millis").pipe(Schedule.jittered, Schedule.upTo({ duration: "5 seconds" })),
+      while: (e) => e._tag === "ChainLockContention",
+    }),
+    Effect.catchTag("ChainLockContention", () => Effect.succeed({ status: "busy" } as const)),
+  );
+});
 
 export function lockChainPromise(
   branch: string,
@@ -183,12 +199,11 @@ export function withLockedChain<A, E, R>(
  *  with no PR, or a PR that already left OPEN, is left alone — EXCEPT
  *  the one recoverable-by-human case below, which gets an attention
  *  line instead of silence. */
-export function retargetIfNeeded(
+export const retargetIfNeeded = Effect.fn("retargetIfNeeded")(function* (
   branch: string,
   expectedBase: string,
   onLog: Logger,
-): Effect.Effect<void> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<void, never> {
   const live = yield* viewPrInfo(branch);
   if (!live) return;
   // Deleting a merged parent's branch via the API (`gh pr merge
@@ -224,8 +239,7 @@ export function retargetIfNeeded(
   const r = yield* retargetPrBase(live.number, expectedBase);
   if (r.ok) onLog(`  retargeted PR #${live.number} base → ${expectedBase}`);
   else onLog(`  warn: retarget PR #${live.number} base: ${r.error}`);
-  });
-}
+});
 
 export function retargetIfNeededPromise(
   branch: string,

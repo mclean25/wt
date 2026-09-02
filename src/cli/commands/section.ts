@@ -24,10 +24,13 @@
  * derived from the fork-base records, so naming one here would be
  * writing down something wt re-derives on the next render.
  */
+import { Effect } from "effect";
+
+import { config } from "../../core/config.ts";
+import { operationErrors } from "../../core/errors.ts";
 import { buildStackIndex } from "../../core/stack-layout.ts";
-import { Data, Effect } from "effect";
 import type { Worktree } from "../../core/types.ts";
-import { listWorktreesPromise } from "../../core/worktree.ts";
+import { listWorktrees } from "../../core/worktree.ts";
 import {
   GROUP_INBOX,
   readWtState,
@@ -39,7 +42,6 @@ import {
 import type { WtState } from "../../core/wtstate.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red } from "../colors.ts";
-import { config } from "../../core/config.ts";
 
 const USAGE = `usage: wt section <subcommand> [options]
 
@@ -72,32 +74,7 @@ the human agreed on ("held back from today's release"), and use
 human's attention feed, so record the decision rather than describing
 it — but don't reorganize someone's board unasked.`;
 
-export class SectionCommandError extends Data.TaggedError(
-  "SectionCommandError",
-)<{
-  readonly operation: string;
-  readonly cause: unknown;
-}> {}
-
-function commandIo<A>(
-  operation: string,
-  f: () => A,
-): Effect.Effect<A, SectionCommandError> {
-  return Effect.try({
-    try: f,
-    catch: (cause) => new SectionCommandError({ operation, cause }),
-  });
-}
-
-function commandPromise<A>(
-  operation: string,
-  f: () => Promise<A>,
-): Effect.Effect<A, SectionCommandError> {
-  return Effect.tryPromise({
-    try: f,
-    catch: (cause) => new SectionCommandError({ operation, cause }),
-  });
-}
+const io = operationErrors("wt section");
 
 /** Manual sections only, in display order, with the inbox last. */
 function manualSections(state: WtState): string[] {
@@ -223,241 +200,221 @@ function stackSiblings(
     .filter((s): s is string => Boolean(s));
 }
 
-function runMove(
+const runMove = Effect.fnUntraced(function* (
   positional: string[],
   only: boolean,
-): Effect.Effect<number, SectionCommandError> {
-  return Effect.gen(function* () {
-    if (positional.length < 2) {
-      console.error(
-        red("usage: wt section mv <slug>... <section>   (`-` = inbox)"),
-      );
-      return 2;
-    }
-    const target = positional.at(-1)!;
-    const slugArgs = positional.slice(0, -1);
-    const toInbox = target === "-";
-    if (!toInbox) {
-      const bad = invalidName(target);
-      if (bad) {
-        console.error(red(bad));
-        return 2;
-      }
-    }
-    const wts = (yield* commandPromise("list worktrees", listWorktreesPromise)).filter(
-      (w) => !w.isMain,
+) {
+  if (positional.length < 2) {
+    console.error(
+      red("usage: wt section mv <slug>... <section>   (`-` = inbox)"),
     );
-    // A batch moves what it CAN and names what it could not, rather than
-    // abandoning the whole thing on the first bad name. The case this is
-    // for is not a typo: a fleet manager reads `wt section`, builds an mv
-    // from it, and one of those rows archives on merge in between — a
-    // race that is routine at fleet scale and costs a re-run every time.
-    //
-    // Bailing was also worse than it looked. It printed one slug and
-    // moved NOTHING, so the output read as "that one failed" while the
-    // valid ones had silently not moved either — the reader's next move
-    // is to check the rows that appear to have worked, and they haven't.
-    const slugs: string[] = [];
-    const unresolved: string[] = [];
-    for (const arg of slugArgs) {
-      const slug = resolveSlug(wts, arg);
-      if (slug) slugs.push(slug);
-      else unresolved.push(arg);
-    }
-    const reportSkipped = (): void => {
-      if (unresolved.length === 0) return;
-      console.error(red(`no such worktree: ${unresolved.join(", ")}`));
-      console.error(
-        dim(
-          "  (removed since you listed them? `wt ls --all` shows recent removals)",
-        ),
-      );
-    };
-    if (slugs.length === 0) {
-      reportSkipped();
-      return 1;
-    }
-    // An existing section wins over the literal spelling so `mv x "to
-    // merge"` lands in "To Merge" instead of forking a near-duplicate.
-    const state = yield* commandIo("read wt state", readWtState);
-    const section = toInbox
-      ? null
-      : (resolveSection(state, target) ?? target.trim());
-    const created =
-      section !== null && !manualSections(state).includes(section);
-    // A stack is one merge unit, so the whole unit moves unless --only.
-    // Named slugs always move; siblings are pulled in around them.
-    const named = new Set(slugs);
-    const moving = only
-      ? slugs
-      : [...new Set(slugs.flatMap((s) => stackSiblings(wts, s, state)))];
-    const pulled = moving.filter((s) => !named.has(s));
-    // Skip rows already in the target: `setSlugSection` places at the
-    // BOTTOM of the section, so re-asserting a row's current section
-    // silently reorders it (and narrates a move that didn't happen).
-    const changed = moving.filter(
-      (s) => (state.slugs[s]?.section ?? null) !== section,
-    );
-    yield* Effect.all(
-      changed.map((slug) =>
-        commandIo(`move ${slug} to section`, () =>
-          setSlugSection(slug, section),
-        ),
-      ),
-      { concurrency: 1 },
-    );
-    if (changed.length === 0) {
-      console.log(
-        `${dim("·")} ${slugs.map((s) => cyan(s)).join(", ")} ${dim(`already in ${section === null ? "the inbox" : section}`)}`,
-      );
-      reportSkipped();
-      // Non-zero whenever the command did not do everything it was asked,
-      // even though what it COULD do it did. Re-running is idempotent, so
-      // a caller that retries the whole batch loses nothing.
-      return unresolved.length > 0 ? 1 : 0;
-    }
-    const where = section === null ? "the inbox" : bold(section);
-    console.log(
-      `${green("✓")} ${slugs.map((s) => cyan(s)).join(", ")} → ${where}${created ? dim(" (new)") : ""}`,
-    );
-    const pulledChanged = pulled.filter((s) => changed.includes(s));
-    if (pulledChanged.length > 0) {
-      console.log(
-        `  ${dim(`moved ${changed.length} (stack) — also ${pulledChanged.join(", ")}`)}`,
-      );
-      console.log(
-        `  ${dim("--only moves just the named worktrees; splitting a stack is legitimate")}`,
-      );
-    }
-    // After the success line, never before: what MOVED is the answer, and
-    // a skip printed first reads as the whole command failing.
-    reportSkipped();
-    return unresolved.length > 0 ? 1 : 0;
-  });
-}
-
-function runRename(
-  positional: string[],
-): Effect.Effect<number, SectionCommandError> {
-  return Effect.gen(function* () {
-    if (positional.length !== 2) {
-      console.error(red("usage: wt section rename <old> <new>"));
-      return 2;
-    }
-    const [oldArg, newArg] = positional as [string, string];
-    const bad = invalidName(newArg);
+    return 2;
+  }
+  const target = positional.at(-1)!;
+  const slugArgs = positional.slice(0, -1);
+  const toInbox = target === "-";
+  if (!toInbox) {
+    const bad = invalidName(target);
     if (bad) {
       console.error(red(bad));
       return 2;
     }
-    const state = yield* commandIo("read wt state", readWtState);
-    const from = resolveSection(state, oldArg);
-    if (!from) {
-      console.error(red(`no such section: ${oldArg}`));
-      return 1;
-    }
-    const to = newArg.trim();
-    if (from === to) {
-      console.log(dim(`already named ${to}`));
-      return 0;
-    }
-    const merging = resolveSection(state, to) !== null;
-    yield* commandIo("rename section", () => renameSection(from, to));
-    console.log(
-      merging
-        ? `${green("✓")} merged ${bold(from)} into ${bold(to)}`
-        : `${green("✓")} ${bold(from)} → ${bold(to)}`,
+  }
+  const wts = (yield* listWorktrees()).filter((w) => !w.isMain);
+  // A batch moves what it CAN and names what it could not, rather than
+  // abandoning the whole thing on the first bad name. The case this is
+  // for is not a typo: a fleet manager reads `wt section`, builds an mv
+  // from it, and one of those rows archives on merge in between — a
+  // race that is routine at fleet scale and costs a re-run every time.
+  //
+  // Bailing was also worse than it looked. It printed one slug and
+  // moved NOTHING, so the output read as "that one failed" while the
+  // valid ones had silently not moved either — the reader's next move
+  // is to check the rows that appear to have worked, and they haven't.
+  const slugs: string[] = [];
+  const unresolved: string[] = [];
+  for (const arg of slugArgs) {
+    const slug = resolveSlug(wts, arg);
+    if (slug) slugs.push(slug);
+    else unresolved.push(arg);
+  }
+  const reportSkipped = (): void => {
+    if (unresolved.length === 0) return;
+    console.error(red(`no such worktree: ${unresolved.join(", ")}`));
+    console.error(
+      dim(
+        "  (removed since you listed them? `wt ls --all` shows recent removals)",
+      ),
     );
-    return 0;
-  });
-}
+  };
+  if (slugs.length === 0) {
+    reportSkipped();
+    return 1;
+  }
+  // An existing section wins over the literal spelling so `mv x "to
+  // merge"` lands in "To Merge" instead of forking a near-duplicate.
+  const state = yield* io.sync("read wt state", readWtState);
+  const section = toInbox
+    ? null
+    : (resolveSection(state, target) ?? target.trim());
+  const created =
+    section !== null && !manualSections(state).includes(section);
+  // A stack is one merge unit, so the whole unit moves unless --only.
+  // Named slugs always move; siblings are pulled in around them.
+  const named = new Set(slugs);
+  const moving = only
+    ? slugs
+    : [...new Set(slugs.flatMap((s) => stackSiblings(wts, s, state)))];
+  const pulled = moving.filter((s) => !named.has(s));
+  // Skip rows already in the target: `setSlugSection` places at the
+  // BOTTOM of the section, so re-asserting a row's current section
+  // silently reorders it (and narrates a move that didn't happen).
+  const changed = moving.filter(
+    (s) => (state.slugs[s]?.section ?? null) !== section,
+  );
+  yield* Effect.all(
+    changed.map((slug) =>
+      io.sync(`move ${slug} to section`, () => setSlugSection(slug, section)),
+    ),
+    { concurrency: 1 },
+  );
+  if (changed.length === 0) {
+    console.log(
+      `${dim("·")} ${slugs.map((s) => cyan(s)).join(", ")} ${dim(`already in ${section === null ? "the inbox" : section}`)}`,
+    );
+    reportSkipped();
+    // Non-zero whenever the command did not do everything it was asked,
+    // even though what it COULD do it did. Re-running is idempotent, so
+    // a caller that retries the whole batch loses nothing.
+    return unresolved.length > 0 ? 1 : 0;
+  }
+  const where = section === null ? "the inbox" : bold(section);
+  console.log(
+    `${green("✓")} ${slugs.map((s) => cyan(s)).join(", ")} → ${where}${created ? dim(" (new)") : ""}`,
+  );
+  const pulledChanged = pulled.filter((s) => changed.includes(s));
+  if (pulledChanged.length > 0) {
+    console.log(
+      `  ${dim(`moved ${changed.length} (stack) — also ${pulledChanged.join(", ")}`)}`,
+    );
+    console.log(
+      `  ${dim("--only moves just the named worktrees; splitting a stack is legitimate")}`,
+    );
+  }
+  // After the success line, never before: what MOVED is the answer, and
+  // a skip printed first reads as the whole command failing.
+  reportSkipped();
+  return unresolved.length > 0 ? 1 : 0;
+});
 
-function runRemove(
-  positional: string[],
-): Effect.Effect<number, SectionCommandError> {
-  return Effect.gen(function* () {
-    if (positional.length !== 1) {
-      console.error(red("usage: wt section rm <section>"));
+const runRename = Effect.fnUntraced(function* (positional: string[]) {
+  if (positional.length !== 2) {
+    console.error(red("usage: wt section rename <old> <new>"));
+    return 2;
+  }
+  const [oldArg, newArg] = positional as [string, string];
+  const bad = invalidName(newArg);
+  if (bad) {
+    console.error(red(bad));
+    return 2;
+  }
+  const state = yield* io.sync("read wt state", readWtState);
+  const from = resolveSection(state, oldArg);
+  if (!from) {
+    console.error(red(`no such section: ${oldArg}`));
+    return 1;
+  }
+  const to = newArg.trim();
+  if (from === to) {
+    console.log(dim(`already named ${to}`));
+    return 0;
+  }
+  const merging = resolveSection(state, to) !== null;
+  yield* io.sync("rename section", () => renameSection(from, to));
+  console.log(
+    merging
+      ? `${green("✓")} merged ${bold(from)} into ${bold(to)}`
+      : `${green("✓")} ${bold(from)} → ${bold(to)}`,
+  );
+  return 0;
+});
+
+const runRemove = Effect.fnUntraced(function* (positional: string[]) {
+  if (positional.length !== 1) {
+    console.error(red("usage: wt section rm <section>"));
+    return 2;
+  }
+  const state = yield* io.sync("read wt state", readWtState);
+  const name = resolveSection(state, positional[0]!);
+  if (!name) {
+    console.error(red(`no such section: ${positional[0]}`));
+    return 1;
+  }
+  const rowCount = yield* io.sync("remove section", () => removeSection(name));
+  console.log(
+    `${green("✓")} dropped ${bold(name)}${rowCount ? dim(` · ${rowCount} row${rowCount === 1 ? "" : "s"} → inbox`) : ""}`,
+  );
+  return 0;
+});
+
+export const run = Effect.fn("wt section")(function* (argv: string[]) {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
+    return 0;
+  }
+  if (config.instance.role === "worker") {
+    console.error(
+      red(
+        "sections are controller-owned; run this command on the controller",
+      ),
+    );
+    return 1;
+  }
+  const positional: string[] = [];
+  let json = false;
+  let only = false;
+  for (const a of argv) {
+    if (a === "--json") json = true;
+    else if (a === "--only") only = true;
+    // `-` is the inbox sentinel for `mv`, not a flag.
+    else if (a.startsWith("-") && a !== "-") {
+      console.error(red(`unknown flag: ${a}`));
       return 2;
-    }
-    const state = yield* commandIo("read wt state", readWtState);
-    const name = resolveSection(state, positional[0]!);
-    if (!name) {
-      console.error(red(`no such section: ${positional[0]}`));
-      return 1;
-    }
-    const rowCount = yield* commandIo("remove section", () =>
-      removeSection(name),
-    );
-    console.log(
-      `${green("✓")} dropped ${bold(name)}${rowCount ? dim(` · ${rowCount} row${rowCount === 1 ? "" : "s"} → inbox`) : ""}`,
-    );
-    return 0;
-  });
-}
+    } else positional.push(a);
+  }
 
-export function run(
-  argv: string[],
-): Effect.Effect<number, SectionCommandError> {
-  return Effect.gen(function* () {
-    if (hasHelpFlag(argv)) {
+  const [sub, ...rest] = positional;
+  const isList = sub === undefined || sub === "ls" || sub === "list";
+  const isMove = sub === "mv" || sub === "move";
+  if (only && !isMove) {
+    console.error(red("--only is only valid with `wt section mv`"));
+    return 2;
+  }
+  if (json && !isList) {
+    console.error(red("--json is only valid when listing sections"));
+    return 2;
+  }
+  if (isList) {
+    const live = new Set(
+      (yield* listWorktrees())
+        .filter((w) => !w.isMain)
+        .map((w) => w.slug),
+    );
+    const state = yield* io.sync("read wt state", readWtState);
+    return runList(state, live, json);
+  }
+  switch (sub) {
+    case "mv":
+    case "move":
+      return yield* runMove(rest, only);
+    case "rename":
+      return yield* runRename(rest);
+    case "rm":
+    case "remove":
+      return yield* runRemove(rest);
+    default:
+      console.error(red(`unknown subcommand: ${sub}`));
       console.log(USAGE);
-      return 0;
-    }
-    if (config.instance.role === "worker") {
-      console.error(
-        red(
-          "sections are controller-owned; run this command on the controller",
-        ),
-      );
-      return 1;
-    }
-    const positional: string[] = [];
-    let json = false;
-    let only = false;
-    for (const a of argv) {
-      if (a === "--json") json = true;
-      else if (a === "--only") only = true;
-      // `-` is the inbox sentinel for `mv`, not a flag.
-      else if (a.startsWith("-") && a !== "-") {
-        console.error(red(`unknown flag: ${a}`));
-        return 2;
-      } else positional.push(a);
-    }
-
-    const [sub, ...rest] = positional;
-    const isList = sub === undefined || sub === "ls" || sub === "list";
-    const isMove = sub === "mv" || sub === "move";
-    if (only && !isMove) {
-      console.error(red("--only is only valid with `wt section mv`"));
       return 2;
-    }
-    if (json && !isList) {
-      console.error(red("--json is only valid when listing sections"));
-      return 2;
-    }
-    if (isList) {
-      const live = new Set(
-        (yield* commandPromise("list worktrees", listWorktreesPromise))
-          .filter((w) => !w.isMain)
-          .map((w) => w.slug),
-      );
-      const state = yield* commandIo("read wt state", readWtState);
-      return runList(state, live, json);
-    }
-    switch (sub) {
-      case "mv":
-      case "move":
-        return yield* runMove(rest, only);
-      case "rename":
-        return yield* runRename(rest);
-      case "rm":
-      case "remove":
-        return yield* runRemove(rest);
-      default:
-        console.error(red(`unknown subcommand: ${sub}`));
-        console.log(USAGE);
-        return 2;
-    }
-  });
-}
+  }
+});

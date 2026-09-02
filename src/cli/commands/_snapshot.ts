@@ -1,33 +1,22 @@
 import { config } from "../../core/config.ts";
-import { collectWorkerSnapshotPromise } from "../../core/worktree-snapshot.ts";
-import { Data, Effect } from "effect";
-
-export class SnapshotCommandError extends Data.TaggedError(
-  "SnapshotCommandError",
-)<{
-  cause: unknown;
-}> {}
+import { collectWorkerSnapshot, type WorktreeSnapshotError } from "../../core/worktree-snapshot.ts";
+import { Effect } from "effect";
 
 /** Versioned machine contract consumed by a controller over SSH. */
-export function run(
+export const run = Effect.fn("wt _snapshot")(function* (
   argv: string[],
-): Effect.Effect<number, SnapshotCommandError> {
-  return Effect.gen(function* () {
-    if (argv.length > 0) {
-      console.error("usage: wt _snapshot");
-      return 2;
-    }
-    if (config.instance.role !== "worker") {
-      console.error(
-        'worker snapshot requires [instance] role = "worker" on this host',
-      );
-      return 1;
-    }
-    const snapshot = yield* Effect.tryPromise({
-      try: () => collectWorkerSnapshotPromise(),
-      catch: (cause) => new SnapshotCommandError({ cause }),
-    });
-    console.log(JSON.stringify(snapshot));
-    return 0;
-  });
-}
+): Effect.fn.Return<number, WorktreeSnapshotError> {
+  if (argv.length > 0) {
+    console.error("usage: wt _snapshot");
+    return 2;
+  }
+  if (config.instance.role !== "worker") {
+    console.error(
+      'worker snapshot requires [instance] role = "worker" on this host',
+    );
+    return 1;
+  }
+  const snapshot = yield* collectWorkerSnapshot();
+  console.log(JSON.stringify(snapshot));
+  return 0;
+});

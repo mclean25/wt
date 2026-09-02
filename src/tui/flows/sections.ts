@@ -11,6 +11,7 @@ import type { FooterMode } from "../panels/footer.tsx";
 import type { SectionPickerItem } from "../panels/section-picker.tsx";
 import type { Modal } from "../modal-state.ts";
 import { config } from "../../core/config.ts";
+import { operationErrors, type OperationError } from "../../core/errors.ts";
 import {
   GROUP_ARCHIVED,
   GROUP_INBOX,
@@ -18,19 +19,12 @@ import {
   rowWorkRank,
   type WorktreeRow,
 } from "../hooks/useWorktreeRows.ts";
+import { forkReported } from "../effect-boundary.ts";
 import { emptyEdit, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class SectionsFlowError extends Data.TaggedError("SectionsFlowError")<{
-  cause: unknown;
-}> {}
-
-const flowPromise = <A>(evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => new SectionsFlowError({ cause }),
-  });
+const io = operationErrors("sections flows");
 import type { WorktreeTarget } from "../../core/worktree-target.ts";
 import { worktreeTargetKey } from "../../core/worktree-target.ts";
 import { worktreeVisualKey, type WorktreeModel } from "../worktree-model.ts";
@@ -156,8 +150,8 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
       );
       return;
     }
-    Effect.runFork(
-      flowPromise(() =>
+    forkReported(
+      io.promise("move group", () =>
         moveGroupPast(groupKey, neighbor, dir > 0 ? "after" : "before", vseq),
       ).pipe(
         Effect.tap((moved) =>
@@ -170,10 +164,8 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
               );
           }),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() => reportActionError("move", error.cause)),
-        ),
       ),
+      (error) => reportActionError("move", error),
     );
   }
 
@@ -269,14 +261,11 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
         .slice()
         .sort((a, b) => manualOrderOf(a) - manualOrderOf(b))
         .map((r) => r.wt.slug);
-      Effect.runFork(
-        flowPromise(() =>
+      forkReported(
+        io.promise("reorder", () =>
           swapOrder(slug, target.wt.slug, mover.section, bucket),
-        ).pipe(
-          Effect.catch((error) =>
-            Effect.sync(() => reportActionError("reorder", error.cause)),
-          ),
         ),
+        (error) => reportActionError("reorder", error),
       );
       return;
     }
@@ -309,8 +298,8 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
       return;
     }
     const sectionVal = targetGroup === GROUP_INBOX ? null : targetGroup;
-    Effect.runFork(
-      flowPromise(() =>
+    forkReported(
+      io.promise("move", () =>
         placeSlug(slug, sectionVal, dir > 0 ? "top" : "bottom"),
       ).pipe(
         Effect.tap(() =>
@@ -318,10 +307,8 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
             toast(`moved to ${sectionVal ?? "Inbox"}`, theme.info, 1200),
           ),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() => reportActionError("move", error.cause)),
-        ),
       ),
+      (error) => reportActionError("move", error),
     );
   }
 
@@ -383,10 +370,10 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
   function moveWorktrees(
     members: readonly WorktreeModel[],
     section: string | null,
-  ): Effect.Effect<readonly void[], SectionsFlowError> {
+  ): Effect.Effect<readonly void[], OperationError> {
     return Effect.all(
       members.map((member) =>
-        flowPromise(() => setWorktreeSection(member.target, section)),
+        io.promise("move worktree", () => setWorktreeSection(member.target, section)),
       ),
       { concurrency: 4 },
     );
@@ -407,17 +394,15 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
       advanceCursorPast(group.map(worktreeVisualKey));
     }
     if (item.kind === "none") {
-      Effect.runFork(
+      forkReported(
         moveWorktrees(group, null).pipe(
           Effect.tap(() =>
             Effect.sync(() =>
               toast(`moved to Inbox${suffix}`, theme.info, 1500),
             ),
           ),
-          Effect.catch((error) =>
-            Effect.sync(() => reportActionError("move", error.cause)),
-          ),
         ),
+        (error) => reportActionError("move", error),
       );
       setLastMoveTarget(null);
       setModal(null);
@@ -425,17 +410,15 @@ export function makeSectionFlows(ctx: SectionFlowsCtx) {
     }
     if (item.kind === "section") {
       const target = item.name;
-      Effect.runFork(
+      forkReported(
         moveWorktrees(group, target).pipe(
           Effect.tap(() =>
             Effect.sync(() =>
               toast(`moved to ${target}${suffix}`, theme.info, 1500),
             ),
           ),
-          Effect.catch((error) =>
-            Effect.sync(() => reportActionError("move", error.cause)),
-          ),
         ),
+        (error) => reportActionError("move", error),
       );
       setLastMoveTarget(target);
       setModal(null);

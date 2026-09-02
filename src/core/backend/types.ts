@@ -20,8 +20,14 @@
  * its own wt); backend chooses how it's materialized LOCALLY. A remote
  * host picks its own backend independently.
  */
+import type { Effect } from "effect";
+
+import type { GitBackendError } from "./git.ts";
+import type { RiftBackendError } from "./rift.ts";
 
 export type BackendKind = "git-worktree" | "rift";
+
+export type BackendError = GitBackendError | RiftBackendError;
 
 export type BackendCreateInput = {
   /** Target checkout path — always `<worktreeRoot>/<slug>`. */
@@ -66,13 +72,14 @@ export interface WorktreeBackend {
   /**
    * Materialize a checkout at `input.path` sitting on `input.branch`.
    * Branch creation/switch is the backend's job; wt handles everything
-   * around it. Throws on failure (the caller's lock `finally` releases).
+   * around it. Fails with the backend's own tagged error (the caller's
+   * lock/scope finalizers still run on failure).
    */
-  create(input: BackendCreateInput): Promise<void>;
+  create(input: BackendCreateInput): Effect.Effect<void, BackendError>;
   /**
-   * Tear the checkout down. Returns `{ ok: false, message }` (rather
-   * than throwing) when the checkout could not be removed and is still
-   * on disk, matching the `git worktree remove` fallback contract.
+   * Tear the checkout down. Succeeds with `{ ok: false, message }`
+   * (rather than failing) when the checkout could not be removed and is
+   * still on disk, matching the `git worktree remove` fallback contract.
    */
-  remove(input: BackendRemoveInput): Promise<BackendRemoveResult>;
+  remove(input: BackendRemoveInput): Effect.Effect<BackendRemoveResult, BackendError>;
 }

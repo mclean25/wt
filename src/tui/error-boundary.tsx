@@ -12,7 +12,8 @@
 import { Component, type ReactNode } from "react";
 import { useKeyboard } from "@opentui/react";
 
-import { writeClipboardPromise } from "../core/macos.ts";
+import { writeClipboard } from "../core/macos.ts";
+import { forkReported } from "./effect-boundary.ts";
 import {
   captureError,
   formatCapturedError,
@@ -56,11 +57,8 @@ function CrashScreen({
       return;
     }
     if (k.name === "y" && !k.ctrl && !k.meta && captured) {
-      try {
-        writeClipboardPromise(formatCapturedError(captured));
-      } catch {
-        // Nowhere safe to report from here; the log has the error.
-      }
+      // Nowhere safe to report a failure from here; the log has the error.
+      forkReported(writeClipboard(formatCapturedError(captured)), () => {});
     }
   });
   return (

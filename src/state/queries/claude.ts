@@ -1,5 +1,4 @@
 import { queryOptions } from "@tanstack/react-query";
-import { Data, Effect } from "effect";
 
 import {
   readRegistry,
@@ -14,23 +13,9 @@ import {
 import type { Worktree } from "../../core/types.ts";
 
 import { qk } from "../keys.ts";
+import { operationErrors, runQuery } from "./boundary.ts";
 
-class ClaudeQueryError extends Data.TaggedError("ClaudeQueryError")<{
-  operation: string;
-  cause: unknown;
-}> {
-  override get message(): string {
-    return this.cause instanceof Error
-      ? this.cause.message
-      : String(this.cause);
-  }
-}
-
-const querySync = <A>(operation: string, evaluate: () => A) =>
-  Effect.try({
-    try: evaluate,
-    catch: (cause) => new ClaudeQueryError({ operation, cause }),
-  });
+const io = operationErrors("claude");
 
 export type ClaudeRegistryData = {
   /** Every live claude session on the machine, in readdir order. */
@@ -52,14 +37,15 @@ export type ClaudeRegistryData = {
 export const claudeRegistryQuery = () =>
   queryOptions({
     queryKey: qk.claudeRegistry(),
-    queryFn: (): Promise<ClaudeRegistryData> =>
-      Effect.runPromise(
-        querySync("read Claude registry", () => {
+    queryFn: ({ signal }): Promise<ClaudeRegistryData> =>
+      runQuery(
+        io.sync("read Claude registry", () => {
           const sessions = readRegistry();
           const bySessionId: Record<string, RegistrySession> = {};
           for (const s of sessions) bySessionId[s.sessionId] = s;
           return { sessions, bySessionId };
         }),
+        signal,
       ),
     staleTime: 1_000,
     refetchInterval: 15_000,
@@ -77,9 +63,9 @@ export const claudeRegistryQuery = () =>
 export const claudeSummariesQuery = (wt: Pick<Worktree, "slug" | "path">) =>
   queryOptions({
     queryKey: qk.claudeSummaries(wt.slug),
-    queryFn: (): Promise<Record<string, SessionSummary | null>> =>
-      Effect.runPromise(
-        querySync("read Claude summaries", () => {
+    queryFn: ({ signal }): Promise<Record<string, SessionSummary | null>> =>
+      runQuery(
+        io.sync("read Claude summaries", () => {
           const names: ReadonlyArray<string | null> = [
             null,
             ...listClaudeNames(wt.slug),
@@ -87,6 +73,7 @@ export const claudeSummariesQuery = (wt: Pick<Worktree, "slug" | "path">) =>
           const ids = names.map((n) => wtSessionUuid(wt.path, n));
           return readSummariesForSessions(wt.path, ids);
         }),
+        signal,
       ),
     staleTime: 30_000,
   });

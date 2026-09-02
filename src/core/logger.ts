@@ -26,9 +26,10 @@
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Data, Deferred, Effect, Queue } from "effect";
+import { Deferred, Effect, Queue } from "effect";
 
 import { config } from "./config.ts";
+import { operationErrors } from "./errors.ts";
 
 export type EventKind = "info" | "ok" | "warn" | "err" | "dim";
 
@@ -110,10 +111,7 @@ let toastSink: ToastSink | null = null;
 // Each `appendFile` reopens the file, so daily rollover is automatic.
 let initialized = false;
 
-class LoggerWriteError extends Data.TaggedError("LoggerWriteError")<{
-  readonly path: string;
-  readonly cause: unknown;
-}> {}
+const io = operationErrors("logger");
 
 type LogCommand =
   | { readonly _tag: "Write"; readonly path: string; readonly line: string }
@@ -127,10 +125,9 @@ function ensureLoggerWorker(): Queue.Queue<LogCommand> {
   commandQueue = queue;
   const run = Effect.forever(Queue.take(queue).pipe(Effect.flatMap((command) => {
     if (command._tag === "Flush") return Deferred.succeed(command.done, undefined);
-    return Effect.tryPromise({
-      try: () => appendFile(command.path, command.line, "utf8"),
-      catch: (cause) => new LoggerWriteError({ path: command.path, cause }),
-    }).pipe(Effect.catch(() => Effect.void));
+    return io.promise(`write ${command.path}`, () => appendFile(command.path, command.line, "utf8")).pipe(
+      Effect.catch(() => Effect.void),
+    );
   })));
   Effect.runFork(run);
   return queue;
@@ -144,15 +141,15 @@ export function setToastSink(fn: ToastSink | null): void {
   toastSink = fn;
 }
 
-/** Await every queued write before a CLI or daemon exits. */
-export const flushLogger = Effect.suspend(() => {
+const flush = Effect.fnUntraced(function* () {
   const queue = ensureLoggerWorker();
-  return Effect.gen(function* () {
-    const done = yield* Deferred.make<void>();
-    yield* Queue.offer(queue, { _tag: "Flush", done });
-    yield* Deferred.await(done);
-  });
+  const done = yield* Deferred.make<void>();
+  yield* Queue.offer(queue, { _tag: "Flush", done });
+  yield* Deferred.await(done);
 });
+
+/** Await every queued write before a CLI or daemon exits. */
+export const flushLogger: Effect.Effect<void> = flush();
 
 export function createLogger(source: string): Logger {
   return {

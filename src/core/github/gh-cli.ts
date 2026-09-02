@@ -65,27 +65,27 @@ export function repoSlugPromise(): Promise<string | null> {
  * can't review your own PR).
  */
 let _authedLogin: string | null | undefined;
-export function fetchAuthenticatedLogin(): Effect.Effect<string | null> {
+export const fetchAuthenticatedLogin = Effect.fn(
+  "fetchAuthenticatedLogin",
+)(function* (): Effect.fn.Return<string | null> {
   // Positive-only memo (see `hasGh`): a failed probe (not yet authed)
   // re-tries on the next call instead of pinning null all session.
-  if (_authedLogin != null) return Effect.succeed(_authedLogin);
-  return Effect.gen(function* () {
-    if (!(yield* hasGh())) return null;
-    const r = yield* run(["gh", "api", "user", "--jq", ".login"], {
-      cwd: config.paths.mainClone,
-      timeoutMs: 5_000,
-    }).pipe(Effect.catch(() => Effect.succeed(null)));
-    if (r === null || r.exitCode !== 0) {
-      if (r) {
-        log.error("auth user fetch failed", { stderr: r.stderr.slice(0, 200) });
-      }
-      return null;
+  if (_authedLogin != null) return _authedLogin;
+  if (!(yield* hasGh())) return null;
+  const r = yield* run(["gh", "api", "user", "--jq", ".login"], {
+    cwd: config.paths.mainClone,
+    timeoutMs: 5_000,
+  }).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (r === null || r.exitCode !== 0) {
+    if (r) {
+      log.error("auth user fetch failed", { stderr: r.stderr.slice(0, 200) });
     }
-    const login = r.stdout.trim();
-    if (login.length > 0) _authedLogin = login;
-    return _authedLogin ?? null;
-  });
-}
+    return null;
+  }
+  const login = r.stdout.trim();
+  if (login.length > 0) _authedLogin = login;
+  return _authedLogin ?? null;
+});
 
 export function fetchAuthenticatedLoginPromise(): Promise<string | null> {
   return Effect.runPromise(fetchAuthenticatedLogin());

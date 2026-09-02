@@ -80,7 +80,7 @@
  * ────────────────────────────────────────────────────────────────────
  */
 import { useEffect, useMemo } from "react";
-import { Data, Duration, Effect, Fiber } from "effect";
+import { Duration, Effect, Fiber } from "effect";
 import {
   MutationObserver,
   matchQuery,
@@ -98,8 +98,9 @@ import {
 } from "../core/archive.ts";
 import { config } from "../core/config.ts";
 import type { DiffContext } from "../core/diff/index.ts";
+import { causeMessage } from "../core/errors.ts";
 import { gitRun, invalidateMainFirstParents } from "../core/git.ts";
-import { fetchAuthenticatedLoginPromise } from "../core/github.ts";
+import { fetchAuthenticatedLogin } from "../core/github.ts";
 import { createLogger } from "../core/logger.ts";
 import { markSelfSectionWrite } from "./self-writes.ts";
 import type { PullRequest, Worktree } from "../core/types.ts";
@@ -123,6 +124,7 @@ import {
 import { CACHE_DB } from "./client.ts";
 import { qk } from "./keys.ts";
 import { clearPersistedCache } from "./persister.ts";
+import { operationErrors } from "./queries/boundary.ts";
 import {
   contributorsQuery,
   fetchOriginQuery,
@@ -133,21 +135,35 @@ import {
   type GithubData,
   type TmuxSessionsData,
 } from "./queries.ts";
-import { fetchOriginEffect } from "./queries/worktree.ts";
+import { refreshOrigin as forceFetchOrigin } from "./queries/worktree.ts";
 import type { Contributor } from "../core/types.ts";
 
-class HookOperationError extends Data.TaggedError("HookOperationError")<{
-  operation: string;
-  cause: unknown;
-  message: string;
-}> {}
+const io = operationErrors("hooks");
+const log = createLogger("[state]");
 
-const hookError = (operation: string, cause: unknown) =>
-  new HookOperationError({
-    operation,
-    cause,
-    message: cause instanceof Error ? cause.message : String(cause),
-  });
+/**
+ * Fork `effect` into the background and log (not throw) if it fails.
+ * Used for the "kick off, don't block on it" tail of `refreshAll` /
+ * `clearAll` — a bare `Effect.runFork` nested inside an already-
+ * running Effect works but hides failures; this composes with
+ * `Effect.forkDetach` (survives the parent effect's completion, same
+ * as the old `Effect.runFork`) and narrates a failure the same way
+ * `useGithub`'s reap-remote-archive catch does.
+ */
+function forkLogged<A, E>(
+  label: string,
+  effect: Effect.Effect<A, E>,
+): Effect.Effect<void, never> {
+  return effect.pipe(
+    Effect.catch((cause) =>
+      Effect.sync(() => {
+        log.warn(`${label} failed`, { err: causeMessage(cause) });
+      }),
+    ),
+    Effect.forkDetach,
+    Effect.asVoid,
+  );
+}
 
 /**
  * In-place patch helper for a single PR inside the github cache. The
@@ -202,22 +218,22 @@ export function useGithub(): UseQueryResult<GithubData, Error> {
   useEffect(() => {
     if (!shouldReapRemoteArchive(remoteList) || !config.remote) return;
     Effect.runSync(
-      Effect.try({
-        try: () =>
-        reapRemoteArchived(
-          config.remote!.host,
-          new Set((remoteList.data ?? []).map((row) => row.slug)),
-        ),
-        catch: (cause) => hookError("reap remote archive", cause),
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.sync(() =>
-            createLogger("[github]").warn("remote archive reconciliation failed", {
-              err: error.message,
-            }),
+      io
+        .sync("reap remote archive", () =>
+          reapRemoteArchived(
+            config.remote!.host,
+            new Set((remoteList.data ?? []).map((row) => row.slug)),
+          ),
+        )
+        .pipe(
+          Effect.catch((error) =>
+            Effect.sync(() =>
+              createLogger("[github]").warn("remote archive reconciliation failed", {
+                err: error.message,
+              }),
+            ),
           ),
         ),
-      ),
     );
   }, [remoteList.data, remoteList.isFetchedAfterMount, remoteList.isSuccess]);
   const branches = useMemo(() => {
@@ -304,8 +320,11 @@ export function useGithub(): UseQueryResult<GithubData, Error> {
  * instead — and a guard with no deadline would pin those until the
  * process died.
  *
- * `run` must throw on failure; mutations that return `{ ok: false,
- * error }` should be wrapped to throw at the call site.
+ * `run` is either an `Effect` (preferred — composes directly, typed
+ * failure) or a Promise-returning thunk that must throw/reject on
+ * failure (the TUI's flow call sites haven't all migrated off this
+ * yet); mutations that return `{ ok: false, error }` should be wrapped
+ * to throw/fail at the call site.
  */
 /**
  * How long the clobber guard keeps re-applying the patch after `run`
@@ -327,12 +346,12 @@ export function patchArchivedKeys(
   return [...set];
 }
 
-export async function runOptimisticMutation<TData>(
+export async function runOptimisticMutation<TData, E = unknown>(
   qc: import("@tanstack/react-query").QueryClient,
   opts: {
     filter: QueryFilters;
     patch: (prev: TData | undefined) => TData | undefined;
-    run: () => Promise<void>;
+    run: (() => Promise<void>) | Effect.Effect<void, E>;
     /** Test seam for the post-settle guard deadline. */
     settleGuardMs?: number;
   },
@@ -368,7 +387,7 @@ export async function runOptimisticMutation<TData>(
         Effect.gen(function* () {
           yield* Effect.tryPromise({
             try: () => qc.cancelQueries(filter),
-            catch: (cause) => hookError("cancel queries", cause),
+            catch: io.wrap("cancel queries"),
           });
           yield* Effect.sync(() => {
             snapshots = qc.getQueriesData<TData>(filter);
@@ -395,10 +414,15 @@ export async function runOptimisticMutation<TData>(
               qc.setQueryData<TData>(event.query.queryKey, patch);
             }),
           );
-          yield* Effect.tryPromise({
-            try: run,
-            catch: (cause) => hookError("run optimistic mutation", cause),
-          });
+          // `run` is either an Effect (pass it straight through, typed
+          // failure preserved on `cause`) or a legacy Promise thunk
+          // (adopted at the boundary, same as before).
+          yield* Effect.isEffect(run)
+            ? run.pipe(Effect.mapError(io.wrap("run optimistic mutation")))
+            : Effect.tryPromise({
+                try: run,
+                catch: io.wrap("run optimistic mutation"),
+              });
         }),
       ),
     onError: () => {
@@ -444,10 +468,10 @@ export function useWtActions() {
   const qc = useQueryClient();
 
   /** See `runOptimisticMutation` — this just binds the hook's client. */
-  function mutate<TData>(opts: {
+  function mutate<TData, E = unknown>(opts: {
     filter: QueryFilters;
     patch: (prev: TData | undefined) => TData | undefined;
-    run: () => Promise<void>;
+    run: (() => Promise<void>) | Effect.Effect<void, E>;
   }): Promise<void> {
     return runOptimisticMutation(qc, opts);
   }
@@ -455,16 +479,15 @@ export function useWtActions() {
   const queryClientEffect = <A>(evaluate: () => PromiseLike<A>) =>
     Effect.tryPromise({
       try: evaluate,
-      catch: (cause) => hookError("query client operation", cause),
+      catch: io.wrap("query client operation"),
     });
   const invalidate = (filter: QueryFilters) =>
     queryClientEffect(() => qc.invalidateQueries(filter));
   const writeWtState = <A>(evaluate: () => A): Promise<A> =>
     Effect.runPromise(
-      Effect.try({
-        try: evaluate,
-        catch: (cause) => hookError("write wt state", cause),
-      }).pipe(Effect.tap(() => invalidate({ queryKey: qk.wtState() }))),
+      io
+        .sync("write wt state", evaluate)
+        .pipe(Effect.tap(() => invalidate({ queryKey: qk.wtState() }))),
     );
 
   return {
@@ -516,14 +539,12 @@ export function useWtActions() {
           // the next timer turn instead of keeping the key handler/caller
           // parked behind every row's git/fs probes.
           Effect.tap(() =>
-            Effect.sync(() => {
-              Effect.runFork(
-                Effect.sleep(Duration.millis(50)).pipe(
-                  Effect.andThen(invalidate({ queryKey: ["wt"] })),
-                  Effect.catch(() => Effect.void),
-                ),
-              );
-            }),
+            forkLogged(
+              "deferred wt invalidation",
+              Effect.sleep(Duration.millis(50)).pipe(
+                Effect.andThen(invalidate({ queryKey: ["wt"] })),
+              ),
+            ),
           ),
         ),
       );
@@ -534,7 +555,7 @@ export function useWtActions() {
      * main immediately instead of waiting out fetchOriginQuery's staleTime.
      */
     refreshOrigin(): Promise<void> {
-      return Effect.runPromise(fetchOriginEffect().pipe(Effect.asVoid));
+      return Effect.runPromise(forceFetchOrigin().pipe(Effect.asVoid));
     },
     /**
      * Nuke every cached query — in-memory *and* the SQLite blob on
@@ -545,27 +566,25 @@ export function useWtActions() {
      */
     clearAll(): Promise<void> {
       return Effect.runPromise(
-        Effect.sync(() => {
-          qc.clear();
-          clearPersistedCache(CACHE_DB);
-          invalidateMainFirstParents();
+        Effect.gen(function* () {
+          yield* Effect.sync(() => qc.clear());
+          yield* clearPersistedCache(CACHE_DB);
+          yield* Effect.sync(invalidateMainFirstParents);
           // Not observed by any component, so it won't auto-refetch on
           // clear — kick it off explicitly so the first-parents cache gets
           // repopulated alongside the observed queries.
-          Effect.runFork(
-            queryClientEffect(() => qc.fetchQuery(fetchOriginQuery())).pipe(
-              Effect.catch(() => Effect.void),
-            ),
+          yield* forkLogged(
+            "clearAll origin refetch",
+            queryClientEffect(() => qc.fetchQuery(fetchOriginQuery())),
           );
           // Belt-and-suspenders: `qc.clear()` removes cache entries, but
           // active observers sitting on `staleTime: Infinity` (notably
           // the AI summary) don't always re-trigger their queryFn
           // afterwards. Forcing a refetch on every active observer makes
           // "R" deterministic for the AI chain.
-          Effect.runFork(
-            queryClientEffect(() => qc.refetchQueries({ type: "active" })).pipe(
-              Effect.catch(() => Effect.void),
-            ),
+          yield* forkLogged(
+            "clearAll active refetch",
+            queryClientEffect(() => qc.refetchQueries({ type: "active" })),
           );
         }),
       );
@@ -660,12 +679,7 @@ export function useWtActions() {
      * `fetchAuthenticatedLogin` in `core/github.ts`.
      */
     fetchMe(): Promise<string | null> {
-      return Effect.runPromise(
-        Effect.tryPromise({
-          try: () => fetchAuthenticatedLoginPromise(),
-          catch: (cause) => hookError("fetch authenticated login", cause),
-        }),
-      );
+      return Effect.runPromise(fetchAuthenticatedLogin());
     },
     /**
      * Invalidate the combined PR + merge-queue fetch. Use after an
@@ -721,7 +735,7 @@ export function useWtActions() {
           // not a defect: keep it on the typed channel.
           const { writePrimaryHarness } = yield* Effect.tryPromise({
             try: () => import("../core/harness/primary.ts"),
-            catch: (cause) => hookError("load primary harness", cause),
+            catch: io.wrap("load primary harness"),
           });
           yield* Effect.sync(() => writePrimaryHarness(id));
           yield* invalidate({ queryKey: qk.primaryHarness() });
@@ -739,7 +753,7 @@ export function useWtActions() {
         Effect.gen(function* () {
           const { cyclePrimaryHarness } = yield* Effect.tryPromise({
             try: () => import("../core/harness/primary.ts"),
-            catch: (cause) => hookError("load primary harness", cause),
+            catch: io.wrap("load primary harness"),
           });
           const next = yield* Effect.sync(() => cyclePrimaryHarness());
           yield* invalidate({ queryKey: qk.primaryHarness() });
@@ -864,21 +878,15 @@ export function useWtActions() {
           intendedArchived ??= !set.has(key);
           return patchArchivedKeys(prev, key, intendedArchived);
         },
-        run: () =>
-          Effect.runPromise(
-            Effect.try({
-              try: () => {
-                // Disk write is synchronous; wrapped in async so it slots
-                // into the mutate pipeline. Errors propagate as throws and
-                // trigger the rollback path.
-                result = toggleArchivedOnDisk(key);
-                // Disk is authoritative if another process changed the ledger
-                // between the cached read and this serialized write.
-                intendedArchived = result.archived;
-              },
-              catch: (cause) => hookError("toggle archive", cause),
-            }),
-          ),
+        run: io.sync("toggle archive", () => {
+          // Disk write is synchronous; the mutate pipeline just awaits
+          // the Effect. Errors propagate as a typed failure and trigger
+          // the rollback path.
+          result = toggleArchivedOnDisk(key);
+          // Disk is authoritative if another process changed the ledger
+          // between the cached read and this serialized write.
+          intendedArchived = result.archived;
+        }),
       });
       // `result` is set inside `run` which always runs before mutate
       // resolves; the `?? throw` here is just a type-narrowing prop.
@@ -900,13 +908,9 @@ export function useWtActions() {
           set.add(slug);
           return [...set];
         },
-        run: () =>
-          Effect.runPromise(
-            Effect.try({
-              try: () => archiveOnDisk(slug),
-              catch: (cause) => hookError("archive slug", cause),
-            }),
-          ),
+        run: io.sync("archive slug", () => {
+          archiveOnDisk(slug);
+        }),
       });
     },
     /**
@@ -969,16 +973,13 @@ export function useWtActions() {
               wt.path,
             );
             const sha = mb.exitCode === 0 ? mb.stdout.trim() : "";
-            yield* Effect.try({
-              try: () =>
-                setSlugBaseOnDisk(wt.slug, { branch, sha: sha || undefined }),
-              catch: (cause) => hookError("set worktree base", cause),
-            });
+            yield* io.sync("set worktree base", () =>
+              setSlugBaseOnDisk(wt.slug, { branch, sha: sha || undefined }),
+            );
           } else {
-            yield* Effect.try({
-              try: () => setSlugBaseOnDisk(wt.slug, null),
-              catch: (cause) => hookError("clear worktree base", cause),
-            });
+            yield* io.sync("clear worktree base", () =>
+              setSlugBaseOnDisk(wt.slug, null),
+            );
           }
           yield* Effect.all(
             [
@@ -1043,10 +1044,9 @@ export function useWtActions() {
     ): Promise<boolean> {
       return Effect.runPromise(
         Effect.gen(function* () {
-          const moved = yield* Effect.try({
-            try: () => moveGroupPastOnDisk(key, pastKey, side, visualOrder),
-            catch: (cause) => hookError("move section group", cause),
-          });
+          const moved = yield* io.sync("move section group", () =>
+            moveGroupPastOnDisk(key, pastKey, side, visualOrder),
+          );
           if (moved) yield* invalidate({ queryKey: qk.wtState() });
           return moved;
         }),
@@ -1070,10 +1070,9 @@ export function useWtActions() {
     toggleRemovedAutomationsPaused(slug: string): Promise<boolean | null> {
       return Effect.runPromise(
         Effect.gen(function* () {
-          const paused = yield* Effect.try({
-            try: () => toggleRemovedAutomationsPausedOnDisk(slug),
-            catch: (cause) => hookError("toggle removed automations", cause),
-          });
+          const paused = yield* io.sync("toggle removed automations", () =>
+            toggleRemovedAutomationsPausedOnDisk(slug),
+          );
           if (paused !== null) yield* invalidate({ queryKey: qk.wtState() });
           return paused;
         }),

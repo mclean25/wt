@@ -5,11 +5,12 @@ import { Cause, Data, Deferred, Effect, Fiber } from "effect";
 import type * as EffectScope from "effect/Scope";
 
 import { actionRegistry } from "../core/actions.ts";
+import { causeMessage } from "../core/errors.ts";
 import { reapArchived } from "../core/archive.ts";
 import { recordWorktreeEdit } from "../core/automations.ts";
 import { watchRegistry } from "../core/harness/claude/registry.ts";
 import { config } from "../core/config.ts";
-import { disposeDiffPoolPromise } from "../core/diff/pool.ts";
+import { disposeDiffPool } from "../core/diff/pool.ts";
 import { lockStatus } from "../core/locks.ts";
 import { watchGithubEvents } from "../core/events/store.ts";
 import { closeOpencodeDb, HARNESSES } from "../core/harness/index.ts";
@@ -19,7 +20,7 @@ import { harnessTailRegistry } from "../core/harness/tail.ts";
 import { startOpencodeEventPolling } from "../core/harness/opencode/events.ts";
 import { createLogger, flushLogger, setEventSink } from "../core/logger.ts";
 import { ensureManagerClaudeName, MANAGER_SLUG } from "../core/manager.ts";
-import { killHarnessSessionPromise, listAllSessionsRawPromise } from "../core/tmux.ts";
+import { killHarnessSession, listAllSessionsRaw } from "../core/tmux.ts";
 import { reapDevServerFiles } from "../core/dev-server.ts";
 import { reapDestroyLogs } from "../core/logs.ts";
 import {
@@ -40,8 +41,8 @@ import {
 import { isRiftWorktree } from "../core/backend.ts";
 import { attachInputLatencyProbe, startLoopLagProbe } from "../core/perf.ts";
 import { reapShellLogs, shellTailRegistry } from "../core/shell-tail.ts";
-import { reapOrphanedSessionsPromise } from "../core/tmux.ts";
-import { listWorktreesPromise } from "../core/worktree.ts";
+import { reapOrphanedSessions } from "../core/tmux.ts";
+import { listWorktrees } from "../core/worktree.ts";
 import { readWtState, reapWtState } from "../core/wtstate.ts";
 import { createWtQueryClient } from "../state/index.ts";
 import { qk } from "../state/keys.ts";
@@ -58,7 +59,7 @@ import { TuiErrorBoundary } from "./error-boundary.tsx";
 import { installProcessErrorCapture } from "./error-store.ts";
 import { backfillActivityLog } from "./activity-backfill.ts";
 import { events } from "./activity-log.ts";
-import { cancelAllAutoMergeRetries } from "./flows/auto-merge-retry.ts";
+import { closeAutoMergeRetries } from "./flows/auto-merge-retry.ts";
 import { attachFetchLogs } from "./fetch-log.ts";
 import { SLOT_SLUGS } from "./sessions/slots.ts";
 import { attachLoggerToasts } from "./toast.ts";
@@ -147,24 +148,18 @@ class InvalidationError extends Data.TaggedError("InvalidationError")<{
   readonly cause: unknown;
 }> {}
 
-class StartupReapError extends Data.TaggedError("StartupReapError")<{
-  readonly operation: string;
-  readonly cause: unknown;
-}> {}
-
-function startupReapPromise<A>(operation: string, run: () => Promise<A>) {
-  return Effect.tryPromise({
-    try: run,
-    catch: (cause) => new StartupReapError({ operation, cause }),
-  });
-}
-
 const forkBestEffort = (run: () => Promise<unknown>): void => {
   Effect.runFork(
     Effect.tryPromise({
       try: run,
       catch: (cause) => new InvalidationError({ cause }),
-    }).pipe(Effect.ignore),
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          startupLog.warn("invalidation failed", { err: causeMessage(error.cause) });
+        }),
+      ),
+    ),
   );
 };
 
@@ -256,7 +251,7 @@ class InvalidationScheduler {
  * swallowed; a stale entry is a worse outcome than blocking startup.
  */
 const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
-    const wts = yield* startupReapPromise("list worktrees", listWorktreesPromise);
+    const wts = yield* listWorktrees();
     const live = new Set(wts.map((w) => w.slug));
     const liveHarnessSlugs = new Set(live);
     for (const slug of SLOT_SLUGS) liveHarnessSlugs.add(slug);
@@ -280,8 +275,7 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
     for (const slug of actionRegistry.persistedRemoteActionKeys()) {
       protectedSlugs.add(slug);
     }
-    yield* startupReapPromise("reap orphaned sessions", () =>
-      reapOrphanedSessionsPromise(protectedSlugs));
+    yield* reapOrphanedSessions(protectedSlugs);
     // One-time migration: the manager now lives as a NAMED claude
     // session (`manager~manager`) with its own conversation UUID —
     // the old bare `manager` primary shared main's conversation (same
@@ -289,17 +283,12 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
     // would linger protected forever and confuse `m` (which no longer
     // attaches it), so kill it here. New code never creates it.
     ensureManagerClaudeName();
-    const tmuxLive = yield* startupReapPromise("list tmux sessions", listAllSessionsRawPromise).pipe(
-      Effect.catch(() => Effect.succeed(new Set<string>())),
-    );
+    const tmuxLive = yield* listAllSessionsRaw();
     if (tmuxLive.has(MANAGER_SLUG)) {
       startupLog.warn(
         "killing legacy primary-form manager session (shared main's conversation)",
       );
-      yield* startupReapPromise("kill legacy manager session", () =>
-        killHarnessSessionPromise(MANAGER_SLUG, "claude", null)).pipe(
-          Effect.catch(() => Effect.void),
-        );
+      yield* killHarnessSession(MANAGER_SLUG, "claude", null);
     }
     // Drop terminal action run dirs whose slug is gone OR that fall
     // beyond the rehydration window. Ordered before `boot` so the
@@ -310,7 +299,7 @@ const reapStartupEffect: Effect.Effect<void, never> = Effect.gen(function* () {
     // session that was running when the previous wt exited (or
     // crashed) and re-attaches a live tail; finalizes runs whose
     // wrapper exited while wt was down.
-    yield* startupReapPromise("rehydrate action runs", () => actionRegistry.bootPromise(live));
+    yield* actionRegistry.boot(live);
 }).pipe(
   // Reaping is maintenance and must not prevent first paint. Keep the
   // failure policy from the legacy helper, but represent every async leg as
@@ -332,12 +321,17 @@ export const runTui = Effect.gen(function* () {
     shellTailRegistry.stopAll();
     harnessTailRegistry.stopAll();
   });
-  yield* addRuntimeFinalizer(() => actionRegistry.shutdownPromise());
-  yield* addRuntimeFinalizer(cancelAllAutoMergeRetries);
+  yield* Effect.addFinalizer(() => actionRegistry.shutdown());
+  yield* Effect.addFinalizer(() => closeAutoMergeRetries);
   yield* addRuntimeFinalizer(closeOpencodeDb);
   yield* addRuntimeFinalizer(disposeCodexDiscoveryWorker);
-  yield* addRuntimeFinalizer(disposeDiffPoolPromise);
+  yield* Effect.addFinalizer(() => disposeDiffPool());
 
+  // Gate the pane-feed store's debounce fiber to this render's
+  // lifetime — same attach/detach discipline as `attachLoggerToasts`
+  // below, so its 16ms coalescing fiber is interrupted at shutdown
+  // instead of surviving a torn-down render tree.
+  yield* acquireSyncResource(() => events.attach(), () => events.detach());
   // Restore the pane feeds from the daily logs FIRST (a restart must
   // not wipe the attention trail), then forward live logger.event.*
   // into the store. CLI runs leave the sink unset, so event-style log
@@ -719,9 +713,13 @@ export const runTui = Effect.gen(function* () {
   // everything else (teammates pushing to main, repos without the
   // events daemon). The fetch itself is silent when nothing changed;
   // when refs DO move, the refs watcher fans out the invalidations —
-  // no extra plumbing here. Errors (offline, transient network) are
-  // swallowed; the next tick retries.
+  // no extra plumbing here. A single failure (offline, transient
+  // network) is routine and only logged at warn; the next tick retries.
+  // A RUN of failures is a different fact — sustained offline, a broken
+  // remote — worth interrupting a scan for, so it escalates to
+  // `log.attention` once it's no longer a blip.
   const FETCH_ORIGIN_INTERVAL_MS = 3 * 60 * 1000;
+  const FETCH_ORIGIN_ATTENTION_THRESHOLD = 3;
 
   // Opt-in (`WT_PERF=1`) probe that logs whenever the single JS thread
   // is blocked long enough to drop a frame / stall a keypress. Used to
@@ -734,6 +732,7 @@ export const runTui = Effect.gen(function* () {
   yield* addRuntimeFinalizer(() => detachInputLatency?.());
 
   yield* acquireSyncResource(startLoopLagProbe, (stop) => stop());
+  let fetchOriginFailures = 0;
   yield* Effect.forkScoped(
     Effect.forever(
       Effect.sleep(`${FETCH_ORIGIN_INTERVAL_MS} millis`).pipe(
@@ -743,7 +742,20 @@ export const runTui = Effect.gen(function* () {
             catch: (cause) => new InvalidationError({ cause }),
           }),
         ),
-        Effect.ignore,
+        Effect.tap(() => Effect.sync(() => { fetchOriginFailures = 0; })),
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            fetchOriginFailures++;
+            const msg = causeMessage(error.cause);
+            if (fetchOriginFailures >= FETCH_ORIGIN_ATTENTION_THRESHOLD) {
+              startupLog.attention.warn(
+                `periodic origin fetch has failed ${fetchOriginFailures} times in a row: ${msg}`,
+              );
+            } else {
+              startupLog.warn("periodic origin fetch failed", { err: msg });
+            }
+          }),
+        ),
       ),
     ),
   );

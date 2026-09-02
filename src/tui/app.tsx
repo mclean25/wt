@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
+import { Effect } from "effect";
 
 import { config } from "../core/config.ts";
 import { createLogger } from "../core/logger.ts";
@@ -85,7 +86,8 @@ import { useErrorOverlayAutoPop } from "./hooks/useErrorOverlay.ts";
 import { usePrTargetChord } from "./hooks/usePrTargetChord.ts";
 import { useRemovedView } from "./hooks/useRemovedView.ts";
 import { useSessionsPickerData } from "./hooks/useSessionsPickerData.ts";
-import { writeClipboardPromise } from "../core/macos.ts";
+import { writeClipboard } from "../core/macos.ts";
+import { forkReported } from "./effect-boundary.ts";
 import { theme } from "./theme.ts";
 import { showToast } from "./toast.ts";
 import {
@@ -558,9 +560,17 @@ export function App({ onExit }: Props) {
     toast(`${label} failed: ${msg}`, theme.err, 3000);
   }
 
-  const { setSectionPromise: setWorktreeSection } = makeWorktreeMutations({
+  const { setSection: setSectionEffect } = makeWorktreeMutations({
     setControllerSection: setSection,
   });
+  // Boundary: `setSectionEffect` is the Effect; the flows this feeds
+  // (`flows/sections.ts`, `keyboard/normal-keys.ts`) still expect a
+  // Promise-returning callback, so it's run here, at the composition
+  // root, rather than adding a new Promise-returning core export.
+  const setWorktreeSection = (
+    target: Parameters<typeof setSectionEffect>[0],
+    section: string | null,
+  ): Promise<void> => Effect.runPromise(setSectionEffect(target, section));
 
   // Section-management flows (Shift+J/K moves, the section picker,
   // rename) — extracted to `flows/sections.ts`. Rebuilt per render so
@@ -724,14 +734,10 @@ export function App({ onExit }: Props) {
       toast(`no ${label} to yank`, theme.warn, 1500);
       return;
     }
-    try {
-      writeClipboardPromise(value);
-    } catch (err) {
-      log.event.err(`pbcopy failed: ${err instanceof Error ? err.message : String(err)}`);
-      log.error(err instanceof Error ? err : String(err));
+    forkReported(writeClipboard(value), (error) => {
+      log.event.err(`pbcopy failed: ${error.message}`);
       toast(`copy failed: ${label}`, theme.err, 3000);
-      return;
-    }
+    });
     log.event.info(`yanked ${label}: ${value}`);
     toast(`copied ${label}`, theme.info, 1500);
   }

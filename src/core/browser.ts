@@ -128,7 +128,7 @@ type StatusJson = {
  * spin up browser infrastructure just to discover there was nothing to
  * clean up.
  */
-function liveSessionsEffect(): Effect.Effect<BrowserSession[] | null> {
+function liveSessions(): Effect.Effect<BrowserSession[] | null> {
   if (!Bun.which(BIN)) return Effect.succeed(null);
   return run([BIN, "status", "--json"], { timeoutMs: 5000 }).pipe(
     Effect.map((res) => {
@@ -156,7 +156,7 @@ function liveSessionsEffect(): Effect.Effect<BrowserSession[] | null> {
 }
 
 /** Delete the given sessions, returning the ids that actually went. */
-function deleteSessionsEffect(ids: readonly string[]): Effect.Effect<string[]> {
+function deleteSessions(ids: readonly string[]): Effect.Effect<string[]> {
   return Effect.forEach(
     ids,
     (id) =>
@@ -247,23 +247,21 @@ export function closeDevServerBrowserSessionsPromise(
  * target, which keeps the sweep's job down to the ones it lost — and
  * leaves the session record cleaned up either way.
  */
-function closeBrowserTabs(
+const closeBrowserTabs = Effect.fnUntraced(function* (
   slug: string,
   devPort: number | null,
   owned: (session: BrowserSession) => boolean,
-): Effect.Effect<BrowserCleanup> {
-  return Effect.gen(function* () {
-    const live = yield* liveSessionsEffect();
-    const sessions = live === null
-      ? []
-      : yield* deleteSessionsEffect(live.filter(owned).map((s) => s.id));
-    const tabs = devPort === null ? 0 : yield* closeTabsOnPortEffect(devPort);
-    if (sessions.length > 0 || tabs > 0) {
-      log.info("closed browser sessions", { slug, sessions, tabs });
-    }
-    return { sessions, tabs };
-  });
-}
+): Effect.fn.Return<BrowserCleanup> {
+  const live = yield* liveSessions();
+  const sessions = live === null
+    ? []
+    : yield* deleteSessions(live.filter(owned).map((s) => s.id));
+  const tabs = devPort === null ? 0 : yield* closeTabsOnPort(devPort);
+  if (sessions.length > 0 || tabs > 0) {
+    log.info("closed browser sessions", { slug, sessions, tabs });
+  }
+  return { sessions, tabs };
+});
 
 // ---------------------------------------------------------------------
 // The browser itself. Everything below talks to the Chromium apps over
@@ -298,7 +296,7 @@ const CHROMIUM_APPS = [
 ] as const;
 
 /** Running Chromium apps, by the name AppleScript addresses them with. */
-function runningChromiumAppsEffect(): Effect.Effect<string[]> {
+function runningChromiumApps(): Effect.Effect<string[]> {
   return run(["ps", "-Aco", "command"], { timeoutMs: 5000 }).pipe(
     Effect.map((res) => {
       if (res.exitCode !== 0) return [];
@@ -340,7 +338,7 @@ function warnIfUnauthorized(app: string, stderr: string): void {
  * unit-tested — instead of a second copy written in AppleScript that
  * nothing checks.
  */
-function tabUrlsEffect(app: string): Effect.Effect<string[]> {
+function tabUrls(app: string): Effect.Effect<string[]> {
   const script = `tell application ${asQuote(app)}
   set out to ""
   repeat with w in windows
@@ -391,7 +389,7 @@ end tell`;
  * failure the caller swallows. A dev-server tab in its own window is an
  * ordinary shape, so that's the common case, not the exotic one.
  */
-function closeTabsWithUrlsEffect(
+function closeTabsWithUrls(
   app: string,
   urls: readonly string[],
 ): Effect.Effect<number> {
@@ -441,25 +439,25 @@ return closedCount`;
  * with the rest, because the symptom otherwise is tabs quietly piling
  * up with nothing anywhere saying why.
  */
-function closeTabsOnPortEffect(port: number): Effect.Effect<number> {
-  // Per app, concurrently: the apps are independent, and this is awaited
-  // by a destroy the human is watching. Serially, someone running Chrome
-  // + Brave + Arc pays each one's timeout in turn.
-  return Effect.gen(function* () {
-    const apps = yield* runningChromiumAppsEffect();
-    const perApp = yield* Effect.forEach(
-      apps,
-      (app) =>
-        Effect.gen(function* () {
-          const doomed = (yield* tabUrlsEffect(app)).filter((u) =>
-            urlOnDevPort(u, port),
-          );
-          return doomed.length === 0
-            ? 0
-            : yield* closeTabsWithUrlsEffect(app, doomed);
-        }),
-      { concurrency: 4 },
-    );
-    return perApp.reduce((a, b) => a + b, 0);
-  });
-}
+const closeTabsForApp = Effect.fnUntraced(function* (
+  app: string,
+  port: number,
+): Effect.fn.Return<number> {
+  const doomed = (yield* tabUrls(app)).filter((u) => urlOnDevPort(u, port));
+  return doomed.length === 0 ? 0 : yield* closeTabsWithUrls(app, doomed);
+});
+
+// Per app, concurrently: the apps are independent, and this is awaited by a
+// destroy the human is watching. Serially, someone running Chrome + Brave +
+// Arc pays each one's timeout in turn.
+const closeTabsOnPort = Effect.fnUntraced(function* (
+  port: number,
+): Effect.fn.Return<number> {
+  const apps = yield* runningChromiumApps();
+  const perApp = yield* Effect.forEach(
+    apps,
+    (app) => closeTabsForApp(app, port),
+    { concurrency: 4 },
+  );
+  return perApp.reduce((a, b) => a + b, 0);
+});

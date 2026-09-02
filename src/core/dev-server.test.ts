@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { once } from "node:events";
 import net from "node:net";
 
 import { runPromise } from "./proc.ts";
@@ -27,7 +28,8 @@ function blockLoop(ms: number): void {
 
 async function withListener<T>(fn: (port: number) => Promise<T>): Promise<T> {
   const server = net.createServer(() => {});
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   const { port } = server.address() as net.AddressInfo;
   try {
     return await fn(port);
@@ -39,9 +41,11 @@ async function withListener<T>(fn: (port: number) => Promise<T>): Promise<T> {
 /** A port nothing is listening on: bind one, then release it. */
 async function closedPort(): Promise<number> {
   const server = net.createServer(() => {});
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   const { port } = server.address() as net.AddressInfo;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  server.close();
+  await once(server, "close");
   return port;
 }
 

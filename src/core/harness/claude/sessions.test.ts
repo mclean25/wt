@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 
 import { wtSessionUuid } from "./jsonl.ts";
 import type { RegistrySession } from "./registry.ts";
@@ -8,6 +9,23 @@ import { createClaudeSessions } from "./sessions.ts";
 const cwd = "/Users/michael/.wt";
 const target = { slug: "wt", cwd, managedName: null };
 const sessionId = wtSessionUuid(cwd, null);
+
+/**
+ * Run an Effect under a virtual clock: fork it, advance the TestClock past
+ * every sleep it can possibly schedule (the 20s registration timeout, twice
+ * over for the recycle-then-fail path), then join. `waitForRegistration`'s
+ * schedule and the lock's poll schedule both read the ambient Clock now, so
+ * this is what lets the "never registers" tests assert their 20s-out
+ * behavior without spending 20 real seconds.
+ */
+const run = <A, E>(effect: Effect.Effect<A, E>, advanceMs = 45_000): Promise<A> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(effect);
+      yield* TestClock.adjust(advanceMs);
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 
 function native(overrides: Partial<RegistrySession> = {}): RegistrySession {
   return {
@@ -26,7 +44,6 @@ function native(overrides: Partial<RegistrySession> = {}): RegistrySession {
 }
 
 function fakes() {
-  let now = 100;
   let nativeEntries: RegistrySession[] = [];
   let starts = 0;
   const deps = {
@@ -40,11 +57,6 @@ function fakes() {
     // Hermetic: without this the shared defaults supply the real
     // `capturePane`, so a unit test spawns tmux on its failure path.
     peekPane: async () => null,
-    now: () => now,
-    sleep: async (ms: number) => {
-      now += ms;
-      await Promise.resolve();
-    },
   };
   return {
     deps,
@@ -119,8 +131,6 @@ describe("Claude sessions", () => {
       },
       kill: async () => {},
       peekPane: async () => null,
-      now: Date.now,
-      sleep: async () => {},
     });
 
     await Effect.runPromise(Effect.gen(function* () {
@@ -148,7 +158,9 @@ describe("Claude sessions", () => {
       startDetached: async () => ({ ok: true as const }),
     });
 
-    expect(sessions.ensureInfoPromise(target)).rejects.toThrow("did not register within 20s");
+    await expect(run(sessions.ensureInfo(target), 25_000)).rejects.toThrow(
+      "did not register within 20s",
+    );
   });
 });
 
@@ -165,7 +177,6 @@ describe("a pre-existing dead session", () => {
   function stuckAdoption(opts: { registersAfterKill: boolean }) {
     let killed = false;
     let starts = 0;
-    let now = 100;
     let entries: RegistrySession[] = [];
     return {
       get starts() {
@@ -191,11 +202,6 @@ describe("a pre-existing dead session", () => {
           killed = true;
         },
         peekPane: async () => "some stuck output\nlast line",
-        now: () => now,
-        sleep: async (ms: number) => {
-          now += ms;
-          await Promise.resolve();
-        },
       },
     };
   }
@@ -204,7 +210,7 @@ describe("a pre-existing dead session", () => {
     const fake = stuckAdoption({ registersAfterKill: true });
     const sessions = createClaudeSessions(fake.deps);
 
-    await sessions.ensureInfoPromise(target);
+    await run(sessions.ensureInfo(target));
 
     expect(fake.killed).toBe(true);
     expect(fake.starts).toBe(2);
@@ -215,7 +221,7 @@ describe("a pre-existing dead session", () => {
     const fake = stuckAdoption({ registersAfterKill: true });
     const sessions = createClaudeSessions(fake.deps);
 
-    const { session } = await sessions.ensureInfoPromise(target);
+    const { session } = await run(sessions.ensureInfo(target));
     expect(session.cwd).toBe("/tmp/demo-wt");
   });
 
@@ -226,7 +232,7 @@ describe("a pre-existing dead session", () => {
     const fake = stuckAdoption({ registersAfterKill: false });
     const sessions = createClaudeSessions(fake.deps);
 
-    expect(sessions.ensureInfoPromise(target)).rejects.toThrow(/recycling the pre-existing/);
+    await expect(run(sessions.ensureInfo(target))).rejects.toThrow(/recycling the pre-existing/);
   });
 
   // A session this call genuinely CREATED is a different failure: the
@@ -234,7 +240,6 @@ describe("a pre-existing dead session", () => {
   // just reproduce that. Recycle only what we adopted.
   test("a freshly created session that never registers is not recycled", async () => {
     let killed = false;
-    let now = 100;
     const sessions = createClaudeSessions({
       readNative: () => [],
       startDetached: async () => ({ ok: true as const }),
@@ -242,33 +247,24 @@ describe("a pre-existing dead session", () => {
         killed = true;
       },
       peekPane: async () => "",
-      now: () => now,
-      sleep: async (ms: number) => {
-        now += ms;
-        await Promise.resolve();
-      },
     });
 
-    expect(sessions.ensureInfoPromise(target)).rejects.toThrow("did not register within 20s");
+    await expect(run(sessions.ensureInfo(target), 25_000)).rejects.toThrow(
+      "did not register within 20s",
+    );
     expect(killed).toBe(false);
   });
 
   // The pane is the only place a refusing harness explains itself, and
   // "empty" is itself the answer to the first question a reader has.
   test("an empty pane is reported as empty rather than omitted", async () => {
-    let now = 100;
     const sessions = createClaudeSessions({
       readNative: () => [],
       startDetached: async () => ({ ok: true as const }),
       kill: async () => {},
       peekPane: async () => "   \n\n",
-      now: () => now,
-      sleep: async (ms: number) => {
-        now += ms;
-        await Promise.resolve();
-      },
     });
 
-    expect(sessions.ensureInfoPromise(target)).rejects.toThrow(/pane is empty/);
+    await expect(run(sessions.ensureInfo(target), 25_000)).rejects.toThrow(/pane is empty/);
   });
 });

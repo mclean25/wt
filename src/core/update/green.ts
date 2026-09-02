@@ -15,9 +15,12 @@
  * scheduled digest that fails during a GitHub outage — can't veto an
  * update.
  */
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
+import { operationErrors } from "../errors.ts";
 import { gitOk, logSafe } from "./exec.ts";
+
+const io = operationErrors("update/green");
 
 /** Check-run names that gate updates: the ci.yml job (and its typecheck-only predecessor). */
 export const GATE_CHECK_NAMES: ReadonlySet<string> = new Set(["ci", "typecheck"]);
@@ -83,31 +86,24 @@ export function classifyCheckRuns(payload: unknown): CheckStatus {
   return pending ? "pending" : "green";
 }
 
-class CheckFetchError extends Data.TaggedError("CheckFetchError")<{
-  readonly sha: string;
-  readonly cause: unknown;
-}> {}
-
-function fetchCheckStatusEffect(
+function fetchCheckStatus(
   owner: string,
   repo: string,
   sha: string,
   fetchImpl: typeof fetch,
 ): Effect.Effect<CheckStatus> {
-  return Effect.tryPromise({
-    try: (signal) =>
-      fetchImpl(
-        `https://api.github.com/repos/${owner}/${repo}/commits/${sha}/check-runs?per_page=100`,
-        {
-          headers: {
-            Accept: "application/vnd.github+json",
-            "User-Agent": "wt-updater",
-          },
-          signal,
+  return io.promise(`check-runs fetch (${sha})`, (signal) =>
+    fetchImpl(
+      `https://api.github.com/repos/${owner}/${repo}/commits/${sha}/check-runs?per_page=100`,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "wt-updater",
         },
-      ),
-    catch: (cause) => new CheckFetchError({ sha, cause }),
-  }).pipe(
+        signal,
+      },
+    ),
+  ).pipe(
     Effect.timeout(`${API_TIMEOUT_MS} millis`),
     Effect.flatMap((response) => {
       if (!response.ok) {
@@ -119,14 +115,12 @@ function fetchCheckStatusEffect(
           return "unknown" as const;
         });
       }
-      return Effect.tryPromise({
-        try: () => response.json(),
-        catch: (cause) => new CheckFetchError({ sha, cause }),
-      }).pipe(Effect.map(classifyCheckRuns));
+      return io.promise(`check-runs parse (${sha})`, () => response.json())
+        .pipe(Effect.map(classifyCheckRuns));
     }),
     Effect.catch((error) =>
       Effect.sync(() => {
-        logSafe("warn", `check-runs fetch failed for ${sha}: ${String(error)}`);
+        logSafe("warn", `check-runs fetch failed for ${sha}: ${error.message}`);
         return "unknown" as const;
       }),
     ),
@@ -148,31 +142,29 @@ export type GateResult = {
  * red and pending are skipped. Stops at the first eligible hit, so the
  * common case costs one API call.
  */
-export function findNewestEligible(
+export const findNewestEligible = Effect.fn("findNewestEligible")(function* (
   candidates: string[],
   fetchImpl: typeof fetch = fetch,
-): Effect.Effect<GateResult> {
-  return Effect.gen(function* () {
-    if (candidates.length === 0) {
-      return { target: null, checked: [], gated: false };
+): Effect.fn.Return<GateResult> {
+  if (candidates.length === 0) {
+    return { target: null, checked: [], gated: false };
+  }
+  const origin = yield* originGithubRepo;
+  if (!origin) {
+    return { target: candidates[0] ?? null, checked: [], gated: false };
+  }
+  const checked: { sha: string; status: CheckStatus }[] = [];
+  for (const sha of candidates.slice(0, MAX_LOOKUPS)) {
+    const status = yield* fetchCheckStatus(
+      origin.owner,
+      origin.repo,
+      sha,
+      fetchImpl,
+    );
+    checked.push({ sha, status });
+    if (status === "green" || status === "unknown") {
+      return { target: sha, checked, gated: true };
     }
-    const origin = yield* originGithubRepo;
-    if (!origin) {
-      return { target: candidates[0] ?? null, checked: [], gated: false };
-    }
-    const checked: { sha: string; status: CheckStatus }[] = [];
-    for (const sha of candidates.slice(0, MAX_LOOKUPS)) {
-      const status = yield* fetchCheckStatusEffect(
-        origin.owner,
-        origin.repo,
-        sha,
-        fetchImpl,
-      );
-      checked.push({ sha, status });
-      if (status === "green" || status === "unknown") {
-        return { target: sha, checked, gated: true };
-      }
-    }
-    return { target: null, checked, gated: true };
-  });
-}
+  }
+  return { target: null, checked, gated: true };
+});

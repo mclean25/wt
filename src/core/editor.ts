@@ -20,12 +20,17 @@ import { spawn } from "node:child_process";
 import { Data, Effect } from "effect";
 
 import { config } from "./config.ts";
+import { causeMessage } from "./errors.ts";
 import { hideFrontmostTerminal, openInZed } from "./zed.ts";
 
 export class EditorLaunchError extends Data.TaggedError("EditorLaunchError")<{
   readonly command: string;
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.command}: ${causeMessage(this.cause)}`;
+  }
+}
 
 /** Single-quote for `$SHELL -lc` so a path with spaces or quotes can't break out. */
 function shellQuote(s: string): string {
@@ -49,7 +54,7 @@ export function renderEditorCommand(command: string, path: string): string {
  * been attempted — short-lived CLI callers exit immediately afterwards,
  * so nothing may be left to a background tick.
  */
-function spawnDetachedEffect(
+function spawnDetached(
   shell: string,
   command: string,
 ): Effect.Effect<void, EditorLaunchError> {
@@ -98,7 +103,7 @@ export function openInEditor(
   const shell = process.env.SHELL || "bash";
   const rendered = renderEditorCommand(command, path);
   return hideFrontmostTerminal().pipe(
-    Effect.andThen(spawnDetachedEffect(shell, rendered)),
+    Effect.andThen(spawnDetached(shell, rendered)),
   );
 }
 

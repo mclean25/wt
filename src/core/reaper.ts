@@ -152,8 +152,9 @@ function alive(pid: number): boolean {
  * SIGKILL whatever ignores it. Returns what was reaped, for the
  * destroy log; empty on any failure.
  */
-export function reapWorktreeListeners(wtPath: string): Effect.Effect<ReapedProcess[]> {
-  return Effect.gen(function* () {
+export const reapWorktreeListeners = Effect.fn("reapWorktreeListeners")(function* (
+  wtPath: string,
+): Effect.fn.Return<ReapedProcess[]> {
     // A killer keyed on path containment earns paranoia about its root:
     // never sweep from the main clone (a preview server there is the
     // human's), and never from a path short enough to be a mistake.
@@ -191,8 +192,8 @@ export function reapWorktreeListeners(wtPath: string): Effect.Effect<ReapedProce
     for (const p of mine) {
       yield* Effect.try(() => process.kill(p.pid, "SIGTERM")).pipe(Effect.ignore);
     }
-    const deadline = (yield* Clock.currentTimeMillis) + 2000;
-    while ((yield* Clock.currentTimeMillis) < deadline && mine.some((p) => alive(p.pid))) {
+    const termDeadline = (yield* Clock.currentTimeMillis) + 2000;
+    while ((yield* Clock.currentTimeMillis) < termDeadline && mine.some((p) => alive(p.pid))) {
       yield* Effect.sleep(100);
     }
     for (const p of mine) {
@@ -200,13 +201,30 @@ export function reapWorktreeListeners(wtPath: string): Effect.Effect<ReapedProce
         yield* Effect.try(() => process.kill(p.pid, "SIGKILL")).pipe(Effect.ignore);
       }
     }
-    log.info("reaped worktree listeners", {
-      path: wtPath,
-      reaped: mine.map((p) => `${p.command}:${p.pid} [${p.ports.join(",")}]`),
-    });
-    return mine;
-  });
-}
+    // The kill signals landing is not the kill taking — confirm before
+    // reporting. A pid that ignores SIGKILL (rare: uninterruptible I/O,
+    // a zombie) must not be logged as reaped, since a caller (the destroy
+    // path) treats "reaped" as "the port is free now".
+    const killDeadline = (yield* Clock.currentTimeMillis) + 2000;
+    while ((yield* Clock.currentTimeMillis) < killDeadline && mine.some((p) => alive(p.pid))) {
+      yield* Effect.sleep(100);
+    }
+    const reaped = mine.filter((p) => !alive(p.pid));
+    const survivors = mine.filter((p) => alive(p.pid));
+    if (survivors.length > 0) {
+      log.warn("worktree listeners survived SIGKILL", {
+        path: wtPath,
+        survivors: survivors.map((p) => `${p.command}:${p.pid} [${p.ports.join(",")}]`),
+      });
+    }
+    if (reaped.length > 0) {
+      log.info("reaped worktree listeners", {
+        path: wtPath,
+        reaped: reaped.map((p) => `${p.command}:${p.pid} [${p.ports.join(",")}]`),
+      });
+    }
+    return reaped;
+});
 
 export const reapWorktreeListenersPromise = (wtPath: string): Promise<ReapedProcess[]> =>
   Effect.runPromise(reapWorktreeListeners(wtPath));

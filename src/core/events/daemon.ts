@@ -19,6 +19,7 @@ import { Clock, Data, Duration, Effect, Exit, Queue, Ref, Scope, Semaphore } fro
 
 import { buildSha, currentSourceSha } from "../build-id.ts";
 import { config, type GithubEventsConfig } from "../config.ts";
+import { causeMessage } from "../errors.ts";
 import { fetchGithub, type GithubData } from "../github.ts";
 import { createLogger, flushLogger } from "../logger.ts";
 import { fetchOrigin, listWorktrees } from "../worktree.ts";
@@ -213,7 +214,11 @@ export function nextFetchAt(
 export class DaemonOperationError extends Data.TaggedError("DaemonOperationError")<{
   readonly operation: string;
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.operation}: ${causeMessage(this.cause)}`;
+  }
+}
 
 type GithubResult = GithubData;
 type Delivery = {
@@ -240,11 +245,6 @@ export type DaemonCore = {
 };
 
 type Daemon = { readonly stop: () => Promise<void> };
-
-function errorMessage(error: unknown): string {
-  if (error instanceof DaemonOperationError) return errorMessage(error.cause);
-  return error instanceof Error ? error.message : String(error);
-}
 
 const trySync = <A>(operation: string, evaluate: () => A) => Effect.try({
   try: evaluate,
@@ -280,10 +280,10 @@ function productionDependencies(): DaemonDependencies {
 }
 
 /** Scoped engine: all timers and workers are child fibers joined on close. */
-export const makeDaemonCore = (
+export const makeDaemonCore = Effect.fn("makeDaemonCore")(function* (
   events: GithubEventsConfig,
   dependencies: DaemonDependencies,
-): Effect.Effect<DaemonCore, DaemonOperationError, Scope.Scope> => Effect.gen(function* () {
+): Effect.fn.Return<DaemonCore, DaemonOperationError, Scope.Scope> {
   const initialState: EventsState = {
     pid: process.pid,
     port: events.port,
@@ -317,7 +317,7 @@ export const makeDaemonCore = (
   const scheduleSignals = yield* Queue.dropping<void>(1);
   const fetchRequests = yield* Queue.dropping<void>(1);
 
-  const getLocalBranches = Effect.gen(function* () {
+  const getLocalBranches = Effect.fnUntraced(function* () {
     const now = yield* Clock.currentTimeMillis;
     const cached = yield* Ref.get(localBranches);
     if (cached.branches.size > 0 && now - cached.at < LOCAL_BRANCHES_TTL_MS) return cached.branches;
@@ -327,12 +327,12 @@ export const makeDaemonCore = (
     return next.branches;
   });
 
-  const processDelivery = ({ event, branches, receivedAt }: Delivery) => Effect.gen(function* () {
+  const processDelivery = Effect.fnUntraced(function* ({ event, branches, receivedAt }: Delivery) {
     if (branches) {
-      const relevant = yield* getLocalBranches.pipe(
+      const relevant = yield* getLocalBranches().pipe(
         Effect.map((local) => branches.some((branch) => local.has(branch))),
         Effect.catch((error) => {
-          log.warn("local-branch check failed; refetching anyway", { err: errorMessage(error) });
+          log.warn("local-branch check failed; refetching anyway", { err: causeMessage(error) });
           return Effect.succeed(true);
         }),
       );
@@ -349,7 +349,9 @@ export const makeDaemonCore = (
     yield* Queue.offer(scheduleSignals, undefined);
   });
 
-  const scheduler = (pendingAt: number | null): Effect.Effect<never> => Effect.gen(function* () {
+  const scheduler = Effect.fnUntraced(function* (
+    pendingAt: number | null,
+  ): Effect.fn.Return<never> {
     if (pendingAt === null) {
       yield* Queue.take(scheduleSignals);
       const now = yield* Clock.currentTimeMillis;
@@ -370,51 +372,54 @@ export const makeDaemonCore = (
     return yield* scheduler(nextFetchAt(signalAt, lastStarted, pendingAt) ?? pendingAt);
   });
 
-  const runFetch = Effect.gen(function* () {
-    if (dependencies.sourceMoved()) {
-      log.info("wt source moved under a running daemon — exiting so launchd restarts it", {
-        startedFrom: buildSha(), now: currentSourceSha(),
-      });
-      const current = yield* Ref.get(state);
-      yield* trySync("write daemon state", () => dependencies.writeState(current));
-      yield* flushLogger;
-      return yield* dependencies.exitForUpgrade;
-    }
-    const startedAt = yield* Clock.currentTimeMillis;
-    const previousStartedAt = yield* Ref.getAndSet(lastFetchStartedAt, startedAt);
-    const sinceLast = previousStartedAt === 0 ? null : startedAt - previousStartedAt;
-    yield* dependencies.fetchOrigin.pipe(Effect.catch((error) => Effect.sync(() => {
-      log.warn("origin refresh after webhook failed", { err: errorMessage(error) });
-    })));
-    const branches = yield* dependencies.currentBranches();
-    yield* Ref.set(localBranches, { branches: new Set(branches), at: yield* Clock.currentTimeMillis });
-    const { prs, mergeQueue } = yield* dependencies.fetchGithub(branches);
-    const committedAt = yield* Clock.currentTimeMillis;
-    yield* Effect.uninterruptible(Effect.gen(function* () {
-      yield* trySync("write GitHub snapshot", () => dependencies.writeSnapshot({
-        updatedAt: committedAt,
-        branches: [...branches],
-        prs: Object.fromEntries(prs),
-        mergeQueue: Object.fromEntries(mergeQueue),
-        writerSha: buildSha(),
+  const runFetch = Effect.fnUntraced(
+    function* () {
+      if (dependencies.sourceMoved()) {
+        log.info("wt source moved under a running daemon — exiting so launchd restarts it", {
+          startedFrom: buildSha(), now: currentSourceSha(),
+        });
+        const current = yield* Ref.get(state);
+        yield* trySync("write daemon state", () => dependencies.writeState(current));
+        yield* flushLogger;
+        return yield* dependencies.exitForUpgrade;
+      }
+      const startedAt = yield* Clock.currentTimeMillis;
+      const previousStartedAt = yield* Ref.getAndSet(lastFetchStartedAt, startedAt);
+      const sinceLast = previousStartedAt === 0 ? null : startedAt - previousStartedAt;
+      yield* dependencies.fetchOrigin.pipe(Effect.catch((error) => Effect.sync(() => {
+        log.warn("origin refresh after webhook failed", { err: causeMessage(error) });
+      })));
+      const branches = yield* dependencies.currentBranches();
+      yield* Ref.set(localBranches, { branches: new Set(branches), at: yield* Clock.currentTimeMillis });
+      const { prs, mergeQueue } = yield* dependencies.fetchGithub(branches);
+      const committedAt = yield* Clock.currentTimeMillis;
+      yield* Effect.uninterruptible(Effect.gen(function* () {
+        yield* trySync("write GitHub snapshot", () => dependencies.writeSnapshot({
+          updatedAt: committedAt,
+          branches: [...branches],
+          prs: Object.fromEntries(prs),
+          mergeQueue: Object.fromEntries(mergeQueue),
+          writerSha: buildSha(),
+        }));
+        yield* trySync("touch GitHub marker", () => dependencies.touchMarker(committedAt));
+        yield* updateState((current) => ({ ...current, lastFetchAt: committedAt, lastError: null }));
       }));
-      yield* trySync("touch GitHub marker", () => dependencies.touchMarker(committedAt));
-      yield* updateState((current) => ({ ...current, lastFetchAt: committedAt, lastError: null }));
-    }));
-    log.info("refetched after webhook", { branches: branches.length, prs: prs.size, sinceLastMs: sinceLast });
-  }).pipe(Effect.catch((error) => Effect.gen(function* () {
-    const message = errorMessage(error);
-    yield* updateState((current) => ({ ...current, lastError: message })).pipe(Effect.catch(() => Effect.void));
-    log.error("webhook refetch failed", { err: message });
-  })));
+      log.info("refetched after webhook", { branches: branches.length, prs: prs.size, sinceLastMs: sinceLast });
+    },
+    Effect.catch((error) => Effect.gen(function* () {
+      const message = causeMessage(error);
+      yield* updateState((current) => ({ ...current, lastError: message })).pipe(Effect.catch(() => Effect.void));
+      log.error("webhook refetch failed", { err: message });
+    })),
+  );
 
   yield* Effect.forkScoped(Effect.forever(Queue.take(deliveries).pipe(Effect.flatMap(processDelivery))));
   yield* Effect.forkScoped(scheduler(null));
-  yield* Effect.forkScoped(Effect.forever(Queue.take(fetchRequests).pipe(Effect.andThen(runFetch))));
+  yield* Effect.forkScoped(Effect.forever(Queue.take(fetchRequests).pipe(Effect.andThen(runFetch()))));
   yield* Queue.offer(fetchRequests, undefined);
 
   return {
-    accept: (event, body) => Effect.gen(function* () {
+    accept: Effect.fnUntraced(function* (event: string, body: string) {
       const now = yield* Clock.currentTimeMillis;
       const payload = yield* trySync("parse webhook body", () => JSON.parse(body)).pipe(
         Effect.catch(() => {
@@ -437,11 +442,11 @@ export const makeDaemonCore = (
   };
 });
 
-const acquireServer = (
+const acquireServer = Effect.fnUntraced(function* (
   events: GithubEventsConfig,
   secret: string,
   core: DaemonCore,
-): Effect.Effect<{ stop(force?: boolean): void }, DaemonOperationError, Scope.Scope> => Effect.gen(function* () {
+): Effect.fn.Return<{ stop(force?: boolean): void }, DaemonOperationError, Scope.Scope> {
   const context = yield* Effect.context<never>();
   return yield* Effect.acquireRelease(
     trySync("start webhook server", () => Bun.serve({
@@ -468,7 +473,7 @@ const acquireServer = (
           try {
             await Effect.runPromiseWith(context)(core.accept(event, body));
           } catch (error) {
-            log.error("failed to persist webhook delivery", { err: errorMessage(error) });
+            log.error("failed to persist webhook delivery", { err: causeMessage(error) });
             return new Response("failed to accept delivery", { status: 503 });
           }
         }
@@ -495,6 +500,26 @@ export function startDaemon(events: GithubEventsConfig, secret: string): Daemon 
   let stopping: Promise<void> | null = null;
   return { stop: () => stopping ??= Effect.runPromise(Scope.close(scope, Exit.void)) };
 }
+
+/**
+ * Resolves once SIGTERM or SIGINT arrives. Registers both handlers on
+ * subscription and always removes them again — on normal delivery (the
+ * handler itself unregisters before resuming) and on interruption (the
+ * cleanup effect `Effect.callback` runs in that case).
+ */
+const waitForShutdownSignal: Effect.Effect<void> = Effect.callback<void>((resume) => {
+  const shutdown = () => {
+    process.off("SIGTERM", shutdown);
+    process.off("SIGINT", shutdown);
+    resume(Effect.void);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+  return Effect.sync(() => {
+    process.off("SIGTERM", shutdown);
+    process.off("SIGINT", shutdown);
+  });
+});
 
 /**
  * Foreground entry point for `wt events serve` (and the launchd agent).
@@ -534,11 +559,7 @@ export async function runDaemonForeground(): Promise<number> {
     );
     return 1;
   }
-  await new Promise<void>((resolve) => {
-    const shutdown = () => resolve();
-    process.on("SIGTERM", shutdown);
-    process.on("SIGINT", shutdown);
-  });
+  await Effect.runPromise(waitForShutdownSignal);
   await daemon.stop();
   return 0;
 }

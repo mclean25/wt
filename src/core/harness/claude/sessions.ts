@@ -15,9 +15,9 @@
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { Data, Effect } from "effect";
+import { Data, Effect, Schedule } from "effect";
 
-import { withAsyncFileLock } from "../../locks.ts";
+import { withAsyncFileLock, type AsyncLockError } from "../../locks.ts";
 import { killHarnessSession } from "../../tmux/admin.ts";
 import { startHarnessSessionDetached } from "../../tmux/lifecycle.ts";
 import { capturePane } from "../../tmux/process.ts";
@@ -50,7 +50,7 @@ export type ClaudeSessionInfo = {
 };
 
 export type ClaudeSession = ClaudeSessionInfo & {
-  stopPromise(): Promise<void>;
+  stop(): Effect.Effect<void, ClaudeSessionError | AsyncLockError>;
 };
 
 export class ClaudeSessionError extends Data.TaggedError("ClaudeSessionError")<{
@@ -58,6 +58,9 @@ export class ClaudeSessionError extends Data.TaggedError("ClaudeSessionError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+/** Not yet found on this poll — retried by `waitForRegistrationEffect`'s schedule, never surfaced. */
+class RegistrationPendingError extends Data.TaggedError("RegistrationPendingError")<{}> {}
 
 type Dependencies = {
   readNative: typeof readRegistry;
@@ -76,8 +79,6 @@ type Dependencies = {
    * observed instance, and `wt logs <slug>` answers about destroy logs.
    */
   peekPane(tmuxName: string): Promise<string | null>;
-  now(): number;
-  sleep(ms: number): Promise<void>;
 };
 
 function canonical(path: string): string {
@@ -88,9 +89,8 @@ function canonical(path: string): string {
   }
 }
 
-const defaults: Pick<Dependencies, "readNative" | "now"> = {
+const defaults: Pick<Dependencies, "readNative"> = {
   readNative: readRegistry,
-  now: Date.now,
 };
 
 export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
@@ -138,13 +138,6 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     : capturePane(tmuxName).pipe(
         Effect.mapError((cause) => fail("pane", cause)),
       );
-
-  const sleepEffect = (ms: number) => overrides.sleep
-    ? Effect.tryPromise({
-        try: () => overrides.sleep!(ms),
-        catch: (cause) => fail("wait", cause),
-      })
-    : Effect.sleep(ms);
 
   function list(): ClaudeSessionInfo[] {
     return deps
@@ -209,21 +202,26 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     return cwdMatches[0] ?? null;
   }
 
+  /** One poll: found is success, absent fails with the pending sentinel so the schedule below retries it. */
+  const pollRegistration = (target: ClaudeSessionTarget) =>
+    Effect.try({
+      try: () => find(target),
+      catch: (cause) => fail("find", cause),
+    }).pipe(
+      Effect.flatMap((session) =>
+        session ? Effect.succeed(session) : Effect.fail(new RegistrationPendingError())),
+    );
+
   function waitForRegistrationEffect(
     target: ClaudeSessionTarget,
   ): Effect.Effect<ClaudeSessionInfo | null, ClaudeSessionError> {
-    return Effect.gen(function* () {
-      const deadline = deps.now() + START_TIMEOUT_MS;
-      while (deps.now() < deadline) {
-        const session = yield* Effect.try({
-          try: () => find(target),
-          catch: (cause) => fail("find", cause),
-        });
-        if (session) return session;
-        yield* sleepEffect(START_POLL_MS);
-      }
-      return null;
-    });
+    return pollRegistration(target).pipe(
+      Effect.retry({
+        while: (error) => error._tag === "RegistrationPendingError",
+        schedule: Schedule.spaced(START_POLL_MS).pipe(Schedule.upTo({ duration: START_TIMEOUT_MS })),
+      }),
+      Effect.catchTag("RegistrationPendingError", () => Effect.succeed(null)),
+    );
   }
 
   /**
@@ -251,10 +249,9 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     }));
   }
 
-  function startUnlockedEffect(
+  const startUnlockedEffect = Effect.fnUntraced(function* (
     target: ClaudeSessionTarget,
-  ): Effect.Effect<ClaudeSessionInfo, ClaudeSessionError> {
-    return Effect.gen(function* () {
+  ): Effect.fn.Return<ClaudeSessionInfo, ClaudeSessionError> {
       const managedName = target.managedName ?? null;
       const identity = targetIdentity(target);
       const started = yield* startDetachedEffect(target, managedName);
@@ -309,8 +306,7 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
           `Claude started but did not register within ${START_TIMEOUT_MS / 1000}s. ` +
           `Its pane (${identity.tmuxName}) holds:\n${pane}`,
       });
-    });
-  }
+  });
 
   function start(target: ClaudeSessionTarget) {
     const identity = targetIdentity(target);
@@ -379,14 +375,14 @@ export function createClaudeSessions(overrides: Partial<Dependencies> = {}) {
     const identity = targetIdentity(target);
     return {
       ...info,
-      stopPromise: () => {
+      stop: () => {
         if (info.sessionId !== identity.sessionId) {
-          return Effect.runPromise(Effect.fail(new ClaudeSessionError({
+          return Effect.fail(new ClaudeSessionError({
             operation: "stop",
             message: "cannot stop a Claude process that was not started by wt",
-          })));
+          }));
         }
-        return stopPromise(target);
+        return stop(target);
       },
     };
   }

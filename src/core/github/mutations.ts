@@ -9,7 +9,7 @@ import type { GhActionResult, LivePrInfo } from "./types.ts";
 
 const log = createLogger("[gh]");
 
-const parseJsonOrNullEffect = <A>(text: string): Effect.Effect<A | null> =>
+const parseJsonOrNull = <A>(text: string): Effect.Effect<A | null> =>
   Effect.try(() => JSON.parse(text) as A).pipe(
     Effect.catch(() => Effect.succeed(null)),
   );
@@ -57,12 +57,11 @@ export function missingWorkflowScope(error: string | undefined): boolean {
     || /without\s+`?workflow`?\s+scope/i.test(error);
 }
 
-function runGhMutationEffect(
+const runGhMutation = Effect.fnUntraced(function* (
   argv: string[],
   logLabel: string,
   logCtx: Record<string, unknown>,
-): Effect.Effect<GhActionResult> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<GhActionResult> {
   if (!(yield* hasGh())) return { ok: false, error: "gh CLI not found" };
   const r = yield* run(argv, {
     cwd: config.paths.mainClone,
@@ -79,8 +78,7 @@ function runGhMutationEffect(
     return { ok: false, error: msg };
   }
   return { ok: true };
-  });
-}
+});
 
 /**
  * Does `branch` have a merge queue? `null` when it doesn't, when the
@@ -94,9 +92,10 @@ function runGhMutationEffect(
  * buys a deterministic answer instead of arming the wrong feature off a
  * stale badge.
  */
-function mergeQueueIdForBranchEffect(branch: string): Effect.Effect<string | null> {
-  if (!branch) return Effect.succeed(null);
-  return Effect.gen(function* () {
+const mergeQueueIdForBranch = Effect.fnUntraced(function* (
+  branch: string,
+): Effect.fn.Return<string | null> {
+  if (!branch) return null;
   const slug = yield* repoSlug();
   if (!slug) return null;
   const [owner, name] = slug.split("/");
@@ -117,12 +116,11 @@ function mergeQueueIdForBranchEffect(branch: string): Effect.Effect<string | nul
     log.warn("merge-queue probe failed", { branch, msg: (r.stderr || r.stdout).slice(0, 200) });
     return null;
   }
-  const parsed = yield* parseJsonOrNullEffect<{
+  const parsed = yield* parseJsonOrNull<{
     data?: { repository?: { mergeQueue?: { id?: string } | null } };
   }>(r.stdout);
   return parsed?.data?.repository?.mergeQueue?.id ?? null;
-  });
-}
+});
 
 /**
  * Enable "merge when ready" on a PR — ARM ONLY, never merge now.
@@ -148,16 +146,16 @@ function mergeQueueIdForBranchEffect(branch: string): Effect.Effect<string | nul
  * unprotected repo — the picker's confirm-less "arm" keystroke once
  * shipped a dogfood PR on the spot while toasting "auto-merge enabled".
  */
-export function enableAutoMerge(
+export const enableAutoMerge = Effect.fn("enableAutoMerge")(function* (
   prId: string,
   opts: { baseRefName?: string; headRefOid?: string } = {},
-): Effect.Effect<GhActionResult> {
+): Effect.fn.Return<GhActionResult> {
   // Callers guard, but a raw GraphQL "Could not resolve to a node with
   // the global id of ''" toast is useless — fail with a named reason.
-  if (!prId) return Effect.succeed({ ok: false, error: "missing PR node id" });
+  if (!prId) return { ok: false, error: "missing PR node id" };
 
   const classic = (): Effect.Effect<GhActionResult> =>
-    runGhMutationEffect(
+    runGhMutation(
       [
         "gh", "api", "graphql",
         "-f",
@@ -169,9 +167,8 @@ export function enableAutoMerge(
       { prId },
     );
 
-  return Effect.gen(function* () {
   const queueId = opts.baseRefName
-    ? yield* mergeQueueIdForBranchEffect(opts.baseRefName)
+    ? yield* mergeQueueIdForBranch(opts.baseRefName)
     : null;
   if (!queueId) return yield* classic();
 
@@ -186,7 +183,7 @@ export function enableAutoMerge(
     "-f", `prId=${prId}`,
   ];
   if (opts.headRefOid) argv.push("-f", `oid=${opts.headRefOid}`);
-  const enqueued = yield* runGhMutationEffect(argv, "enqueue failed", {
+  const enqueued = yield* runGhMutation(argv, "enqueue failed", {
     prId,
     base: opts.baseRefName,
   });
@@ -217,8 +214,7 @@ export function enableAutoMerge(
       ? `${enqueued.error} That check has not reported for this commit yet, so the refusal clears itself once CI does. (arming instead also failed: ${armed.error})`
       : `${enqueued.error} (arming instead also failed: ${armed.error})`,
   };
-  });
-}
+});
 
 export function enableAutoMergePromise(
   prId: string,
@@ -344,17 +340,16 @@ export function notYetEnqueueable(error: string | undefined): boolean {
  * `gh pr merge --disable-auto`, which no-ops with an error we surface
  * verbatim when the PR wasn't armed.
  */
-export function disableAutoMerge(
+export const disableAutoMerge = Effect.fn("disableAutoMerge")(function* (
   prNumber: number,
   opts: { prId?: string; baseRefName?: string } = {},
-): Effect.Effect<GhActionResult> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<GhActionResult> {
   const queueId =
     opts.prId && opts.baseRefName
-      ? yield* mergeQueueIdForBranchEffect(opts.baseRefName)
+      ? yield* mergeQueueIdForBranch(opts.baseRefName)
       : null;
   if (queueId && opts.prId) {
-    return yield* runGhMutationEffect(
+    return yield* runGhMutation(
       [
         "gh", "api", "graphql",
         "-f",
@@ -365,13 +360,12 @@ export function disableAutoMerge(
       { prNumber, base: opts.baseRefName },
     );
   }
-  return yield* runGhMutationEffect(
+  return yield* runGhMutation(
     ["gh", "pr", "merge", String(prNumber), "--disable-auto"],
     "disable auto-merge failed",
     { prNumber },
   );
-  });
-}
+});
 
 export function disableAutoMergePromise(
   prNumber: number,
@@ -396,7 +390,7 @@ export function editReviewers(
   const argv = ["gh", "pr", "edit", String(prNumber)];
   for (const l of changes.add) argv.push("--add-reviewer", l);
   for (const l of changes.remove) argv.push("--remove-reviewer", l);
-  return runGhMutationEffect(argv, "edit reviewers failed", { prNumber, changes });
+  return runGhMutation(argv, "edit reviewers failed", { prNumber, changes });
 }
 
 export function editReviewersPromise(
@@ -417,7 +411,7 @@ export function retargetPrBase(
   prNumber: number,
   base: string,
 ): Effect.Effect<GhActionResult> {
-  return runGhMutationEffect(
+  return runGhMutation(
     ["gh", "pr", "edit", String(prNumber), "--base", base],
     "retarget pr base failed",
     { prNumber, base },
@@ -437,7 +431,7 @@ export function retargetPrBasePromise(prNumber: number, base: string): Promise<G
 export function markPullRequestReady(
   prNumber: number,
 ): Effect.Effect<GhActionResult> {
-  return runGhMutationEffect(
+  return runGhMutation(
     ["gh", "pr", "ready", String(prNumber)],
     "mark ready failed",
     { prNumber },
@@ -456,7 +450,7 @@ export function markPullRequestReadyPromise(prNumber: number): Promise<GhActionR
  * they log and move on rather than surfacing an error.
  */
 export function closeGithubIssue(issue: number): Effect.Effect<GhActionResult> {
-  return runGhMutationEffect(
+  return runGhMutation(
     ["gh", "issue", "close", String(issue), "--reason", "completed"],
     "close issue failed",
     { issue },
@@ -485,23 +479,23 @@ export function closeGithubIssuePromise(issue: number): Promise<GhActionResult> 
  * end state, not an error, so callers log and move on rather than
  * retrying into a ref that is already gone.
  */
-export function deleteRemoteBranch(branch: string): Effect.Effect<GhActionResult> {
-  if (!branch) return Effect.succeed({ ok: false, error: "missing branch" });
+export const deleteRemoteBranch = Effect.fn("deleteRemoteBranch")(function* (
+  branch: string,
+): Effect.fn.Return<GhActionResult> {
+  if (!branch) return { ok: false, error: "missing branch" };
   if (branch === config.branch.base) {
-    return Effect.succeed({ ok: false, error: `refusing to delete the trunk branch ${branch}` });
+    return { ok: false, error: `refusing to delete the trunk branch ${branch}` };
   }
-  return Effect.gen(function* () {
   const slug = yield* repoSlug();
   if (!slug) return { ok: false, error: "could not resolve the origin repo" };
   // Nested refs (`user/feature`) need no escaping — the REST path takes
   // the rest of the ref verbatim after `heads/`.
-  return yield* runGhMutationEffect(
+  return yield* runGhMutation(
     ["gh", "api", "--method", "DELETE", `repos/${slug}/git/refs/heads/${branch}`],
     "delete branch failed",
     { branch },
   );
-  });
-}
+});
 
 export function deleteRemoteBranchPromise(branch: string): Promise<GhActionResult> {
   return Effect.runPromise(deleteRemoteBranch(branch));
@@ -514,11 +508,10 @@ export function deleteRemoteBranchPromise(branch: string): Promise<GhActionResul
  * run exists (a check can fail as a bare `StatusContext` with no Actions
  * run behind it), or gh errors. Read-only; safe to fire from a keybind.
  */
-export function streamFailedRunLog(
+export const streamFailedRunLog = Effect.fn("streamFailedRunLog")(function* (
   branch: string,
   onLine: (line: string) => void,
-): Effect.Effect<{ ok: true } | { ok: false; reason: string }> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<{ ok: true } | { ok: false; reason: string }> {
   if (!(yield* hasGh())) return { ok: false, reason: "gh CLI not found" };
   const listed = yield* run(
     [
@@ -537,7 +530,7 @@ export function streamFailedRunLog(
   if (listed.exitCode !== 0) {
     return { ok: false, reason: (listed.stderr || listed.stdout).trim() || "gh run list failed" };
   }
-  const runs = yield* parseJsonOrNullEffect<Array<{ databaseId?: number }>>(
+  const runs = yield* parseJsonOrNull<Array<{ databaseId?: number }>>(
     listed.stdout,
   );
   if (!runs) return { ok: false, reason: "could not parse gh run list" };
@@ -549,8 +542,7 @@ export function streamFailedRunLog(
   ).pipe(Effect.catch(() => Effect.succeed(-1)));
   if (code !== 0) return { ok: false, reason: `gh run view exited ${code}` };
   return { ok: true };
-  });
-}
+});
 
 export function streamFailedRunLogPromise(
   branch: string,
@@ -565,9 +557,10 @@ export function streamFailedRunLogPromise(
  * the recorded parent against the PR's actual base. Returns null when
  * there's no PR (or gh is unavailable).
  */
-export function viewPrInfo(branch: string): Effect.Effect<LivePrInfo | null> {
-  if (!branch) return Effect.succeed(null);
-  return Effect.gen(function* () {
+export const viewPrInfo = Effect.fn("viewPrInfo")(function* (
+  branch: string,
+): Effect.fn.Return<LivePrInfo | null> {
+  if (!branch) return null;
   if (!(yield* hasGh())) return null;
   const r = yield* run(
     [
@@ -578,24 +571,23 @@ export function viewPrInfo(branch: string): Effect.Effect<LivePrInfo | null> {
   ).pipe(Effect.catch(() => Effect.succeed(null)));
   if (r === null) return null;
   if (r.exitCode !== 0) return null;
-  const d = yield* parseJsonOrNullEffect<Partial<LivePrInfo>>(r.stdout);
+  const d = yield* parseJsonOrNull<Partial<LivePrInfo>>(r.stdout);
   if (!d || typeof d.number !== "number") return null;
-    // Validate `state` against the known set rather than asserting — gh
-    // could in principle return a value outside the union, and downstream
-    // merge-detection branches on it.
-    const state: LivePrInfo["state"] =
-      d.state === "CLOSED" || d.state === "MERGED" ? d.state : "OPEN";
+  // Validate `state` against the known set rather than asserting — gh
+  // could in principle return a value outside the union, and downstream
+  // merge-detection branches on it.
+  const state: LivePrInfo["state"] =
+    d.state === "CLOSED" || d.state === "MERGED" ? d.state : "OPEN";
   return {
-      number: d.number,
-      baseRefName: typeof d.baseRefName === "string" ? d.baseRefName : "",
-      state,
-      isDraft: d.isDraft === true,
-      title: typeof d.title === "string" ? d.title : "",
-      id: typeof d.id === "string" ? d.id : "",
-      headRefOid: typeof d.headRefOid === "string" ? d.headRefOid : "",
+    number: d.number,
+    baseRefName: typeof d.baseRefName === "string" ? d.baseRefName : "",
+    state,
+    isDraft: d.isDraft === true,
+    title: typeof d.title === "string" ? d.title : "",
+    id: typeof d.id === "string" ? d.id : "",
+    headRefOid: typeof d.headRefOid === "string" ? d.headRefOid : "",
   };
-  });
-}
+});
 
 export function viewPrInfoPromise(branch: string): Promise<LivePrInfo | null> {
   return Effect.runPromise(viewPrInfo(branch));

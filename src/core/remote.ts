@@ -1,6 +1,7 @@
 import { Data, Effect } from "effect";
 
 import type { RemoteConfig } from "./config.ts";
+import { causeMessage } from "./errors.ts";
 import { runStreaming, terminateSubprocess } from "./proc.ts";
 import { remoteWtCommand } from "./remote-protocol.ts";
 
@@ -98,7 +99,11 @@ export function interactiveRemoteSshArgv(
 export class RemoteRunError extends Data.TaggedError("RemoteRunError")<{
   readonly operation: "spawn" | "wait";
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.operation}: ${causeMessage(this.cause)}`;
+  }
+}
 
 export function runRemoteWt(
   remote: RemoteConfig,

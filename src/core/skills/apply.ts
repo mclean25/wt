@@ -19,16 +19,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
+import { causeMessage, operationErrors } from "../errors.ts";
 import { run } from "../proc.ts";
 import type { UnitReport } from "./report.ts";
 import type { RulesyncInfo } from "./targets.ts";
 import { unitSourcePath } from "./registry.ts";
 import { spliceInstructionsBlock, stampContent } from "./template.ts";
 
-/** Write one unit at its report's target. Throws on failure. */
-export function applyReportPromise(report: UnitReport): void {
+const io = operationErrors("skills/apply");
+
+function dispatchApply(report: UnitReport): void {
   if (report.unit.kind === "skill") {
     applySkill(report);
   } else {
@@ -36,17 +38,15 @@ export function applyReportPromise(report: UnitReport): void {
   }
 }
 
-export class SkillApplyError extends Data.TaggedError("SkillApplyError")<{
-  readonly unit: string;
-  readonly cause: unknown;
-}> {}
+/** Write one unit at its report's target. Throws on failure. */
+export function applyReportPromise(report: UnitReport): void {
+  dispatchApply(report);
+}
 
 /** Effect-native write path for scoped command composition. */
-export const applyReport = (report: UnitReport): Effect.Effect<void, SkillApplyError> =>
-  Effect.try({
-    try: () => applyReportPromise(report),
-    catch: (cause) => new SkillApplyError({ unit: report.unit.name, cause }),
-  });
+export const applyReport = Effect.fn("applyReport")(function* (report: UnitReport) {
+  yield* io.sync(`apply ${report.unit.name}`, () => dispatchApply(report));
+});
 
 function applySkill(report: UnitReport): void {
   const destDir = dirname(report.path); // <skills root>/<name>
@@ -130,7 +130,7 @@ export function regenRulesync(roots: RulesyncInfo[]): Effect.Effect<RegenResult[
       Effect.catch((err) => Effect.succeed({
         root: rs.root,
         ok: false,
-        output: err instanceof Error ? err.message : String(err),
+        output: causeMessage(err),
       })),
     ),
     { concurrency: 1 },

@@ -6,10 +6,11 @@
  * semantics as when these lived inline).
  */
 import { existsSync } from "node:fs";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
 import { actionRegistry } from "../../core/actions.ts";
 import type { RemoteConfig } from "../../core/config.ts";
+import { causeMessage, operationErrors } from "../../core/errors.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import {
   isRemoteWorktreeTarget,
@@ -18,7 +19,7 @@ import {
 } from "../../core/worktree-target.ts";
 import type { PullRequest } from "../../core/types.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessagePromise } from "../../core/harness/session-messaging.ts";
+import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { spawnBackgroundRemovePromise } from "../../core/lifecycle.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
@@ -40,19 +41,14 @@ import {
   isRemoteCleanCandidate,
   remoteCleanHazardLabel,
 } from "../clean-candidate.ts";
+import { forkReported } from "../effect-boundary.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
 import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 
 const appLog = createLogger("[app]");
 
-class RemovalRefreshError extends Data.TaggedError("RemovalRefreshError")<{
-  readonly cause: unknown;
-}> {}
-
-class CleanError extends Data.TaggedError("CleanError")<{
-  readonly cause: unknown;
-}> {}
+const io = operationErrors("destroy flows");
 
 /**
  * Rich removed-history snapshot taken at destroy DISPATCH, while the
@@ -147,27 +143,21 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     primaryHarness,
   } = ctx;
 
-  const scheduleRemovalRefresh = (): Promise<void> =>
-    Effect.runPromise(
-      Effect.sleep("600 millis").pipe(
-        Effect.andThen(
-          Effect.tryPromise({
-            try: refreshAfterRemoval,
-            catch: (cause) => new RemovalRefreshError({ cause }),
-          }),
-        ),
-        Effect.catch((error) =>
-          Effect.sync(() => {
-            appLog.warn("post-removal refresh failed", {
-              err:
-                error.cause instanceof Error
-                  ? error.cause.message
-                  : String(error.cause),
-            });
-          }),
-        ),
-      ),
-    );
+  /**
+   * Refresh the LIST (not per-slug fields — the checkout is being
+   * deleted out from under them) 600ms after a destroy dispatches, so
+   * the just-archived row's removal has a beat to land before the
+   * board re-reads it. A failure here is maintenance, not a user-facing
+   * outcome the destroy itself should answer for — logged and dropped.
+   */
+  const removalRefresh: Effect.Effect<void> = Effect.sleep("600 millis").pipe(
+    Effect.andThen(io.promise("refresh after removal", refreshAfterRemoval)),
+    Effect.catch((error) =>
+      Effect.sync(() => {
+        appLog.warn("post-removal refresh failed", { err: causeMessage(error.cause) });
+      }),
+    ),
+  );
 
   async function doRemoteRemove(
     remote: RemoteConfig,
@@ -187,7 +177,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     ];
     log.event.info(`removing ${slug}${force ? " (force)" : ""}`);
     try {
-      void actionRegistry.killPromise(remoteWorktreeActionKey(remote.host, slug));
+      Effect.runFork(actionRegistry.kill(remoteWorktreeActionKey(remote.host, slug)));
       await optimisticRemoveRemoteWorktree(remote, slug, async () => {
         const code = await runRemoteWtPromise(remote, args, {
           onLine: (line) => log.event.dim(line),
@@ -265,7 +255,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // kill() commits the "killed" status synchronously before its async
     // tmux teardown, so the status flip lands before killAllSessionsFor
     // below even though we don't await here.
-    void actionRegistry.killPromise(slug);
+    Effect.runFork(actionRegistry.kill(slug));
     // Tear down any interactive sessions (claude, diff, shell) BEFORE
     // the worktree removal starts. Their cwds are inside the worktree;
     // letting the remove race against a live tmux child can leave it
@@ -297,7 +287,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // deleted out from under them, so re-running ten git probes in a
     // vanishing directory buys errors, not freshness. The busy glyph
     // comes from the lock watcher either way.
-    await scheduleRemovalRefresh();
+    await Effect.runPromise(removalRefresh);
   }
 
   /** One removal entrypoint; location is resolved only at execution. */
@@ -338,15 +328,10 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     await Effect.runPromise(
       Effect.all(
         [
-          Effect.tryPromise({
-            try: () => doCleanRows(localCandidates),
-            catch: (cause) => new CleanError({ cause }),
-          }),
+          io.promise("clean local candidates", () => doCleanRows(localCandidates)),
           ...safeRemoteCandidates.map((entry) =>
-            Effect.tryPromise({
-              try: () => doRemoteRemove(entry.remote, entry.slug),
-              catch: (cause) => new CleanError({ cause }),
-            }),
+            io.promise("clean remote candidate", () =>
+              doRemoteRemove(entry.remote, entry.slug)),
           ),
         ],
         { concurrency: "unbounded", discard: true },
@@ -418,7 +403,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // cursor can't land on the next row this sweep is about to destroy.
     advanceCursorPast(candidates.map((r) => r.wt.slug));
     recordRemovedSnapshots(candidates);
-    for (const row of candidates) void actionRegistry.killPromise(row.wt.slug);
+    for (const row of candidates) Effect.runFork(actionRegistry.kill(row.wt.slug));
     // This is intentionally all-settled: one already-dead or inaccessible
     // tmux session must not prevent the remaining candidates from entering
     // the destroy queue. Effect makes that best-effort policy explicit.
@@ -451,7 +436,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     // triggers `reparentBaseReferences`, anchors preserved), so no
     // TUI-side bookkeeping is needed here. The actual replay (rebasing
     // commits off the squashed parent) stays an explicit `R`/`/restack`.
-    await scheduleRemovalRefresh();
+    await Effect.runPromise(removalRefresh);
   }
 
   /**
@@ -560,38 +545,50 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       : "";
     const text = `${skill}\n\nwt's restack engine just bailed on this worktree: ${detail}.${backup} Resolve the conflict and finish the restack.`;
     log.event.info(`conflict — sending ${skill} to ${harness.label} session`);
-    void sendSessionMessagePromise({
-      slug,
-      cwd: row.wt.path,
-      harnessId: primaryHarness,
-      text,
-    }).then((res) => {
-      if (res.ok && res.delivered === false) {
-        // Delivery is verified against the target's own transcript, for
-        // every harness. An unattended handoff that failed verification
-        // must say so, because the conflict is still sitting there.
-        log.attention.warn(
-          `${skill} handoff never reached the ${harness.label} session — run it by hand`,
-        );
-      } else if (res.ok) {
-        // Toast: the handoff lands well after the restack's own toast
-        // expired, and cold starts take seconds — worth an async ack.
-        // The payload IS a slash command, so `delivered` is null here:
-        // it ran, but a command leaves no prompt entry to confirm
-        // against, and claiming otherwise would overstate it.
-        log.event.ok(
-          `${
-            res.coldStarted
-              ? `started ${harness.label} session and sent ${skill}`
-              : `sent ${skill} to ${harness.label} session`
-          }${res.delivered === null ? " (a command's arrival can't be confirmed)" : ""}`,
-          { toast: true },
-        );
-      } else {
-        log.event.err(`${skill} handoff failed: ${res.reason} — run it by hand`);
-        toast(`${skill} handoff failed: ${res.reason}`, theme.err, 5000);
-      }
-    });
+    // `res.ok`/`res.reason` are data on the SUCCESS value (the target's
+    // own verdict); a genuine Effect failure here means the send never
+    // even attempted delivery (e.g. the per-target lock blew up) — the
+    // old `.then` with no `.catch` left that case an unhandled
+    // rejection, which `forkReported` now reports instead.
+    forkReported(
+      sendSessionMessage({ slug, cwd: row.wt.path, harnessId: primaryHarness, text }).pipe(
+        Effect.tap((res) =>
+          Effect.sync(() => {
+            if (res.ok && res.delivered === false) {
+              // Delivery is verified against the target's own transcript,
+              // for every harness. An unattended handoff that failed
+              // verification must say so, because the conflict is still
+              // sitting there.
+              log.attention.warn(
+                `${skill} handoff never reached the ${harness.label} session — run it by hand`,
+              );
+            } else if (res.ok) {
+              // Toast: the handoff lands well after the restack's own
+              // toast expired, and cold starts take seconds — worth an
+              // async ack. The payload IS a slash command, so
+              // `delivered` is null here: it ran, but a command leaves
+              // no prompt entry to confirm against, and claiming
+              // otherwise would overstate it.
+              log.event.ok(
+                `${
+                  res.coldStarted
+                    ? `started ${harness.label} session and sent ${skill}`
+                    : `sent ${skill} to ${harness.label} session`
+                }${res.delivered === null ? " (a command's arrival can't be confirmed)" : ""}`,
+                { toast: true },
+              );
+            } else {
+              log.event.err(`${skill} handoff failed: ${res.reason} — run it by hand`);
+              toast(`${skill} handoff failed: ${res.reason}`, theme.err, 5000);
+            }
+          }),
+        ),
+      ),
+      (error) => {
+        log.event.err(`${skill} handoff failed: ${error.message} — run it by hand`);
+        toast(`${skill} handoff failed: ${error.message}`, theme.err, 5000);
+      },
+    );
     return true;
   }
 

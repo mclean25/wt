@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient } from "@tanstack/react-query";
+import { Effect } from "effect";
 
 import {
   patchArchivedKeys,
@@ -34,14 +35,16 @@ function deferred(): {
 } {
   let resolve!: () => void;
   let reject!: (e: Error) => void;
-  const promise = new Promise<void>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
+  const promise = Effect.runPromise(
+    Effect.callback<void, Error>((resume) => {
+      resolve = () => resume(Effect.void);
+      reject = (e) => resume(Effect.fail(e));
+    }),
+  );
   return { promise, resolve, reject };
 }
 
-const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+const tick = () => Effect.runPromise(Effect.sleep(0));
 
 test("archive patches keep the intended state when the settle guard reapplies them", () => {
   const archived = patchArchivedKeys(["existing"], "new", true);

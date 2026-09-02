@@ -2,32 +2,36 @@ import type { KeyEvent } from "@opentui/core";
 
 import { recentValues } from "../../core/actions.ts";
 import { createLogger } from "../../core/logger.ts";
-import { openInEditorPromise } from "../../core/editor.ts";
+import { openInEditor } from "../../core/editor.ts";
+import { operationErrors } from "../../core/errors.ts";
+import { forkReported } from "../effect-boundary.ts";
 import { printableMultiline } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import { SESSION_SLOTS } from "../sessions/slots.ts";
 import { applyEditKey, emptyEdit, insertText } from "../text-edit.tsx";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleListPickerKey } from "./list-picker.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class ActionsModalError extends Data.TaggedError("ActionsModalError")<{
-  cause: unknown;
-}> {}
-const actionEffect = <A>(evaluate: () => A | PromiseLike<A>) =>
-  Effect.try({
-    try: evaluate,
-    catch: (cause) => new ActionsModalError({ cause }),
-  }).pipe(
-    Effect.flatMap((value) =>
-      value && typeof (value as PromiseLike<A>).then === "function"
-        ? Effect.tryPromise({
-            try: () => value as PromiseLike<A>,
-            catch: (cause) => new ActionsModalError({ cause }),
-          })
-        : Effect.succeed(value as A),
-    ),
+const io = operationErrors("modal-keys/actions");
+
+/**
+ * Fire-and-forget an action launch. `evaluate`'s declared return type
+ * (`void | Promise<unknown>`) is deliberately loose in `ctx.ts` — the
+ * real implementations always return a Promise — so `Promise.resolve`
+ * normalizes either shape into one awaitable without duck-typing at
+ * runtime.
+ */
+function launchFireAndForget(
+  label: string,
+  evaluate: () => void | Promise<unknown>,
+  reportActionError: (label: string, err: unknown) => void,
+): void {
+  forkReported(
+    io.promise(label, () => Promise.resolve(evaluate())),
+    (error) => reportActionError(label, error),
   );
+}
 
 export function handleActionPickerKey(
   k: KeyEvent,
@@ -46,6 +50,7 @@ export function handleActionPickerKey(
     doAutoMerge,
     toast,
     warnColor,
+    reportActionError,
   } = ctx;
   const ap = modal.state;
   const manager = ap.surface === "manager";
@@ -69,10 +74,10 @@ export function handleActionPickerKey(
         // Direct toggle, no confirm — `!` + `m` is already deliberate,
         // matching the `; x` direct-kill convention.
         setModal(null);
-        Effect.runFork(
-          actionEffect(() =>
-            doAutoMerge(ap.slug, item.armed ? "disable" : "enable", ap.target),
-          ).pipe(Effect.catch(() => Effect.void)),
+        launchFireAndForget(
+          "auto-merge",
+          () => doAutoMerge(ap.slug, item.armed ? "disable" : "enable", ap.target),
+          reportActionError,
         );
         return;
       }
@@ -83,19 +88,13 @@ export function handleActionPickerKey(
         const slot = SESSION_SLOTS.find((s) => s.slug === ap.slug);
         if (!slot) return;
         const editorLog = createLogger(slot.label);
-        Effect.runFork(
-          actionEffect(() => openInEditorPromise(slot.path)).pipe(
+        forkReported(
+          openInEditor(slot.path).pipe(
             Effect.tap(() =>
               Effect.sync(() => editorLog.event.info(`opened ${slot.path}`)),
             ),
-            Effect.catch((error) =>
-              Effect.sync(() =>
-                editorLog.event.err(
-                  `editor open failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
-                ),
-              ),
-            ),
           ),
+          (error) => reportActionError("editor open", error),
         );
         return;
       }
@@ -111,10 +110,10 @@ export function handleActionPickerKey(
         // must NOT route here (it'd silently address the palette's
         // slot session).
         setModal(null);
-        Effect.runFork(
-          actionEffect(() => launchSlotCommand(ap.slug, item.def, "")).pipe(
-            Effect.catch(() => Effect.void),
-          ),
+        launchFireAndForget(
+          item.def.name,
+          () => launchSlotCommand(ap.slug, item.def, ""),
+          reportActionError,
         );
         return;
       }
@@ -145,8 +144,9 @@ export function handleActionPickerKey(
       }
       if (item.kind === "action" && item.def.kind === "shell") {
         setModal(null);
-        Effect.runFork(
-          actionEffect(() =>
+        launchFireAndForget(
+          item.def.name,
+          () =>
             launchAction(
               ap.slug,
               item.def,
@@ -155,7 +155,7 @@ export function handleActionPickerKey(
               undefined,
               ap.target,
             ),
-          ).pipe(Effect.catch(() => Effect.void)),
+          reportActionError,
         );
         return;
       }
@@ -273,21 +273,22 @@ export function handleActionPickerKey(
       // against the captured row so they get template vars and the
       // `[re: <slug>]` prefix.
       if (def === null || def.fleet)
-        Effect.runFork(
-          actionEffect(() => launchSlotCommand(slug, def, extras.value)).pipe(
-            Effect.catch(() => Effect.void),
-          ),
+        launchFireAndForget(
+          def?.name ?? "custom message",
+          () => launchSlotCommand(slug, def, extras.value),
+          reportActionError,
         );
       else if (rowSlug)
-        Effect.runFork(
-          actionEffect(() => launchAction(rowSlug, def, extras.value)).pipe(
-            Effect.catch(() => Effect.void),
-          ),
+        launchFireAndForget(
+          def.name,
+          () => launchAction(rowSlug, def, extras.value),
+          reportActionError,
         );
       else toast("no row selected", warnColor, 2000);
     } else {
-      Effect.runFork(
-        actionEffect(() =>
+      launchFireAndForget(
+        def?.name ?? "custom message",
+        () =>
           launchAction(
             slug,
             def,
@@ -296,7 +297,7 @@ export function handleActionPickerKey(
             undefined,
             ap.target,
           ),
-        ).pipe(Effect.catch(() => Effect.void)),
+        reportActionError,
       );
     }
     return true;
@@ -321,7 +322,7 @@ export function handleActionPickerKey(
 export function handleArgPickerKey(
   k: KeyEvent,
   modal: Extract<Modal, { kind: "argPicker" }>,
-  { setModal, launchAction }: SimpleModalContext,
+  { setModal, launchAction, reportActionError }: SimpleModalContext,
 ): boolean {
   const rowCount = modal.history.length + 1;
   const isInput = modal.input !== null;
@@ -329,8 +330,9 @@ export function handleArgPickerKey(
     const trimmed = value.trim();
     if (!trimmed) return;
     setModal(null);
-    Effect.runFork(
-      actionEffect(() =>
+    launchFireAndForget(
+      modal.def.name,
+      () =>
         launchAction(
           modal.slug,
           modal.def,
@@ -339,7 +341,7 @@ export function handleArgPickerKey(
           undefined,
           modal.target,
         ),
-      ).pipe(Effect.catch(() => Effect.void)),
+      reportActionError,
     );
   };
   if (k.ctrl && k.name === "c") {

@@ -10,10 +10,10 @@
  * terminal handoff when the overlay was dismissed mid-send.
  */
 import type { Dispatch, SetStateAction } from "react";
-import { Data, Effect } from "effect";
+import { Effect, Option } from "effect";
 
 import type { HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessagePromise } from "../../core/harness/session-messaging.ts";
+import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
 import {
   buildErrorInvestigationPrompt,
@@ -26,20 +26,27 @@ import { theme } from "../theme.ts";
 
 const log = createLogger(WT_SOURCE_SLOT.label);
 
+/** A wedged transport must not permanently disable the `i` affordance. */
+const SEND_TIMEOUT = "30 seconds";
+
 let inFlight = false;
 let cancelled = false;
 
-class ErrorReportSendError extends Data.TaggedError("ErrorReportSendError")<{
-  readonly cause: unknown;
-}> {}
-
 /**
  * Called when the error overlay closes. A send already in flight still
- * completes (the message is on its way) but stops short of entering the
- * session.
+ * completes in the background (the message is on its way) but stops
+ * short of entering the session — `cancelled` gates that last step.
+ * `inFlight` is reset here too, immediately, rather than waiting for
+ * that background send (or its timeout) to settle: the `i` affordance
+ * is a UI throttle, not a concurrency guard (the transport already
+ * serializes per target), so there's no reason a dismissed overlay
+ * should keep it disabled.
  */
 export function cancelErrorInvestigate(): void {
-  if (inFlight) cancelled = true;
+  if (inFlight) {
+    cancelled = true;
+    inFlight = false;
+  }
 }
 
 export type ErrorFlowCtx = {
@@ -72,28 +79,28 @@ export function makeErrorFlows(ctx: ErrorFlowCtx): {
     cancelled = false;
     patchInject({ kind: "sending" });
     Effect.runFork(
-      Effect.tryPromise({
-        // Same tmux session `,` attaches to. The prompt lands in the
-        // conversation the user is about to enter.
-        try: () =>
-          sendSessionMessagePromise({
-            slug: WT_SOURCE_SLOT.slug,
-            cwd: WT_SOURCE_SLOT.path,
-            harnessId: primaryHarness,
-            text: buildErrorInvestigationPrompt(captured),
-          }),
-        catch: (cause) => new ErrorReportSendError({ cause }),
+      // Same tmux session `,` attaches to. The prompt lands in the
+      // conversation the user is about to enter.
+      sendSessionMessage({
+        slug: WT_SOURCE_SLOT.slug,
+        cwd: WT_SOURCE_SLOT.path,
+        harnessId: primaryHarness,
+        text: buildErrorInvestigationPrompt(captured),
       }).pipe(
+        Effect.timeoutOption(SEND_TIMEOUT),
         Effect.match({
           onFailure: (error) => {
-            const reason =
-              error.cause instanceof Error
-                ? error.cause.message
-                : String(error.cause);
+            const reason = error.message;
             patchInject({ kind: "failed", reason });
             log.event.err(`error-report send failed: ${reason}`);
           },
-          onSuccess: (result) => {
+          onSuccess: (outcome) => {
+            if (Option.isNone(outcome)) {
+              patchInject({ kind: "failed", reason: "timed out waiting for the session" });
+              log.event.err("error-report send timed out");
+              return;
+            }
+            const result = outcome.value;
             if (!result.ok) {
               patchInject({ kind: "failed", reason: result.reason });
               log.event.err(`error-report send failed: ${result.reason}`);

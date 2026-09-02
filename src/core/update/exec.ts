@@ -4,7 +4,7 @@
  * crash-rollback path (main.ts catch → cli/commands/rollback.ts) has
  * to work when `core/config.ts` is exactly what the broken update
  * can't load — so no imports of config, proc, locks, or logger (all of
- * which pull the config chain in at module init). `runInEffect` is a local
+ * which pull the config chain in at module init). `runIn` is a local
  * copy of proc.ts's `run` minus config defaults and signal plumbing;
  * `logSafe` is a best-effort lazy logger that silently no-ops when the
  * logging chain itself can't load.
@@ -12,7 +12,9 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { constants as osConstants, homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { Data, Duration, Effect, Option, Schedule, Scope } from "effect";
+import { Clock, Data, Duration, Effect, Option, Schedule, Scope } from "effect";
+
+import { causeMessage } from "../errors.ts";
 
 /** Repo root of the wt source tree (this file is `<root>/src/core/update/exec.ts`). */
 export const WT_REPO_ROOT: string = resolve(import.meta.dir, "..", "..", "..");
@@ -23,7 +25,14 @@ export class UpdateProcessError extends Data.TaggedError("UpdateProcessError")<{
   readonly argv: readonly string[];
   readonly operation: "spawn" | "read" | "timeout";
   readonly cause?: unknown;
-}> {}
+}> {
+  override get message(): string {
+    const argv = this.argv.join(" ");
+    return this.operation === "timeout"
+      ? `timed out: ${argv}`
+      : `${this.operation} failed for "${argv}": ${causeMessage(this.cause)}`;
+  }
+}
 
 function killUpdateProcessGroup(
   proc: Bun.Subprocess<"ignore", "pipe", "pipe">,
@@ -229,71 +238,6 @@ export function restartEventsDaemonAfterUpdate(
   });
 }
 
-const GIT_LOCK_DIR = join(homedir(), ".cache", "wt", "update-git.lock");
-
-class UpdateLockBusy extends Data.TaggedError("UpdateLockBusy") {}
-
-const releaseUpdateGitLock = (): void => {
-  try {
-    rmSync(GIT_LOCK_DIR, { recursive: true, force: true });
-  } catch {
-    // Staleness detection reclaims a lock whose release was interrupted.
-  }
-};
-
-const acquireUpdateGitLockOnce = (): Effect.Effect<() => void, UpdateLockBusy> =>
-  Effect.suspend(() => {
-    try {
-      mkdirSync(GIT_LOCK_DIR, { recursive: false });
-      writeFileSync(join(GIT_LOCK_DIR, "pid"), String(process.pid));
-      return Effect.succeed(releaseUpdateGitLock);
-    } catch {
-      let stale = false;
-      try {
-        const pid = parseInt(
-          readFileSync(join(GIT_LOCK_DIR, "pid"), "utf8"),
-          10,
-        );
-        let alive = false;
-        if (Number.isFinite(pid) && pid > 0) {
-          try {
-            process.kill(pid, 0);
-            alive = true;
-          } catch (error) {
-            alive = (error as NodeJS.ErrnoException).code === "EPERM";
-          }
-        }
-        stale = !alive || Date.now() - statSync(GIT_LOCK_DIR).mtimeMs > 15 * 60_000;
-      } catch {
-        try {
-          stale = Date.now() - statSync(GIT_LOCK_DIR).mtimeMs > 60_000;
-        } catch {
-          stale = false;
-        }
-      }
-      if (stale) releaseUpdateGitLock();
-      return Effect.fail(new UpdateLockBusy());
-    }
-  });
-
-export const acquireUpdateGitLock: Effect.Effect<(() => void) | null> =
-  acquireUpdateGitLockOnce().pipe(
-    Effect.retry(
-      Schedule.max([
-        Schedule.spaced(Duration.millis(200)),
-        Schedule.recurs(9),
-      ]),
-    ),
-    Effect.orElseSucceed(() => null),
-  );
-
-/** Scoped lock ownership. Scope close releases on success, failure, or interruption. */
-export const updateGitLock: Effect.Effect<boolean, never, Scope.Scope> =
-  Effect.acquireRelease(
-    acquireUpdateGitLock,
-    (release) => release ? Effect.sync(release) : Effect.void,
-  ).pipe(Effect.map((release) => release !== null));
-
 /**
  * Cross-process mutual exclusion for the destructive git operations
  * (merge/reset on the ONE shared source clone). `core/locks.ts` is
@@ -304,6 +248,88 @@ export const updateGitLock: Effect.Effect<boolean, never, Scope.Scope> =
  * install` for minutes, and "another update is in progress, retry" is
  * a better answer than a silent multi-minute block.
  */
+const GIT_LOCK_DIR = join(homedir(), ".cache", "wt", "update-git.lock");
+
+class UpdateLockBusy extends Data.TaggedError("UpdateLockBusy") {
+  override get message(): string {
+    return "update-git lock is held by another process";
+  }
+}
+
+const releaseUpdateGitLockAt = (lockDir: string) => (): void => {
+  try {
+    rmSync(lockDir, { recursive: true, force: true });
+  } catch {
+    // Staleness detection reclaims a lock whose release was interrupted.
+  }
+};
+
+function pidIsStale(lockDir: string, now: number): boolean {
+  const pid = parseInt(readFileSync(join(lockDir, "pid"), "utf8"), 10);
+  let alive = false;
+  if (Number.isFinite(pid) && pid > 0) {
+    try {
+      process.kill(pid, 0);
+      alive = true;
+    } catch (error) {
+      alive = (error as NodeJS.ErrnoException).code === "EPERM";
+    }
+  }
+  return !alive || now - statSync(lockDir).mtimeMs > 15 * 60_000;
+}
+
+function mtimeOnlyIsStale(lockDir: string, now: number): boolean {
+  return now - statSync(lockDir).mtimeMs > 60_000;
+}
+
+const acquireUpdateGitLockOnceAt = (lockDir: string) =>
+  Effect.fnUntraced(function* (): Effect.fn.Return<() => void, UpdateLockBusy> {
+    const release = releaseUpdateGitLockAt(lockDir);
+    const acquired = yield* Effect.try(() => {
+      mkdirSync(lockDir, { recursive: false });
+      writeFileSync(join(lockDir, "pid"), String(process.pid));
+    }).pipe(Effect.as(true), Effect.orElseSucceed(() => false));
+    if (acquired) return release;
+
+    const now = yield* Clock.currentTimeMillis;
+    const stale = yield* Effect.try(() => pidIsStale(lockDir, now)).pipe(
+      Effect.catch(() => Effect.try(() => mtimeOnlyIsStale(lockDir, now))),
+      Effect.orElseSucceed(() => false),
+    );
+    if (stale) release();
+    return yield* new UpdateLockBusy();
+  });
+
+/**
+ * Lock-directory-parameterized form, so tests can point at a throwaway
+ * directory instead of the real `~/.cache/wt/update-git.lock` a live wt
+ * instance on the same machine may be holding. Production goes through
+ * the fixed-path `acquireUpdateGitLock` below.
+ */
+export function acquireUpdateGitLockAt(lockDir: string): Effect.Effect<(() => void) | null> {
+  return acquireUpdateGitLockOnceAt(lockDir)().pipe(
+    Effect.retry(
+      Schedule.max([
+        Schedule.spaced(Duration.millis(200)),
+        Schedule.recurs(9),
+      ]),
+    ),
+    Effect.orElseSucceed(() => null),
+  );
+}
+
+export const acquireUpdateGitLock: Effect.Effect<(() => void) | null> = acquireUpdateGitLockAt(GIT_LOCK_DIR);
+
+/** Scoped lock ownership. Scope close releases on success, failure, or interruption. */
+export function updateGitLockAt(lockDir: string): Effect.Effect<boolean, never, Scope.Scope> {
+  return Effect.acquireRelease(
+    acquireUpdateGitLockAt(lockDir),
+    (release) => release ? Effect.sync(release) : Effect.void,
+  ).pipe(Effect.map((release) => release !== null));
+}
+
+export const updateGitLock: Effect.Effect<boolean, never, Scope.Scope> = updateGitLockAt(GIT_LOCK_DIR);
+
 /** Display form of a full sha. */
 export function shortSha(sha: string): string {
   return sha.slice(0, 7);

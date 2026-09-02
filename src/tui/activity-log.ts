@@ -32,6 +32,7 @@ class EventLog {
   private listeners = new Set<Listener>();
   private nextId = 1;
   private notifyFiber: Fiber.Fiber<void, never> | null = null;
+  private accepting = true;
   /**
    * Attention "seen" watermark (epoch ms; 0 = never marked). Events at
    * or before it render dim below a `── seen` rule in the attention
@@ -87,8 +88,27 @@ class EventLog {
     };
   };
 
+  /**
+   * Enable/disable pairing mirroring `ToastStore`'s: `runtime.tsx`
+   * detaches at TUI shutdown so the debounce fiber below is
+   * interrupted instead of left to run past a torn-down render tree,
+   * and re-attaches (idempotently — the class already starts
+   * accepting) on the next boot.
+   */
+  attach(): void {
+    this.accepting = true;
+  }
+
+  detach(): void {
+    this.accepting = false;
+    if (this.notifyFiber !== null) {
+      Effect.runSync(Fiber.interrupt(this.notifyFiber));
+      this.notifyFiber = null;
+    }
+  }
+
   private scheduleNotify(): void {
-    if (this.notifyFiber !== null) return;
+    if (!this.accepting || this.notifyFiber !== null) return;
     this.notifyFiber = Effect.runFork(
       Effect.sleep(Duration.millis(16)).pipe(
         Effect.andThen(Effect.sync(() => {

@@ -7,21 +7,16 @@
 import type { KeyEvent } from "@opentui/core";
 
 import { createLogger } from "../../core/logger.ts";
+import { operationErrors } from "../../core/errors.ts";
 import { printableText } from "../app-helpers.ts";
+import { forkReported } from "../effect-boundary.ts";
 import type { PendingStatusText } from "../flows/work-status.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { applyEditKey, insertText, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class FooterInputError extends Data.TaggedError("FooterInputError")<{
-  cause: unknown;
-}> {}
-const footerPromise = <A>(evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => new FooterInputError({ cause }),
-  });
+const io = operationErrors("footer-input-keys");
 
 const appLog = createLogger("[app]");
 
@@ -117,8 +112,8 @@ export function handleFooterInputKey(
       const oldName = pendingRename;
       setPendingRename(null);
       if (!oldName || !raw || raw === oldName) return;
-      Effect.runFork(
-        footerPromise(() => renameSection(oldName, raw)).pipe(
+      forkReported(
+        io.promise("rename section", () => renameSection(oldName, raw)).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
               // Update only after persistence succeeds so a failed rename
@@ -127,17 +122,11 @@ export function handleFooterInputKey(
               toast(`renamed "${oldName}" to "${raw}"`, theme.info, 1800);
             }),
           ),
-          Effect.catch((error) =>
-            Effect.sync(() => {
-              const msg =
-                error.cause instanceof Error
-                  ? error.cause.message
-                  : String(error.cause);
-              appLog.event.err(`rename failed: ${msg}`);
-              toast(`rename failed: ${msg}`, theme.err, 3000);
-            }),
-          ),
         ),
+        (error) => {
+          appLog.event.err(`rename failed: ${error.message}`);
+          toast(`rename failed: ${error.message}`, theme.err, 3000);
+        },
       );
       return;
     }
@@ -162,26 +151,26 @@ export function handleFooterInputKey(
           }),
         );
       if (purpose === "new-remote") {
-        Effect.runFork(
-          footerPromise(() => doRemoteNew(raw)).pipe(
+        forkReported(
+          io.promise("new remote worktree", () => doRemoteNew(raw)).pipe(
             Effect.tap((ok) =>
               Effect.sync(() => {
                 if (!ok) restore();
               }),
             ),
-            Effect.catch(() => Effect.sync(restore)),
           ),
+          restore,
         );
       } else {
-        Effect.runFork(
-          footerPromise(() => doNew(raw, base)).pipe(
+        forkReported(
+          io.promise("new worktree", () => doNew(raw, base)).pipe(
             Effect.tap((ok) =>
               Effect.sync(() => {
                 if (!ok) restore();
               }),
             ),
-            Effect.catch(() => Effect.sync(restore)),
           ),
+          restore,
         );
       }
     }

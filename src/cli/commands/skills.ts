@@ -10,8 +10,9 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
+import { operationErrors } from "../../core/errors.ts";
 import { run as shEffect } from "../../core/proc.ts";
 import {
   buildReports,
@@ -105,12 +106,9 @@ function status(): number {
   return 0;
 }
 
-class SkillsCommandError extends Data.TaggedError("SkillsCommandError")<{
-  readonly operation: "diff" | "sync";
-  readonly cause: unknown;
-}> {}
+const io = operationErrors("wt skills");
 
-function diff(name: string | undefined): Effect.Effect<number, SkillsCommandError> {
+function diff(name: string | undefined) {
   if (!name || hasHelpFlag([name])) {
     return Effect.sync(() => {
       console.log(name ? USAGE : red("usage: wt skills diff <name>"));
@@ -159,7 +157,7 @@ function diff(name: string | undefined): Effect.Effect<number, SkillsCommandErro
             continue;
           }
           const d = yield* shEffect(["diff", "-u", installedFile, expectedFile]).pipe(
-            Effect.mapError((cause) => new SkillsCommandError({ operation: "diff", cause })),
+            Effect.mapError(io.wrap("diff")),
           );
           console.log(d.stdout.trim() === "" ? dim("(differs only by stamp)") : d.stdout);
         }
@@ -195,7 +193,7 @@ function reset(argv: string[]): number {
   return 0;
 }
 
-function sync(argv: string[]): Effect.Effect<number, SkillsCommandError> {
+function sync(argv: string[]) {
   if (hasHelpFlag(argv)) {
     return Effect.sync(() => {
       console.log(USAGE);
@@ -222,33 +220,29 @@ function sync(argv: string[]): Effect.Effect<number, SkillsCommandError> {
     force,
     names: names.length > 0 ? names : null,
     startup: false,
-  }).pipe(Effect.mapError((cause) => new SkillsCommandError({ operation: "sync", cause })));
+  }).pipe(Effect.mapError(io.wrap("sync")));
 }
 
-export function run(argv: string[]): Effect.Effect<number, SkillsCommandError> {
+export const run = Effect.fn("wt skills")(function* (argv: string[]) {
   const [sub, ...rest] = argv;
   if (hasHelpFlag([sub ?? ""])) {
-    return Effect.sync(() => {
-      console.log(USAGE);
-      return 0;
-    });
+    console.log(USAGE);
+    return 0;
   }
   switch (sub) {
     case undefined:
     case "status":
-      return Effect.sync(status);
+      return status();
     case "sync":
     case "install": // legacy alias
-      return sync(rest);
+      return yield* sync(rest);
     case "diff":
-      return diff(rest[0]);
+      return yield* diff(rest[0]);
     case "reset":
-      return Effect.sync(() => reset(rest));
+      return reset(rest);
     default:
-      return Effect.sync(() => {
-        console.error(red(`unknown skills subcommand: ${sub}\n`));
-        console.error(USAGE);
-        return 2;
-      });
+      console.error(red(`unknown skills subcommand: ${sub}\n`));
+      console.error(USAGE);
+      return 2;
   }
-}
+});

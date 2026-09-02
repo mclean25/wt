@@ -8,13 +8,11 @@ describe("wt logs tail lifecycle", () => {
     let killed = 0;
     let reaped = 0;
     let exitCode: number | null = null;
-    let finish!: (code: number) => void;
-    const exited = new Promise<number>((resolve) => {
-      finish = (code) => {
-        reaped++;
-        resolve(code);
-      };
-    });
+    const { promise: exited, resolve: resolveExit } = Promise.withResolvers<number>();
+    const finish = (code: number): void => {
+      reaped++;
+      resolveExit(code);
+    };
 
     await Effect.runPromise(
       Effect.gen(function* () {

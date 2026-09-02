@@ -1,4 +1,4 @@
-import { Data, Effect, Exit, Ref, Semaphore } from "effect";
+import { Data, Effect, Exit, Ref, Scope, Semaphore } from "effect";
 
 import { config } from "./config.ts";
 
@@ -131,20 +131,18 @@ type KillableProcess = {
  * wait forever. Interactive handoffs cannot use the captured-process runner,
  * but they need the same TERM, bounded grace, KILL, join contract.
  */
-export function terminateSubprocess(
+export const terminateSubprocess = Effect.fn("terminateSubprocess")(function* (
   proc: KillableProcess & { readonly exited: Promise<number> },
   graceMs = TERMINATION_GRACE_MS,
-): Effect.Effect<void> {
+) {
   const joined = Effect.promise(() => proc.exited.then(() => undefined, () => undefined));
-  return Effect.gen(function* () {
-    if (proc.exitCode !== null) return;
-    killProcess(proc, "SIGTERM");
-    const graceful = yield* joined.pipe(Effect.timeoutOption(graceMs));
-    if (graceful._tag === "Some") return;
-    killProcess(proc, "SIGKILL");
-    yield* joined;
-  });
-}
+  if (proc.exitCode !== null) return;
+  killProcess(proc, "SIGTERM");
+  const graceful = yield* joined.pipe(Effect.timeoutOption(graceMs));
+  if (graceful._tag === "Some") return;
+  killProcess(proc, "SIGKILL");
+  yield* joined;
+});
 
 function killProcess(proc: KillableProcess, signal: NodeJS.Signals): void {
   if (proc.exitCode !== null) return;
@@ -166,11 +164,10 @@ function killProcessGroup(
   }
 }
 
-function spawnCaptured(
+const spawnCaptured = Effect.fnUntraced(function* (
   argv: readonly string[],
   opts: Pick<RunOptions, "cwd" | "env" | "input">,
-): Effect.Effect<RunningProcess, ProcSpawnError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<RunningProcess, ProcSpawnError> {
     const proc = yield* Effect.try({
       try: () =>
         Bun.spawn([...argv], {
@@ -200,8 +197,7 @@ function spawnCaptured(
     ]).then(([stdout, stderr, exited]) => ({ proc, stdout, stderr, exited }));
 
     return { proc, settled };
-  });
-}
+});
 
 function writeInput(
   argv: readonly string[],
@@ -222,17 +218,16 @@ function writeInput(
 const awaitCaptured = (running: RunningProcess) =>
   Effect.promise(() => running.settled).pipe(Effect.asVoid);
 
-const terminateCaptured = (running: RunningProcess) =>
-  Effect.gen(function* () {
-    killProcessGroup(running.proc, "SIGTERM");
-    const graceful = yield* Effect.interruptible(awaitCaptured(running)).pipe(
-      Effect.timeoutOption(TERMINATION_GRACE_MS),
-    );
-    if (graceful._tag === "None") {
-      killProcessGroup(running.proc, "SIGKILL");
-      yield* awaitCaptured(running);
-    }
-  });
+const terminateCaptured = Effect.fnUntraced(function* (running: RunningProcess) {
+  killProcessGroup(running.proc, "SIGTERM");
+  const graceful = yield* Effect.interruptible(awaitCaptured(running)).pipe(
+    Effect.timeoutOption(TERMINATION_GRACE_MS),
+  );
+  if (graceful._tag === "None") {
+    killProcessGroup(running.proc, "SIGKILL");
+    yield* awaitCaptured(running);
+  }
+});
 
 function joinCaptured(
   argv: readonly string[],
@@ -305,60 +300,53 @@ function externalInterruption(
   });
 }
 
-function capturedRunEffect(
+const capturedRunEffect = Effect.fnUntraced(function* (
   argv: readonly string[],
   opts: RunOptions,
-): Effect.Effect<
-  RunResult,
-  ProcSpawnError | ProcReadError | ProcInterruptedError
-> {
+): Effect.fn.Return<RunResult, ProcSpawnError | ProcReadError | ProcInterruptedError, Scope.Scope> {
   const cwd = opts.cwd ?? config.paths.mainClone;
-  return Effect.scoped(
-    Effect.gen(function* () {
-      if (opts.signal?.aborted) {
-        return yield* new ProcInterruptedError({ argv });
-      }
-      const running = yield* Effect.acquireRelease(
-        spawnCaptured(argv, { cwd, env: opts.env, input: opts.input }),
-        releaseCaptured,
-      );
-      yield* writeInput(argv, running, opts.input);
-      if (opts.signal) {
-        // AbortSignal is the compatibility boundary used by Promise callers.
-        // After spawn, preserve their captured partial output as a nonzero
-        // RunResult; native Effect callers interrupt the fiber itself and the
-        // scoped finalizer kills and joins the child before interruption ends.
-        yield* Effect.forkScoped(
-          externalInterruption(argv, opts.signal).pipe(
-            Effect.catch(() => terminateCaptured(running)),
-          ),
-        );
-      }
-      const timedOut = yield* Ref.make(false);
-      if (opts.timeoutMs !== undefined && opts.timeoutMs > 0) {
-        yield* Effect.forkScoped(
-          Effect.sleep(opts.timeoutMs).pipe(
-            Effect.andThen(Ref.set(timedOut, true)),
-            Effect.andThen(
-              Effect.sync(() => killProcessGroup(running.proc, "SIGKILL")),
-            ),
-          ),
-        );
-      }
-      const captured = yield* joinCaptured(argv, running);
-      const didTimeOut = yield* Ref.get(timedOut);
-      return {
-        stdout:
-          captured.stdout.status === "fulfilled" ? captured.stdout.value : "",
-        stderr:
-          captured.stderr.status === "fulfilled" ? captured.stderr.value : "",
-        exitCode:
-          captured.exited.status === "fulfilled" ? captured.exited.value : -1,
-        timedOut: didTimeOut,
-      };
-    }),
+  if (opts.signal?.aborted) {
+    return yield* new ProcInterruptedError({ argv });
+  }
+  const running = yield* Effect.acquireRelease(
+    spawnCaptured(argv, { cwd, env: opts.env, input: opts.input }),
+    releaseCaptured,
   );
-}
+  yield* writeInput(argv, running, opts.input);
+  if (opts.signal) {
+    // AbortSignal is the compatibility boundary used by Promise callers.
+    // After spawn, preserve their captured partial output as a nonzero
+    // RunResult; native Effect callers interrupt the fiber itself and the
+    // scoped finalizer kills and joins the child before interruption ends.
+    yield* Effect.forkScoped(
+      externalInterruption(argv, opts.signal).pipe(
+        Effect.catch(() => terminateCaptured(running)),
+      ),
+    );
+  }
+  const timedOut = yield* Ref.make(false);
+  if (opts.timeoutMs !== undefined && opts.timeoutMs > 0) {
+    yield* Effect.forkScoped(
+      Effect.sleep(opts.timeoutMs).pipe(
+        Effect.andThen(Ref.set(timedOut, true)),
+        Effect.andThen(
+          Effect.sync(() => killProcessGroup(running.proc, "SIGKILL")),
+        ),
+      ),
+    );
+  }
+  const captured = yield* joinCaptured(argv, running);
+  const didTimeOut = yield* Ref.get(timedOut);
+  return {
+    stdout:
+      captured.stdout.status === "fulfilled" ? captured.stdout.value : "",
+    stderr:
+      captured.stderr.status === "fulfilled" ? captured.stderr.value : "",
+    exitCode:
+      captured.exited.status === "fulfilled" ? captured.exited.value : -1,
+    timedOut: didTimeOut,
+  };
+}, Effect.scoped);
 
 /** Effect-native captured subprocess execution. */
 export function run(
@@ -544,17 +532,16 @@ type StreamingProcess = Bun.Subprocess<"ignore", "pipe", "pipe">;
 const awaitStreaming = (proc: StreamingProcess) =>
   Effect.promise(() => proc.exited).pipe(Effect.asVoid);
 
-const terminateStreaming = (proc: StreamingProcess) =>
-  Effect.gen(function* () {
-    killProcessGroup(proc, "SIGTERM");
-    const graceful = yield* Effect.interruptible(awaitStreaming(proc)).pipe(
-      Effect.timeoutOption(TERMINATION_GRACE_MS),
-    );
-    if (graceful._tag === "None") {
-      killProcessGroup(proc, "SIGKILL");
-      yield* awaitStreaming(proc);
-    }
-  });
+const terminateStreaming = Effect.fnUntraced(function* (proc: StreamingProcess) {
+  killProcessGroup(proc, "SIGTERM");
+  const graceful = yield* Effect.interruptible(awaitStreaming(proc)).pipe(
+    Effect.timeoutOption(TERMINATION_GRACE_MS),
+  );
+  if (graceful._tag === "None") {
+    killProcessGroup(proc, "SIGKILL");
+    yield* awaitStreaming(proc);
+  }
+});
 
 const releaseStreaming = (
   proc: StreamingProcess,
@@ -563,59 +550,55 @@ const releaseStreaming = (
   Exit.isSuccess(exit) ? awaitStreaming(proc) : terminateStreaming(proc);
 
 /** Effect-native streaming subprocess execution. */
-export function runStreaming(
+export const runStreaming = Effect.fn("runStreaming")(function* (
   argv: readonly string[],
   opts: RunStreamingOptions = {},
-): Effect.Effect<number, ProcSpawnError | ProcReadError> {
+): Effect.fn.Return<number, ProcSpawnError | ProcReadError, Scope.Scope> {
   const emit = opts.onLine ?? (() => {});
-  return Effect.scoped(
-    Effect.gen(function* () {
-      const proc = yield* Effect.acquireRelease(
-        Effect.try({
-          try: () =>
-            Bun.spawn([...argv], {
-              cwd: opts.cwd,
-              stdin: "ignore",
-              stdout: "pipe",
-              stderr: "pipe",
-              env: opts.env ? { ...process.env, ...opts.env } : process.env,
-              detached: true,
-            }),
-          catch: (cause) => new ProcSpawnError({ argv, cause }),
+  const proc = yield* Effect.acquireRelease(
+    Effect.try({
+      try: () =>
+        Bun.spawn([...argv], {
+          cwd: opts.cwd,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+          env: opts.env ? { ...process.env, ...opts.env } : process.env,
+          detached: true,
         }),
-        releaseStreaming,
-      );
-
-      if (opts.killAfterMs !== undefined && opts.killAfterMs > 0) {
-        yield* Effect.forkScoped(
-          Effect.interruptible(
-            Effect.sleep(opts.killAfterMs).pipe(
-              Effect.andThen(
-                Effect.sync(() => {
-                  emit(
-                    `timed out after ${Math.round(opts.killAfterMs! / 1000)}s — killing`,
-                  );
-                  killProcessGroup(proc, "SIGKILL");
-                }),
-              ),
-            ),
-          ),
-        );
-      }
-
-      const [exitCode] = yield* Effect.all(
-        [
-          Effect.tryPromise({
-            try: () => proc.exited,
-            catch: (cause) =>
-              new ProcReadError({ argv, stream: "stderr", cause }),
-          }),
-          streamLines(proc.stdout, emit),
-          streamLines(proc.stderr, emit),
-        ],
-        { concurrency: "unbounded" },
-      );
-      return exitCode;
+      catch: (cause) => new ProcSpawnError({ argv, cause }),
     }),
+    releaseStreaming,
   );
-}
+
+  if (opts.killAfterMs !== undefined && opts.killAfterMs > 0) {
+    yield* Effect.forkScoped(
+      Effect.interruptible(
+        Effect.sleep(opts.killAfterMs).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              emit(
+                `timed out after ${Math.round(opts.killAfterMs! / 1000)}s — killing`,
+              );
+              killProcessGroup(proc, "SIGKILL");
+            }),
+          ),
+        ),
+      ),
+    );
+  }
+
+  const [exitCode] = yield* Effect.all(
+    [
+      Effect.tryPromise({
+        try: () => proc.exited,
+        catch: (cause) =>
+          new ProcReadError({ argv, stream: "stderr", cause }),
+      }),
+      streamLines(proc.stdout, emit),
+      streamLines(proc.stderr, emit),
+    ],
+    { concurrency: "unbounded" },
+  );
+  return exitCode;
+}, Effect.scoped);

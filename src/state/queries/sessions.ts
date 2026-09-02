@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
 import {
   getHarness,
@@ -7,36 +7,17 @@ import {
   type HarnessSession,
 } from "../../core/harness/index.ts";
 import {
+  listSessions,
   type ClaudeSessionEntry,
-  listSessionsPromise as listTmuxSessions,
 } from "../../core/tmux.ts";
 
 export type { ClaudeSessionEntry };
 
 import { qk } from "../keys.ts";
+import { operationErrors, runQuery } from "./boundary.ts";
 import { STALE } from "./shared.ts";
 
-class SessionsQueryError extends Data.TaggedError("SessionsQueryError")<{
-  operation: string;
-  cause: unknown;
-}> {
-  override get message(): string {
-    return this.cause instanceof Error
-      ? this.cause.message
-      : String(this.cause);
-  }
-}
-
-const queryPromise = <A, E>(
-  effect: Effect.Effect<A, E>,
-  signal?: AbortSignal,
-) => Effect.runPromise(effect, signal ? { signal } : undefined);
-
-const promiseEffect = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => new SessionsQueryError({ operation, cause }),
-  });
+const io = operationErrors("sessions");
 
 export type TmuxSessionsData = {
   /**
@@ -89,8 +70,8 @@ export type TmuxSessionsData = {
 export const tmuxSessionsQuery = () =>
   queryOptions({
     queryKey: qk.tmuxSessions(),
-    queryFn: (): Promise<TmuxSessionsData> =>
-      queryPromise(
+    queryFn: ({ signal }): Promise<TmuxSessionsData> =>
+      runQuery(
         Effect.gen(function* () {
           const {
             claude,
@@ -102,9 +83,7 @@ export const tmuxSessionsQuery = () =>
             action,
             dev,
             all,
-          } = yield* promiseEffect("list tmux sessions", () =>
-            listTmuxSessions(),
-          );
+          } = yield* listSessions();
           return {
             claude,
             slugsByHarness: {
@@ -119,6 +98,7 @@ export const tmuxSessionsQuery = () =>
             all: [...all],
           };
         }),
+        signal,
       ),
     staleTime: STALE.fast,
     refetchInterval: 5_000,
@@ -147,8 +127,8 @@ export const harnessSessionsQuery = (
     queryKey: qk.harnessSessions(harnessId, slug),
     queryFn: ({ signal }): Promise<HarnessSession[]> => {
       const harness = getHarness(harnessId);
-      return queryPromise(
-        promiseEffect("discover harness sessions", () =>
+      return runQuery(
+        io.promise("discover harness sessions", () =>
           harness.discoverSessions({ slug, wtPath, signal }),
         ),
         signal,
@@ -175,13 +155,14 @@ export const harnessSessionsQuery = (
 export const primaryHarnessQuery = () =>
   queryOptions({
     queryKey: qk.primaryHarness(),
-    queryFn: () =>
-      queryPromise(
-        promiseEffect("read primary harness", () =>
+    queryFn: ({ signal }) =>
+      runQuery(
+        io.promise("read primary harness", () =>
           import("../../core/harness/primary.ts").then(
             ({ readPrimaryHarness }) => readPrimaryHarness(),
           ),
         ),
+        signal,
       ),
     staleTime: Infinity,
   });

@@ -43,7 +43,7 @@ export class AttachOperationError extends Data.TaggedError("AttachOperationError
 /** Run the interactive tmux client as a scoped resource. Interruption must
  * terminate the client and reap it, otherwise an aborted renderer handoff
  * leaves an inherited-stdio process attached to the user's terminal. */
-function runAttachedClientEffect(
+function runAttachedClient(
   args: string[],
   options: Parameters<typeof Bun.spawn>[1],
   onStderr: (text: string) => void,
@@ -267,7 +267,7 @@ export function attachOrCreate(opts: {
    */
   base?: string;
 }): Effect.Effect<AttachResult, AttachOperationError> {
-  return attachOrCreateEffectInternal(opts);
+  return attachOrCreateInternal(opts);
 }
 
 /** Promise boundary for terminal/CLI callers. */
@@ -277,7 +277,7 @@ export function attachOrCreatePromise(
   return Effect.runPromise(attachOrCreate(opts));
 }
 
-function attachOrCreateEffectInternal(
+function attachOrCreateInternal(
   opts: Parameters<typeof attachOrCreate>[0],
 ): Effect.Effect<AttachResult, AttachOperationError> {
  return Effect.gen(function* () {
@@ -480,7 +480,7 @@ function attachOrCreateEffectInternal(
         "@wt-shortcut",
         shortcut,
       ];
-  const code = yield* runAttachedClientEffect(clientArgs, {
+  const code = yield* runAttachedClient(clientArgs, {
     cwd: tmuxClientCwd(),
     stdin: "inherit",
     stdout: "inherit",

@@ -11,12 +11,11 @@ import type { Logger } from "./shared.ts";
 export type PruneBackupsResult = { deleted: string[]; kept: string[] };
 
 /** Sweep one object store's `backup/` refs, accumulating into result. */
-function pruneBackupsInEffect(
+const pruneBackupsIn = Effect.fnUntraced(function* (
   cwd: string | undefined,
   cutoff: number,
   onLog: Logger,
-): Effect.Effect<PruneBackupsResult> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<PruneBackupsResult> {
   const out: PruneBackupsResult = { deleted: [], kept: [] };
   const args = ["for-each-ref", "--format=%(refname:short)", "refs/heads/backup/"];
   const r = yield* gitRun(args, cwd).pipe(
@@ -45,8 +44,7 @@ function pruneBackupsInEffect(
     }
   }
   return out;
-  });
-}
+});
 
 /**
  * Delete restack backup branches (`backup/restack-*` and the retired stack
@@ -63,20 +61,19 @@ function pruneBackupsInEffect(
  * per-slice sweep — the engine creates them in the slice cwd
  * (`engine.ts` `replayStep`), so the manual sweep must look there too.
  */
-export function pruneStackBackups(
+export const pruneStackBackups = Effect.fn("pruneStackBackups")(function* (
   olderThanDays: number,
   onLog: Logger,
-): Effect.Effect<PruneBackupsResult> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<PruneBackupsResult> {
   const cutoff = (yield* Clock.currentTimeMillis) - olderThanDays * 86_400_000;
-  const main = yield* pruneBackupsInEffect(undefined, cutoff, onLog);
+  const main = yield* pruneBackupsIn(undefined, cutoff, onLog);
   // Rift slices carry their own refs; sweep each independent clone too.
   const worktrees = yield* listWorktrees().pipe(
     Effect.catch(() => Effect.succeed([])),
   );
   const rift = yield* Effect.forEach(
     worktrees.filter((w) => !w.isMain && isRiftWorktree(w.path)),
-    (w) => pruneBackupsInEffect(w.path, cutoff, onLog),
+    (w) => pruneBackupsIn(w.path, cutoff, onLog),
     { concurrency: 4 },
   );
   return rift.reduce(
@@ -86,8 +83,7 @@ export function pruneStackBackups(
     }),
     main,
   );
-  });
-}
+});
 
 export function pruneStackBackupsPromise(
   olderThanDays: number,

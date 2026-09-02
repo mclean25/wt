@@ -1,27 +1,27 @@
 import { queryOptions } from "@tanstack/react-query";
-import { Data, Effect } from "effect";
+import { Clock, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
 import {
-  devServerStatusPromise,
+  devServerStatus,
   type DevServerStatus,
 } from "../../core/dev-server.ts";
 import {
-  claudeStatusPromise,
+  claudeStatus,
   type ClaudeStatus,
 } from "../../core/harness/claude/jsonl.ts";
 import {
   branchIsGone,
-  branchIsMergedPromise,
+  branchIsMerged,
   effectiveBaseOrTrunk,
   firstCommitSubject,
-  freshBaseRevEffect,
+  freshBaseRev,
   invalidateMainFirstParents,
-  mergeConflictProbePromise,
+  mergeConflictProbe,
   revParse,
   type MergeConflictProbe,
 } from "../../core/git.ts";
-import { gitActivityPromise, type GitActivity } from "../../core/git-activity.ts";
+import { gitActivity, type GitActivity } from "../../core/git-activity.ts";
 import { lockStatus } from "../../core/locks.ts";
 import type { LockMeta, Worktree } from "../../core/types.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
@@ -34,58 +34,41 @@ import {
 } from "../../core/worktree.ts";
 
 import { qk } from "../keys.ts";
+import { operationErrors, runQuery } from "./boundary.ts";
 import { KEEP_PREV, STALE } from "./shared.ts";
 
-class WorktreeQueryError extends Data.TaggedError("WorktreeQueryError")<{
-  operation: string;
-  cause: unknown;
-}> {
-  override get message(): string {
-    return this.cause instanceof Error
-      ? this.cause.message
-      : String(this.cause);
-  }
-}
-
-const queryPromise = <A, E>(
-  effect: Effect.Effect<A, E>,
-  signal?: AbortSignal,
-) => Effect.runPromise(effect, signal ? { signal } : undefined);
-
-const promiseEffect = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => new WorktreeQueryError({ operation, cause }),
-  });
-
-const syncEffect = <A>(operation: string, evaluate: () => A) =>
-  Effect.try({
-    try: evaluate,
-    catch: (cause) => new WorktreeQueryError({ operation, cause }),
-  });
+const io = operationErrors("worktree");
 
 // ---------- Root queries ----------
 
 export const worktreesQuery = () =>
   queryOptions({
     queryKey: qk.worktrees(),
-    queryFn: (): Promise<Worktree[]> => queryPromise(listWorktrees()),
+    queryFn: ({ signal }): Promise<Worktree[]> =>
+      runQuery(listWorktrees(), signal),
     staleTime: STALE.mid,
   });
 
-export const fetchOriginEffect = () =>
-  promiseEffect("fetch origin", () => fetchOriginPromise()).pipe(
+/**
+ * Force an `origin` fetch. Named distinctly from core's `fetchOrigin`
+ * Effect (it wraps `fetchOriginPromise` for single-flight dedup) —
+ * the two collided under the same name. Once `fetchOrigin` itself
+ * gains single-flight dedup (see `core/worktree.ts`), this can call it
+ * directly instead of adopting the Promise adapter.
+ */
+export const refreshOrigin = () =>
+  io.promise("fetch origin", () => fetchOriginPromise()).pipe(
     Effect.tap(() => Effect.sync(invalidateMainFirstParents)),
-    Effect.map(() => Date.now()),
+    Effect.flatMap(() => Clock.currentTimeMillis),
   );
 
-export const fetchOriginNow = (): Promise<number> =>
-  queryPromise(fetchOriginEffect());
+export const fetchOriginNow = (signal?: AbortSignal): Promise<number> =>
+  runQuery(refreshOrigin(), signal);
 
 export const fetchOriginQuery = () =>
   queryOptions({
     queryKey: qk.fetchOrigin(),
-    queryFn: fetchOriginNow,
+    queryFn: ({ signal }) => fetchOriginNow(signal),
     staleTime: STALE.slow,
   });
 
@@ -94,16 +77,19 @@ export const fetchOriginQuery = () =>
 export const wtDirtyQuery = (wt: Pick<Worktree, "slug" | "path">) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).dirty(),
-    queryFn: (): Promise<readonly string[]> =>
-      queryPromise(worktreeDirtyFiles(wt.path)),
+    queryFn: ({ signal }): Promise<readonly string[]> =>
+      runQuery(worktreeDirtyFiles(wt.path), signal),
     staleTime: STALE.fast,
   });
 
 export const wtLockQuery = (wt: Pick<Worktree, "slug">) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).lock(),
-    queryFn: (): Promise<Partial<LockMeta> | null> =>
-      queryPromise(syncEffect("read lock status", () => lockStatus(wt.slug))),
+    queryFn: ({ signal }): Promise<Partial<LockMeta> | null> =>
+      runQuery(
+        io.sync("read lock status", () => lockStatus(wt.slug)),
+        signal,
+      ),
     staleTime: STALE.fast,
     // The lock-dir watcher (`watchLockDir` in the TUI runtime) is the
     // primary trigger — acquire, phase writes, and release all fire it,
@@ -116,9 +102,10 @@ export const wtLockQuery = (wt: Pick<Worktree, "slug">) =>
 export const wtDeployQuery = (wt: Pick<Worktree, "slug" | "path">) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).deploy(),
-    queryFn: (): Promise<boolean> =>
-      queryPromise(
-        syncEffect("read deployment status", () => isOurStageDeployed(wt)),
+    queryFn: ({ signal }): Promise<boolean> =>
+      runQuery(
+        io.sync("read deployment status", () => isOurStageDeployed(wt)),
+        signal,
       ),
     staleTime: STALE.fast,
   });
@@ -141,17 +128,16 @@ export const wtDevQuery = (
 ) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).dev(sessionExists),
-    queryFn: (): Promise<DevServerStatus> =>
-      queryPromise(
-        promiseEffect("read dev server status", () =>
-          devServerStatusPromise(wt.slug, {
-            sessionExists: sessionExists ?? undefined,
-            // Enables the rebase-staleness check: one `git merge-base
-            // --is-ancestor` (0.1s), which is why it can ride this poll
-            // where asking the environment itself (9s) could not.
-            path: wt.path,
-          }),
-        ),
+    queryFn: ({ signal }): Promise<DevServerStatus> =>
+      runQuery(
+        devServerStatus(wt.slug, {
+          sessionExists: sessionExists ?? undefined,
+          // Enables the rebase-staleness check: one `git merge-base
+          // --is-ancestor` (0.1s), which is why it can ride this poll
+          // where asking the environment itself (9s) could not.
+          path: wt.path,
+        }),
+        signal,
       ),
     staleTime: STALE.fast,
     refetchInterval: 15_000,
@@ -164,17 +150,12 @@ export const wtMergedQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
     // answer until the staleTime expires, and across a restart the
     // persisted entry serves it indefinitely.
     queryKey: qk.wt(wt.slug).merged(wt.branch ?? ""),
-    queryFn: (): Promise<boolean> =>
-      queryPromise(
+    queryFn: ({ signal }): Promise<boolean> =>
+      runQuery(
         wt.branch
-          ? promiseEffect("check merged branch", () =>
-              branchIsMergedPromise({
-                slug: wt.slug,
-                branch: wt.branch,
-                path: wt.path,
-              }),
-            )
+          ? branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path })
           : Effect.succeed(false),
+        signal,
       ),
     staleTime: STALE.mid,
   });
@@ -182,11 +163,10 @@ export const wtMergedQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
 export const wtGoneQuery = (wt: Pick<Worktree, "slug" | "branch" | "path">) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).gone(wt.branch ?? ""),
-    queryFn: (): Promise<boolean> =>
-      queryPromise(
-        wt.branch
-          ? branchIsGone(wt.branch, wt.path)
-          : Effect.succeed(false),
+    queryFn: ({ signal }): Promise<boolean> =>
+      runQuery(
+        wt.branch ? branchIsGone(wt.branch, wt.path) : Effect.succeed(false),
+        signal,
       ),
     staleTime: STALE.mid,
   });
@@ -198,8 +178,8 @@ export const wtSyncQuery = (
   const base = effectiveBase ?? `origin/${config.branch.base}`;
   return queryOptions({
     queryKey: qk.wt(wt.slug).sync(base),
-    queryFn: (): Promise<SyncState> =>
-      queryPromise(syncState(wt.path, base)),
+    queryFn: ({ signal }): Promise<SyncState> =>
+      runQuery(syncState(wt.path, base), signal),
     staleTime: STALE.mid,
     ...KEEP_PREV,
   });
@@ -208,12 +188,8 @@ export const wtSyncQuery = (
 export const wtClaudeQuery = (wt: Pick<Worktree, "slug" | "path">) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).claude(),
-    queryFn: (): Promise<ClaudeStatus> =>
-      queryPromise(
-        promiseEffect("read Claude status", () =>
-          claudeStatusPromise({ slug: wt.slug, path: wt.path }),
-        ),
-      ),
+    queryFn: ({ signal }): Promise<ClaudeStatus> =>
+      runQuery(claudeStatus({ slug: wt.slug, path: wt.path }), signal),
     staleTime: STALE.fast,
     // The session-tail slug sink is the primary trigger: it invalidates
     // this query the moment a live session's jsonl grows, so turn ends
@@ -234,12 +210,8 @@ export const wtGitActivityQuery = (
   const base = effectiveBase ?? `origin/${config.branch.base}`;
   return queryOptions({
     queryKey: qk.wt(wt.slug).gitActivity(base),
-    queryFn: (): Promise<GitActivity> =>
-      queryPromise(
-        promiseEffect("read git activity", () =>
-          gitActivityPromise({ path: wt.path, branch: wt.branch }, base),
-        ),
-      ),
+    queryFn: ({ signal }): Promise<GitActivity> =>
+      runQuery(gitActivity({ path: wt.path, branch: wt.branch }, base), signal),
     staleTime: STALE.mid,
     ...KEEP_PREV,
   });
@@ -267,20 +239,59 @@ export const wtConflictQuery = (
   const base = effectiveBase ?? `origin/${config.branch.base}`;
   return queryOptions({
     queryKey: qk.wt(wt.slug).conflict(base),
-    queryFn: (): Promise<MergeConflictProbe> =>
-      queryPromise(
+    queryFn: ({ signal }): Promise<MergeConflictProbe> =>
+      runQuery(
         effectiveBaseOrTrunk(wt.path, base).pipe(
           Effect.flatMap((effectiveBase) =>
-            promiseEffect("probe merge conflict", () =>
-              mergeConflictProbePromise("HEAD", effectiveBase, wt.path),
-            ),
+            mergeConflictProbe("HEAD", effectiveBase, wt.path),
           ),
         ),
+        signal,
       ),
     staleTime: STALE.mid,
     ...KEEP_PREV,
   });
 };
+
+/**
+ * Current tip of every branch a `branch.advanced` automation watches.
+ *
+ * Resolved in the MAIN CLONE, never in a worktree: the question is
+ * "where is this branch now", and only the clone that fetches can
+ * answer it — a rift checkout's copy is as old as its last fetch. wt
+ * advances these branches itself (`[branch] base` and everything in
+ * `keep_fresh`), which the config loader already requires of any
+ * watched branch, so this reads what `fetchOrigin` just wrote.
+ *
+ * Empty (and free) when no rule watches anything.
+ */
+export const watchedBranchTipsQuery = (branches: readonly string[]) =>
+  queryOptions({
+    queryKey: qk.watchedBranchTips([...branches].sort()),
+    queryFn: ({ signal }): Promise<Record<string, string>> =>
+      runQuery(
+        Effect.all(
+          branches.map((branch) =>
+            revParse(branch, config.paths.mainClone).pipe(
+              Effect.map((sha) => [branch, sha] as const),
+            ),
+          ),
+          { concurrency: 8 },
+        ).pipe(
+          Effect.map((entries) =>
+            Object.fromEntries(
+              entries.filter(
+                (entry): entry is readonly [string, string] =>
+                  entry[1] !== null,
+              ),
+            ),
+          ),
+        ),
+        signal,
+      ),
+    enabled: branches.length > 0,
+    staleTime: STALE.mid,
+  });
 
 /**
  * Subject of the oldest commit on the branch — fallback title when
@@ -309,61 +320,23 @@ export const wtConflictQuery = (
  * rather than a replacement for it: a title is a claim about THIS
  * branch, and a wrong one is indistinguishable from a right one.
  */
-/**
- * Current tip of every branch a `branch.advanced` automation watches.
- *
- * Resolved in the MAIN CLONE, never in a worktree: the question is
- * "where is this branch now", and only the clone that fetches can
- * answer it — a rift checkout's copy is as old as its last fetch. wt
- * advances these branches itself (`[branch] base` and everything in
- * `keep_fresh`), which the config loader already requires of any
- * watched branch, so this reads what `fetchOrigin` just wrote.
- *
- * Empty (and free) when no rule watches anything.
- */
-export const watchedBranchTipsQuery = (branches: readonly string[]) =>
-  queryOptions({
-    queryKey: qk.watchedBranchTips([...branches].sort()),
-    queryFn: (): Promise<Record<string, string>> =>
-      queryPromise(
-        Effect.all(
-          branches.map((branch) =>
-            revParse(branch, config.paths.mainClone).pipe(
-              Effect.map((sha) => [branch, sha] as const),
-            ),
-          ),
-          { concurrency: 8 },
-        ).pipe(
-          Effect.map((entries) =>
-            Object.fromEntries(
-              entries.filter(
-                (entry): entry is readonly [string, string] =>
-                  entry[1] !== null,
-              ),
-            ),
-          ),
-        ),
-      ),
-    enabled: branches.length > 0,
-    staleTime: STALE.mid,
-  });
-
 export const wtFirstCommitQuery = (
   wt: Pick<Worktree, "slug" | "path">,
   baseBranch?: string | null,
 ) =>
   queryOptions({
     queryKey: qk.wt(wt.slug).firstCommit(baseBranch ?? null),
-    queryFn: (): Promise<string | null> =>
-      queryPromise(
+    queryFn: ({ signal }): Promise<string | null> =>
+      runQuery(
         Effect.gen(function* () {
           const effectiveBase = yield* effectiveBaseOrTrunk(
             wt.path,
             baseBranch,
           );
-          const freshBase = yield* freshBaseRevEffect(wt.path, effectiveBase);
+          const freshBase = yield* freshBaseRev(wt.path, effectiveBase);
           return yield* firstCommitSubject(wt.path, freshBase);
         }),
+        signal,
       ),
     staleTime: STALE.mid,
   });

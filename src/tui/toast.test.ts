@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { Effect } from "effect";
 
 import { theme } from "./theme.ts";
 import { attachLoggerToasts, getToast, showToast, toastColor, toastDuration } from "./toast.ts";
 
-const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// `ToastStore`'s expiry fiber runs on the real Clock (see toast.ts), so
+// this waits in real time too — an Effect construct rather than a bare
+// `new Promise`, but not a TestClock seam (not worth one for a handful
+// of sub-100ms waits; see the auto-merge-retry.ts comment for where
+// that seam earns its keep).
+const tick = (ms: number) => Effect.runPromise(Effect.sleep(`${ms} millis`));
 
 describe("toast store", () => {
   test("show → visible, expires after ms", async () => {

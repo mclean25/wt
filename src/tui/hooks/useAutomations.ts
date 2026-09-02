@@ -43,7 +43,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Data, Effect, Fiber } from "effect";
+import { Effect, Fiber } from "effect";
 
 import {
   actionRegistry,
@@ -67,10 +67,11 @@ import {
   tripBreaker,
 } from "../../core/automations.ts";
 import { config, type AutomationTrigger } from "../../core/config.ts";
-import { closeGithubIssuePromise, deleteRemoteBranchPromise, viewPrInfoPromise } from "../../core/github.ts";
+import { operationErrors, OperationError } from "../../core/errors.ts";
+import { closeGithubIssue, deleteRemoteBranch, viewPrInfo } from "../../core/github.ts";
 import { lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
-import { notifyMacosPromise } from "../../core/notify.ts";
+import { notifyMacos } from "../../core/notify.ts";
 import { StatusKind } from "../../core/types.ts";
 import { setBranchTip, toggleGlobalAutomationsPaused } from "../../core/wtstate.ts";
 import { watchedBranchTipsQuery, wtStateQuery } from "../../state/queries.ts";
@@ -132,17 +133,7 @@ type Executing = {
  *  guard refused BEFORE anything ran; the fire gets un-consumed. */
 type ExecuteOutcome = { declined: string | null };
 
-class AutomationDispatchError extends Data.TaggedError(
-  "AutomationDispatchError",
-)<{ readonly cause: unknown }> {}
-
-const automationPromise = <A>(operation: string, run: () => Promise<A>) =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) => new AutomationDispatchError({
-      cause: new Error(`${operation}: ${cause instanceof Error ? cause.message : String(cause)}`),
-    }),
-  });
+const io = operationErrors("useAutomations");
 
 /** Triggers whose condition needs fresh github data to evaluate at all.
  *  Their breaker resets are gated on freshness too — a boot-stale pass
@@ -477,14 +468,17 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     }
   }
 
-  function execute(fire: AutomationFire): Effect.Effect<ExecuteOutcome, AutomationDispatchError> {
-    return Effect.gen(function* () {
+  const execute = Effect.fn("execute")(function* (
+    fire: AutomationFire,
+  ): Effect.fn.Return<ExecuteOutcome, OperationError> {
     const { rule, slug, stackId } = fire;
     const wtLog = createLogger(slug);
     if (rule.run === "builtin:restack") {
       if (!stackId) {
-        return yield* new AutomationDispatchError({
-          cause: new Error("builtin:restack fire without a stackId"),
+        return yield* new OperationError({
+          source: "useAutomations",
+          operation: "restack",
+          cause: "builtin:restack fire without a stackId",
         });
       }
       // Busy check FIRST, before the pre-clean: a manual `R` running on
@@ -529,7 +523,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         wtLog.event.info(
           `auto ${rule.id}: cleaning merged member${mergedSlugs.length === 1 ? "" : "s"} ${mergedSlugs.join(", ")}`,
         );
-        yield* automationPromise("clean merged members", () => latest.current.doCleanSlugs(mergedSlugs));
+        yield* io.promise("clean merged members", () => latest.current.doCleanSlugs(mergedSlugs));
       }
       // Target the restack at a SURVIVING member's branch, never the
       // stack id: the id is the ROOT's branch, and when the merged
@@ -538,7 +532,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // `fire.slug` is the first open member, which the pre-clean never
       // touches; the engine resolves the whole surviving stack from it.
       const targetRow = latest.current.rows.find((r) => r.wt.slug === slug);
-      const outcome = yield* automationPromise(
+      const outcome = yield* io.promise(
         "restack stack",
         () => latest.current.doRestackStack(targetRow?.wt.branch ?? stackId),
       );
@@ -547,22 +541,23 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         // engine acquiring it (a manual `R` mid-dispatch). The merged
         // members are already cleaned, so surface it as a failure that
         // names the manual follow-up instead of silently retrying.
-        return yield* new AutomationDispatchError({
-          cause: new Error(
+        return yield* new OperationError({
+          source: "useAutomations",
+          operation: "restack",
+          cause:
             "restack engine grabbed by another run after the pre-clean — press R (or /restack) once it's free",
-          ),
         });
       }
       return { declined: null };
     }
     if (rule.run === "builtin:clean") {
-      yield* automationPromise("clean worktree", () => latest.current.doCleanSlugs([slug]));
+      yield* io.promise("clean worktree", () => latest.current.doCleanSlugs([slug]));
       return { declined: null };
     }
     if (rule.run === "builtin:notify") {
       // The attention feed already narrates the transition; this is the
       // "you're not looking at wt" leg. Detail carries state + note.
-      yield* automationPromise("notify macOS", () => notifyMacosPromise(`wt · ${slug}`, fire.detail));
+      yield* notifyMacos(`wt · ${slug}`, fire.detail);
       return { declined: null };
     }
     if (rule.run === "builtin:close-issue") {
@@ -575,7 +570,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         wtLog.event.dim(`auto ${rule.id}: fire carried no issue number — nothing to close`);
         return { declined: null };
       }
-      const r = yield* automationPromise("close GitHub issue", () => closeGithubIssuePromise(issue));
+      const r = yield* closeGithubIssue(issue);
       if (r.ok) {
         // ATTENTION, not the firehose: this is the one builtin that
         // writes to a system OUTSIDE wt, where wt's undo does not
@@ -607,7 +602,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       // whose head ref disappears, with no close event to explain it,
       // so a wrong delete destroys a PR and hides why. A live read is
       // one gh call on a path that runs once per merged branch.
-      const live = yield* automationPromise("view GitHub pull request", () => viewPrInfoPromise(branch));
+      const live = yield* viewPrInfo(branch);
       const confirmed = live
         ? live.state === "MERGED"
         // No PR on the branch at all: only the fire that claimed local
@@ -626,7 +621,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
         );
         return { declined: null };
       }
-      const r = yield* automationPromise("delete remote branch", () => deleteRemoteBranchPromise(branch));
+      const r = yield* deleteRemoteBranch(branch);
       if (r.ok) {
         // ATTENTION for the same reason close-issue takes it: this
         // writes to a system outside wt, where wt's undo does not
@@ -646,8 +641,10 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // A typed failure, so the caller's ledger/breaker bookkeeping and the
     // error toast see it; a thrown Error would be a defect that skips both.
     if (!def) {
-      return yield* new AutomationDispatchError({
-        cause: new Error(`action "${rule.run}" not found in config`),
+      return yield* new OperationError({
+        source: "useAutomations",
+        operation: "resolve action",
+        cause: `action "${rule.run}" not found in config`,
       });
     }
     // A fleet-level fire belongs to no worktree, so it cannot go
@@ -657,15 +654,15 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // measured against.
     const range = fire.branchRange;
     if (range) {
-      const started = yield* automationPromise("start fleet action", () => actionRegistry.startPromise(
-          def,
-          FLEET_SLUG,
-          config.paths.mainClone,
-          "",
-          { branch: range.branch, from: range.from, to: range.to },
-          "claude",
-          { autoFireKeys: fire.fireKeys },
-        ));
+      const started = yield* actionRegistry.start(
+        def,
+        FLEET_SLUG,
+        config.paths.mainClone,
+        "",
+        { branch: range.branch, from: range.from, to: range.to },
+        "claude",
+        { autoFireKeys: fire.fireKeys },
+      );
       if (!started.ok) return { declined: started.reason };
       // Advance the watermark only now. The range is consumed exactly
       // once, so moving the mark before the run is launched would drop
@@ -685,18 +682,18 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // exit code without having run.)
     const frozenVars = fire.frozenVars;
     if (frozenVars) {
-      const started = yield* automationPromise("start post-merge action", () => actionRegistry.startPromise(
-          def,
-          slug,
-          config.paths.mainClone,
-          "",
-          frozenVars,
-          "claude",
-          { autoFireKeys: fire.fireKeys },
-        ));
+      const started = yield* actionRegistry.start(
+        def,
+        slug,
+        config.paths.mainClone,
+        "",
+        frozenVars,
+        "claude",
+        { autoFireKeys: fire.fireKeys },
+      );
       return { declined: started.ok ? null : started.reason };
     }
-    const outcome = yield* automationPromise(
+    const outcome = yield* io.promise(
       "launch action",
       () => latest.current.launchAction(slug, def, "", undefined, {
         autoFireKeys: fire.fireKeys,
@@ -707,8 +704,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     return {
       declined: outcome.launched ? null : (outcome.reason ?? "launch declined"),
     };
-    });
-  }
+  });
 
   function dispatchKind(rule: AutomationFire["rule"]): Executing["kind"] {
     if (rule.run.startsWith("builtin:")) return "builtin";
@@ -1052,11 +1048,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
             // retry path.
             markFiresDelivered(fire.fireKeys);
             if (!breakerExempt) bumpBreaker(rule.id, target);
-            const msg =
-              error.cause instanceof Error
-                ? error.cause.message
-                : String(error.cause);
-            wtLog.event.err(`auto ${rule.id} failed: ${msg}`, { toast: true });
+            wtLog.event.err(`auto ${rule.id} failed: ${error.message}`, { toast: true });
           },
         }),
         Effect.ensuring(

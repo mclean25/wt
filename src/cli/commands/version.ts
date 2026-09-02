@@ -11,23 +11,21 @@ commit date ("-dirty" when the clone has local changes). Notes when
 origin is ahead as of the last fetch — no network is touched here;
 \`wt update --check\` does the live comparison.`;
 
-export function run(argv: string[]): Effect.Effect<number> {
-  return Effect.gen(function* () {
-    if (hasHelpFlag(argv)) {
-      console.log(USAGE);
-      return 0;
-    }
-    console.log(`wt ${wtVersion()}`);
-    const state = yield* repoUpdateState;
-    if (state && state.behind > 0 && !state.dirty && state.ahead === 0) {
-      console.log(
-        yellow(
-          `${state.behind} commit(s) behind ${state.upstream} — run \`wt update\``,
-        ),
-      );
-    } else if (state?.dirty || (state?.ahead ?? 0) > 0) {
-      console.log(dim("(clone has local changes — self-update disabled)"));
-    }
+export const run = Effect.fn("wt version")(function* (argv: string[]) {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
     return 0;
-  });
-}
+  }
+  console.log(`wt ${wtVersion()}`);
+  const state = yield* repoUpdateState;
+  if (state && state.behind > 0 && !state.dirty && state.ahead === 0) {
+    console.log(
+      yellow(
+        `${state.behind} commit(s) behind ${state.upstream} — run \`wt update\``,
+      ),
+    );
+  } else if (state?.dirty || (state?.ahead ?? 0) > 0) {
+    console.log(dim("(clone has local changes — self-update disabled)"));
+  }
+  return 0;
+});

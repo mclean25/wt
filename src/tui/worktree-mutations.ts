@@ -1,4 +1,5 @@
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
+import { operationErrors } from "../core/errors.ts";
 import type { WorktreeTarget } from "../core/worktree-target.ts";
 import { worktreeTargetKey } from "../core/worktree-target.ts";
 
@@ -6,10 +7,7 @@ export type WorktreeMutationDeps = {
   setControllerSection: (key: string, section: string | null) => Promise<void>;
 };
 
-export class WorktreeMutationError extends Data.TaggedError("WorktreeMutationError")<{
-  readonly key: string;
-  readonly cause: unknown;
-}> {}
+const io = operationErrors("worktree mutations");
 
 /** Persistence boundary for controller-owned fleet layout. */
 export function makeWorktreeMutations(deps: WorktreeMutationDeps) {
@@ -18,12 +16,9 @@ export function makeWorktreeMutations(deps: WorktreeMutationDeps) {
     section: string | null,
   ) {
     const key = worktreeTargetKey(target);
-    return Effect.tryPromise({
-      try: (signal) => {
-        if (signal.aborted) return Promise.reject(signal.reason);
-        return deps.setControllerSection(key, section);
-      },
-      catch: (cause) => new WorktreeMutationError({ key, cause }),
+    return io.promise(`set section ${key}`, (signal) => {
+      if (signal.aborted) return Promise.reject(signal.reason);
+      return deps.setControllerSection(key, section);
     });
   }
 

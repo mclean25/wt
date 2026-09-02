@@ -1,8 +1,8 @@
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-import { removeWorktreePromise } from "../../core/lifecycle.ts";
-import { killAllSessionsForPromise } from "../../core/tmux.ts";
-import { listWorktreesPromise } from "../../core/worktree.ts";
+import { removeWorktree } from "../../core/lifecycle.ts";
+import { killAllSessionsFor } from "../../core/tmux.ts";
+import { listWorktrees } from "../../core/worktree.ts";
 
 type Parsed = {
   slug: string;
@@ -40,63 +40,49 @@ function parse(argv: string[]): Parsed | { error: string } {
  * `console.log` here — and every grandchild's output — lands in the log
  * automatically. No monkey-patching.
  */
-export class DestroyCommandError extends Data.TaggedError(
-  "DestroyCommandError",
-)<{
-  readonly operation: string;
-  readonly cause: unknown;
-}> {}
+export const run = Effect.fn("wt _destroy")(function* (argv: string[]) {
+  const parsed = parse(argv);
+  if ("error" in parsed) {
+    console.error(parsed.error);
+    return 2;
+  }
 
-function commandPromise<A>(
-  operation: string,
-  f: () => Promise<A>,
-): Effect.Effect<A, DestroyCommandError> {
-  return Effect.tryPromise({
-    try: f,
-    catch: (cause) => new DestroyCommandError({ operation, cause }),
-  });
-}
-
-export function run(
-  argv: string[],
-): Effect.Effect<number, DestroyCommandError> {
-  return Effect.gen(function* () {
-    const parsed = parse(argv);
-    if ("error" in parsed) {
-      console.error(parsed.error);
-      return 2;
-    }
-
-    const wt = (yield* commandPromise("list worktrees", listWorktreesPromise)).find(
-      (w) => w.slug === parsed.slug,
-    );
-    if (!wt) {
-      console.error(`No worktree: ${parsed.slug}`);
-      return 1;
-    }
-    console.log(
-      `[bg destroy] slug=${parsed.slug} force=${parsed.force} ` +
-        `stage=${parsed.destroyStage} branch=${parsed.deleteBranch}`,
-    );
-    const result = yield* commandPromise("remove worktree", () =>
-      removeWorktreePromise(wt, {
-        force: parsed.force,
-        destroyStage: parsed.destroyStage,
-        deleteBranch: parsed.deleteBranch,
-        onLog: (line) => console.log(line),
-        onPhase: (phase) => console.log(`· ${phase}`),
+  const wt = (yield* listWorktrees()).find((w) => w.slug === parsed.slug);
+  if (!wt) {
+    console.error(`No worktree: ${parsed.slug}`);
+    return 1;
+  }
+  console.log(
+    `[bg destroy] slug=${parsed.slug} force=${parsed.force} ` +
+      `stage=${parsed.destroyStage} branch=${parsed.deleteBranch}`,
+  );
+  const result = yield* removeWorktree(wt, {
+    force: parsed.force,
+    destroyStage: parsed.destroyStage,
+    deleteBranch: parsed.deleteBranch,
+    onLog: (line) => console.log(line),
+    onPhase: (phase) => console.log(`· ${phase}`),
+  }).pipe(
+    // A refused remove (busy lock, guard tripped, ...) is a reported
+    // outcome here, not a command failure — fold it into the same
+    // ok:false shape a "removeWorktreeProgram said no" result has, so
+    // one branch below handles both.
+    Effect.catchTag("LifecycleError", (error) =>
+      Effect.succeed({
+        ok: false as const,
+        message: error.message,
+        destroyedStage: false,
+        deletedBranch: false,
       }),
-    );
-    if (!result.ok) {
-      console.error(`failed: ${result.message}`);
-      return 1;
-    }
-    yield* commandPromise("kill removed worktree sessions", () =>
-      killAllSessionsForPromise(wt.slug),
-    );
-    console.log(`✓ ${result.message}`);
-    if (result.destroyedStage) console.log(`✓ destroyed stage ${wt.stage}`);
-    if (result.deletedBranch) console.log(`✓ deleted branch ${wt.branch}`);
-    return 0;
-  });
-}
+    ),
+  );
+  if (!result.ok) {
+    console.error(`failed: ${result.message}`);
+    return 1;
+  }
+  yield* killAllSessionsFor(wt.slug);
+  console.log(`✓ ${result.message}`);
+  if (result.destroyedStage) console.log(`✓ destroyed stage ${wt.stage}`);
+  if (result.deletedBranch) console.log(`✓ deleted branch ${wt.branch}`);
+  return 0;
+});

@@ -6,12 +6,17 @@ import { Data, Effect } from "effect";
 
 import { hideFrontmostTerminal } from "./zed.ts";
 import { config } from "./config.ts";
+import { causeMessage } from "./errors.ts";
 import { run } from "./proc.ts";
 
 export class MacosCommandError extends Data.TaggedError("MacosCommandError")<{
   readonly operation: "open" | "pbcopy";
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.operation}: ${causeMessage(this.cause)}`;
+  }
+}
 
 /**
  * Build the macOS launcher command for a URL. A configured Chrome profile

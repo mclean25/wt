@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { Data, Effect } from "effect";
 
+import { causeMessage } from "./errors.ts";
 import {
   run,
   runStreaming,
@@ -27,7 +28,11 @@ export type WorktreeRunOptions = {
 export class WorktreeExecutorError extends Data.TaggedError("WorktreeExecutorError")<{
   readonly operation: "spawn" | "wait" | "logs" | "message";
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.operation}: ${causeMessage(this.cause)}`;
+  }
+}
 
 /**
  * The sole direct-versus-SSH transport decision for ordinary wt commands.

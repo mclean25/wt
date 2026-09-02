@@ -1,31 +1,18 @@
 import { keepPreviousData, queryOptions } from "@tanstack/react-query";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
 import { config } from "../../core/config.ts";
-import { fetchRemoteWorktreesPromise } from "../../core/remote-worktrees.ts";
+import { fetchRemoteWorktrees } from "../../core/remote-worktrees.ts";
 import { refreshRemoteWorkerInfo } from "../../core/worker-info.ts";
 import { DEV_SERVER_STOPPED } from "../../core/dev-server.ts";
 import { qk } from "../keys.ts";
-
-class RemoteQueryError extends Data.TaggedError("RemoteQueryError")<{
-  operation: string;
-  cause: unknown;
-}> {
-  override get message(): string {
-    return this.cause instanceof Error
-      ? this.cause.message
-      : String(this.cause);
-  }
-}
-
-const queryPromise = <A, E>(effect: Effect.Effect<A, E>, signal: AbortSignal) =>
-  Effect.runPromise(effect, { signal });
+import { runQuery } from "./boundary.ts";
 
 export const remoteWorkerInfoQuery = (remote = config.remote) =>
   queryOptions({
     queryKey: qk.remoteWorkerInfo(remote?.host),
     queryFn: ({ signal }) =>
-      queryPromise(
+      runQuery(
         remote ? refreshRemoteWorkerInfo(remote) : Effect.succeed(null),
         signal,
       ),
@@ -38,14 +25,8 @@ export const remoteWorktreesQuery = (remote = config.remote) =>
   queryOptions({
     queryKey: qk.remoteWorktrees(remote?.host),
     queryFn: ({ signal }) =>
-      queryPromise(
-        remote
-          ? Effect.tryPromise({
-              try: () => fetchRemoteWorktreesPromise(remote, signal),
-              catch: (cause) =>
-                new RemoteQueryError({ operation: "fetch worktrees", cause }),
-            })
-          : Effect.succeed([]),
+      runQuery(
+        remote ? fetchRemoteWorktrees(remote, signal) : Effect.succeed([]),
         signal,
       ),
     // Persisted query data from versions before location-aware fleet keys has

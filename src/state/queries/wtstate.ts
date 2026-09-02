@@ -1,43 +1,26 @@
 import { queryOptions } from "@tanstack/react-query";
-import { Data, Effect } from "effect";
 
 import { readArchived } from "../../core/archive.ts";
 import { readWtState, type WtState } from "../../core/wtstate.ts";
 
 import { qk } from "../keys.ts";
+import { operationErrors, runQuery } from "./boundary.ts";
 import { STALE } from "./shared.ts";
 
-class WtStateQueryError extends Data.TaggedError("WtStateQueryError")<{
-  operation: string;
-  cause: unknown;
-}> {
-  override get message(): string {
-    return this.cause instanceof Error
-      ? this.cause.message
-      : String(this.cause);
-  }
-}
-
-const querySync = <A>(operation: string, evaluate: () => A) =>
-  Effect.runPromise(
-    Effect.try({
-      try: evaluate,
-      catch: (cause) => new WtStateQueryError({ operation, cause }),
-    }),
-  );
+const io = operationErrors("wtstate");
 
 export const archiveQuery = () =>
   queryOptions({
     queryKey: qk.archive(),
-    queryFn: (): Promise<string[]> =>
-      querySync("read archive", () => [...readArchived()]),
+    queryFn: ({ signal }): Promise<string[]> =>
+      runQuery(io.sync("read archive", () => [...readArchived()]), signal),
     staleTime: STALE.fast,
   });
 
 export const wtStateQuery = () =>
   queryOptions({
     queryKey: qk.wtState(),
-    queryFn: (): Promise<WtState> =>
-      querySync("read wt state", () => readWtState()),
+    queryFn: ({ signal }): Promise<WtState> =>
+      runQuery(io.sync("read wt state", () => readWtState()), signal),
     staleTime: STALE.fast,
   });

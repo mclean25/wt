@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { Deferred, Effect, Exit, Fiber, Ref } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Ref } from "effect";
+import { TestClock } from "effect/testing";
 
 import {
+  AiNamingError,
   isStackTitleMetaOnly,
+  NAMING_RETRY_SCHEDULE,
   parseTitleDescription,
   withNamingPermit,
 } from "./ai.ts";
@@ -53,6 +56,34 @@ test("a queued naming request cancelled before its permit never runs", async () 
     return { count: yield* Ref.get(count), interrupted: Exit.hasInterrupts(queuedExit) };
   })));
   expect(ran).toEqual({ count: 0, interrupted: true });
+});
+
+describe("NAMING_RETRY_SCHEDULE", () => {
+  test("a transient failure retries once, then a second failure surfaces AiNamingError", async () => {
+    const { attempts, failure } = await Effect.runPromise(Effect.gen(function* () {
+      let attempts = 0;
+      const failingCall = Effect.suspend(() => {
+        attempts++;
+        return Effect.fail(
+          new AiNamingError({ kind: "completion", detail: `attempt ${attempts} failed` }),
+        );
+      }).pipe(Effect.retry(NAMING_RETRY_SCHEDULE));
+
+      const fiber = yield* Effect.forkChild(failingCall);
+      // The schedule caps its delay at 500ms; advancing well past that
+      // lets the one permitted retry (and only that one) fire.
+      yield* TestClock.adjust(Duration.seconds(2));
+      const failure = yield* Fiber.join(fiber).pipe(Effect.flip);
+      return { attempts, failure };
+    }).pipe(Effect.provide(TestClock.layer())));
+
+    // One initial attempt plus exactly one retry — `Schedule.recurs(1)`
+    // caps it there, so a persistently transient failure still surfaces
+    // rather than retrying forever.
+    expect(attempts).toBe(2);
+    expect(failure).toBeInstanceOf(AiNamingError);
+    expect(failure.detail).toBe("attempt 2 failed");
+  });
 });
 
 describe("parseTitleDescription", () => {

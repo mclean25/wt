@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Cause, Effect } from "effect";
+import { Cause, Duration, Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 
 import {
   buildQuery,
@@ -159,6 +160,47 @@ const emptyGraphql = (branchCount: number) => ({
   exitCode: 0,
 });
 
+/**
+ * Retry backoff is `Schedule.exponential(400ms)` (`RETRY_BASE_MS`) with
+ * `Schedule.jittered` (a 0.8x-1.2x multiplier per the Effect docs), so the
+ * Nth retry's OWN delay falls in `[400 * 2^(N-1) * 0.8, 400 * 2^(N-1) *
+ * 1.2]`. Each retry's delay is jittered independently, so pinning a single
+ * retry's window against wall time measured from the *previous* retry (not
+ * from t=0) is unsafe once there's more than one: the previous retry could
+ * have fired anywhere in ITS OWN window, and stepping to what looks like
+ * "just past this retry's floor" from an assumed fixed anchor can land
+ * after the retry has already fired for a legitimate reason.
+ *
+ * `cumulativeBounds(k)` instead gives the bounds on the total elapsed time
+ * for `k` retries to have happened, from t=0: the earliest EVERY retry can
+ * have fired is the sum of each window's floor, and the latest is the sum
+ * of each window's ceiling. Advancing a forked fiber to just under the
+ * cumulative floor must never observe the Kth retry; advancing to the
+ * cumulative ceiling always must.
+ */
+const RETRY_BASE_MS = 400;
+const retryWindow = (attemptIndex: number) => ({
+  floorMs: Math.floor(RETRY_BASE_MS * 2 ** attemptIndex * 0.8),
+  ceilMs: Math.ceil(RETRY_BASE_MS * 2 ** attemptIndex * 1.2),
+});
+const cumulativeBounds = (retries: number) => {
+  let floorMs = 0;
+  let ceilMs = 0;
+  for (let i = 0; i < retries; i++) {
+    const w = retryWindow(i);
+    floorMs += w.floorMs;
+    ceilMs += w.ceilMs;
+  }
+  return { floorMs, ceilMs };
+};
+
+/** Advance a shared `TestClock` to an absolute elapsed-ms mark, tracked in `elapsed`. */
+const advanceCumulative = (elapsed: { ms: number }, targetMs: number) => {
+  const delta = targetMs - elapsed.ms;
+  elapsed.ms = targetMs;
+  return TestClock.adjust(Duration.millis(delta));
+};
+
 describe("Effect chunk execution", () => {
   test("cancellation is interruption, never successful empty data", async () => {
     let started = false;
@@ -183,14 +225,27 @@ describe("Effect chunk execution", () => {
 
   test("retries a transient chunk and then succeeds", async () => {
     let calls = 0;
-    const data = await Effect.runPromise(
-      fetchChunk("owner", "repo", ["branch"], false, () => {
-        calls += 1;
-        return Effect.succeed(
-          calls < 2 ? res({ stderr: "gh: HTTP 502" }) : emptyGraphql(1),
-        );
-      }),
-    );
+    const elapsed = { ms: 0 };
+    const b1 = cumulativeBounds(1);
+    const data = await Effect.runPromise(Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(
+        fetchChunk("owner", "repo", ["branch"], false, () => {
+          calls += 1;
+          return Effect.succeed(
+            calls < 2 ? res({ stderr: "gh: HTTP 502" }) : emptyGraphql(1),
+          );
+        }),
+      );
+      yield* Effect.yieldNow;
+      expect(calls).toBe(1);
+      yield* advanceCumulative(elapsed, b1.floorMs - 1);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(1);
+      yield* advanceCumulative(elapsed, b1.ceilMs);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(2);
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestClock.layer())));
     expect(calls).toBe(2);
     expect(data.prs.size).toBe(0);
   });
@@ -214,12 +269,34 @@ describe("Effect chunk execution", () => {
 
   test("a truncated success body is transient and retried", async () => {
     let calls = 0;
-    const exit = await Effect.runPromiseExit(
-      fetchChunk("owner", "repo", ["branch"], false, () => {
-        calls += 1;
-        return Effect.succeed({ stdout: '{"data":', stderr: "", exitCode: 0 });
-      }),
-    );
+    const elapsed = { ms: 0 };
+    const b1 = cumulativeBounds(1);
+    const b2 = cumulativeBounds(2);
+    const exit = await Effect.runPromise(Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(
+        Effect.exit(
+          fetchChunk("owner", "repo", ["branch"], false, () => {
+            calls += 1;
+            return Effect.succeed({ stdout: '{"data":', stderr: "", exitCode: 0 });
+          }),
+        ),
+      );
+      yield* Effect.yieldNow;
+      expect(calls).toBe(1);
+      yield* advanceCumulative(elapsed, b1.floorMs - 1);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(1);
+      yield* advanceCumulative(elapsed, b1.ceilMs);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(2);
+      yield* advanceCumulative(elapsed, b2.floorMs - 1);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(2);
+      yield* advanceCumulative(elapsed, b2.ceilMs);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(3);
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestClock.layer())));
     expect(calls).toBe(3);
     expect(exit._tag).toBe("Failure");
     if (exit._tag === "Failure") {
@@ -229,41 +306,76 @@ describe("Effect chunk execution", () => {
 
   test("partial GraphQL data with errors fails the whole chunk", async () => {
     let calls = 0;
-    const exit = await Effect.runPromiseExit(
-      fetchChunk("owner", "repo", ["branch"], false, () => {
-        calls += 1;
-        return Effect.succeed({
-          stdout: JSON.stringify({
-            data: { repository: { wt_0: { nodes: [] } } },
-            errors: [{ type: "INTERNAL", message: "internal server error" }],
+    const elapsed = { ms: 0 };
+    const b1 = cumulativeBounds(1);
+    const b2 = cumulativeBounds(2);
+    const exit = await Effect.runPromise(Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(
+        Effect.exit(
+          fetchChunk("owner", "repo", ["branch"], false, () => {
+            calls += 1;
+            return Effect.succeed({
+              stdout: JSON.stringify({
+                data: { repository: { wt_0: { nodes: [] } } },
+                errors: [{ type: "INTERNAL", message: "internal server error" }],
+              }),
+              stderr: "",
+              exitCode: 0,
+            });
           }),
-          stderr: "",
-          exitCode: 0,
-        });
-      }),
-    );
+        ),
+      );
+      yield* Effect.yieldNow;
+      expect(calls).toBe(1);
+      yield* advanceCumulative(elapsed, b1.floorMs - 1);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(1);
+      yield* advanceCumulative(elapsed, b1.ceilMs);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(2);
+      yield* advanceCumulative(elapsed, b2.floorMs - 1);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(2);
+      yield* advanceCumulative(elapsed, b2.ceilMs);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(3);
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestClock.layer())));
     expect(calls).toBe(3);
     expect(exit._tag).toBe("Failure");
   });
 
   test("a transient GraphQL error response is retried", async () => {
     let calls = 0;
-    const data = await Effect.runPromise(
-      fetchChunk("owner", "repo", ["branch"], false, () => {
-        calls += 1;
-        return Effect.succeed(
-          calls === 1
-            ? {
-                stdout: JSON.stringify({
-                  errors: [{ type: "INTERNAL", message: "internal server error" }],
-                }),
-                stderr: "",
-                exitCode: 0,
-              }
-            : emptyGraphql(1),
-        );
-      }),
-    );
+    const elapsed = { ms: 0 };
+    const b1 = cumulativeBounds(1);
+    const data = await Effect.runPromise(Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(
+        fetchChunk("owner", "repo", ["branch"], false, () => {
+          calls += 1;
+          return Effect.succeed(
+            calls === 1
+              ? {
+                  stdout: JSON.stringify({
+                    errors: [{ type: "INTERNAL", message: "internal server error" }],
+                  }),
+                  stderr: "",
+                  exitCode: 0,
+                }
+              : emptyGraphql(1),
+          );
+        }),
+      );
+      yield* Effect.yieldNow;
+      expect(calls).toBe(1);
+      yield* advanceCumulative(elapsed, b1.floorMs - 1);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(1);
+      yield* advanceCumulative(elapsed, b1.ceilMs);
+      yield* Effect.yieldNow;
+      expect(calls).toBe(2);
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestClock.layer())));
     expect(calls).toBe(2);
     expect(data.prs.size).toBe(0);
   });

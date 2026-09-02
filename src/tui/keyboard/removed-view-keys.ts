@@ -12,14 +12,14 @@ import { createLogger } from "../../core/logger.ts";
 import { issueUrlForSlug } from "../../core/issue-tracker.ts";
 import type { RemovedWorktree } from "../../core/wtstate.ts";
 import { isPlainLetter } from "../app-helpers.ts";
-import { openUrlHidingTerminalPromise } from "../../core/macos.ts";
+import { openUrlHidingTerminal } from "../../core/macos.ts";
+import { operationErrors } from "../../core/errors.ts";
+import { forkReported } from "../effect-boundary.ts";
 import type { Modal } from "../modal-state.ts";
 import { theme } from "../theme.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class RemovedViewError extends Data.TaggedError("RemovedViewError")<{
-  cause: unknown;
-}> {}
+const io = operationErrors("removed-view-keys");
 
 export type RemovedViewKeysCtx = {
   setRemovedView: (v: boolean) => void;
@@ -87,11 +87,8 @@ export function handleRemovedViewKey(
   // and the automations still able to fire for an archived slug
   // (post-merge `external` runs) are exactly the ones this stops.
   if (k.ctrl && k.name === "a") {
-    Effect.runFork(
-      Effect.tryPromise({
-        try: () => toggleRemovedAutomationsPaused(entry.slug),
-        catch: (cause) => new RemovedViewError({ cause }),
-      }).pipe(
+    forkReported(
+      io.promise("automations toggle", () => toggleRemovedAutomationsPaused(entry.slug)).pipe(
         Effect.tap((paused) =>
           Effect.sync(() => {
             if (paused === null) {
@@ -112,14 +109,9 @@ export function handleRemovedViewKey(
             );
           }),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() =>
-            removedLog.event.err(
-              `automations toggle failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
-            ),
-          ),
-        ),
       ),
+      (error) =>
+        removedLog.event.err(`automations toggle failed: ${error.message}`),
     );
     return;
   }
@@ -140,19 +132,8 @@ export function handleRemovedViewKey(
       );
       return;
     }
-    Effect.runFork(
-      Effect.tryPromise({
-        try: () => openUrlHidingTerminalPromise(url),
-        catch: (cause) => new RemovedViewError({ cause }),
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.sync(() =>
-            removedLog.event.err(
-              `open issue failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
-            ),
-          ),
-        ),
-      ),
+    forkReported(openUrlHidingTerminal(url), (error) =>
+      removedLog.event.err(`open issue failed: ${error.message}`),
     );
     removedLog.event.info("opened issue");
     return;

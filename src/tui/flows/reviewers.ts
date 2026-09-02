@@ -7,6 +7,7 @@ import type { QueryFilters } from "@tanstack/react-query";
 
 import { config } from "../../core/config.ts";
 import { editReviewersPromise } from "../../core/github.ts";
+import { operationErrors } from "../../core/errors.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { Contributor } from "../../core/types.ts";
 import { patchPullRequest, type GithubData } from "../../state/index.ts";
@@ -14,13 +15,9 @@ import type { Modal } from "../modal-state.ts";
 import type { MultiPickerItem } from "../panels/picker.tsx";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class ReviewersFlowError extends Data.TaggedError("ReviewersFlowError")<{ cause: unknown }> {}
-const reviewerPromise = <A>(evaluate: () => PromiseLike<A>) => Effect.tryPromise({
-  try: evaluate,
-  catch: (cause) => new ReviewersFlowError({ cause }),
-});
+const io = operationErrors("reviewers flow");
 
 type ReviewerFlowsCtx = {
   rows: WorktreeRow[];
@@ -62,12 +59,11 @@ export function makeReviewerFlows(ctx: ReviewerFlowsCtx) {
     // the cached list is stale. `fetchMe` is process-cached after
     // first call.
     const fetched = await Effect.runPromise(Effect.all([
-      reviewerPromise(fetchContributors),
-      reviewerPromise(fetchMe),
+      io.promise("fetch contributors", fetchContributors),
+      io.promise("fetch me", fetchMe),
     ], { concurrency: "unbounded" }).pipe(
       Effect.catch((error) => Effect.sync(() => {
-        const message = error.cause instanceof Error ? error.cause.message : String(error.cause);
-        toast(`reviewers unavailable: ${message}`, theme.err, 3000);
+        toast(`reviewers unavailable: ${error.message}`, theme.err, 3000);
         return null;
       })),
     ));

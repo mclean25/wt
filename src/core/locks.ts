@@ -241,6 +241,7 @@ export function withAsyncFileLock<A, E, R>(
       ).pipe(
         Effect.retry(
           Schedule.spaced(Duration.millis(pollMs)).pipe(
+            Schedule.jittered,
             Schedule.upTo({ duration: Duration.millis(timeoutMs) }),
           ),
         ),

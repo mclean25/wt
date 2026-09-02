@@ -1,12 +1,12 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
-import { Data, Effect, Schedule } from "effect";
+import { Data, Effect, Fiber, Schedule, Semaphore } from "effect";
 
 import { listRiftWorktreePaths } from "./backend.ts";
 import { config } from "./config.ts";
-import { branchIsGone, branchIsMerged, effectiveBaseOrTrunk, freshBaseRevEffect, git, gitQuiet, gitRun, invalidateMainFirstParents, localBranchExists, originBranchExists, revParse } from "./git.ts";
+import { branchIsGone, branchIsMerged, effectiveBaseOrTrunk, freshBaseRev, git, gitQuiet, gitRun, invalidateMainFirstParents, localBranchExists, originBranchExists, revParse } from "./git.ts";
 import { resolveMainSyncInstall } from "./install.ts";
-import { lockAge, lockLabel, lockStatus, tryAcquireLock, type LockHandle } from "./locks.ts";
+import { lockAge, lockLabel, lockStatus, tryAcquireLock } from "./locks.ts";
 import { createLogger } from "./logger.ts";
 import { latestLogFor } from "./logs.ts";
 import { runOk, runQuiet, runStreaming, type ProcError } from "./proc.ts";
@@ -15,7 +15,6 @@ import { type Status, StatusKind, type Worktree } from "./types.ts";
 
 const log = createLogger("[worktree]");
 const FETCH_ORIGIN_LOCK = "__fetch_origin__";
-let fetchOriginInFlight: Promise<void> | null = null;
 export class WorktreeError extends Data.TaggedError("WorktreeError")<{
   readonly operation: "list" | "fetch-origin";
   readonly cause: unknown;
@@ -243,7 +242,7 @@ export type SyncState = {
   remote: SyncCounts | null;
 };
 
-function countsForEffect(wtPath: string, range: string): Effect.Effect<SyncCounts, ProcError | WorktreeError> {
+function countsFor(wtPath: string, range: string): Effect.Effect<SyncCounts, ProcError | WorktreeError> {
   return runOk(["git", "rev-list", "--left-right", "--count", range], { cwd: wtPath }).pipe(
     Effect.flatMap((out) => {
       const match = out.trim().match(/^(\d+)\s+(\d+)$/);
@@ -276,19 +275,17 @@ function countsForEffect(wtPath: string, range: string): Effect.Effect<SyncCount
 export const syncStatePromise = (wtPath: string, effectiveBase?: string | null): Promise<SyncState> =>
   Effect.runPromise(syncState(wtPath, effectiveBase));
 
-export function syncState(wtPath: string, effectiveBase?: string | null) {
-  return Effect.gen(function* () {
-    const resolved = yield* effectiveBaseOrTrunk(wtPath, effectiveBase);
-    const base = yield* freshBaseRevEffect(wtPath, resolved);
-    const main = yield* countsForEffect(wtPath, `${base}...HEAD`);
-    const branch = (yield* runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })).trim();
-    if (!branch || branch === "HEAD") return { main, remote: null };
-    const originRef = `origin/${branch}`;
-    const exists = yield* runQuiet(["git", "rev-parse", "--verify", "--quiet", originRef], { cwd: wtPath });
-    if (!exists) return { main, remote: null };
-    return { main, remote: yield* countsForEffect(wtPath, `${originRef}...HEAD`) };
-  });
-}
+export const syncState = Effect.fn("syncState")(function* (wtPath: string, effectiveBase?: string | null) {
+  const resolved = yield* effectiveBaseOrTrunk(wtPath, effectiveBase);
+  const base = yield* freshBaseRev(wtPath, resolved);
+  const main = yield* countsFor(wtPath, `${base}...HEAD`);
+  const branch = (yield* runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })).trim();
+  if (!branch || branch === "HEAD") return { main, remote: null };
+  const originRef = `origin/${branch}`;
+  const exists = yield* runQuiet(["git", "rev-parse", "--verify", "--quiet", originRef], { cwd: wtPath });
+  if (!exists) return { main, remote: null };
+  return { main, remote: yield* countsFor(wtPath, `${originRef}...HEAD`) };
+});
 
 /**
  * Paths flagged by `git status --porcelain` (relative to the worktree
@@ -339,34 +336,32 @@ export const worktreeHasTrackedChanges = (wtPath: string) =>
  * "couldn't determine" must never masquerade as "nothing to lose";
  * callers treat null as unpushed-work-unknown and stay cautious.
  */
-export function unpushedCommits(wtPath: string) {
-  return Effect.gen(function* () {
-    // `@{u}` is resolved to its ref NAME rather than used directly, so
-    // the trunk case is recognizable to `freshBaseRev` — wt points a
-    // worktree's upstream at its base, so for an unstacked worktree
-    // `@{u}` IS `origin/<trunk>`, and that is exactly the ref a rift
-    // clone holds a stale copy of.
-    const hasUpstream = yield* runQuiet(
-      ["git", "rev-parse", "--abbrev-ref", "@{u}"],
-      { cwd: wtPath },
-    );
-    const upstream = hasUpstream
-      ? (yield* runOk(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wtPath })).trim()
-      : "";
-    const base = yield* freshBaseRevEffect(
-      wtPath,
-      upstream || `origin/${config.branch.base}`,
-    );
-    const ahead = yield* runOk(
-      ["git", "rev-list", "--count", `${base}..HEAD`],
-      { cwd: wtPath },
-    );
-    return parseInt(ahead, 10) || 0;
-  }).pipe(Effect.catch((err) => Effect.sync(() => {
-    log.error(err instanceof Error ? err : String(err), { wtPath });
-    return null;
-  })));
-}
+export const unpushedCommits = Effect.fn("unpushedCommits")(function* (wtPath: string): Effect.fn.Return<number, ProcError> {
+  // `@{u}` is resolved to its ref NAME rather than used directly, so
+  // the trunk case is recognizable to `freshBaseRev` — wt points a
+  // worktree's upstream at its base, so for an unstacked worktree
+  // `@{u}` IS `origin/<trunk>`, and that is exactly the ref a rift
+  // clone holds a stale copy of.
+  const hasUpstream = yield* runQuiet(
+    ["git", "rev-parse", "--abbrev-ref", "@{u}"],
+    { cwd: wtPath },
+  );
+  const upstream = hasUpstream
+    ? (yield* runOk(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wtPath })).trim()
+    : "";
+  const base = yield* freshBaseRev(
+    wtPath,
+    upstream || `origin/${config.branch.base}`,
+  );
+  const ahead = yield* runOk(
+    ["git", "rev-list", "--count", `${base}..HEAD`],
+    { cwd: wtPath },
+  );
+  return parseInt(ahead, 10) || 0;
+}, (effect, wtPath) => effect.pipe(Effect.catch((err) => Effect.sync(() => {
+  log.error(err instanceof Error ? err : String(err), { wtPath });
+  return null;
+}))));
 export const unpushedCommitsPromise = (wtPath: string): Promise<number | null> =>
   Effect.runPromise(unpushedCommits(wtPath));
 
@@ -397,70 +392,66 @@ export type PushCounts = {
  * against `origin/<branch>` when that ref exists (true unpushed), and
  * `aheadOfBase` carries the old measurement.
  */
-export function pushCounts(wtPath: string) {
-  return Effect.gen(function* () {
-    const aheadOfBase = yield* unpushedCommits(wtPath);
-    return yield* Effect.gen(function* () {
-      const branch = (
-        yield* runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
-      ).trim();
-      // Detached HEAD reports the literal "HEAD" — no branch, no counterpart.
-      if (branch && branch !== "HEAD") {
-        const originRef = `origin/${branch}`;
-        const originExists = yield* runQuiet(
-          ["git", "rev-parse", "--verify", "--quiet", originRef],
+export const pushCounts = Effect.fn("pushCounts")(function* (wtPath: string) {
+  const aheadOfBase = yield* unpushedCommits(wtPath);
+  return yield* Effect.gen(function* () {
+    const branch = (
+      yield* runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })
+    ).trim();
+    // Detached HEAD reports the literal "HEAD" — no branch, no counterpart.
+    if (branch && branch !== "HEAD") {
+      const originRef = `origin/${branch}`;
+      const originExists = yield* runQuiet(
+        ["git", "rev-parse", "--verify", "--quiet", originRef],
+        { cwd: wtPath },
+      );
+      if (originExists) {
+        const count = yield* runOk(
+          ["git", "rev-list", "--count", `${originRef}..HEAD`],
           { cwd: wtPath },
         );
-        if (originExists) {
-          const count = yield* runOk(
-            ["git", "rev-list", "--count", `${originRef}..HEAD`],
-            { cwd: wtPath },
-          );
-          return { unpushed: parseInt(count, 10) || 0, aheadOfBase, pushed: true };
-        }
+        return { unpushed: parseInt(count, 10) || 0, aheadOfBase, pushed: true };
       }
-      return { unpushed: aheadOfBase, aheadOfBase, pushed: false };
-    }).pipe(Effect.catch((err) => Effect.sync(() => {
-      log.error(err instanceof Error ? err : String(err), { wtPath });
-      return { unpushed: null, aheadOfBase, pushed: null };
-    })));
-  });
-}
+    }
+    return { unpushed: aheadOfBase, aheadOfBase, pushed: false };
+  }).pipe(Effect.catch((err) => Effect.sync(() => {
+    log.error(err instanceof Error ? err : String(err), { wtPath });
+    return { unpushed: null, aheadOfBase, pushed: null };
+  })));
+});
 export const pushCountsPromise = (wtPath: string): Promise<PushCounts> =>
   Effect.runPromise(pushCounts(wtPath));
 
-export function worktreeStatus(wt: Worktree): Effect.Effect<Status, ProcError> {
+export const worktreeStatus = Effect.fn("worktreeStatus")(function* (wt: Worktree): Effect.fn.Return<Status, ProcError> {
   const lock = lockStatus(wt.slug);
   if (lock) {
-    return Effect.succeed({
+    return {
       kind: StatusKind.Busy,
       label: lockLabel(lock),
       age: lockAge(lock) ?? undefined,
       log: latestLogFor(wt.slug) ?? undefined,
       pid: lock.pid,
       op: lock.op,
-    });
+    };
   }
   if (!existsSync(wt.path)) {
-    return Effect.succeed({ kind: StatusKind.Missing, label: "missing" });
+    return { kind: StatusKind.Missing, label: "missing" };
   }
-  return Effect.gen(function* () {
-    if (wt.branch) {
-      if (yield* branchIsGone(wt.branch, wt.path)) {
-        return { kind: StatusKind.Gone, label: "gone (squash-merged or deleted)" } as Status;
-      }
-      if (yield* branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path })) {
-        return { kind: StatusKind.Merged, label: "merged into origin/main" } as Status;
-      }
+  if (wt.branch) {
+    if (yield* branchIsGone(wt.branch, wt.path)) {
+      return { kind: StatusKind.Gone, label: "gone (squash-merged or deleted)" };
     }
-    if (yield* worktreeIsDirty(wt.path)) return { kind: StatusKind.Dirty, label: "dirty" } as Status;
-    return { kind: StatusKind.Clean, label: "clean" } as Status;
-  });
-}
+    if (yield* branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path })) {
+      return { kind: StatusKind.Merged, label: "merged into origin/main" };
+    }
+  }
+  if (yield* worktreeIsDirty(wt.path)) return { kind: StatusKind.Dirty, label: "dirty" };
+  return { kind: StatusKind.Clean, label: "clean" };
+});
 export const worktreeStatusPromise = (wt: Worktree): Promise<Status> => Effect.runPromise(worktreeStatus(wt));
 
-function acquireFetchOriginLockEffect(): Effect.Effect<LockHandle, WorktreeError> {
-  return Effect.suspend(() => {
+const acquireFetchOriginLock = Effect.fnUntraced(function* () {
+  return yield* Effect.suspend(() => {
     const handle = tryAcquireLock(FETCH_ORIGIN_LOCK, "fetch-origin", {
       phase: "fetch origin",
     });
@@ -468,11 +459,11 @@ function acquireFetchOriginLockEffect(): Effect.Effect<LockHandle, WorktreeError
       ? Effect.succeed(handle)
       : Effect.fail(new WorktreeError({ operation: "fetch-origin", cause: new Error("another origin fetch is still running") }));
   }).pipe(Effect.retry(Schedule.max([Schedule.spaced("250 millis"), Schedule.recurs(59)])));
-}
+});
 
-function fetchOriginLockedEffect(opts: { onWarn?: (msg: string) => void } = {}) {
-  return Effect.acquireUseRelease(
-    acquireFetchOriginLockEffect(),
+const fetchOriginLocked = Effect.fnUntraced(function* (opts: { onWarn?: (msg: string) => void } = {}) {
+  return yield* Effect.acquireUseRelease(
+    acquireFetchOriginLock(),
     () => Effect.gen(function* () {
     const fetch = yield* gitRun(["fetch", "origin", "--prune"]);
     if (fetch.exitCode !== 0) {
@@ -490,7 +481,7 @@ function fetchOriginLockedEffect(opts: { onWarn?: (msg: string) => void } = {}) 
     // so naming the base in `keep_fresh` is redundant rather than a
     // double fast-forward.
     for (const branch of new Set([config.branch.base, ...config.branch.keepFresh])) {
-      yield* syncLocalBranchEffect(branch, {
+      yield* syncLocalBranch(branch, {
         main,
         checkedOut: head === branch,
         // `base` keeps its historical skip-if-absent semantics — it is a
@@ -503,11 +494,11 @@ function fetchOriginLockedEffect(opts: { onWarn?: (msg: string) => void } = {}) 
         onWarn: opts.onWarn,
       });
     }
-    yield* freshenWorktreeTrunkRefsEffect(main);
+    yield* freshenWorktreeTrunkRefs(main);
     }),
     (handle) => Effect.sync(() => handle.release()),
   ).pipe(Effect.mapError((cause) => cause instanceof WorktreeError ? cause : new WorktreeError({ operation: "fetch-origin", cause })));
-}
+});
 
 /**
  * Point every worktree's OWN `origin/<trunk>` at the tip the main clone
@@ -542,61 +533,57 @@ function fetchOriginLockedEffect(opts: { onWarn?: (msg: string) => void } = {}) 
  * GitHub's merge-queue branches in ahead of the merge — so it is a ref
  * write, not a transfer (0 of 19 live checkouts needed the fetch).
  */
-function freshenWorktreeTrunkRefsEffect(main: string) {
-  return Effect.gen(function* () {
-    const trunk = config.branch.base;
-    const tip = yield* revParse(`origin/${trunk}`, main);
-    if (!tip) return;
-    const worktrees = yield* listWorktrees().pipe(
-      Effect.map((items) => items.filter((w) => !w.isMain)),
-      Effect.catch((err) => Effect.sync(() => {
-        log.debug(`could not list worktrees to freshen origin/${trunk}`, { err: err.message });
-        return [];
-      })),
-    );
-    yield* Effect.all(worktrees.map((wt) => freshenTrunkRefEffect(wt, trunk, tip, main)), { concurrency: 8 });
-  });
-}
+const freshenWorktreeTrunkRefs = Effect.fnUntraced(function* (main: string) {
+  const trunk = config.branch.base;
+  const tip = yield* revParse(`origin/${trunk}`, main);
+  if (!tip) return;
+  const worktrees = yield* listWorktrees().pipe(
+    Effect.map((items) => items.filter((w) => !w.isMain)),
+    Effect.catch((err) => Effect.sync(() => {
+      log.debug(`could not list worktrees to freshen origin/${trunk}`, { err: err.message });
+      return [];
+    })),
+  );
+  yield* Effect.all(worktrees.map((wt) => freshenTrunkRef(wt, trunk, tip, main)), { concurrency: 8 });
+});
 
 /**
  * One checkout's trunk ref. Never throws: a directory removed
  * out-of-band between the listing and here must not fail the fetch that
  * every caller of `fetchOrigin` is actually waiting on.
  */
-function freshenTrunkRefEffect(
+const freshenTrunkRef = Effect.fnUntraced(function* (
   wt: Worktree,
   trunk: string,
   tip: string,
   main: string,
-): Effect.Effect<void> {
+) {
   const ref = `refs/remotes/origin/${trunk}`;
-  return Effect.gen(function* () {
-    const have = yield* revParse(`origin/${trunk}`, wt.path);
-    if (have === tip) return;
-    if (!(yield* gitQuiet(["cat-file", "-e", `${tip}^{commit}`], wt.path))) {
-      // Not here yet. The fetch brings the object and moves the ref in
-      // one step, over the filesystem from the main clone — no network.
-      yield* gitRun(
-        ["fetch", "--no-tags", "--quiet", main, `+refs/remotes/origin/${trunk}:${ref}`],
-        wt.path,
-      );
-      return;
-    }
-    // Fast-forward only. A clone that ran its own `git fetch` can be
-    // AHEAD of the main clone's last one, and rewinding its ref is the
-    // same lie pointing the other way.
-    if (have && !(yield* gitQuiet(["merge-base", "--is-ancestor", have, tip], wt.path))) {
-      return;
-    }
-    yield* gitRun(["update-ref", ref, tip], wt.path);
-    log.debug(`freshened ${ref}`, { slug: wt.slug, from: have ?? "(none)", to: tip });
-  }).pipe(Effect.catch((err) => Effect.sync(() => {
-    log.debug(`could not freshen ${ref}`, {
-      slug: wt.slug,
-      err: err instanceof Error ? err.message : String(err),
-    });
-  })));
-}
+  const have = yield* revParse(`origin/${trunk}`, wt.path);
+  if (have === tip) return;
+  if (!(yield* gitQuiet(["cat-file", "-e", `${tip}^{commit}`], wt.path))) {
+    // Not here yet. The fetch brings the object and moves the ref in
+    // one step, over the filesystem from the main clone — no network.
+    yield* gitRun(
+      ["fetch", "--no-tags", "--quiet", main, `+refs/remotes/origin/${trunk}:${ref}`],
+      wt.path,
+    );
+    return;
+  }
+  // Fast-forward only. A clone that ran its own `git fetch` can be
+  // AHEAD of the main clone's last one, and rewinding its ref is the
+  // same lie pointing the other way.
+  if (have && !(yield* gitQuiet(["merge-base", "--is-ancestor", have, tip], wt.path))) {
+    return;
+  }
+  yield* gitRun(["update-ref", ref, tip], wt.path);
+  log.debug(`freshened ${ref}`, { slug: wt.slug, from: have ?? "(none)", to: tip });
+}, (effect, wt, trunk) => effect.pipe(Effect.catch((err) => Effect.sync(() => {
+  log.debug(`could not freshen refs/remotes/origin/${trunk}`, {
+    slug: wt.slug,
+    err: err instanceof Error ? err.message : String(err),
+  });
+}))));
 
 /**
  * Fast-forward one local branch in the main clone onto the
@@ -617,7 +604,7 @@ function freshenTrunkRefEffect(
  * every few minutes — the one thing it must never do is decide which
  * copy wins.
  */
-function syncLocalBranchEffect(
+const syncLocalBranch = Effect.fnUntraced(function* (
   branch: string,
   opts: {
     main: string;
@@ -625,8 +612,7 @@ function syncLocalBranchEffect(
     create: boolean;
     onWarn?: (msg: string) => void;
   },
-): Effect.Effect<void, ProcError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<void, ProcError> {
   const { main, checkedOut, create } = opts;
   const remoteRef = `origin/${branch}`;
   const exists = yield* localBranchExists(branch, main);
@@ -662,14 +648,13 @@ function syncLocalBranchEffect(
     }
     return;
   }
-  yield* restoreAutoRegenEffect(main);
+  yield* restoreAutoRegen(main);
   const status = yield* runOk(["git", "status", "--porcelain"], { cwd: main });
   if (status.trim()) return;
   const before = (yield* runOk(["git", "rev-parse", "HEAD"], { cwd: main })).trim();
   yield* gitRun(["merge", "--ff-only", "--quiet", remoteRef], main);
-  yield* syncMainDepsEffect(main, before);
-  });
-}
+  yield* syncMainDeps(main, before);
+});
 
 /**
  * The ONE place origin gets fetched, and therefore the one place that
@@ -688,14 +673,32 @@ function syncLocalBranchEffect(
  * Invalidating here makes forgetting impossible rather than making it a
  * rule to remember.
  */
-export const fetchOrigin = (opts: { onWarn?: (msg: string) => void } = {}) =>
-  fetchOriginLockedEffect(opts).pipe(Effect.ensuring(Effect.sync(invalidateMainFirstParents)));
+// Single-flight IN THE EFFECT: concurrent `fetchOrigin` callers join the one
+// in-flight fetch instead of each paying the lock retry plus a redundant
+// `git fetch`. Previously this lived only in the Promise twin's own
+// module-level cache, so Effect callers (lifecycle.ts, stack-ops/replay.ts,
+// events/daemon.ts) each called `fetchOriginLocked` directly and bypassed it.
+// The claim/read is done under a semaphore (fast — it only forks, never
+// blocks on the fetch itself); joins happen outside it so concurrent
+// joiners don't serialize on the semaphore for the fetch's duration.
+// `forkDetach` so the underlying fetch outlives whichever caller's own
+// fiber happens to be interrupted while others are still joined on it.
+let fetchOriginFiber: Fiber.Fiber<void, WorktreeError> | null = null;
+const fetchOriginGate = Semaphore.makeUnsafe(1);
 
-export const fetchOriginPromise = (opts: { onWarn?: (msg: string) => void } = {}): Promise<void> => {
-  if (fetchOriginInFlight) return fetchOriginInFlight;
-  fetchOriginInFlight = Effect.runPromise(fetchOrigin(opts)).finally(() => { fetchOriginInFlight = null; });
-  return fetchOriginInFlight;
-};
+export const fetchOrigin = (opts: { onWarn?: (msg: string) => void } = {}): Effect.Effect<void, WorktreeError> =>
+  fetchOriginGate.withPermits(1)(Effect.suspend(() => {
+    if (fetchOriginFiber) return Effect.succeed(fetchOriginFiber);
+    return fetchOriginLocked(opts).pipe(
+      Effect.ensuring(Effect.sync(invalidateMainFirstParents)),
+      Effect.ensuring(Effect.sync(() => { fetchOriginFiber = null; })),
+      Effect.forkDetach,
+      Effect.tap((fiber) => Effect.sync(() => { fetchOriginFiber = fiber; })),
+    );
+  })).pipe(Effect.flatMap(Fiber.join));
+
+export const fetchOriginPromise = (opts: { onWarn?: (msg: string) => void } = {}): Promise<void> =>
+  Effect.runPromise(fetchOrigin(opts));
 
 /**
  * After the main clone fast-forwards to fresh trunk, reinstall deps IF the
@@ -718,8 +721,7 @@ export const fetchOriginPromise = (opts: { onWarn?: (msg: string) => void } = {}
  * Best-effort: a failed install warns to the activity pane and never
  * fails the fetch.
  */
-function syncMainDepsEffect(cwd: string, beforeHead: string): Effect.Effect<void, ProcError> {
-  return Effect.gen(function* () {
+const syncMainDeps = Effect.fnUntraced(function* (cwd: string, beforeHead: string): Effect.fn.Return<void, ProcError> {
   const after = (yield* runOk(["git", "rev-parse", "HEAD"], { cwd })).trim();
   if (!after || after === beforeHead) return; // nothing was pulled
   const sync = resolveMainSyncInstall(cwd);
@@ -741,17 +743,14 @@ function syncMainDepsEffect(cwd: string, beforeHead: string): Effect.Effect<void
       toast: true,
     });
   }
-  });
-}
+});
 
-function restoreAutoRegenEffect(cwd: string): Effect.Effect<void, ProcError> {
-  return Effect.gen(function* () {
-    for (const p of config.sst?.autoRegenPaths ?? []) {
+const restoreAutoRegen = Effect.fnUntraced(function* (cwd: string): Effect.fn.Return<void, ProcError> {
+  for (const p of config.sst?.autoRegenPaths ?? []) {
     if (!existsSync(join(cwd, p))) continue;
     const porcelain = yield* runOk(["git", "status", "--porcelain", "--", p], { cwd });
     if (porcelain) {
       yield* runQuiet(["git", "checkout", "HEAD", "--", p], { cwd });
     }
   }
-  });
-}
+});

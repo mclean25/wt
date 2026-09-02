@@ -11,7 +11,9 @@ import type { KeyEvent } from "@opentui/core";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { createLogger } from "../../core/logger.ts";
 import { isPlainLetter, isShiftedLetter } from "../app-helpers.ts";
-import { openInEditorPromise } from "../../core/editor.ts";
+import { openInEditor } from "../../core/editor.ts";
+import { operationErrors } from "../../core/errors.ts";
+import { forkReported } from "../effect-boundary.ts";
 import type { Modal } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { emptyEdit } from "../text-edit.tsx";
@@ -26,16 +28,9 @@ import {
 import { theme } from "../theme.ts";
 import type { CleanCandidate } from "../clean-candidate.ts";
 import { config } from "../../core/config.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class GlobalKeyError extends Data.TaggedError("GlobalKeyError")<{
-  cause: unknown;
-}> {}
-const keyPromise = <A>(evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => new GlobalKeyError({ cause }),
-  });
+const io = operationErrors("global-keys");
 
 const appLog = createLogger("[app]");
 const newLog = createLogger("[new]");
@@ -102,12 +97,8 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
     // or the row just doesn't move) — ack the keystroke so `r` doesn't
     // look like a no-op.
     toast("refreshing", theme.fgDim, 800);
-    Effect.runFork(
-      keyPromise(refreshAll).pipe(
-        Effect.catch((error) =>
-          Effect.sync(() => reportActionError("refresh", error.cause)),
-        ),
-      ),
+    forkReported(io.promise("refresh", refreshAll), (error) =>
+      reportActionError("refresh", error),
     );
     return true;
   }
@@ -167,8 +158,8 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       toast("no [[automations]] configured", theme.fgDim, 2000);
       return true;
     }
-    Effect.runFork(
-      keyPromise(automations.togglePaused).pipe(
+    forkReported(
+      io.promise("automations toggle", automations.togglePaused).pipe(
         Effect.tap((nowPaused) =>
           Effect.sync(() => {
             toast(
@@ -178,12 +169,8 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
             );
           }),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() =>
-            reportActionError("automations toggle", error.cause),
-          ),
-        ),
       ),
+      (error) => reportActionError("automations toggle", error),
     );
     return true;
   }
@@ -199,17 +186,15 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
     !k.hyper &&
     !k.meta
   ) {
-    Effect.runFork(
-      keyPromise(cyclePrimaryHarness).pipe(
+    forkReported(
+      io.promise("cycle harness", cyclePrimaryHarness).pipe(
         Effect.tap((next) =>
           Effect.sync(() =>
             appLog.event.info(`primary harness → ${getHarness(next).label}`),
           ),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() => reportActionError("cycle harness", error.cause)),
-        ),
       ),
+      (error) => reportActionError("cycle harness", error),
     );
     return true;
   }
@@ -264,21 +249,15 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
   }
   if (k.sequence === "O") {
     const slotLog = createLogger(MAIN_CLONE_SLOT.label);
-    Effect.runFork(
-      keyPromise(() => openInEditorPromise(MAIN_CLONE_SLOT.path)).pipe(
+    forkReported(
+      openInEditor(MAIN_CLONE_SLOT.path).pipe(
         Effect.tap(() =>
           Effect.sync(() =>
             slotLog.event.info(`opened ${MAIN_CLONE_SLOT.path}`),
           ),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() =>
-            slotLog.event.err(
-              `editor open failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
-            ),
-          ),
-        ),
       ),
+      (error) => reportActionError("editor open", error),
     );
     return true;
   }

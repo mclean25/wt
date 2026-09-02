@@ -7,7 +7,6 @@
  */
 import { useEffect, useRef } from "react";
 import type { KeyEvent } from "@opentui/core";
-import { Effect } from "effect";
 
 import { config, type PullRequestTarget } from "../../core/config.ts";
 import {
@@ -18,6 +17,7 @@ import { createLogger } from "../../core/logger.ts";
 import type { ReviewRequestPr } from "../../state/index.ts";
 import { isPlainLetter } from "../app-helpers.ts";
 import { openUrlHidingTerminal } from "../../core/macos.ts";
+import { forkReported } from "../effect-boundary.ts";
 import type { WorktreeModel } from "../worktree-model.ts";
 
 const PR_TARGET_CHORD_MS = 1_200;
@@ -79,8 +79,11 @@ export function usePrTargetChord(opts: {
       ? pullRequestOpenUrlForTarget(url, target)
       : pullRequestOpenUrl(url);
     const label = target ?? config.github.prTarget;
-    Effect.runFork(openUrlHidingTerminal(resolved).pipe(Effect.ignore));
-    createLogger(logName).event.info(`opened PR #${number} in ${label}`);
+    const log = createLogger(logName);
+    forkReported(openUrlHidingTerminal(resolved), (error) =>
+      log.debug(`open PR url failed: ${error.message}`),
+    );
+    log.event.info(`opened PR #${number} in ${label}`);
   }
 
   function consumePrTargetChord(k: KeyEvent): boolean {

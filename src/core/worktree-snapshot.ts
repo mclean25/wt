@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { Data, Effect } from "effect";
+import { Data, Effect, Schema } from "effect";
 
 import { config } from "./config.ts";
 import { devServerStatusPromise, type DevServerStatus } from "./dev-server.ts";
@@ -58,10 +58,9 @@ export class WorktreeSnapshotError extends Data.TaggedError("WorktreeSnapshotErr
 }
 
 /** Collect the authoritative execution state once for CLI and SSH consumers. */
-export function collectWorktreeSnapshots(
+export const collectWorktreeSnapshots = Effect.fn("collectWorktreeSnapshots")(function* (
   discovered?: readonly Worktree[],
-): Effect.Effect<WorktreeSnapshot[], WorktreeSnapshotError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<WorktreeSnapshot[], WorktreeSnapshotError> {
   const states = readWtState().slugs;
   const rows = (discovered ?? (yield* listWorktrees().pipe(
     Effect.mapError((cause) => new WorktreeSnapshotError({ operation: "discover", cause })),
@@ -106,8 +105,7 @@ export function collectWorktreeSnapshots(
     })),
     { concurrency: "unbounded" },
   );
-  });
-}
+});
 
 export const collectWorktreeSnapshotsPromise = (
   discovered?: readonly Worktree[],
@@ -144,159 +142,111 @@ function parseJsonPayload(raw: string): unknown {
   }
 }
 
-function parseDev(raw: unknown, index: number): DevServerStatus {
-  if (!raw || typeof raw !== "object") {
-    throw new Error(`remote worker snapshot ${index}.dev is invalid`);
-  }
-  const value = raw as Partial<DevServerStatus>;
-  const bool = (key: "running" | "starting" | "crashed"): boolean => {
-    if (typeof value[key] !== "boolean") {
-      throw new Error(`remote worker snapshot ${index}.dev.${key} is invalid`);
-    }
-    return value[key];
-  };
-  const nullableNumber = (key: "port" | "since"): number | null => {
-    const field = value[key];
-    if (field === null) return null;
-    if (typeof field !== "number" || !Number.isFinite(field)) {
-      throw new Error(`remote worker snapshot ${index}.dev.${key} is invalid`);
-    }
-    return field;
-  };
-  const running = bool("running");
-  const starting = bool("starting");
-  const crashed = bool("crashed");
-  if (value.url !== null && typeof value.url !== "string") {
-    throw new Error(`remote worker snapshot ${index}.dev.url is invalid`);
-  }
-  if (value.waiting !== null &&
-      (!value.waiting || !Number.isInteger(value.waiting.rank) ||
-        !Number.isFinite(value.waiting.since))) {
-    throw new Error(`remote worker snapshot ${index}.dev.waiting is invalid`);
-  }
-  if (value.rebasedSince !== null && typeof value.rebasedSince !== "boolean") {
-    throw new Error(`remote worker snapshot ${index}.dev.rebasedSince is invalid`);
-  }
-  if (value.restarts !== null &&
-      (!value.restarts || !Number.isInteger(value.restarts.count) ||
-        !Number.isInteger(value.restarts.lastExit))) {
-    throw new Error(`remote worker snapshot ${index}.dev.restarts is invalid`);
-  }
-  return {
-    running,
-    starting,
-    crashed,
-    port: nullableNumber("port"),
-    url: value.url,
-    since: nullableNumber("since"),
-    waiting: value.waiting,
-    rebasedSince: value.rebasedSince,
-    restarts: value.restarts,
-  };
-}
+// The one Schema use in the codebase: untrusted JSON off an SSH worker's
+// stdout, replacing ~150 lines of hand-rolled `str`/`bool`/`nullableNumber`
+// helpers with field-pathed decode errors. `work` is deliberately left as
+// `Schema.Unknown` and validated afterward via `parseWorkStatus` — the
+// canonical work-status decoder shared with every other reader of that
+// shape — rather than re-implementing its rules here.
+const DevServerStatusSchema = Schema.Struct({
+  running: Schema.Boolean,
+  starting: Schema.Boolean,
+  crashed: Schema.Boolean,
+  port: Schema.NullOr(Schema.Finite),
+  url: Schema.NullOr(Schema.String),
+  since: Schema.NullOr(Schema.Finite),
+  waiting: Schema.NullOr(Schema.Struct({ rank: Schema.Int, since: Schema.Finite })),
+  rebasedSince: Schema.NullOr(Schema.Boolean),
+  restarts: Schema.NullOr(Schema.Struct({ count: Schema.Int, lastExit: Schema.Int })),
+}) satisfies Schema.Schema<DevServerStatus>;
 
-const STATUS_KINDS = new Set<string>(Object.values(StatusKind));
+const STATUS_KINDS = Object.values(StatusKind) as [StatusKind, ...StatusKind[]];
+const StatusSchema = Schema.Struct({
+  kind: Schema.Literals(STATUS_KINDS),
+  label: Schema.String,
+  age: Schema.optional(Schema.String),
+  log: Schema.optional(Schema.String),
+  pid: Schema.optional(Schema.Number),
+  op: Schema.optional(Schema.String),
+}) satisfies Schema.Schema<Status>;
+
+const WorktreeSnapshotRowSchema = Schema.Struct({
+  slug: Schema.String,
+  branch: Schema.String,
+  base: Schema.String,
+  path: Schema.String,
+  stage: Schema.String,
+  deployed: Schema.Boolean,
+  exists: Schema.Boolean,
+  status: StatusSchema,
+  dev: DevServerStatusSchema,
+  dirty: Schema.Boolean,
+  unpushed: Schema.NullOr(Schema.Finite),
+  pushed: Schema.NullOr(Schema.Boolean),
+  aheadOfBase: Schema.NullOr(Schema.Finite),
+  issueId: Schema.NullOr(Schema.String),
+  issueUrl: Schema.NullOr(Schema.String),
+  githubIssue: Schema.NullOr(Schema.Finite),
+  githubIssueUrl: Schema.NullOr(Schema.String),
+  work: Schema.Unknown,
+});
+
+const WorkerEnvelopeSchema = Schema.Struct({
+  protocol: Schema.Literal(WORKER_PROTOCOL_VERSION),
+  worktrees: Schema.mutable(Schema.Array(WorktreeSnapshotRowSchema)),
+});
+
+const decodeWorkerEnvelope = Schema.decodeUnknownSync(WorkerEnvelopeSchema);
+
+/**
+ * `Schema.decodeUnknownSync` throws with a bracket-notation path (`at
+ * ["worktrees"][0]["status"]["kind"]`) ahead of the reason. Reduce that
+ * to the old hand-rolled validator's `<row-index>.<dotted-field> is
+ * invalid` wording — callers keyed their own diagnostics (and tests) to
+ * the exact phrase naming which field broke, and it reads better than
+ * the bracket form besides.
+ */
+function schemaDecodeError(err: unknown): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  const pathMatch = /at ((?:\["[^"]*"\]|\[\d+\])+)/.exec(message);
+  const segments = pathMatch?.[1]
+    ? [...pathMatch[1].matchAll(/\["([^"]*)"\]|\[(\d+)\]/g)].map((m) => m[1] ?? m[2]!)
+    : [];
+  if (segments[0] === "worktrees" && segments.length >= 2) {
+    const [, rowIndex, ...field] = segments;
+    const where = field.length > 0 ? `${rowIndex}.${field.join(".")}` : rowIndex;
+    return new Error(`remote worker snapshot ${where} is invalid`);
+  }
+  if (segments[0] === "worktrees") {
+    return new Error("remote worker snapshot worktrees is not an array");
+  }
+  return new Error(`remote worker snapshot payload is invalid (${message.split("\n")[0]})`);
+}
 
 /** Strict parser: the handshake version is what makes this contract safe. */
 export function parseWorkerSnapshot(raw: string): WorkerSnapshot {
   const parsed = parseJsonPayload(raw);
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("remote worker snapshot returned an invalid payload");
-  }
-  const envelope = parsed as { protocol?: unknown; worktrees?: unknown };
-  if (envelope.protocol !== WORKER_PROTOCOL_VERSION) {
+  // Checked ahead of the full decode so a protocol mismatch (an old/new
+  // build talking to each other) gets the friendly, actionable message
+  // instead of a field-pathed schema error about the shape underneath it.
+  const protocol = parsed && typeof parsed === "object" ? (parsed as { protocol?: unknown }).protocol : undefined;
+  if (protocol !== WORKER_PROTOCOL_VERSION) {
     throw new Error(
-      `remote worker snapshot uses protocol ${String(envelope.protocol)}; expected ${WORKER_PROTOCOL_VERSION}`,
+      `remote worker snapshot uses protocol ${String(protocol)}; expected ${WORKER_PROTOCOL_VERSION}`,
     );
   }
-  if (!Array.isArray(envelope.worktrees)) {
-    throw new Error("remote worker snapshot worktrees is not an array");
+  let envelope: ReturnType<typeof decodeWorkerEnvelope>;
+  try {
+    envelope = decodeWorkerEnvelope(parsed);
+  } catch (err) {
+    throw schemaDecodeError(err);
   }
-  const worktrees = envelope.worktrees.map((rawRow, index): WorktreeSnapshot => {
-    if (!rawRow || typeof rawRow !== "object") {
-      throw new Error(`remote worker snapshot ${index} is not an object`);
-    }
-    const row = rawRow as Record<string, unknown>;
-    const str = (key: string): string => {
-      if (typeof row[key] !== "string") {
-        throw new Error(`remote worker snapshot ${index}.${key} is invalid`);
-      }
-      return row[key];
-    };
-    const bool = (key: string): boolean => {
-      if (typeof row[key] !== "boolean") {
-        throw new Error(`remote worker snapshot ${index}.${key} is invalid`);
-      }
-      return row[key];
-    };
-    const nullableNumber = (key: string): number | null => {
-      const field = row[key];
-      if (field === null) return null;
-      if (typeof field !== "number" || !Number.isFinite(field)) {
-        throw new Error(`remote worker snapshot ${index}.${key} is invalid`);
-      }
-      return field;
-    };
-    const nullableString = (key: string): string | null => {
-      const field = row[key];
-      if (field === null) return null;
-      if (typeof field !== "string") {
-        throw new Error(`remote worker snapshot ${index}.${key} is invalid`);
-      }
-      return field;
-    };
-    const nullableBoolean = (key: string): boolean | null => {
-      const field = row[key];
-      if (field === null) return null;
-      if (typeof field !== "boolean") {
-        throw new Error(`remote worker snapshot ${index}.${key} is invalid`);
-      }
-      return field;
-    };
-    const rawStatus = row.status;
-    if (!rawStatus || typeof rawStatus !== "object") {
-      throw new Error(`remote worker snapshot ${index}.status is invalid`);
-    }
-    const statusRow = rawStatus as Record<string, unknown>;
-    const kind = statusRow.kind;
-    if (typeof kind !== "string" || !STATUS_KINDS.has(kind)) {
-      throw new Error(`remote worker snapshot ${index}.status.kind is invalid`);
-    }
-    if (typeof statusRow.label !== "string") {
-      throw new Error(`remote worker snapshot ${index}.status.label is invalid`);
-    }
-    const status: Status = {
-      kind: kind as Status["kind"],
-      label: statusRow.label,
-      ...(typeof statusRow.age === "string" ? { age: statusRow.age } : {}),
-      ...(typeof statusRow.op === "string" ? { op: statusRow.op } : {}),
-      ...(typeof statusRow.log === "string" ? { log: statusRow.log } : {}),
-      ...(typeof statusRow.pid === "number" ? { pid: statusRow.pid } : {}),
-    };
+  const worktrees = envelope.worktrees.map((row, index): WorktreeSnapshot => {
     const work = parseWorkStatus(row.work);
     if (row.work !== null && work === null) {
       throw new Error(`remote worker snapshot ${index}.work is invalid`);
     }
-    return {
-      slug: str("slug"),
-      branch: str("branch"),
-      base: str("base"),
-      path: str("path"),
-      stage: str("stage"),
-      deployed: bool("deployed"),
-      exists: bool("exists"),
-      status,
-      dev: parseDev(row.dev, index),
-      dirty: bool("dirty"),
-      unpushed: nullableNumber("unpushed"),
-      pushed: nullableBoolean("pushed"),
-      aheadOfBase: nullableNumber("aheadOfBase"),
-      issueId: nullableString("issueId"),
-      issueUrl: nullableString("issueUrl"),
-      githubIssue: nullableNumber("githubIssue"),
-      githubIssueUrl: nullableString("githubIssueUrl"),
-      work,
-    };
+    return { ...row, work };
   });
-  return { protocol: WORKER_PROTOCOL_VERSION, worktrees };
+  return { protocol: envelope.protocol, worktrees };
 }

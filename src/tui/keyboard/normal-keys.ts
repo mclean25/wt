@@ -56,7 +56,8 @@ import { REVIEW_SECTION } from "../flows/new-worktree.ts";
 import type { makeSectionFlows } from "../flows/sections.ts";
 import type { makeSessionFlows } from "../flows/sessions.ts";
 import { openUrlHidingTerminal } from "../../core/macos.ts";
-import { openInEditorPromise } from "../../core/editor.ts";
+import { openInEditor } from "../../core/editor.ts";
+import { forkReported } from "../effect-boundary.ts";
 import {
   isSyntheticLiveSessionId,
   type useHarnessSessions,
@@ -227,12 +228,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     label: string,
     evaluate: () => Promise<A>,
   ): void => {
-    Effect.runFork(
-      keyPromise(label, evaluate).pipe(
-        Effect.catch((error) =>
-          Effect.sync(() => reportActionError(error.label, error.cause)),
-        ),
-      ),
+    forkReported(keyPromise(label, evaluate), (error) =>
+      reportActionError(error.label, error.cause),
     );
   };
 
@@ -427,7 +424,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toast("select a worktree first", theme.warn, 1500);
         return;
       }
-      Effect.runFork(
+      forkReported(
         Effect.gen(function* () {
           if (stackId) {
             const memberSlugs = visualItems.flatMap((v) =>
@@ -466,11 +463,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
             nowPaused ? theme.warn : theme.ok,
             2000,
           );
-        }).pipe(
-          Effect.catch((error) =>
-            Effect.sync(() => reportActionError(error.label, error.cause)),
-          ),
-        ),
+        }),
+        (error) => reportActionError(error.label, error.cause),
       );
       return;
     }
@@ -875,7 +869,9 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           );
           return;
         }
-        Effect.runFork(openUrlHidingTerminal(url).pipe(Effect.ignore));
+        forkReported(openUrlHidingTerminal(url), (error) =>
+          modelLog.debug(`open issue url failed: ${error.message}`),
+        );
         modelLog.event.info(
           selectedWorktree.githubIssue
             ? `opened gh issue #${selectedWorktree.githubIssue}`
@@ -891,7 +887,9 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           );
           return;
         }
-        Effect.runFork(openUrlHidingTerminal(url).pipe(Effect.ignore));
+        forkReported(openUrlHidingTerminal(url), (error) =>
+          modelLog.debug(`open issue url failed: ${error.message}`),
+        );
         modelLog.event.info("opened issue");
         return;
       }
@@ -910,7 +908,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         if (!selectedWorktree.archived && currentItem) {
           advanceCursorPast([visualKey(currentItem)]);
         }
-        Effect.runFork(
+        forkReported(
           Effect.gen(function* () {
             if (selectedWorktree.archived) {
               yield* keyPromise(
@@ -939,11 +937,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
               theme.info,
               2000,
             );
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.sync(() => reportActionError(error.label, error.cause)),
-            ),
-          ),
+          }),
+          (error) => reportActionError(error.label, error.cause),
         );
         return;
       }
@@ -1024,16 +1019,11 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     if (!current) return;
     const rowLog = createLogger(current.wt.slug);
     if (isPlainLetter(k, "o")) {
-      Effect.runFork(
-        keyPromise("editor open", () => openInEditorPromise(current.wt.path)).pipe(
+      forkReported(
+        openInEditor(current.wt.path).pipe(
           Effect.tap(() => Effect.sync(() => rowLog.event.info("opened in the editor"))),
-          Effect.catch((error) => Effect.sync(() => {
-            const cause = error.cause;
-            rowLog.event.err(
-              `editor open failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-            );
-          })),
         ),
+        (error) => reportActionError("editor open", error),
       );
       return;
     }
@@ -1047,13 +1037,17 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
           rowLog.event.warn("no stage domain configured");
           return;
         }
-        Effect.runFork(openUrlHidingTerminal(url).pipe(Effect.ignore));
+        forkReported(openUrlHidingTerminal(url), (error) =>
+          rowLog.debug(`open stage url failed: ${error.message}`),
+        );
         rowLog.event.info(`opened ${current.wt.stage}`);
         return;
       }
       const dev = current.fields.dev.data;
       if (dev?.running && dev.url) {
-        Effect.runFork(openUrlHidingTerminal(dev.url).pipe(Effect.ignore));
+        forkReported(openUrlHidingTerminal(dev.url), (error) =>
+          rowLog.debug(`open dev url failed: ${error.message}`),
+        );
         rowLog.event.info(`opened dev server (${dev.url})`);
         return;
       }
@@ -1222,16 +1216,14 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         return;
       }
       const slug = current.wt.slug;
-      Effect.runFork(
+      forkReported(
         keyPromise("refresh AI summary", () => refreshAiSummary(slug)).pipe(
           Effect.tap((ok) => Effect.sync(() => {
             if (ok) rowLog.event.dim("regenerating worktree summary");
             else toast("no diff context yet", theme.warn, 2000);
           })),
-          Effect.catch((error) =>
-            Effect.sync(() => reportActionError(error.label, error.cause)),
-          ),
         ),
+        (error) => reportActionError(error.label, error.cause),
       );
       return;
     }

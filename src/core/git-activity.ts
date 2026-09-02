@@ -33,7 +33,7 @@ function createdMsFor(path: string): number | null {
   }
 }
 
-function lastCommitMsForEffect(path: string) {
+function lastCommitMsFor(path: string) {
   return run(["git", "log", "-1", "--format=%ct", "HEAD"], {
     cwd: path,
     timeoutMs: TIMEOUT_MS,
@@ -54,35 +54,33 @@ function lastCommitMsForEffect(path: string) {
 // unstacked, parent branch for stacked — so the count reflects this
 // branch's actual contribution. Untracked files are invisible to
 // `git diff` and get folded in separately below.
-function diffForEffect(
+const diffFor = Effect.fnUntraced(function* (
   path: string,
   branch: string,
   base: string,
 ) {
-  if (!branch) return Effect.succeed(null);
-  return Effect.gen(function* () {
-    const mb = yield* run(["git", "merge-base", base, "HEAD"], {
-      cwd: path,
-      timeoutMs: TIMEOUT_MS,
-    });
-    if (mb.exitCode !== 0) return null;
-    const r = yield* run(
-      ["git", "diff", "--shortstat", mb.stdout.trim()],
-      { cwd: path, timeoutMs: TIMEOUT_MS },
-    );
-    if (r.exitCode !== 0) return null;
-    const out = r.stdout.trim();
-    const files = out.match(/(\d+) files? changed/);
-    const added = out.match(/(\d+) insertions?\(\+\)/);
-    const removed = out.match(/(\d+) deletions?\(-\)/);
-    const untracked = yield* untrackedCountsEffect(path);
-    return {
-      files: (files ? Number.parseInt(files[1]!, 10) : 0) + untracked.files,
-      added: (added ? Number.parseInt(added[1]!, 10) : 0) + untracked.added,
-      removed: removed ? Number.parseInt(removed[1]!, 10) : 0,
-    };
+  if (!branch) return null;
+  const mb = yield* run(["git", "merge-base", base, "HEAD"], {
+    cwd: path,
+    timeoutMs: TIMEOUT_MS,
   });
-}
+  if (mb.exitCode !== 0) return null;
+  const r = yield* run(
+    ["git", "diff", "--shortstat", mb.stdout.trim()],
+    { cwd: path, timeoutMs: TIMEOUT_MS },
+  );
+  if (r.exitCode !== 0) return null;
+  const out = r.stdout.trim();
+  const files = out.match(/(\d+) files? changed/);
+  const added = out.match(/(\d+) insertions?\(\+\)/);
+  const removed = out.match(/(\d+) deletions?\(-\)/);
+  const untracked = yield* untrackedCounts(path);
+  return {
+    files: (files ? Number.parseInt(files[1]!, 10) : 0) + untracked.files,
+    added: (added ? Number.parseInt(added[1]!, 10) : 0) + untracked.added,
+    removed: removed ? Number.parseInt(removed[1]!, 10) : 0,
+  };
+});
 
 /**
  * Untracked files counted as a new file whose every line is an
@@ -93,34 +91,30 @@ function diffForEffect(
  * output is parsed regardless of exit code so one unreadable file
  * (dangling symlink) doesn't zero out the rest.
  */
-function untrackedCountsEffect(
-  path: string,
-) {
-  return Effect.gen(function* () {
-    const ls = yield* run(
-      ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-      { cwd: path, timeoutMs: TIMEOUT_MS },
-    );
-    if (ls.exitCode !== 0) return { files: 0, added: 0 };
-    const names = ls.stdout.split("\0").filter(Boolean);
-    if (names.length === 0) return { files: 0, added: 0 };
-    // "./" prefix so a name starting with "-" can't read as a wc flag.
-    const wc = yield* run(["wc", "-l", ...names.map((n) => `./${n}`)], {
-      cwd: path,
-      timeoutMs: TIMEOUT_MS,
-    });
-    let added = 0;
-    // Per-file lines look like "  12 ./path"; with 2+ operands wc appends
-    // a "  34 total" line — drop it and sum the per-file lines.
-    const lines = wc.stdout.split("\n").filter((l) => /^\s*\d+\s/.test(l));
-    const perFile = names.length > 1 ? lines.slice(0, -1) : lines;
-    for (const l of perFile) {
-      const m = l.match(/^\s*(\d+)\s/);
-      if (m) added += Number.parseInt(m[1]!, 10);
-    }
-    return { files: names.length, added };
+const untrackedCounts = Effect.fnUntraced(function* (path: string) {
+  const ls = yield* run(
+    ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+    { cwd: path, timeoutMs: TIMEOUT_MS },
+  );
+  if (ls.exitCode !== 0) return { files: 0, added: 0 };
+  const names = ls.stdout.split("\0").filter(Boolean);
+  if (names.length === 0) return { files: 0, added: 0 };
+  // "./" prefix so a name starting with "-" can't read as a wc flag.
+  const wc = yield* run(["wc", "-l", ...names.map((n) => `./${n}`)], {
+    cwd: path,
+    timeoutMs: TIMEOUT_MS,
   });
-}
+  let added = 0;
+  // Per-file lines look like "  12 ./path"; with 2+ operands wc appends
+  // a "  34 total" line — drop it and sum the per-file lines.
+  const lines = wc.stdout.split("\n").filter((l) => /^\s*\d+\s/.test(l));
+  const perFile = names.length > 1 ? lines.slice(0, -1) : lines;
+  for (const l of perFile) {
+    const m = l.match(/^\s*(\d+)\s/);
+    if (m) added += Number.parseInt(m[1]!, 10);
+  }
+  return { files: names.length, added };
+});
 
 export function gitActivity(
   wt: { path: string; branch: string },
@@ -129,8 +123,8 @@ export function gitActivity(
   return effectiveBaseOrTrunk(wt.path, effectiveBase).pipe(
     Effect.flatMap((base) => Effect.all({
         createdMs: Effect.sync(() => createdMsFor(wt.path)),
-        lastCommitMs: lastCommitMsForEffect(wt.path).pipe(Effect.orElseSucceed(() => null)),
-        diff: diffForEffect(wt.path, wt.branch, base).pipe(Effect.orElseSucceed(() => null)),
+        lastCommitMs: lastCommitMsFor(wt.path).pipe(Effect.orElseSucceed(() => null)),
+        diff: diffFor(wt.path, wt.branch, base).pipe(Effect.orElseSucceed(() => null)),
       }, { concurrency: 3 })),
     Effect.orElseSucceed(() => ({
       createdMs: createdMsFor(wt.path),

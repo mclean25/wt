@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
 import { config } from "../../core/config.ts";
+import { operationErrors } from "../../core/errors.ts";
 import {
   harnessTailRegistry,
   type LiveHarnessSlot,
@@ -12,7 +13,8 @@ import {
   type LiveSessionDesc,
 } from "../../core/harness/claude/tail.ts";
 import { shellTailRegistry } from "../../core/shell-tail.ts";
-import { diffCommandUsesBase, killDiffSessionPromise } from "../../core/tmux.ts";
+import { diffCommandUsesBase, killDiffSession } from "../../core/tmux.ts";
+import { forkReported } from "../effect-boundary.ts";
 import { resolveDiffBase } from "../app-helpers.ts";
 import { SESSION_SLOTS } from "../sessions/slots.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
@@ -27,9 +29,7 @@ type Args = {
   refreshTmuxSessions: () => Promise<unknown>;
 };
 
-class DiffSessionRefreshError extends Data.TaggedError(
-  "DiffSessionRefreshError",
-)<{ readonly slug: string; readonly cause: unknown }> {}
+const io = operationErrors("useSessionTailReconcile");
 
 export function useSessionTailReconcile({
   rows,
@@ -93,25 +93,11 @@ export function useSessionTailReconcile({
       if (!activeDiffSessions.has(slug)) continue;
       const log = createLogger(slug);
       log.event.info(`diff base changed (${prev} -> ${next}); killing diff session`);
-      Effect.runFork(
-        Effect.tryPromise({
-          try: () => killDiffSessionPromise(slug),
-          catch: (cause) => new DiffSessionRefreshError({ slug, cause }),
-        }).pipe(
-          Effect.andThen(
-            Effect.tryPromise({
-              try: refreshTmuxSessions,
-              catch: (cause) => new DiffSessionRefreshError({ slug, cause }),
-            }),
-          ),
-          Effect.catch((error) =>
-            Effect.sync(() => {
-              log.event.err(
-                `diff session refresh failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
-              );
-            }),
-          ),
+      forkReported(
+        killDiffSession(slug).pipe(
+          Effect.andThen(io.promise("refresh tmux sessions", refreshTmuxSessions)),
         ),
+        (error) => log.event.err(`diff session refresh failed: ${error.message}`),
       );
     }
     for (const slug of [...lastDiffBase.current.keys()]) {

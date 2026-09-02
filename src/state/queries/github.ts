@@ -1,12 +1,12 @@
 import { queryOptions } from "@tanstack/react-query";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
 import { config } from "../../core/config.ts";
 import { snapshotForBranches } from "../../core/events/store.ts";
 import {
   fetchGithub,
-  fetchRepoContributorsPromise,
-  fetchReviewRequestsPromise,
+  fetchRepoContributors,
+  fetchReviewRequests,
   type ReviewRequestPr,
 } from "../../core/github.ts";
 import type {
@@ -16,27 +16,8 @@ import type {
 } from "../../core/types.ts";
 
 import { qk } from "../keys.ts";
+import { runQuery } from "./boundary.ts";
 import { KEEP_PREV, STALE } from "./shared.ts";
-
-class GithubQueryError extends Data.TaggedError("GithubQueryError")<{
-  operation: string;
-  cause: unknown;
-}> {
-  override get message(): string {
-    return this.cause instanceof Error
-      ? this.cause.message
-      : String(this.cause);
-  }
-}
-
-const queryPromise = <A, E>(effect: Effect.Effect<A, E>, signal: AbortSignal) =>
-  Effect.runPromise(effect, { signal });
-
-const promiseEffect = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => new GithubQueryError({ operation, cause }),
-  });
 
 // WT_GITHUB=off pins the github source to whatever the persisted cache
 // holds — no gh round-trips at all. Set by the TUI probe harness
@@ -76,7 +57,7 @@ export const githubQuery = (branches: readonly string[]) =>
   queryOptions({
     queryKey: qk.github(branches),
     queryFn: ({ signal }): Promise<GithubData> =>
-      queryPromise(
+      runQuery(
         Effect.gen(function* () {
           // Events mode: serve the daemon's warm snapshot when it's fresh and
           // covers these branches, skipping the gh round-trip entirely. The
@@ -125,12 +106,7 @@ export const reviewRequestsQuery = () =>
   queryOptions({
     queryKey: qk.reviewRequests(),
     queryFn: ({ signal }): Promise<ReviewRequestPr[]> =>
-      queryPromise(
-        promiseEffect("fetch review requests", () =>
-          fetchReviewRequestsPromise(signal),
-        ),
-        signal,
-      ),
+      runQuery(fetchReviewRequests(signal), signal),
     // Same freshness model as `githubQuery`: with the webhook daemon
     // configured the marker drives invalidation, so relax staleTime to the
     // backstop and keep a periodic safety net so a dropped fs event or
@@ -159,12 +135,7 @@ export const contributorsQuery = () =>
   queryOptions({
     queryKey: qk.contributors(),
     queryFn: ({ signal }): Promise<Contributor[]> =>
-      queryPromise(
-        promiseEffect("fetch contributors", () =>
-          fetchRepoContributorsPromise(signal),
-        ),
-        signal,
-      ),
+      runQuery(fetchRepoContributors(signal), signal),
     staleTime: 7 * 24 * 60 * 60 * 1000,
     gcTime: Number.POSITIVE_INFINITY,
   });

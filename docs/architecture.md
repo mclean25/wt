@@ -14,36 +14,67 @@ The list panel (`src/tui/panels/list.tsx`) is deliberately **not** row-driven �
 
 ## Effect boundary
 
-Effect is the default model for production work that performs I/O, starts or
-waits for subprocesses, coordinates concurrency, retries, waits on time, or
-owns a resource. These functions return `Effect<Success, ExpectedError,
-Requirements>` and compose until one of the explicit runtime boundaries runs
-them:
+Effect 4 (`effect@4.0.0-rc`) is the model for production work that performs
+I/O, starts or waits for subprocesses, coordinates concurrency, retries, waits
+on time, or owns a resource. These functions return `Effect<Success,
+ExpectedError, Requirements>` under their plain name and compose until one of
+the runtime boundaries runs them:
 
-- `src/main.ts` for CLI and process lifetime;
-- TanStack query functions and React event/lifecycle adapters;
-- worker entrypoints;
+- `src/main.ts` for CLI and process lifetime (`Effect.runPromise` once, then a
+  hard exit);
+- TanStack query and mutation functions, through `runQuery(effect, signal)` in
+  `state/queries/boundary.ts` — the context's `AbortSignal` interrupts the
+  fiber, so a superseded key cancels the git/gh subprocess under it instead of
+  letting the stale fetch finish against the shared `run()` budget;
+- OpenTUI key handlers and flow callbacks, through `forkReported(effect,
+  report)` in `tui/effect-boundary.ts` — fire-and-forget on purpose (the action
+  should outlive the modal that started it), with the failure toasted and
+  logged by the caller's reporter rather than thrown into React;
+- React lifetimes, through `useEffectFiber(make, deps)` — one fiber per mount,
+  interrupted on cleanup;
+- worker entrypoints (`_`-prefixed CLI commands, the diff and tail workers);
 - tests.
 
-Pure synchronous transforms and React's own lifecycle hooks remain plain
-TypeScript. Expected failures use tagged error types. Defects remain defects.
-Use Effect scopes and finalizers for watchers, subprocesses, timers, workers,
-and subscriptions; Effect concurrency primitives for shared limits and
-in-flight work; schedules and `TestClock` for retry and time behavior. Do not
-hide Effect programs behind new Promise-returning core APIs. Promise adapters
-remain only where an external contract requires one, such as TanStack query
-functions, React/OpenTUI callbacks, worker messages, or a legacy public
-interface that cannot change in the same migration. Remove migration-only
-adapters as soon as their callers move.
+Naming: the Effect takes the plain name. A Promise-returning adapter exists
+only where an external contract requires one (the TanStack persister, a
+`Harness` interface method, a worker message) and is named `fooPromise`, beside
+the Effect it runs. Untyped boundaries — a synchronous call that may throw, a
+Promise API, a dynamic `import()` — are wrapped once with `operationErrors(source)`
+from `core/errors.ts`, whose `OperationError` carries `source`, `operation` and
+`cause` and renders as `operation: cause`. Domain failures keep their own
+`Data.TaggedError` classes with fields consumers match on, and every tagged
+error overrides `message`, because the crash renderer, the CLI and the row
+error prints all read it. Defects remain defects.
 
-The project uses Effect 3 and the official Effect language-service diagnostics.
-`bun run lint` runs those diagnostics, and `bun run typecheck` runs them again
-through the patched TypeScript compiler. `bun run build` verifies the Bun
-production bundle. The design follows the official Effect guidance for
-[typed errors](https://www.effect.website/docs/v3/error-management/expected-errors),
-[resource management](https://www.effect.website/docs/v3/resource-management/introduction),
-[concurrency](https://www.effect.website/docs/v3/concurrency/basic-concurrency),
-and [code style](https://www.effect.website/docs/v3/code-style/guidelines).
+Named effectful functions use `Effect.fn("name")`; module-private helpers and
+generic functions use `Effect.fnUntraced`. Use Effect scopes and finalizers
+for watchers, subprocesses, timers, workers, and subscriptions; Effect
+concurrency primitives (`Semaphore`, `Ref`, `Deferred`, `Queue`, `FiberMap`)
+for shared limits and in-flight work; `Schedule` for retry and polling; and
+`TestClock` from `effect/testing` for every time-dependent test. Services and
+layers are introduced only where a real seam exists (a dependency a test or a
+second implementation actually swaps); the existing hand-rolled `deps` objects
+(`createSessionMessenger`, `DaemonDependencies`, `CleanDeps`) are that seam and
+stay as they are until a second consumer asks for a `Layer`.
+
+Pure synchronous transforms, synchronous SQLite/fs reads used from render
+paths, and React's own lifecycle hooks remain plain TypeScript.
+
+`bun run lint` runs the official language-service diagnostics and `bun run
+typecheck` runs them again through the patched compiler. The rules this project
+relies on are promoted to warning severity in `tsconfig.json`; at their default
+suggestion severity they never reach a CLI run, so a clean lint proves only what
+was promoted. (`effectFnOpportunity` is inert in the installed plugin version
+even when promoted; `Effect.fn` adoption is a review habit.) `bun run build`
+verifies the Bun production bundle. When unsure about an API, the authoritative
+sources for the installed version are `node_modules/effect/AGENTS.md`,
+`node_modules/effect/ai-docs/src/index.md` and `node_modules/effect/dist/*.d.ts`;
+the narrative docs live at
+[effect.website/docs/v4](https://effect.website/docs/v4/), including
+[typed errors](https://effect.website/docs/v4/error-management/expected-errors),
+[resource management](https://effect.website/docs/v4/resource-management/introduction),
+[concurrency](https://effect.website/docs/v4/concurrency/basic-concurrency),
+and [code style](https://effect.website/docs/v4/code-style/guidelines).
 
 ## Composition root
 

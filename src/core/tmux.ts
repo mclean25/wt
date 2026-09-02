@@ -72,7 +72,7 @@ export {
   listAllSessionsRawPromise,
 } from "./tmux/process.ts";
 
-export { attachOrCreatePromise } from "./tmux/attach.ts";
+export { attachOrCreate, attachOrCreatePromise, AttachOperationError } from "./tmux/attach.ts";
 export type { AttachResult } from "./tmux/attach.ts";
 
 export {

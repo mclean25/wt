@@ -6,6 +6,7 @@ import {
   findZedWindowForPath,
   focusYabaiWindow,
   spawnZedAndTrack,
+  type ZedWindowError,
 } from "./zed-windows.ts";
 
 /**
@@ -63,14 +64,14 @@ export function hideFrontmostTerminalPromise(): Promise<void> {
  * exits right after and a background tracking poll wouldn't survive
  * `process.exit`.
  */
-export function openInZed(path: string) {
-  return Effect.gen(function* () {
-    yield* hideFrontmostTerminal();
-    const existing = yield* findZedWindowForPath(path);
-    if (existing !== null && (yield* focusYabaiWindow(existing))) return;
-    yield* spawnZedAndTrack(path);
-  });
-}
+export const openInZed = Effect.fn("openInZed")(function* (
+  path: string,
+): Effect.fn.Return<void, ZedWindowError> {
+  yield* hideFrontmostTerminal();
+  const existing = yield* findZedWindowForPath(path);
+  if (existing !== null && (yield* focusYabaiWindow(existing))) return;
+  yield* spawnZedAndTrack(path);
+});
 
 export function openInZedPromise(path: string): Promise<void> {
   return Effect.runPromise(openInZed(path));

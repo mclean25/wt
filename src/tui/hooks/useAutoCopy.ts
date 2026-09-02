@@ -4,7 +4,8 @@ import { useRenderer } from "@opentui/react";
 
 import { createLogger } from "../../core/logger.ts";
 import { pluralize } from "../../core/text.ts";
-import { writeClipboardPromise } from "../../core/macos.ts";
+import { writeClipboard } from "../../core/macos.ts";
+import { forkReported } from "../effect-boundary.ts";
 
 const log = createLogger("app");
 
@@ -38,13 +39,9 @@ export function useAutoCopy(): void {
     const handler = (selection: unknown): void => {
       const text = extractSelection(selection);
       if (!text) return;
-      try {
-        writeClipboardPromise(text);
-      } catch (err) {
-        log.event.err(`pbcopy failed: ${err instanceof Error ? err.message : String(err)}`);
-        log.error(err instanceof Error ? err : String(err));
-        return;
-      }
+      forkReported(writeClipboard(text), (error) => {
+        log.event.err(`pbcopy failed: ${error.message}`);
+      });
       renderer.clearSelection();
       const lines = text.split("\n").length;
       const suffix = lines > 1 ? ` (${pluralize(lines, "line")})` : "";

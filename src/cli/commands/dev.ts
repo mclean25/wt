@@ -1,5 +1,5 @@
 import { cpus, loadavg } from "node:os";
-import { Data, Effect } from "effect";
+import { Clock, Effect } from "effect";
 
 import { config } from "../../core/config.ts";
 import {
@@ -98,8 +98,7 @@ function reclaimHint(holders: readonly DevSlotHolder[]): string | null {
   return `${parked.length} crashed server${s} hold${parked.length === 1 ? "s" : ""} a slot: ${parked.join(", ")}`;
 }
 
-function runStart(wt: Worktree, argv: readonly string[]) {
-  return Effect.gen(function* () {
+const runStart = Effect.fnUntraced(function* (wt: Worktree, argv: readonly string[]) {
   const wait = argv.includes("--wait");
   const rebuild = argv.includes("--rebuild");
   const timeoutIdx = argv.indexOf("--timeout");
@@ -115,11 +114,17 @@ function runStart(wt: Worktree, argv: readonly string[]) {
     }
     timeoutMs = raw * 1000;
   }
+  // A single absolute deadline shared by the slot wait and the ready
+  // wait below — passing `timeoutMs` to each separately gave the
+  // operation up to 2x its stated budget, since the ready wait's clock
+  // only started once the slot wait already returned.
+  const startedMs = yield* Clock.currentTimeMillis;
+  const deadlineMs = startedMs + timeoutMs;
 
   if (wait) {
     let announced = false;
     const got = yield* waitForDevSlot(wt.slug, {
-      timeoutMs,
+      deadlineMs,
       onWait: ({ rank, holders, waited }) => {
         // First tick names who has the slots; after that just the
         // position, so a half-hour wait doesn't bury a terminal.
@@ -189,7 +194,7 @@ function runStart(wt: Worktree, argv: readonly string[]) {
       return 0;
     }
     const outcome = yield* waitForDevReady(wt, {
-      timeoutMs: timeoutMs,
+      deadlineMs,
       onTick: ({ waited, state }) => {
         if (state === "checking") {
           console.error(dim(`  serving — waiting for the environment to settle (${humanAge(waited)})`));
@@ -252,8 +257,7 @@ function runStart(wt: Worktree, argv: readonly string[]) {
       return EXIT_NO_SLOT;
     });
   }));
-  });
-}
+});
 
 /**
  * `wt dev queue [<slug> --first|--normal]`.
@@ -336,10 +340,9 @@ function printQueue(json: boolean): number {
   return 0;
 }
 
-function runStatusAll(json: boolean) {
-  return Effect.gen(function* () {
+const runStatusAll = Effect.fnUntraced(function* (json: boolean) {
   const report = yield* devSlotReport();
-  const now = Date.now();
+  const now = yield* Clock.currentTimeMillis;
   if (json) {
     console.log(
       JSON.stringify(
@@ -402,17 +405,15 @@ function runStatusAll(json: boolean) {
     });
   }
   return report.holders === null ? 1 : 0;
-  });
-}
+});
 
-function runStatusOne(wt: Worktree, json: boolean) {
-  return Effect.gen(function* () {
+const runStatusOne = Effect.fnUntraced(function* (wt: Worktree, json: boolean) {
   const st = yield* devServerStatus(wt.slug, { path: wt.path });
   // Only worth asking a running server, and only here: this is the
   // on-demand surface, where a slow-but-exact answer is the point. It
   // never rides a poll.
   const health = st.running ? yield* devHealth(wt) : null;
-  const now = Date.now();
+  const now = yield* Clock.currentTimeMillis;
   if (json) {
     console.log(JSON.stringify({ slug: wt.slug, ...st, health }, null, 2));
     return st.crashed || health?.ok === false ? 1 : 0;
@@ -493,11 +494,9 @@ function runStatusOne(wt: Worktree, json: boolean) {
     }
   }
   return st.crashed || health?.ok === false ? 1 : 0;
-  });
-}
+});
 
-function runEffectProgram(argv: string[]) {
-  return Effect.gen(function* () {
+export const run = Effect.fn("wt dev")(function* (argv: string[]) {
   if (hasHelpFlag(argv)) {
     console.log(USAGE);
     return 0;
@@ -588,13 +587,4 @@ function runEffectProgram(argv: string[]) {
       console.log(USAGE);
       return 2;
   }
-  });
-}
-
-class DevCommandError extends Data.TaggedError("DevCommandError")<{
-  readonly cause: unknown;
-}> {}
-
-export function run(argv: string[]): Effect.Effect<number, DevCommandError> {
-  return runEffectProgram(argv).pipe(Effect.mapError((cause) => new DevCommandError({ cause })));
-}
+});

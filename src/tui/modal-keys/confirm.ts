@@ -1,20 +1,15 @@
 import type { KeyEvent } from "@opentui/core";
 
 import { actionRegistry } from "../../core/actions.ts";
-import { killDiffSessionPromise, killShellSessionPromise } from "../../core/tmux.ts";
+import { operationErrors } from "../../core/errors.ts";
+import { killDiffSession, killShellSession } from "../../core/tmux.ts";
+import { forkReported } from "../effect-boundary.ts";
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleYesNoKey } from "./list-picker.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class ConfirmModalError extends Data.TaggedError("ConfirmModalError")<{
-  cause: unknown;
-}> {}
-const confirmPromise = <A>(evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => new ConfirmModalError({ cause }),
-  });
+const io = operationErrors("modal-keys/confirm");
 
 export function handleKillActionConfirmKey(
   k: KeyEvent,
@@ -25,15 +20,15 @@ export function handleKillActionConfirmKey(
     onConfirm: () => {
       const { slug, actionName } = modal;
       setModal(null);
-      Effect.runFork(
-        confirmPromise(() => actionRegistry.killPromise(slug)).pipe(
+      forkReported(
+        actionRegistry.kill(slug).pipe(
           Effect.tap((killed) =>
             Effect.sync(() => {
               if (killed) logWarn(`killed action "${actionName}" on ${slug}`);
             }),
           ),
-          Effect.catch(() => Effect.void),
         ),
+        () => {},
       );
     },
     onCancel: () => setModal(null),
@@ -51,25 +46,18 @@ export function handleKillSessionConfirmKey(
     onConfirm: () => {
       const { slug } = modal;
       setModal(null);
-      const kill = sessionKind === "diff" ? killDiffSessionPromise : killShellSessionPromise;
-      Effect.runFork(
-        confirmPromise(() => kill(slug)).pipe(
+      const kill = sessionKind === "diff" ? killDiffSession : killShellSession;
+      forkReported(
+        kill(slug).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
               logWarn(`killed ${sessionKind} session on ${slug}`);
             }),
           ),
-          Effect.andThen(confirmPromise(refreshTmuxSessions)),
-          Effect.catch((error) =>
-            Effect.sync(() => {
-              const msg =
-                error.cause instanceof Error
-                  ? error.cause.message
-                  : String(error.cause);
-              logErr(`kill ${sessionKind} session failed for ${slug}: ${msg}`);
-            }),
-          ),
+          Effect.andThen(io.promise("refresh tmux sessions", refreshTmuxSessions)),
         ),
+        (error) =>
+          logErr(`kill ${sessionKind} session failed for ${slug}: ${error.message}`),
       );
     },
     onCancel: () => setModal(null),
@@ -78,12 +66,14 @@ export function handleKillSessionConfirmKey(
 
 export function handleCleanConfirmKey(
   k: KeyEvent,
-  { setModal, doClean }: SimpleModalContext,
+  { setModal, doClean, logErr }: SimpleModalContext,
 ): boolean {
   return handleYesNoKey(k, {
     onConfirm: () => {
       setModal(null);
-      void doClean();
+      forkReported(io.promise("clean", doClean), (error) =>
+        logErr(`clean failed: ${error.message}`),
+      );
     },
     onCancel: () => setModal(null),
     // `c` opens this modal (global-keys.ts) — toggle-dismiss.
@@ -146,50 +136,40 @@ export function handleConfirmKey(
       // on an unknown slug, the gh flows surface a clear error.
       const slug = modal.slug;
       if (pending === "d" && modal.target) {
-        Effect.runFork(
-          confirmPromise(() => doRemoveWorktree(modal.target!)).pipe(
-            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
-          ),
+        forkReported(
+          io.promise("remove worktree", () => doRemoveWorktree(modal.target!)),
+          (e) => logErr(e.message),
         );
       } else if (pending === "d!" && modal.target) {
-        Effect.runFork(
-          confirmPromise(() =>
+        forkReported(
+          io.promise("remove worktree", () =>
             doRemoveWorktree(modal.target!, { force: true }),
-          ).pipe(
-            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
           ),
+          (e) => logErr(e.message),
         );
       } else if (pending === "e" && slug) {
-        Effect.runFork(
-          confirmPromise(() => doMarkReady(slug)).pipe(
-            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
-          ),
+        forkReported(
+          io.promise("mark ready", () => doMarkReady(slug)),
+          (e) => logErr(e.message),
         );
       } else if (pending === "E" && slug) {
-        Effect.runFork(
-          confirmPromise(() => doShipPr(slug)).pipe(
-            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
-          ),
+        forkReported(
+          io.promise("ship PR", () => doShipPr(slug)),
+          (e) => logErr(e.message),
         );
       } else if (pending === "review-wt" && modal.reviewBranch) {
-        Effect.runFork(
-          confirmPromise(() => doCheckoutReview(modal.reviewBranch!)).pipe(
-            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
-          ),
+        forkReported(
+          io.promise("checkout review", () => doCheckoutReview(modal.reviewBranch!)),
+          (e) => logErr(e.message),
         );
       } else if (pending === "restore" && modal.restoreEntry) {
-        Effect.runFork(
-          confirmPromise(() => doRestoreRemoved(modal.restoreEntry!)).pipe(
-            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
-          ),
+        forkReported(
+          io.promise("restore removed", () => doRestoreRemoved(modal.restoreEntry!)),
+          (e) => logErr(e.message),
         );
       } else if (pending === "R") {
         logWarn("cleared all cached data; refetching from scratch");
-        Effect.runFork(
-          confirmPromise(clearAll).pipe(
-            Effect.catch((e) => Effect.sync(() => logErr(String(e.cause)))),
-          ),
-        );
+        forkReported(io.promise("clear caches", clearAll), (e) => logErr(e.message));
       }
     },
     onCancel: () => setModal(null),

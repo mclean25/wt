@@ -59,8 +59,6 @@ export function removeGitWorktree(input: BackendRemoveInput): Effect.Effect<Back
  */
 export const gitWorktreeBackend: WorktreeBackend = {
   id: "git-worktree",
-
-  create: (input) => Effect.runPromise(createGitWorktree(input)),
-
-  remove: (input) => Effect.runPromise(removeGitWorktree(input)),
+  create: createGitWorktree,
+  remove: removeGitWorktree,
 };

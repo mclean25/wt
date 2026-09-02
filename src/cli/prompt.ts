@@ -38,22 +38,16 @@ export function confirm(
   );
 }
 
-export function pickIndex(
+export const pickIndex = Effect.fn("pickIndex")(function* (
   items: readonly string[],
   title: string,
-): Effect.Effect<number | null, PromptError> {
-  if (items.length === 0) return Effect.succeed(null);
-  return Effect.gen(function* () {
-    yield* Effect.sync(() => {
-      console.log(title);
-      items.forEach((item, index) => console.log(`  ${index + 1}. ${item}`));
-    });
-    const raw = yield* ask(
-      `Pick 1-${items.length} (empty to cancel): `,
-    );
-    if (!raw) return null;
-    const index = parseInt(raw, 10);
-    if (Number.isNaN(index) || index < 1 || index > items.length) return null;
-    return index - 1;
-  });
-}
+): Effect.fn.Return<number | null, PromptError> {
+  if (items.length === 0) return null;
+  console.log(title);
+  items.forEach((item, index) => console.log(`  ${index + 1}. ${item}`));
+  const raw = yield* ask(`Pick 1-${items.length} (empty to cancel): `);
+  if (!raw) return null;
+  const index = parseInt(raw, 10);
+  if (Number.isNaN(index) || index < 1 || index > items.length) return null;
+  return index - 1;
+});

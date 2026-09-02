@@ -1,5 +1,7 @@
 import { Data, Effect } from "effect";
 
+import { causeMessage } from "../core/errors.ts";
+
 const HELP = `usage: wt <command> [options]
 
 commands:
@@ -35,18 +37,26 @@ commands:
 
 Run \`wt <command> --help\` for per-command options where available.`;
 
-type Runner = (argv: string[]) => Effect.Effect<number, Error>;
-type Loader = () => Promise<{ run: Runner }>;
+export type Runner = (argv: string[]) => Effect.Effect<number, Error>;
+export type Loader = () => Promise<{ run: Runner }>;
 
 export class CommandLoadError extends Data.TaggedError("CommandLoadError")<{
   readonly command: string;
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.command}: could not load the command: ${causeMessage(this.cause)}`;
+  }
+}
 
 export class CommandRunError extends Data.TaggedError("CommandRunError")<{
   readonly command: string;
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.command}: ${causeMessage(this.cause)}`;
+  }
+}
 
 export type DispatchError = CommandLoadError | CommandRunError;
 
@@ -103,6 +113,37 @@ const RUNNERS: Record<string, Loader> = {
 };
 
 /**
+ * Load one command module and run it, tagging load vs. run failures
+ * distinctly. `dispatch` below uses this through the lazy-loader map;
+ * main.ts's self-update family (`update`/`rollback`/`version`) routes
+ * around the map entirely (it must work when the dispatcher itself is
+ * what a bad update broke) but wants the same load/run split, so this
+ * is exported for it to call directly with its own static loader.
+ */
+export function loadAndRunCommand(
+  command: string,
+  load: Loader,
+  argv: string[],
+): Effect.Effect<number, CommandLoadError | CommandRunError> {
+  return Effect.tryPromise({
+    try: load,
+    catch: (cause) => new CommandLoadError({ command, cause }),
+  }).pipe(
+    Effect.flatMap(({ run }) => {
+      let result: Effect.Effect<number, Error>;
+      try {
+        result = run(argv);
+      } catch (cause) {
+        return Effect.fail(new CommandRunError({ command, cause }));
+      }
+      return result.pipe(
+        Effect.mapError((cause) => new CommandRunError({ command, cause })),
+      );
+    }),
+  );
+}
+
+/**
  * Effect-native command dispatcher. Dynamic imports remain per command so a
  * broken leaf cannot take down unrelated recovery/status commands.
  *
@@ -124,20 +165,5 @@ export function dispatch(argv: string[]): Effect.Effect<number, DispatchError> {
       return 2;
     });
   }
-  return Effect.tryPromise({
-    try: load,
-    catch: (cause) => new CommandLoadError({ command, cause }),
-  }).pipe(
-    Effect.flatMap(({ run }) => {
-      let result: Effect.Effect<number, Error>;
-      try {
-        result = run(rest);
-      } catch (cause) {
-        return Effect.fail(new CommandRunError({ command, cause }));
-      }
-      return result.pipe(
-        Effect.mapError((cause) => new CommandRunError({ command, cause })),
-      );
-    }),
-  );
+  return loadAndRunCommand(command, load, rest);
 }

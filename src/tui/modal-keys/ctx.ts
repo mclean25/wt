@@ -37,7 +37,7 @@ export type SimpleModalContext = {
    *  batch (name, member slugs) instead of a row. */
   selectedSection: SelectedSection | undefined;
   doYank: (slug: string, label: string, value: string | null) => void;
-  doClean: () => void;
+  doClean: () => Promise<void>;
   doRemoveWorktree: (
     target: WorktreeTarget,
     opts?: { force?: boolean },

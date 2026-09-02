@@ -7,10 +7,10 @@
  * live snapshot each render so the closure never sends a stale sample.
  */
 import type { Dispatch, SetStateAction } from "react";
-import { Data, Effect } from "effect";
+import { Effect, Option } from "effect";
 
 import type { HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessagePromise } from "../../core/harness/session-messaging.ts";
+import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
 import { buildPerfInvestigationPrompt, type PerfSnapshot } from "../../core/perf.ts";
 import type { Modal } from "../modal-state.ts";
@@ -40,17 +40,23 @@ const log = createLogger(WT_SOURCE_SLOT.label);
 let inFlight = false;
 let cancelled = false;
 
-class PerfReportSendError extends Data.TaggedError("PerfReportSendError")<{
-  readonly cause: unknown;
-}> {}
+/** A wedged transport must not permanently disable the `i` affordance. */
+const SEND_TIMEOUT = "30 seconds";
 
 /**
  * Called when the perf overlay closes. A send already in flight still
  * completes (the message is on its way; there's no un-sending it) but
- * stops short of the terminal handoff.
+ * stops short of the terminal handoff. `inFlight` is reset here too,
+ * immediately — it's a UI throttle, not a concurrency guard (the
+ * transport already serializes per target), so a dismissed overlay
+ * shouldn't keep the `i` affordance disabled until the background send
+ * (or its timeout) settles.
  */
 export function cancelPerfInvestigate(): void {
-  if (inFlight) cancelled = true;
+  if (inFlight) {
+    cancelled = true;
+    inFlight = false;
+  }
 }
 
 export type PerfFlowCtx = {
@@ -85,26 +91,26 @@ export function makePerfFlows(ctx: PerfFlowCtx): {
     cancelled = false;
     patchInject({ kind: "sending" });
     Effect.runFork(
-      Effect.tryPromise({
-        try: () =>
-          sendSessionMessagePromise({
-            slug: WT_SOURCE_SLOT.slug,
-            cwd: WT_SOURCE_SLOT.path,
-            harnessId: primaryHarness,
-            text: buildPerfInvestigationPrompt(snapshot),
-          }),
-        catch: (cause) => new PerfReportSendError({ cause }),
+      sendSessionMessage({
+        slug: WT_SOURCE_SLOT.slug,
+        cwd: WT_SOURCE_SLOT.path,
+        harnessId: primaryHarness,
+        text: buildPerfInvestigationPrompt(snapshot),
       }).pipe(
+        Effect.timeoutOption(SEND_TIMEOUT),
         Effect.match({
           onFailure: (error) => {
-            const reason =
-              error.cause instanceof Error
-                ? error.cause.message
-                : String(error.cause);
+            const reason = error.message;
             patchInject({ kind: "failed", reason });
             log.event.err(`perf send failed: ${reason}`);
           },
-          onSuccess: (result) => {
+          onSuccess: (outcome) => {
+            if (Option.isNone(outcome)) {
+              patchInject({ kind: "failed", reason: "timed out waiting for the session" });
+              log.event.err("perf send timed out");
+              return;
+            }
+            const result = outcome.value;
             if (!result.ok) {
               patchInject({ kind: "failed", reason: result.reason });
               log.event.err(`perf send failed: ${result.reason}`);

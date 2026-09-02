@@ -1,10 +1,15 @@
 import { Data, Effect } from "effect";
 
+import { causeMessage } from "./errors.ts";
 import { runOk } from "./proc.ts";
 
 export class WezTermError extends Data.TaggedError("WezTermError")<{
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return causeMessage(this.cause);
+  }
+}
 
 /**
  * WEZTERM_PANE is set by WezTerm for local panes and inherited through

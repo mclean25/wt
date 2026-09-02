@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Fiber } from "effect";
+import { Effect, Fiber, ManagedRuntime } from "effect";
 import { TestClock } from "effect/testing";
 
 import type { GhActionResult } from "../../core/github/types.ts";
@@ -14,11 +14,6 @@ import {
 const gap: GhActionResult = { ok: false, error: "is expected", retryable: true };
 const hard: GhActionResult = { ok: false, error: "head oid does not match" };
 
-/** Settle the loop without sleeping a real interval. */
-function tick(ms = 8): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 describe("startAutoMergeRetry", () => {
   test("keeps asking while the refusal stays retryable, then arms", async () => {
     let calls = 0;
@@ -27,7 +22,7 @@ describe("startAutoMergeRetry", () => {
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
           autoMergeRetry(
-            async () => (++calls < 3 ? gap : { ok: true }),
+            Effect.sync(() => (++calls < 3 ? gap : { ok: true })),
             {
               onArmed: () => void armed++,
               onFailed: () => {},
@@ -56,10 +51,10 @@ describe("startAutoMergeRetry", () => {
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
           autoMergeRetry(
-            async () => {
+            Effect.sync(() => {
               calls++;
               return hard;
-            },
+            }),
             {
               onArmed: () => {},
               onFailed: (error) => void errors.push(error),
@@ -83,7 +78,7 @@ describe("startAutoMergeRetry", () => {
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
           autoMergeRetry(
-            async () => gap,
+            Effect.succeed(gap),
             {
               onArmed: () => {},
               onFailed: () => {},
@@ -105,49 +100,78 @@ describe("startAutoMergeRetry", () => {
   });
 
   test("cancel stops it and reports whether there was anything to stop", async () => {
+    const runtime = ManagedRuntime.make(TestClock.layer());
     let calls = 0;
     startAutoMergeRetry(
       4,
-      async () => {
+      Effect.sync(() => {
         calls++;
         return gap;
-      },
+      }),
       { onArmed: () => {}, onFailed: () => {}, onGaveUp: () => {} },
-      { everyMs: 50 },
+      { everyMs: 50, runFork: runtime.runFork },
     );
     expect(autoMergeRetryPending(4)).toBe(true);
     expect(cancelAutoMergeRetry(4)).toBe(true);
     // Second cancel has nothing to do — this is what lets the disarm
     // leg tell "cancelled a pending arm" from "nothing was armed".
     expect(cancelAutoMergeRetry(4)).toBe(false);
-    await tick(80);
+    await runtime.runPromise(TestClock.adjust(80));
     expect(calls).toBe(0);
+    await runtime.dispose();
   });
 
   test("a cancel during an in-flight attempt wins over its result", async () => {
+    const runtime = ManagedRuntime.make(TestClock.layer());
     let armed = 0;
     startAutoMergeRetry(
       5,
-      async () => {
+      Effect.sync(() => {
         cancelAutoMergeRetry(5);
         return { ok: true } as GhActionResult;
-      },
+      }),
       { onArmed: () => void armed++, onFailed: () => {}, onGaveUp: () => {} },
-      { everyMs: 1 },
+      { everyMs: 1, runFork: runtime.runFork },
     );
-    await tick(30);
+    await runtime.runPromise(TestClock.adjust(1));
     expect(armed).toBe(0);
+    await runtime.dispose();
   });
 
   test("re-arming replaces the loop instead of stacking a second one", async () => {
+    const runtime = ManagedRuntime.make(TestClock.layer());
     let a = 0;
     let b = 0;
     const cb = { onArmed: () => {}, onFailed: () => {}, onGaveUp: () => {} };
-    startAutoMergeRetry(6, async () => (a++, gap), cb, { everyMs: 4 });
-    startAutoMergeRetry(6, async () => (b++, gap), cb, { everyMs: 4 });
-    await tick(30);
+    startAutoMergeRetry(
+      6,
+      Effect.sync(() => {
+        a++;
+        return gap;
+      }),
+      cb,
+      { everyMs: 4, runFork: runtime.runFork },
+    );
+    startAutoMergeRetry(
+      6,
+      Effect.sync(() => {
+        b++;
+        return gap;
+      }),
+      cb,
+      { everyMs: 4, runFork: runtime.runFork },
+    );
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        for (let i = 0; i < 5; i++) {
+          yield* TestClock.adjust(4);
+          yield* Effect.yieldNow;
+        }
+      }),
+    );
     cancelAutoMergeRetry(6);
     expect(a).toBe(0);
     expect(b).toBeGreaterThan(0);
+    await runtime.dispose();
   });
 });

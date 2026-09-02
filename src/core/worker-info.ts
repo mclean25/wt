@@ -184,61 +184,60 @@ export function createWorkerInfoFetcher(load: WorkerInfoLoader) {
   };
 }
 
-const loadRemoteWorkerInfo = (
+const loadRemoteWorkerInfo = Effect.fnUntraced(function* (
   remote: RemoteConfig,
-): Effect.Effect<WorkerInfo, WorkerInfoError> =>
-  Effect.gen(function* () {
-    const result = yield* run(
-      [
-        "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=5",
-        remote.host,
-        remoteWtCommand(remote, ["_hello"]),
-      ],
-      { cwd: process.cwd(), timeoutMs: 15_000 },
-    ).pipe(
-      Effect.mapError(
-        (cause) =>
-          new WorkerInfoTransportError({
-            message: `remote worker handshake failed: ${cause.message}`,
+): Effect.fn.Return<WorkerInfo, WorkerInfoError> {
+  const result = yield* run(
+    [
+      "ssh",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=5",
+      remote.host,
+      remoteWtCommand(remote, ["_hello"]),
+    ],
+    { cwd: process.cwd(), timeoutMs: 15_000 },
+  ).pipe(
+    Effect.mapError(
+      (cause) =>
+        new WorkerInfoTransportError({
+          message: `remote worker handshake failed: ${cause.message}`,
+          cause,
+        }),
+    ),
+  );
+  if (result.exitCode !== 0) {
+    const detail =
+      result.stderr.trim() ||
+      result.stdout.trim() ||
+      `SSH exited ${result.exitCode}`;
+    return yield* new WorkerInfoTransportError({
+      message: `remote worker handshake failed: ${detail}`,
+    });
+  }
+  const info = yield* Effect.try({
+    try: () => parseWorkerInfo(result.stdout),
+    catch: (cause) =>
+      cause instanceof WorkerInfoProtocolError
+        ? cause
+        : new WorkerInfoProtocolError({
+            message: "remote worker handshake returned an invalid payload",
             cause,
           }),
-      ),
-    );
-    if (result.exitCode !== 0) {
-      const detail =
-        result.stderr.trim() ||
-        result.stdout.trim() ||
-        `SSH exited ${result.exitCode}`;
-      return yield* new WorkerInfoTransportError({
-        message: `remote worker handshake failed: ${detail}`,
-      });
-    }
-    const info = yield* Effect.try({
-      try: () => parseWorkerInfo(result.stdout),
-      catch: (cause) =>
-        cause instanceof WorkerInfoProtocolError
-          ? cause
-          : new WorkerInfoProtocolError({
-              message: "remote worker handshake returned an invalid payload",
-              cause,
-            }),
-    });
-    if (info.role !== "worker") {
-      return yield* new WorkerInfoProtocolError({
-        message: `remote ${remote.label} is configured as ${info.role}; set [instance] role = "worker" there`,
-      });
-    }
-    if (info.protocol !== WORKER_PROTOCOL_VERSION) {
-      return yield* new WorkerInfoProtocolError({
-        message: `remote ${remote.label} uses protocol ${info.protocol}; this controller requires ${WORKER_PROTOCOL_VERSION} — run sync-wt`,
-      });
-    }
-    return info;
   });
+  if (info.role !== "worker") {
+    return yield* new WorkerInfoProtocolError({
+      message: `remote ${remote.label} is configured as ${info.role}; set [instance] role = "worker" there`,
+    });
+  }
+  if (info.protocol !== WORKER_PROTOCOL_VERSION) {
+    return yield* new WorkerInfoProtocolError({
+      message: `remote ${remote.label} uses protocol ${info.protocol}; this controller requires ${WORKER_PROTOCOL_VERSION} — run sync-wt`,
+    });
+  }
+  return info;
+});
 
 const workerInfoFetcher = createWorkerInfoFetcher(loadRemoteWorkerInfo);
 

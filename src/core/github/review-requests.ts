@@ -1,6 +1,7 @@
 import { Data, Effect } from "effect";
 
 import { config } from "../config.ts";
+import { causeMessage } from "../errors.ts";
 import { createLogger } from "../logger.ts";
 import { run } from "../proc.ts";
 import { hasGh } from "./gh-cli.ts";
@@ -12,7 +13,11 @@ const log = createLogger("[gh]");
 
 export class ReviewRequestsError extends Data.TaggedError("ReviewRequestsError")<{
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return causeMessage(this.cause);
+  }
+}
 
 /**
  * Pull requests where the authenticated user (or one of their teams)
@@ -100,10 +105,9 @@ type GqlReviewRequestResponse = {
   data?: { search?: { nodes?: Array<GqlReviewRequestNode | null> } };
 };
 
-export function fetchReviewRequests(
+export const fetchReviewRequests = Effect.fn("fetchReviewRequests")(function* (
   signal?: AbortSignal,
-): Effect.Effect<ReviewRequestPr[], ReviewRequestsError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<ReviewRequestPr[], ReviewRequestsError> {
   if (!(yield* hasGh())) return [];
   const r = yield* run(
     ["gh", "api", "graphql", "-f", `query=${REVIEW_REQUESTS_QUERY}`],
@@ -192,8 +196,7 @@ export function fetchReviewRequests(
     });
   }
   return out;
-  });
-}
+});
 
 export function fetchReviewRequestsPromise(
   signal?: AbortSignal,

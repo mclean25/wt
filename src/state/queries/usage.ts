@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import { Data, Effect } from "effect";
+import { Clock, Effect } from "effect";
 
 import {
   readClaudeUsage,
@@ -15,25 +15,9 @@ import {
 } from "../../core/harness/opencode/usage.ts";
 
 import { qk } from "../keys.ts";
+import { operationErrors, runQuery } from "./boundary.ts";
 
-class UsageQueryError extends Data.TaggedError("UsageQueryError")<{
-  operation: string;
-  cause: unknown;
-}> {
-  override get message(): string {
-    return this.cause instanceof Error
-      ? this.cause.message
-      : String(this.cause);
-  }
-}
-
-const querySync = <A>(operation: string, evaluate: () => A) =>
-  Effect.runPromise(
-    Effect.try({
-      try: evaluate,
-      catch: (cause) => new UsageQueryError({ operation, cause }),
-    }),
-  );
+const io = operationErrors("usage");
 
 /**
  * Anthropic API utilization read from the Claude Code statusline's
@@ -45,8 +29,8 @@ const querySync = <A>(operation: string, evaluate: () => A) =>
 export const claudeUsageQuery = () =>
   queryOptions({
     queryKey: qk.claudeUsage(),
-    queryFn: (): Promise<ClaudeUsage | null> =>
-      querySync("read Claude usage", () => readClaudeUsage()),
+    queryFn: ({ signal }): Promise<ClaudeUsage | null> =>
+      runQuery(io.sync("read Claude usage", () => readClaudeUsage()), signal),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -59,8 +43,8 @@ export const claudeUsageQuery = () =>
 export const codexUsageQuery = () =>
   queryOptions({
     queryKey: qk.codexUsage(),
-    queryFn: (): Promise<CodexUsage | null> =>
-      querySync("read Codex usage", () => readCodexUsage()),
+    queryFn: ({ signal }): Promise<CodexUsage | null> =>
+      runQuery(io.sync("read Codex usage", () => readCodexUsage()), signal),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -73,8 +57,15 @@ export const codexUsageQuery = () =>
 export const opencodeCostQuery = () =>
   queryOptions({
     queryKey: qk.opencodeCost(),
-    queryFn: (): Promise<OpencodeCost | null> =>
-      querySync("read OpenCode cost", () => readOpencodeCost(Date.now())),
+    queryFn: ({ signal }): Promise<OpencodeCost | null> =>
+      runQuery(
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            io.sync("read OpenCode cost", () => readOpencodeCost(now)),
+          ),
+        ),
+        signal,
+      ),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

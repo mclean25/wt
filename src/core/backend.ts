@@ -7,6 +7,7 @@ import { isRiftWorktree, riftBackend } from "./backend/rift.ts";
 import type { BackendKind, WorktreeBackend } from "./backend/types.ts";
 
 export type {
+  BackendError,
   BackendKind,
   BackendCreateInput,
   BackendRemoveInput,

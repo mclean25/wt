@@ -10,12 +10,9 @@
  * reason — this runs at the exact moment a project's dev environment is
  * already broken, so it must not be able to fail for a second reason.
  */
-import { handleDevGiveUpPromise } from "../../core/dev-server.ts";
-import { Data, Effect } from "effect";
-
-class DevGiveUpCommandError extends Data.TaggedError("DevGiveUpCommandError")<{
-  cause: unknown;
-}> {}
+import { causeMessage } from "../../core/errors.ts";
+import { handleDevGiveUp } from "../../core/dev-server.ts";
+import { Effect } from "effect";
 
 export function run(argv: string[]): Effect.Effect<number> {
   const slug = argv[0];
@@ -23,18 +20,13 @@ export function run(argv: string[]): Effect.Effect<number> {
     console.error("usage: wt _dev-giveup <slug>");
     return Effect.succeed(2);
   }
-  return Effect.tryPromise({
-    try: () => handleDevGiveUpPromise(slug),
-    catch: (cause) => new DevGiveUpCommandError({ cause }),
-  }).pipe(
-    Effect.catchTag("DevGiveUpCommandError", (error) =>
+  return handleDevGiveUp(slug).pipe(
+    // Never fail the supervisor's exit path over cleanup: the marker is
+    // already written, so the row reads `crashed` regardless, and a
+    // thrown error here would only replace a useful pane with a stack.
+    Effect.catch((cause) =>
       Effect.sync(() => {
-        // Never fail the supervisor's exit path over cleanup: the marker is
-        // already written, so the row reads `crashed` regardless, and a
-        // thrown error here would only replace a useful pane with a stack.
-        console.error(
-          `wt: dev give-up cleanup failed: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`,
-        );
+        console.error(`wt: dev give-up cleanup failed: ${causeMessage(cause)}`);
       }),
     ),
     Effect.as(0),

@@ -5,8 +5,9 @@
  * closures see fresh setters.
  */
 import { config } from "../../core/config.ts";
-import { Data, Effect, Fiber } from "effect";
+import { Effect, Fiber } from "effect";
 import { createWorktreePromise, parseInputPromise } from "../../core/lifecycle.ts";
+import { operationErrors } from "../../core/errors.ts";
 import { createLogger } from "../../core/logger.ts";
 import { runRemoteWtPromise } from "../../core/remote.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
@@ -22,9 +23,7 @@ import { theme } from "../theme.ts";
 
 const newLog = createLogger("[new]");
 
-class RemoteInventoryRefreshError extends Data.TaggedError(
-  "RemoteInventoryRefreshError",
-)<{ readonly cause: unknown }> {}
+const io = operationErrors("new worktree flows");
 
 /** Section a review-requested PR lands in when checked out via `w`. */
 export const REVIEW_SECTION = "Reviews";
@@ -74,14 +73,17 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       branch = await parseInputPromise(parsed.input, {
         anyAuthor: parsed.anyAuthor,
         attach: parsed.attach,
+        // `parseInput` accepts either a Promise or an Effect here —
+        // `Effect.callback` wraps the modal's choice-resolution
+        // callback without a bare `new Promise`.
         promptForChoice: (id, branches) =>
-          new Promise<string | null>((resolve) => {
+          Effect.callback<string | null>((resume) => {
             setModal({
               kind: "branchPicker",
               title: `multiple branches for ${id}`,
               items: branches,
               index: 0,
-              resolve,
+              resolve: (choice) => resume(Effect.succeed(choice)),
             });
           }),
       });
@@ -159,11 +161,12 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     // it while the remaining init phases continue in the background.
     const refreshFiber = Effect.runFork(
       Effect.forever(
-        Effect.tryPromise({
-          try: refreshRemoteWorktrees,
-          catch: (cause) => new RemoteInventoryRefreshError({ cause }),
-        }).pipe(
-          Effect.ignore,
+        io.promise("refresh remote worktrees", refreshRemoteWorktrees).pipe(
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              remoteLog.debug("remote inventory poll failed", { err: error.message });
+            }),
+          ),
           Effect.andThen(Effect.sleep("1500 millis")),
         ),
       ),

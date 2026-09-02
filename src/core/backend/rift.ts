@@ -309,6 +309,6 @@ export function removeRiftWorktree(input: BackendRemoveInput): Effect.Effect<Bac
 
 export const riftBackend: WorktreeBackend = {
   id: "rift",
-  create: (input) => Effect.runPromise(createRiftWorktree(input)),
-  remove: (input) => Effect.runPromise(removeRiftWorktree(input)),
+  create: createRiftWorktree,
+  remove: removeRiftWorktree,
 };

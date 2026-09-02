@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 
+import { WorktreeError } from "../../core/worktree.ts";
 import type { Worktree } from "../../core/types.ts";
 import { StatusKind } from "../../core/types.ts";
 import { parseWtState } from "../../core/wtstate.ts";
@@ -14,7 +15,7 @@ const wt = (slug: string): Worktree => ({
   isMain: false,
 });
 
-async function quiet<A>(effect: Effect.Effect<A, unknown>): Promise<A> {
+async function quiet<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
   const log = console.log;
   const error = console.error;
   console.log = (): void => {};
@@ -29,22 +30,23 @@ async function quiet<A>(effect: Effect.Effect<A, unknown>): Promise<A> {
 
 function baseDeps(overrides: Partial<CleanDeps>): CleanDeps {
   return {
-    fetchOrigin: async () => {},
-    listWorktrees: async () => [],
-    worktreeStatus: async () => ({ kind: StatusKind.Clean, label: "clean" }),
+    fetchOrigin: () => Effect.void,
+    listWorktrees: () => Effect.succeed([]),
+    worktreeStatus: () => Effect.succeed({ kind: StatusKind.Clean, label: "clean" }),
     fetchGithub: () =>
       Effect.succeed({ prs: new Map(), mergeQueue: new Map() }),
-    worktreeIsDirty: async () => false,
+    worktreeIsDirty: () => Effect.succeed(false),
     readWtState: () => parseWtState({}),
-    removeWorktree: async () => ({
-      ok: true,
-      message: "removed",
-      destroyedStage: false,
-      deletedBranch: true,
-    }),
-    spawnBackgroundRemove: () => "/tmp/remove.log",
+    removeWorktree: () =>
+      Effect.succeed({
+        ok: true,
+        message: "removed",
+        destroyedStage: false,
+        deletedBranch: true,
+      }),
+    spawnBackgroundRemove: () => Effect.succeed("/tmp/remove.log"),
     isOurStageDeployed: () => false,
-    killAllSessionsFor: async () => {},
+    killAllSessionsFor: () => Effect.void,
     ...overrides,
   };
 }
@@ -57,22 +59,23 @@ describe("wt clean failure handling", () => {
       runWithDeps(
         ["--yes", "--foreground"],
         baseDeps({
-          fetchOrigin: async () => {
-            throw new Error("offline");
-          },
-          listWorktrees: async () => [wt("one")],
-          worktreeStatus: async () => {
+          fetchOrigin: () =>
+            Effect.fail(
+              new WorktreeError({ operation: "fetch-origin", cause: new Error("offline") }),
+            ),
+          listWorktrees: () => Effect.succeed([wt("one")]),
+          worktreeStatus: () => {
             classified++;
-            return { kind: StatusKind.Merged, label: "merged" };
+            return Effect.succeed({ kind: StatusKind.Merged, label: "merged" });
           },
-          removeWorktree: async () => {
+          removeWorktree: () => {
             removed++;
-            return {
+            return Effect.succeed({
               ok: true,
               message: "removed",
               destroyedStage: false,
               deletedBranch: true,
-            };
+            });
           },
         }),
       ),
@@ -91,22 +94,24 @@ describe("wt clean failure handling", () => {
       runWithDeps(
         ["--yes", "--foreground"],
         baseDeps({
-          listWorktrees: async () => rows,
-          worktreeStatus: async () => ({
-            kind: StatusKind.Merged,
-            label: "merged",
-          }),
-          removeWorktree: async (row) => {
+          listWorktrees: () => Effect.succeed(rows),
+          worktreeStatus: () =>
+            Effect.succeed({
+              kind: StatusKind.Merged,
+              label: "merged",
+            }),
+          removeWorktree: (row) => {
             removed.push(row.slug);
-            return {
+            return Effect.succeed({
               ok: row.slug === "one",
               message: row.slug === "one" ? "removed one" : "refused two",
               destroyedStage: false,
               deletedBranch: row.slug === "one",
-            };
+            });
           },
-          killAllSessionsFor: async (slug) => {
+          killAllSessionsFor: (slug) => {
             cleanedSessions.push(slug);
+            return Effect.void;
           },
         }),
       ),

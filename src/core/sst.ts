@@ -30,31 +30,29 @@ export function awsS3(args: readonly string[]) {
 export const awsS3Promise = (args: string[]) => Effect.runPromise(awsS3(args));
 
 /** List stages from the SST state bucket. Returns null on failure. */
-export function listSstStages() {
+export const listSstStages = Effect.fn("listSstStages")(function* () {
   const sst = requireSst();
-  return Effect.gen(function* () {
-    const r = yield* awsS3(["ls", `s3://${sst.stateBucket}/${sst.statePrefix}`]);
-    if (!r.ok) return null;
-    const stages: SstStage[] = [];
-    for (const line of r.stdout.split("\n")) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length < 4) continue;
-      const date = parts[0]!;
-      const time = parts[1]!;
-      const sizeS = parts[2]!;
-      const name = parts[3]!;
-      if (!name.endsWith(".json")) continue;
-      const size = parseInt(sizeS, 10);
-      if (Number.isNaN(size)) continue;
-      stages.push({
-        name: name.slice(0, -".json".length),
-        sizeBytes: size,
-        lastModified: `${date}T${time}Z`,
-      });
-    }
-    return stages;
-  });
-}
+  const r = yield* awsS3(["ls", `s3://${sst.stateBucket}/${sst.statePrefix}`]);
+  if (!r.ok) return null;
+  const stages: SstStage[] = [];
+  for (const line of r.stdout.split("\n")) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 4) continue;
+    const date = parts[0]!;
+    const time = parts[1]!;
+    const sizeS = parts[2]!;
+    const name = parts[3]!;
+    if (!name.endsWith(".json")) continue;
+    const size = parseInt(sizeS, 10);
+    if (Number.isNaN(size)) continue;
+    stages.push({
+      name: name.slice(0, -".json".length),
+      sizeBytes: size,
+      lastModified: `${date}T${time}Z`,
+    });
+  }
+  return stages;
+});
 export const listSstStagesPromise = (): Promise<SstStage[] | null> => Effect.runPromise(listSstStages());
 
 /**
@@ -62,51 +60,55 @@ export const listSstStagesPromise = (): Promise<SstStage[] | null> => Effect.run
  * leaves a small empty state file; without this check dead stages get
  * repeatedly flagged as orphans.
  */
-function stageHasResourcesEffect(name: string) {
+const stageHasResources = Effect.fnUntraced(function* (name: string) {
   const sst = requireSst();
-  return Effect.gen(function* () {
-    const r = yield* awsS3([
-      "cp",
-      `s3://${sst.stateBucket}/${sst.statePrefix}${name}.json`,
-      "-",
-    ]);
-    if (!r.ok) return true; // be conservative on read failure
-    return yield* Effect.try({
-      try: () => {
-        const state = JSON.parse(r.stdout);
-        const resources = state?.checkpoint?.latest?.resources ?? [];
-        return Array.isArray(resources) && resources.length > 0;
-      },
-      catch: (cause) => new SstStateParseError({ stage: name, cause }),
-    }).pipe(Effect.catch((err) => Effect.sync(() => {
-      log.error(err, { stage: name });
-      return true;
-    })));
-  });
-}
+  const r = yield* awsS3([
+    "cp",
+    `s3://${sst.stateBucket}/${sst.statePrefix}${name}.json`,
+    "-",
+  ]);
+  if (!r.ok) return true; // be conservative on read failure
+  return yield* Effect.try({
+    try: () => {
+      const state = JSON.parse(r.stdout);
+      const resources = state?.checkpoint?.latest?.resources ?? [];
+      return Array.isArray(resources) && resources.length > 0;
+    },
+    catch: (cause) => new SstStateParseError({ stage: name, cause }),
+  }).pipe(Effect.catch((err) => Effect.sync(() => {
+    log.error(err, { stage: name });
+    return true;
+  })));
+});
 
-export function categorizeStages(
+export const categorizeStages = Effect.fn("categorizeStages")(function* (
   stages: SstStage[],
   worktreeStages: Set<string>,
 ) {
-  return Effect.gen(function* () {
-    const live: SstStage[] = [];
-    const orphaned: SstStage[] = [];
-    for (const s of stages) {
-      if (s.name === config.stage.defaultPersonal) continue;
-      if (!s.name.startsWith(config.stage.prefix)) continue;
-      if (worktreeStages.has(s.name)) {
-        live.push(s);
-        continue;
-      }
-      if (!(yield* stageHasResourcesEffect(s.name))) continue;
-      orphaned.push(s);
+  const live: SstStage[] = [];
+  // Candidates need an S3 probe (`stageHasResources`) to tell a real
+  // orphan from an empty post-`sst remove` state file — independent
+  // reads, run concurrently rather than one-by-one.
+  const candidates: SstStage[] = [];
+  for (const s of stages) {
+    if (s.name === config.stage.defaultPersonal) continue;
+    if (!s.name.startsWith(config.stage.prefix)) continue;
+    if (worktreeStages.has(s.name)) {
+      live.push(s);
+      continue;
     }
-    orphaned.sort((a, b) => (b.lastModified > a.lastModified ? 1 : -1));
-    live.sort((a, b) => a.name.localeCompare(b.name));
-    return { live, orphaned };
-  });
-}
+    candidates.push(s);
+  }
+  const hasResources = yield* Effect.forEach(
+    candidates,
+    (s) => stageHasResources(s.name),
+    { concurrency: 4 },
+  );
+  const orphaned = candidates.filter((_, i) => hasResources[i]);
+  orphaned.sort((a, b) => (b.lastModified > a.lastModified ? 1 : -1));
+  live.sort((a, b) => a.name.localeCompare(b.name));
+  return { live, orphaned };
+});
 export const categorizeStagesPromise = (stages: SstStage[], worktreeStages: Set<string>) =>
   Effect.runPromise(categorizeStages(stages, worktreeStages));
 

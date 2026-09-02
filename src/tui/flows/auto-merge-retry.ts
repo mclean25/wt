@@ -25,8 +25,20 @@
  *
  * Keyed by PR number, because that is what both the keystroke and the
  * disarm leg have in hand and it is stable across row re-renders.
+ *
+ * One fiber per PR lives in `retries`, a `FiberMap` built against a
+ * dedicated `Scope` this module owns — re-arming a PR replaces (and
+ * interrupts) any prior fiber under that key for free, and
+ * `closeAutoMergeRetries` (awaited once by `runtime.tsx` as a real
+ * finalizer during TUI shutdown) closes the scope, which interrupts
+ * every retry still waiting. A synchronous cancel/replace can still
+ * race a fiber that is mid-attempt (an `attempt` Effect can complete
+ * before its interrupt request is observed), so `tokens` separately
+ * guards callback delivery: a callback only fires when its fiber is
+ * still the current one for that PR, independent of how quickly the
+ * interrupt lands.
  */
-import { Clock, Data, Effect, Fiber } from "effect";
+import { Clock, Effect, Exit, Fiber, FiberMap, Option, Scope } from "effect";
 
 import type { GhActionResult } from "../../core/github/types.ts";
 
@@ -48,25 +60,35 @@ const RETRY_EVERY_MS = 30_000;
  */
 export const RETRY_LIMIT_MS = 20 * 60_000;
 
-type Pending = {
-  fiber: Fiber.Fiber<void, never> | null;
-  token: object;
-};
+const retryScope: Scope.Closeable = Effect.runSync(Scope.make());
+const retries: FiberMap.FiberMap<number, void, never> = Effect.runSync(
+  FiberMap.make<number, void, never>().pipe(Effect.provideService(Scope.Scope, retryScope)),
+);
 
-const pending = new Map<number, Pending>();
+/** Guards callback delivery against a fiber superseded (or cancelled) mid-attempt. */
+const tokens = new Map<number, object>();
 
 export type RetryCallbacks = {
-  /** The arm finally took. */
-  onArmed: () => void;
+  /**
+   * The arm finally took. May return an Effect (e.g. a GitHub refresh)
+   * to run as part of the retry fiber instead of being forked
+   * fire-and-forget by the caller.
+   */
+  onArmed: () => void | Effect.Effect<void>;
   /** A refusal that is not the registration gap; the loop stops. */
   onFailed: (error: string) => void;
   /** The budget ran out while still waiting on the same gap. */
   onGaveUp: () => void;
 };
 
-/** Is a retry already in flight for this PR? */
+/**
+ * Is a retry already in flight for this PR? Authoritative on `tokens`,
+ * not on `retries` (the FiberMap): a cancel/re-arm must invalidate this
+ * answer the instant it's called, synchronously, and interruption
+ * landing in the FiberMap is asynchronous — see `cancelAutoMergeRetry`.
+ */
 export function autoMergeRetryPending(prNumber: number): boolean {
-  return pending.has(prNumber);
+  return tokens.has(prNumber);
 }
 
 /**
@@ -74,85 +96,95 @@ export function autoMergeRetryPending(prNumber: number): boolean {
  * disarm can say "cancelled the pending arm" rather than the
  * meaningless "merge when ready not armed" — nothing is armed during
  * the wait, which is exactly why the disarm leg has to consult this
- * before it decides there is nothing to do.
+ * before it decides there is nothing to do. Also what lets a SECOND
+ * cancel of the same PR report "nothing to do" instead of "cancelled"
+ * again: `tokens.delete` below is synchronous, so it can't observe its
+ * own prior call as still-pending the way asking the FiberMap would
+ * (a fiber is only forgotten there once its interruption actually
+ * lands).
+ *
+ * The interrupt itself stays fire-and-forget (`Fiber.interrupt` via
+ * `getUnsafe`, not `FiberMap.remove`): the attempt that calls this can
+ * be the very fiber being cancelled (see `autoMergeRetry.test.ts`'s
+ * in-flight-cancel case), and `FiberMap.remove` awaits the interruption
+ * completing — which would deadlock a fiber interrupting itself
+ * synchronously.
  */
 export function cancelAutoMergeRetry(prNumber: number): boolean {
-  const entry = pending.get(prNumber);
-  if (!entry) return false;
-  pending.delete(prNumber);
-  if (entry.fiber) Effect.runFork(Fiber.interrupt(entry.fiber));
+  if (!tokens.has(prNumber)) return false;
+  tokens.delete(prNumber);
+  const fiber = Option.getOrNull(FiberMap.getUnsafe(retries, prNumber));
+  if (fiber) Effect.runFork(Fiber.interrupt(fiber));
   return true;
 }
 
-/** Stop every retry during TUI teardown. */
-export function cancelAllAutoMergeRetries(): void {
-  for (const prNumber of [...pending.keys()]) cancelAutoMergeRetry(prNumber);
-}
+/**
+ * Stop every retry during TUI teardown. Closes the scope backing
+ * `retries`, which interrupts every fiber still in it — a real Effect
+ * so `runtime.tsx` can `yield*`/`Effect.addFinalizer` it and know
+ * every retry is actually gone before the rest of teardown proceeds.
+ */
+export const closeAutoMergeRetries: Effect.Effect<void> = Scope.close(
+  retryScope,
+  Exit.succeed(undefined),
+).pipe(Effect.andThen(Effect.sync(() => tokens.clear())));
 
-class AutoMergeAttemptError extends Data.TaggedError("AutoMergeAttemptError")<{
-  readonly cause: unknown;
-}> {}
-
-export function autoMergeRetry(
-  attempt: () => Promise<GhActionResult>,
+export const autoMergeRetry = Effect.fn("autoMergeRetry")(function* (
+  attempt: Effect.Effect<GhActionResult>,
   cb: RetryCallbacks,
   opts: { everyMs?: number; now?: () => number } = {},
-): Effect.Effect<void> {
+): Effect.fn.Return<void> {
   const everyMs = opts.everyMs ?? RETRY_EVERY_MS;
   const currentTime = opts.now
     ? Effect.sync(opts.now)
     : Clock.currentTimeMillis;
-  return Effect.gen(function* () {
-    const startedAt = yield* currentTime;
-    while (true) {
-      yield* Effect.sleep(`${everyMs} millis`);
-      const result = yield* Effect.tryPromise({
-        try: attempt,
-        catch: (cause) => new AutoMergeAttemptError({ cause }),
-      }).pipe(Effect.result);
-      if (result._tag === "Failure") {
-        cb.onFailed(
-          result.failure.cause instanceof Error
-            ? result.failure.cause.message
-            : String(result.failure.cause),
-        );
-        return;
-      }
-      if (result.success.ok) {
-        cb.onArmed();
-        return;
-      }
-      if (!result.success.retryable) {
-        cb.onFailed(result.success.error);
-        return;
-      }
-      if ((yield* currentTime) - startedAt >= RETRY_LIMIT_MS) {
-        cb.onGaveUp();
-        return;
-      }
+  const startedAt = yield* currentTime;
+  while (true) {
+    yield* Effect.sleep(`${everyMs} millis`);
+    const result = yield* attempt;
+    if (result.ok) {
+      const armed = cb.onArmed();
+      if (Effect.isEffect(armed)) yield* armed;
+      return;
     }
-  });
-}
+    if (!result.retryable) {
+      cb.onFailed(result.error);
+      return;
+    }
+    if ((yield* currentTime) - startedAt >= RETRY_LIMIT_MS) {
+      cb.onGaveUp();
+      return;
+    }
+  }
+});
 
 /**
  * Begin retrying `attempt` until it arms, refuses for a different
  * reason, or the budget expires. Re-arming over an existing retry
- * replaces it rather than stacking a second loop.
+ * replaces it rather than stacking a second loop (`FiberMap.run`'s own
+ * semantics).
  */
 export function startAutoMergeRetry(
   prNumber: number,
-  attempt: () => Promise<GhActionResult>,
+  attempt: Effect.Effect<GhActionResult>,
   cb: RetryCallbacks,
-  /** Injectable so the tests can run the loop without spending a minute. */
-  opts: { everyMs?: number; now?: () => number } = {},
+  opts: {
+    everyMs?: number;
+    now?: () => number;
+    /**
+     * Test seam: how the retry fiber is launched. Defaults to the live
+     * runtime; tests substitute a `ManagedRuntime` built from
+     * `TestClock.layer()` so the retry loop is driven by fake time
+     * instead of blocking on real timers.
+     */
+    runFork?: (effect: Effect.Effect<void>) => void;
+  } = {},
 ): void {
-  cancelAutoMergeRetry(prNumber);
   const token = {};
-  const isCurrent = () => pending.get(prNumber)?.token === token;
+  tokens.set(prNumber, token);
+  const isCurrent = () => tokens.get(prNumber) === token;
   const guarded: RetryCallbacks = {
-    onArmed: () => {
-      if (isCurrent()) cb.onArmed();
-    },
+    onArmed: () => (isCurrent() ? cb.onArmed() : undefined),
     onFailed: (error) => {
       if (isCurrent()) cb.onFailed(error);
     },
@@ -163,11 +195,10 @@ export function startAutoMergeRetry(
   const program = autoMergeRetry(attempt, guarded, opts).pipe(
     Effect.ensuring(
       Effect.sync(() => {
-        if (isCurrent()) pending.delete(prNumber);
+        if (isCurrent()) tokens.delete(prNumber);
       }),
     ),
   );
-  const entry: Pending = { fiber: null, token };
-  pending.set(prNumber, entry);
-  entry.fiber = Effect.runFork(program);
+  const run = opts.runFork ?? ((effect: Effect.Effect<void>) => void Effect.runFork(effect));
+  run(FiberMap.run(retries, prNumber, program).pipe(Effect.asVoid));
 }

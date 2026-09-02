@@ -1,6 +1,7 @@
 import type { KeyEvent } from "@opentui/core";
 
-import { writeClipboardPromise } from "../../core/macos.ts";
+import { writeClipboard } from "../../core/macos.ts";
+import { forkReported } from "../effect-boundary.ts";
 import {
   formatCapturedError,
   latestCapturedError,
@@ -41,16 +42,10 @@ export function handleErrorsKey(
       toast("no captured error", warnColor, 1500);
       return true;
     }
-    try {
-      writeClipboardPromise(formatCapturedError(captured));
-      toast("copied error", infoColor, 1500);
-    } catch (err) {
-      toast(
-        `copy failed: ${err instanceof Error ? err.message : String(err)}`,
-        warnColor,
-        3000,
-      );
-    }
+    forkReported(writeClipboard(formatCapturedError(captured)), (error) => {
+      toast(`copy failed: ${error.message}`, warnColor, 3000);
+    });
+    toast("copied error", infoColor, 1500);
     return true;
   }
   if (

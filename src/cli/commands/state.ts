@@ -13,13 +13,14 @@ import { join, resolve } from "node:path";
 
 import { config } from "../../core/config.ts";
 import { isInsidePath } from "../../core/config-layer.ts";
+import { operationErrors } from "../../core/errors.ts";
 import {
   hasRepositoryState,
   importRepositorySnapshot,
   readForeignRepositoryRows,
   type ForeignRepositoryRow,
 } from "../../core/state-db.ts";
-import { listWorktreesPromise } from "../../core/worktree.ts";
+import { listWorktrees } from "../../core/worktree.ts";
 import {
   GROUP_ARCHIVED,
   GROUP_INBOX,
@@ -32,12 +33,9 @@ import {
 import { withWtStateLock } from "../../core/wtstate/io.ts";
 import { remoteWorktreeLedgerPrefix } from "../../core/worktree-ref.ts";
 import { hasHelpFlag } from "../args.ts";
-import { Data, Effect } from "effect";
+import { Clock, Effect } from "effect";
 
-export class StateCommandError extends Data.TaggedError("StateCommandError")<{
-  operation: string;
-  cause: unknown;
-}> {}
+const io = operationErrors("wt state");
 
 const USAGE = `usage: wt state migrate [--from <legacy-cache-dir>] [--keep-legacy]
 
@@ -353,178 +351,167 @@ function parseArchive(path: string): Set<string> {
   );
 }
 
-function migrate(
+const migrate = Effect.fnUntraced(function* (
   legacyDir: string,
   keepLegacy: boolean,
-): Effect.Effect<number, StateCommandError> {
-  return Effect.gen(function* () {
-    const worktrees = yield* Effect.tryPromise({
-      try: () => listWorktreesPromise(),
-      catch: (cause) =>
-        new StateCommandError({ operation: "list worktrees", cause }),
-    });
-    return yield* Effect.try({
-      try: () => {
-        const statePath = join(legacyDir, "state.json");
-        const archivePath = join(legacyDir, "archive.json");
-        // No early return when the legacy JSON is absent: the sqlite adoption and
-        // runtime carry below are the phases most users need, and a machine that
-        // already migrated its JSON once has neither file left to find.
-        const hasLegacyJson = existsSync(statePath) || existsSync(archivePath);
-        if (!hasLegacyJson)
-          console.log(`no legacy state.json/archive.json in ${legacyDir}`);
+) {
+  const worktrees = yield* listWorktrees();
+  const nowMs = yield* Clock.currentTimeMillis;
+  return yield* io.sync("migrate state", () => {
+      const statePath = join(legacyDir, "state.json");
+      const archivePath = join(legacyDir, "archive.json");
+      // No early return when the legacy JSON is absent: the sqlite adoption and
+      // runtime carry below are the phases most users need, and a machine that
+      // already migrated its JSON once has neither file left to find.
+      const hasLegacyJson = existsSync(statePath) || existsSync(archivePath);
+      if (!hasLegacyJson)
+        console.log(`no legacy state.json/archive.json in ${legacyDir}`);
 
-        const live = new Map(
-          worktrees.map((worktree) => [worktree.slug, worktree.branch]),
+      const live = new Map(
+        worktrees.map((worktree) => [worktree.slug, worktree.branch]),
+      );
+      const legacy = existsSync(statePath)
+        ? parseWtState(JSON.parse(readFileSync(statePath, "utf8")))
+        : parseWtState({});
+      const selection = selectLegacyState(legacy, live);
+      const legacyArchive = parseArchive(archivePath);
+      const remotePrefix = config.remote
+        ? remoteWorktreeLedgerPrefix(config.remote.host)
+        : null;
+      const selectedArchive = new Set(
+        [...legacyArchive].filter(
+          (key) =>
+            live.has(key) ||
+            (remotePrefix !== null && key.startsWith(remotePrefix)),
+        ),
+      );
+
+      const stranded = selectStrandedRows(
+        candidateStateDatabases(homedir(), config.paths.stateDb).flatMap(
+          (source) =>
+            readForeignRepositoryRows(source).map((row) => ({
+              ...row,
+              source,
+            })),
+        ),
+        {
+          repoId: config.repoId,
+          repoPath: config.repoPath,
+          worktreeRoot: config.paths.worktreeRoot,
+          currentDb: config.paths.stateDb,
+        },
+      );
+
+      const stamp = new Date(nowMs).toISOString().replace(/[:.]/g, "-");
+      const backups = [
+        backup(statePath, stamp),
+        backup(archivePath, stamp),
+      ].filter(Boolean);
+      const adoptedArchive = new Set(selectedArchive);
+      const adoptedFrom: string[] = [];
+      withWtStateLock(() => {
+        const currentExists = hasRepositoryState();
+        let merged = mergeMigratedState(
+          selection.state,
+          readWtState(),
+          currentExists,
         );
-        const legacy = existsSync(statePath)
-          ? parseWtState(JSON.parse(readFileSync(statePath, "utf8")))
-          : parseWtState({});
-        const selection = selectLegacyState(legacy, live);
-        const legacyArchive = parseArchive(archivePath);
-        const remotePrefix = config.remote
-          ? remoteWorktreeLedgerPrefix(config.remote.host)
-          : null;
-        const selectedArchive = new Set(
-          [...legacyArchive].filter(
-            (key) =>
-              live.has(key) ||
-              (remotePrefix !== null && key.startsWith(remotePrefix)),
-          ),
-        );
-
-        const stranded = selectStrandedRows(
-          candidateStateDatabases(homedir(), config.paths.stateDb).flatMap(
-            (source) =>
-              readForeignRepositoryRows(source).map((row) => ({
-                ...row,
-                source,
-              })),
-          ),
-          {
-            repoId: config.repoId,
-            repoPath: config.repoPath,
-            worktreeRoot: config.paths.worktreeRoot,
-            currentDb: config.paths.stateDb,
-          },
-        );
-
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        const backups = [
-          backup(statePath, stamp),
-          backup(archivePath, stamp),
-        ].filter(Boolean);
-        const adoptedArchive = new Set(selectedArchive);
-        const adoptedFrom: string[] = [];
-        withWtStateLock(() => {
-          const currentExists = hasRepositoryState();
-          let merged = mergeMigratedState(
-            selection.state,
-            readWtState(),
-            currentExists,
-          );
-          for (const row of stranded) {
-            let selected: LegacySelection;
-            try {
-              selected = selectLegacyState(
-                parseWtState(JSON.parse(row.data)),
-                live,
-              );
-            } catch {
-              // Unreadable stray snapshot: adopting nothing is the safe direction.
-              continue;
-            }
-            const archived = [...row.archived].filter((key) => live.has(key));
-            if (selected.selectedSlugs.size === 0 && archived.length === 0)
-              continue;
-            merged = mergeAdoptedState(selected.state, merged);
-            for (const key of archived) adoptedArchive.add(key);
-            adoptedFrom.push(row.repoId);
+        for (const row of stranded) {
+          let selected: LegacySelection;
+          try {
+            selected = selectLegacyState(
+              parseWtState(JSON.parse(row.data)),
+              live,
+            );
+          } catch {
+            // Unreadable stray snapshot: adopting nothing is the safe direction.
+            continue;
           }
-          importRepositorySnapshot(JSON.stringify(merged), adoptedArchive);
-        });
-
-        if (!keepLegacy) {
-          if (existsSync(statePath)) {
-            const remaining: WtState = {
-              ...legacy,
-              slugs: Object.fromEntries(
-                Object.entries(legacy.slugs).filter(
-                  ([slug]) => !selection.selectedSlugs.has(slug),
-                ),
-              ),
-              edges: legacy.edges.filter(
-                (edge) =>
-                  !selection.selectedSlugs.has(edge.from) &&
-                  !selection.selectedSlugs.has(edge.to),
-              ),
-            };
-            atomicJson(statePath, remaining);
-          }
-          if (existsSync(archivePath)) {
-            for (const key of selectedArchive) legacyArchive.delete(key);
-            atomicJson(archivePath, { slugs: [...legacyArchive].sort() });
-          }
+          const archived = [...row.archived].filter((key) => live.has(key));
+          if (selected.selectedSlugs.size === 0 && archived.length === 0)
+            continue;
+          merged = mergeAdoptedState(selected.state, merged);
+          for (const key of archived) adoptedArchive.add(key);
+          adoptedFrom.push(row.repoId);
         }
+        importRepositorySnapshot(JSON.stringify(merged), adoptedArchive);
+      });
 
+      if (!keepLegacy) {
+        if (existsSync(statePath)) {
+          const remaining: WtState = {
+            ...legacy,
+            slugs: Object.fromEntries(
+              Object.entries(legacy.slugs).filter(
+                ([slug]) => !selection.selectedSlugs.has(slug),
+              ),
+            ),
+            edges: legacy.edges.filter(
+              (edge) =>
+                !selection.selectedSlugs.has(edge.from) &&
+                !selection.selectedSlugs.has(edge.to),
+            ),
+          };
+          atomicJson(statePath, remaining);
+        }
+        if (existsSync(archivePath)) {
+          for (const key of selectedArchive) legacyArchive.delete(key);
+          atomicJson(archivePath, { slugs: [...legacyArchive].sort() });
+        }
+      }
+
+      console.log(
+        `migrated ${selection.selectedSlugs.size} worktree records to ${config.paths.stateDb}`,
+      );
+      console.log(`repository ${config.repoId} (${config.repoPath})`);
+      console.log(`migrated ${adoptedArchive.size} archive flags`);
+      const carried = carryLegacyRuntime(legacyDir, config.paths.cacheRoot);
+      if (carried.length > 0) {
         console.log(
-          `migrated ${selection.selectedSlugs.size} worktree records to ${config.paths.stateDb}`,
+          `carried ${carried.join(", ")} into ${config.paths.cacheRoot}`,
         );
-        console.log(`repository ${config.repoId} (${config.repoPath})`);
-        console.log(`migrated ${adoptedArchive.size} archive flags`);
-        const carried = carryLegacyRuntime(legacyDir, config.paths.cacheRoot);
-        if (carried.length > 0) {
-          console.log(
-            `carried ${carried.join(", ")} into ${config.paths.cacheRoot}`,
-          );
-        }
-        if (adoptedFrom.length > 0) {
-          console.log(
-            `adopted ${adoptedFrom.length} stranded namespace(s): ${adoptedFrom.join(", ")}`,
-          );
-          console.log(
-            "(left in place and unchanged; current values won every conflict)",
-          );
-        }
-        if (
-          legacy.removed.length > 0 ||
-          Object.keys(legacy.branchTips).length > 0
-        ) {
-          console.log(
-            "left unscoped removed history and branch watermarks in the legacy backup",
-          );
-        }
-        if (backups.length > 0) console.log(`backups: ${backups.join(", ")}`);
-        if (keepLegacy) console.log("legacy records retained (--keep-legacy)");
-        return 0;
-      },
-      catch: (cause) =>
-        new StateCommandError({ operation: "migrate state", cause }),
-    });
+      }
+      if (adoptedFrom.length > 0) {
+        console.log(
+          `adopted ${adoptedFrom.length} stranded namespace(s): ${adoptedFrom.join(", ")}`,
+        );
+        console.log(
+          "(left in place and unchanged; current values won every conflict)",
+        );
+      }
+      if (
+        legacy.removed.length > 0 ||
+        Object.keys(legacy.branchTips).length > 0
+      ) {
+        console.log(
+          "left unscoped removed history and branch watermarks in the legacy backup",
+        );
+      }
+      if (backups.length > 0) console.log(`backups: ${backups.join(", ")}`);
+      if (keepLegacy) console.log("legacy records retained (--keep-legacy)");
+      return 0;
   });
-}
+});
 
-export function run(argv: string[]): Effect.Effect<number, StateCommandError> {
-  return Effect.gen(function* () {
-    if (hasHelpFlag(argv) || argv.length === 0) {
-      console.log(USAGE);
-      return argv.length === 0 ? 2 : 0;
-    }
-    if (argv[0] !== "migrate") {
-      console.error(`unknown state command: ${argv[0]}\n\n${USAGE}`);
+export const run = Effect.fn("wt state")(function* (argv: string[]) {
+  if (hasHelpFlag(argv) || argv.length === 0) {
+    console.log(USAGE);
+    return argv.length === 0 ? 2 : 0;
+  }
+  if (argv[0] !== "migrate") {
+    console.error(`unknown state command: ${argv[0]}\n\n${USAGE}`);
+    return 2;
+  }
+  let legacyDir = join(homedir(), ".cache", "wt");
+  let keepLegacy = false;
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--keep-legacy") keepLegacy = true;
+    else if (arg === "--from" && argv[i + 1]) legacyDir = resolve(argv[++i]!);
+    else {
+      console.error(`unknown or incomplete option: ${arg}\n\n${USAGE}`);
       return 2;
     }
-    let legacyDir = join(homedir(), ".cache", "wt");
-    let keepLegacy = false;
-    for (let i = 1; i < argv.length; i++) {
-      const arg = argv[i]!;
-      if (arg === "--keep-legacy") keepLegacy = true;
-      else if (arg === "--from" && argv[i + 1]) legacyDir = resolve(argv[++i]!);
-      else {
-        console.error(`unknown or incomplete option: ${arg}\n\n${USAGE}`);
-        return 2;
-      }
-    }
-    return yield* migrate(legacyDir, keepLegacy);
-  });
-}
+  }
+  return yield* migrate(legacyDir, keepLegacy);
+});

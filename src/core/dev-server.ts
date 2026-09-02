@@ -37,6 +37,7 @@ import { Clock, Data, Duration, Effect } from "effect";
 
 import { closeDevServerBrowserSessions } from "./browser.ts";
 import { config, type DevServerConfig } from "./config.ts";
+import { causeMessage } from "./errors.ts";
 import { createLogger } from "./logger.ts";
 import { run, sanitizeLine } from "./proc.ts";
 import { resolveTeardownCommand, runTeardownCommand } from "./teardown.ts";
@@ -57,7 +58,11 @@ export class DevServerOperationError extends Data.TaggedError("DevServerOperatio
   readonly slug: string;
   readonly operation: "slot" | "status" | "health" | "port";
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.operation} (${this.slug}): ${causeMessage(this.cause)}`;
+  }
+}
 
 const DEV_DIR = join(WT_STATE_DIR, "dev");
 /**
@@ -352,8 +357,7 @@ function portInUseEffect(port: number): Effect.Effect<boolean> {
  * holds would otherwise read as foreign and force a pointless
  * reallocation.
  */
-export function allocateDevPort(slug: string) {
- return Effect.gen(function* () {
+export const allocateDevPort = Effect.fn("allocateDevPort")(function* (slug: string) {
   const dev = requireDevServer();
   const state = readWtState();
   const claimed = new Set<number>();
@@ -397,8 +401,7 @@ export function allocateDevPort(slug: string) {
     log.info("reallocated dev port", { slug, from: recorded, to: port });
   }
   return port;
- });
-}
+});
 
 export function allocateDevPortPromise(slug: string): Promise<number> {
   return Effect.runPromise(allocateDevPort(slug));
@@ -608,8 +611,7 @@ function leaveDevQueue(slug: string): void {
 }
 
 /** Slugs with a live `<slug>-dev` tmux session, or null if tmux couldn't be asked. */
-function devSessionSlugsEffect(): Effect.Effect<string[] | null> {
- return Effect.gen(function* () {
+const devSessionSlugsEffect = Effect.fnUntraced(function* (): Effect.fn.Return<string[] | null> {
   const names = yield* probeSessionNames();
   if (names === null) return null;
   const slugs: string[] = [];
@@ -617,8 +619,7 @@ function devSessionSlugsEffect(): Effect.Effect<string[] | null> {
     if (name.endsWith(SUFFIX.dev)) slugs.push(name.slice(0, -SUFFIX.dev.length));
   }
   return slugs;
- });
-}
+});
 /**
  * Who currently holds a slot. Derived from tmux every time — there is
  * no ledger to drift, and a slot frees itself when its session goes,
@@ -629,8 +630,7 @@ function devSessionSlugsEffect(): Effect.Effect<string[] | null> {
  * running", which would let the cap wave everything through at exactly
  * the moment wt has lost track of the fleet.
  */
-export function devSlotHolders(): Effect.Effect<DevSlotHolder[] | null> {
- return Effect.gen(function* () {
+export const devSlotHolders = Effect.fn("devSlotHolders")(function* (): Effect.fn.Return<DevSlotHolder[] | null> {
   const slugs = yield* devSessionSlugsEffect();
   if (slugs === null) return null;
   return slugs
@@ -639,13 +639,11 @@ export function devSlotHolders(): Effect.Effect<DevSlotHolder[] | null> {
       state: readMarker(slug) === "crashed" ? "crashed" : "up",
     }))
     .sort((a, b) => a.slug.localeCompare(b.slug));
- });
-}
+});
 export const devSlotHoldersPromise = (): Promise<DevSlotHolder[] | null> => Effect.runPromise(devSlotHolders());
 
 /** Slots, holders and queue in one shot — the `wt dev status --all` view. */
-export function devSlotReport(): Effect.Effect<DevSlotReport> {
- return Effect.gen(function* () {
+export const devSlotReport = Effect.fn("devSlotReport")(function* (): Effect.fn.Return<DevSlotReport> {
   const limit = config.devServer?.maxConcurrent ?? null;
   const holders = yield* devSlotHolders();
   return {
@@ -654,8 +652,7 @@ export function devSlotReport(): Effect.Effect<DevSlotReport> {
     waiters: readDevWaiters(),
     free: limit === null || holders === null ? null : Math.max(0, limit - holders.length),
   };
- });
-}
+});
 export const devSlotReportPromise = (): Promise<DevSlotReport> => Effect.runPromise(devSlotReport());
 
 /**
@@ -707,18 +704,16 @@ function runDevStopCommandEffect(
  *
  * Returns the slugs reclaimed.
  */
-export function reclaimDevSlots(): Effect.Effect<string[]> {
- return Effect.gen(function* () {
+export const reclaimDevSlots = Effect.fn("reclaimDevSlots")(function* (): Effect.fn.Return<string[]> {
   const slugs = yield* devSessionSlugsEffect();
   if (slugs === null || slugs.length === 0) return [];
-  let live: Set<string>;
   const worktrees = yield* Effect.result(listWorktrees());
   if (worktrees._tag === "Failure") {
     // Can't establish what's live — reclaiming on a guess would kill a
     // working dev server. Leave the fleet as it is.
     return [];
   }
-  live = new Set(worktrees.success.map((w) => w.slug));
+  const live = new Set(worktrees.success.map((w) => w.slug));
   const orphans = slugs.filter((slug) => !live.has(slug));
   if (orphans.length === 0) return [];
   for (const slug of orphans) {
@@ -728,8 +723,7 @@ export function reclaimDevSlots(): Effect.Effect<string[]> {
     yield* runDevStopCommandEffect(slug, null);
   }
   return orphans;
- });
-}
+});
 export const reclaimDevSlotsPromise = (): Promise<string[]> => Effect.runPromise(reclaimDevSlots());
 
 /**
@@ -812,11 +806,10 @@ export type DevSlotDecision = {
  * would have to be released, and a lock that must be released is the
  * drifting counter this design exists to avoid.
  */
-export function checkDevSlot(
+export const checkDevSlot = Effect.fn("checkDevSlot")(function* (
   slug: string,
   opts: { reclaim?: boolean; respectPriority?: boolean } = {},
-) {
- return Effect.gen(function* () {
+): Effect.fn.Return<DevSlotDecision, DevServerOperationError> {
   const limit = config.devServer?.maxConcurrent ?? null;
   if (limit === null) return decideDevSlot(slug, [], null);
   let holders = yield* devSlotHolders();
@@ -857,8 +850,7 @@ export function checkDevSlot(
     return { ...decision, ok: false, yieldingTo: promoted.slice(0, decision.free!) };
   }
   return decision;
- });
-}
+});
 
 export function checkDevSlotPromise(slug: string, opts: { reclaim?: boolean; respectPriority?: boolean } = {}): Promise<DevSlotDecision> {
   return Effect.runPromise(checkDevSlot(slug, opts));
@@ -915,57 +907,62 @@ const devSlotWaitDependencies: DevSlotWaitDependencies = {
   leave: leaveDevQueue,
 };
 
-export function waitForDevSlot(
+export type WaitForDevSlotOptions = {
+  timeoutMs?: number;
+  /**
+   * Absolute deadline (epoch ms), for a caller sharing one budget across
+   * this wait and a following `waitForDevReady` — `wt dev start --wait
+   * --timeout` waits for a slot and then for readiness, and without a
+   * shared deadline each phase got the FULL timeout, doubling the
+   * effective budget. Takes precedence over `timeoutMs` when set.
+   */
+  deadlineMs?: number;
+  /** Called on each poll that doesn't get a slot. */
+  onWait?: (info: { rank: number; holders: DevSlotHolder[]; waited: number }) => void;
+};
+
+export const waitForDevSlot = Effect.fn("waitForDevSlot")(function* (
   slug: string,
-  opts: {
-    timeoutMs?: number;
-    /** Called on each poll that doesn't get a slot. */
-    onWait?: (info: { rank: number; holders: DevSlotHolder[]; waited: number }) => void;
-  } = {},
+  opts: WaitForDevSlotOptions = {},
   dependencies: DevSlotWaitDependencies = devSlotWaitDependencies,
-): Effect.Effect<boolean, DevServerOperationError> {
-  return Effect.gen(function* () {
-    const timeoutMs = opts.timeoutMs ?? DEV_WAIT_DEFAULT_TIMEOUT_MS;
-    const started = yield* Clock.currentTimeMillis;
-    let lastReclaim = started - DEV_WAIT_RECLAIM_EVERY_MS;
-    const poll = (): Effect.Effect<boolean, DevServerOperationError> =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const reclaim = now - lastReclaim >= DEV_WAIT_RECLAIM_EVERY_MS;
-        if (reclaim) lastReclaim = now;
-        const decision = yield* dependencies.check(slug, { reclaim });
-        const checkedAt = yield* Clock.currentTimeMillis;
-        const waiters = dependencies.waiters();
-        const rank = waiters.findIndex((w) => w.slug === slug);
-        // rank < 0 means our own file went missing (a hand-cleaned cache,
-        // a full disk). Fall back to first-come rather than waiting for a
-        // position we no longer hold.
-        if (decision.ok && (decision.free === null || rank < 0 || rank < decision.free)) {
-          return true;
-        }
-        if (checkedAt - started >= timeoutMs) return false;
-        opts.onWait?.({
-          rank: rank < 0 ? 0 : rank,
-          holders: decision.holders,
-          waited: checkedAt - started,
-        });
-        yield* Effect.sleep(Duration.millis(DEV_WAIT_POLL_MS));
-        return yield* Effect.suspend(poll);
+): Effect.fn.Return<boolean, DevServerOperationError> {
+  const started = yield* Clock.currentTimeMillis;
+  const deadline = opts.deadlineMs ?? started + (opts.timeoutMs ?? DEV_WAIT_DEFAULT_TIMEOUT_MS);
+  let lastReclaim = started - DEV_WAIT_RECLAIM_EVERY_MS;
+  const poll = (): Effect.Effect<boolean, DevServerOperationError> =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const reclaim = now - lastReclaim >= DEV_WAIT_RECLAIM_EVERY_MS;
+      if (reclaim) lastReclaim = now;
+      const decision = yield* dependencies.check(slug, { reclaim });
+      const checkedAt = yield* Clock.currentTimeMillis;
+      const waiters = dependencies.waiters();
+      const rank = waiters.findIndex((w) => w.slug === slug);
+      // rank < 0 means our own file went missing (a hand-cleaned cache,
+      // a full disk). Fall back to first-come rather than waiting for a
+      // position we no longer hold.
+      if (decision.ok && (decision.free === null || rank < 0 || rank < decision.free)) {
+        return true;
+      }
+      if (checkedAt >= deadline) return false;
+      opts.onWait?.({
+        rank: rank < 0 ? 0 : rank,
+        holders: decision.holders,
+        waited: checkedAt - started,
       });
-    return yield* Effect.acquireUseRelease(
-      Effect.sync(() => dependencies.join(slug)),
-      poll,
-      () => Effect.sync(() => dependencies.leave(slug)),
-    );
-  });
-}
+      yield* Effect.sleep(Duration.millis(DEV_WAIT_POLL_MS));
+      return yield* Effect.suspend(poll);
+    });
+  return yield* Effect.acquireUseRelease(
+    Effect.sync(() => dependencies.join(slug)),
+    poll,
+    () => Effect.sync(() => dependencies.leave(slug)),
+  );
+});
 
 export const waitForDevSlotPromise = (
   slug: string,
-  opts: {
-    timeoutMs?: number;
-    onWait?: (info: { rank: number; holders: DevSlotHolder[]; waited: number }) => void;
-  } = {},
+  opts: WaitForDevSlotOptions = {},
 ): Promise<boolean> => Effect.runPromise(waitForDevSlot(slug, opts));
 
 /**
@@ -976,21 +973,19 @@ export const waitForDevSlotPromise = (
  * died would make the sweep worse than the leak. `wt dev logs` falls
  * back to this file when the pane is gone.
  */
-function captureDevCrashLogEffect(slug: string): Effect.Effect<void> {
- return Effect.gen(function* () {
+const captureDevCrashLogEffect = Effect.fnUntraced(function* (slug: string): Effect.fn.Return<void> {
   if (readMarker(slug) !== "crashed") return;
   const text = yield* capturePane(sessionName(slug, "dev"));
   if (!text) return;
+  // Best-effort; the pane is about to go either way.
   yield* Effect.try({
     try: () => {
-    mkdirSync(DEV_DIR, { recursive: true });
-    writeFileSync(crashLogPath(slug), text);
+      mkdirSync(DEV_DIR, { recursive: true });
+      writeFileSync(crashLogPath(slug), text);
     },
     catch: (cause) => new DevServerOperationError({ slug, operation: "status", cause }),
   }).pipe(Effect.ignore);
-    // Best-effort; the pane is about to go either way.
- });
-}
+});
 
 function crashLogPath(slug: string): string {
   return join(DEV_DIR, `${slug}.crash.log`);
@@ -1045,16 +1040,14 @@ function wtExecPath(): string {
  * scrollback, and the fleet stops queueing behind a slot that is
  * holding nothing.
  */
-export function handleDevGiveUp(slug: string) {
- return Effect.gen(function* () {
+export const handleDevGiveUp = Effect.fn("handleDevGiveUp")(function* (slug: string) {
   yield* captureDevCrashLogEffect(slug);
   const wt = (yield* listWorktrees()).find((w) => w.slug === slug) ?? null;
   yield* runDevStopCommandEffect(slug, wt?.path ?? null);
   yield* run([
     "tmux", "-L", TMUX_SOCKET, "kill-session", "-t", `=${sessionName(slug, "dev")}`,
   ]);
- });
-}
+});
 
 export const handleDevGiveUpPromise = (slug: string): Promise<void> => Effect.runPromise(handleDevGiveUp(slug));
 
@@ -1147,11 +1140,10 @@ done
  * crashed supervisor's pane (and therefore the crash logs) readable;
  * intentional stops self-kill the session instead.
  */
-export function startDevServer(wt: {
+export const startDevServer = Effect.fn("startDevServer")(function* (wt: {
   slug: string;
   path: string;
 }) {
- return Effect.gen(function* () {
   const dev = requireDevServer();
   // ADOPT a start already in flight rather than killing it.
   //
@@ -1211,10 +1203,15 @@ export function startDevServer(wt: {
     }
   }
   const port = yield* allocateDevPort(wt.slug);
-  yield* Effect.sync(() => mkdirSync(DEV_DIR, { recursive: true }));
   const command = dev.command.replaceAll("{{port}}", String(port));
   const script = scriptPath(wt.slug);
-  yield* Effect.sync(() => writeFileSync(script, supervisorScript(wt.slug, command, port), { mode: 0o755 }));
+  yield* Effect.try({
+    try: () => {
+      mkdirSync(DEV_DIR, { recursive: true });
+      writeFileSync(script, supervisorScript(wt.slug, command, port), { mode: 0o755 });
+    },
+    catch: (cause) => new DevServerOperationError({ slug: wt.slug, operation: "status", cause }),
+  });
 
   const userShell = process.env.SHELL || "/bin/bash";
   // Outer login shell loads the user's PATH/env (npm, nvm, direnv…);
@@ -1266,8 +1263,7 @@ export function startDevServer(wt: {
   setSlugDevStartedSha(wt.slug, yield* revParse("HEAD", wt.path));
   log.event.info(`dev server starting on port ${port} (${wt.slug})`);
   return { port, url: devUrl(port) };
- });
-}
+});
 
 export const startDevServerPromise = (wt: { slug: string; path: string }): Promise<{ port: number; url: string; adopted?: boolean }> =>
   Effect.runPromise(startDevServer(wt));
@@ -1339,22 +1335,19 @@ export function reapDevServerFiles(liveSlugs: ReadonlySet<string>): void {
  * project's chance to say what else to take down; without it, "stopped"
  * means the vite process is gone and the twelve containers are not.
  */
-export function stopDevServer(
+export const stopDevServer = Effect.fn("stopDevServer")(function* (
   wt: { slug: string; path: string },
 ) {
- return Effect.gen(function* () {
   const slug = wt.slug;
   yield* killByName(sessionName(slug, "dev"));
+  // Marker is advisory; the killed session already means "not running".
   yield* Effect.try({
     try: () => {
-    mkdirSync(DEV_DIR, { recursive: true });
-    writeFileSync(markerPath(slug), "stopped");
+      mkdirSync(DEV_DIR, { recursive: true });
+      writeFileSync(markerPath(slug), "stopped");
     },
     catch: (cause) => new DevServerOperationError({ slug, operation: "status", cause }),
   }).pipe(Effect.ignore);
-  /*
-    // Marker is advisory; the killed session already means "not running".
-  */
   // After the kill, so the teardown isn't racing a supervisor that is
   // about to restart the command it just tore down.
   const stopped = yield* runDevStopCommandEffect(slug, wt.path);
@@ -1376,8 +1369,7 @@ export function stopDevServer(
     }
   }
   return stopped;
- });
-}
+});
 
 export const stopDevServerPromise = (wt: { slug: string; path: string }): Promise<boolean> =>
   Effect.runPromise(stopDevServer(wt));
@@ -1418,11 +1410,10 @@ export type DevHealth = {
  * stdout (falling back to stderr) is the message, so the project owns
  * the wording — wt has no idea what a migration ledger is.
  */
-export function devHealth(wt: {
+export const devHealth = Effect.fn("devHealth")(function* (wt: {
   slug: string;
   path: string;
 }) {
- return Effect.gen(function* () {
   const template = config.devServer?.healthCommand ?? null;
   const command = resolveTeardownCommand(template, {
     path: wt.path,
@@ -1451,8 +1442,7 @@ export function devHealth(wt: {
       firstLine(r.stderr) ||
       `health_command exited ${r.exitCode}`,
   };
- });
-}
+});
 
 export const devHealthPromise = (wt: { slug: string; path: string }): Promise<DevHealth | null> =>
   Effect.runPromise(devHealth(wt));
@@ -1498,55 +1488,59 @@ const devReadyDependencies: DevReadyDependencies = {
   ),
 };
 
-export function waitForDevReady(
+export type WaitForDevReadyOptions = {
+  timeoutMs?: number;
+  /**
+   * Absolute deadline (epoch ms), for a caller sharing one budget across
+   * a preceding `waitForDevSlot` and this wait — see
+   * `WaitForDevSlotOptions.deadlineMs`. Takes precedence over
+   * `timeoutMs` when set.
+   */
+  deadlineMs?: number;
+  onTick?: (info: { waited: number; state: "starting" | "checking" }) => void;
+};
+
+export const waitForDevReady = Effect.fn("waitForDevReady")(function* (
   wt: { slug: string; path: string },
-  opts: {
-    timeoutMs?: number;
-    onTick?: (info: { waited: number; state: "starting" | "checking" }) => void;
-  } = {},
+  opts: WaitForDevReadyOptions = {},
   dependencies: DevReadyDependencies = devReadyDependencies,
-): Effect.Effect<DevReadyOutcome, DevServerOperationError> {
-  return Effect.gen(function* () {
-    const timeoutMs = opts.timeoutMs ?? DEV_READY_DEFAULT_TIMEOUT_MS;
-    const started = yield* Clock.currentTimeMillis;
-    let lastHealth: DevHealth | null = null;
-    const poll = (): Effect.Effect<DevReadyOutcome, DevServerOperationError> =>
-      Effect.gen(function* () {
-        const st = yield* dependencies.status(wt.slug, wt.path);
-        if (st.crashed) return { ready: false, reason: "crashed" };
-        if (st.running) {
-          const health = yield* dependencies.health(wt);
-          if (!health || health.ok) return { ready: true, health };
-          // An unhealthy answer is RETRIED rather than believed, because
-          // "not yet" and "wrong" are the same answer from a check that
-          // runs once. A migration replay in progress reads 29 of 35
-          // applied — indistinguishable from a stale volume stuck at 29 —
-          // and it settled at 35 a minute later. Somebody encoding this
-          // check per-agent has to remember to wait for quiescence, and
-          // the report that reached us was written by someone who did not.
-          // So the waiting happens here, once, for everyone.
-          lastHealth = health;
-        }
-        const now = yield* Clock.currentTimeMillis;
-        if (now - started >= timeoutMs) {
-          return lastHealth
-            ? { ready: false, reason: "unhealthy", health: lastHealth }
-            : { ready: false, reason: "timeout" };
-        }
-        opts.onTick?.({ waited: now - started, state: st.running ? "checking" : "starting" });
-        yield* Effect.sleep(Duration.millis(DEV_READY_POLL_MS));
-        return yield* Effect.suspend(poll);
-      });
-    return yield* poll();
-  });
-}
+): Effect.fn.Return<DevReadyOutcome, DevServerOperationError> {
+  const started = yield* Clock.currentTimeMillis;
+  const deadline = opts.deadlineMs ?? started + (opts.timeoutMs ?? DEV_READY_DEFAULT_TIMEOUT_MS);
+  let lastHealth: DevHealth | null = null;
+  const poll = (): Effect.Effect<DevReadyOutcome, DevServerOperationError> =>
+    Effect.gen(function* () {
+      const st = yield* dependencies.status(wt.slug, wt.path);
+      if (st.crashed) return { ready: false, reason: "crashed" };
+      if (st.running) {
+        const health = yield* dependencies.health(wt);
+        if (!health || health.ok) return { ready: true, health };
+        // An unhealthy answer is RETRIED rather than believed, because
+        // "not yet" and "wrong" are the same answer from a check that
+        // runs once. A migration replay in progress reads 29 of 35
+        // applied — indistinguishable from a stale volume stuck at 29 —
+        // and it settled at 35 a minute later. Somebody encoding this
+        // check per-agent has to remember to wait for quiescence, and
+        // the report that reached us was written by someone who did not.
+        // So the waiting happens here, once, for everyone.
+        lastHealth = health;
+      }
+      const now = yield* Clock.currentTimeMillis;
+      if (now >= deadline) {
+        return lastHealth
+          ? { ready: false, reason: "unhealthy", health: lastHealth }
+          : { ready: false, reason: "timeout" };
+      }
+      opts.onTick?.({ waited: now - started, state: st.running ? "checking" : "starting" });
+      yield* Effect.sleep(Duration.millis(DEV_READY_POLL_MS));
+      return yield* Effect.suspend(poll);
+    });
+  return yield* poll();
+});
 
 export const waitForDevReadyPromise = (
   wt: { slug: string; path: string },
-  opts: {
-    timeoutMs?: number;
-    onTick?: (info: { waited: number; state: "starting" | "checking" }) => void;
-  } = {},
+  opts: WaitForDevReadyOptions = {},
 ): Promise<DevReadyOutcome> => Effect.runPromise(waitForDevReady(wt, opts));
 
 /**
@@ -1563,11 +1557,10 @@ export const waitForDevReadyPromise = (
  * before the last applied one; `supabase db reset` wipes buckets that
  * are provisioned at start rather than by migrations).
  */
-export function resetDevServer(
+export const resetDevServer = Effect.fn("resetDevServer")(function* (
   wt: { slug: string; path: string },
   onLog?: (line: string) => void,
 ) {
- return Effect.gen(function* () {
   const stopped = yield* stopDevServer(wt);
   // `reset_command` DISCARDS the environment's state (volumes, caches,
   // a migrated database). Doing that on top of an environment that is
@@ -1600,8 +1593,7 @@ export function resetDevServer(
     });
   }
   return yield* startDevServer(wt);
- });
-}
+});
 
 export const resetDevServerPromise = (wt: { slug: string; path: string }, onLog?: (line: string) => void): Promise<{ port: number; url: string; adopted?: boolean }> =>
   Effect.runPromise(resetDevServer(wt, onLog));
@@ -1617,11 +1609,10 @@ export const resetDevServerPromise = (wt: { slug: string; path: string }, onLog?
  * live. Omit it (CLI callers with no query cache to read) to fall
  * back to the direct tmux check.
  */
-export function devServerStatus(
+export const devServerStatus = Effect.fn("devServerStatus")(function* (
   slug: string,
   opts: { sessionExists?: boolean; path?: string } = {},
 ) {
- return Effect.gen(function* () {
   if (!config.devServer) return DEV_SERVER_STOPPED;
   const port = readWtState().slugs[slug]?.devPort ?? null;
   const session = sessionName(slug, "dev");
@@ -1683,8 +1674,7 @@ export function devServerStatus(
     url: null,
     ...base,
   };
- });
-}
+});
 
 export const devServerStatusPromise = (slug: string, opts: { sessionExists?: boolean; path?: string } = {}): Promise<DevServerStatus> =>
   Effect.runPromise(devServerStatus(slug, opts));

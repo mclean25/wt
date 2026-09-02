@@ -3,8 +3,11 @@ import { resolve as resolvePath } from "node:path";
 import { Data, Effect, Semaphore } from "effect";
 
 import { config } from "./config.ts";
+import { createLogger } from "./logger.ts";
 import { run, runOk, runQuiet, type ProcError, type RunResult } from "./proc.ts";
 import { readWtState } from "./wtstate.ts";
+
+const log = createLogger("[git]");
 
 export class GitError extends Data.TaggedError("GitError")<{
   readonly args: readonly string[];
@@ -23,10 +26,25 @@ export function git(args: readonly string[], cwd?: string): Effect.Effect<string
   );
 }
 
+/**
+ * `true` iff `git <args>` exits 0. The Effect fails only when git itself
+ * couldn't be spawned/read/interrupted (`ProcError`) — a nonzero exit is
+ * data, not a failure, and folds to `false`. The Promise twin folds the
+ * spawn failure too, to `false`, which is the historical "quiet" contract;
+ * an Effect caller that cares about the spawn-failed case should not fold
+ * it away.
+ */
 export function gitQuiet(args: readonly string[], cwd?: string) {
   return runQuiet(["git", ...args], { cwd: gitCwd(cwd) });
 }
 
+/**
+ * Runs `git <args>` and always returns the captured `RunResult` — a
+ * nonzero exit code is part of the result, not a failure. The Effect
+ * fails only on `ProcError` (spawn/read/interrupted): git could not be
+ * run at all. The Promise twin folds that case into a synthetic
+ * `exitCode: -1` result so legacy callers never see a rejection.
+ */
 export function gitRun(args: readonly string[], cwd?: string) {
   return run(["git", ...args], { cwd: gitCwd(cwd) });
 }
@@ -119,7 +137,7 @@ export const effectiveBaseOrTrunkPromise = (wtPath: string, effectiveBase?: stri
  * that need a stable ref NAME for display (the `{{base}}` substitution,
  * whose change kills a live diff session) must not route through here.
  */
-export function freshBaseRevEffect(wtPath: string, base: string) {
+export function freshBaseRev(wtPath: string, base: string) {
   if (base !== `origin/${config.branch.base}`) return Effect.succeed(base);
   return revParse(base, config.paths.mainClone).pipe(Effect.flatMap((fresh) => {
     if (!fresh) return Effect.succeed(base);
@@ -135,7 +153,7 @@ export function freshBaseRevEffect(wtPath: string, base: string) {
  * nothing to abort, the exact ambiguity that produced false "left mid-rebase"
  * reports on slices whose rebase failed at preflight without ever starting).
  */
-export const rebaseInProgress = (cwd: string) => Effect.gen(function* () {
+export const rebaseInProgress = Effect.fn("rebaseInProgress")(function* (cwd: string) {
   for (const dir of ["rebase-merge", "rebase-apply"]) {
     const r = yield* gitRun(["rev-parse", "--git-path", dir], cwd);
     const p = r.stdout.trim();
@@ -173,20 +191,19 @@ export type MergeConflictProbe =
  * strong hint rather than a guarantee — good enough to warn before a
  * restack, cheap enough to run per row.
  */
-export function mergeConflictProbe(
+// Mid-rebase, HEAD is a moving target (detached on the pick sequence) and
+// the interesting fact is the rebase itself — report it instead of probing
+// a transient tree. The TUI renders this as "resolution in progress" rather
+// than a conflict warning.
+export const mergeConflictProbe = Effect.fn("mergeConflictProbe")(function* (
   headRef: string,
   base: string,
   cwd?: string,
-): Effect.Effect<MergeConflictProbe, ProcError> {
-  // Mid-rebase, HEAD is a moving target (detached on the pick sequence)
-  // and the interesting fact is the rebase itself — report it instead of
-  // probing a transient tree. The TUI renders this as "resolution in
-  // progress" rather than a conflict warning.
-  return Effect.gen(function* () {
-    if (cwd && (yield* rebaseInProgress(cwd))) return { status: "rebasing", base } as const;
-    const r = yield* gitRun(["merge-tree", "--write-tree", "--name-only", "--no-messages", base, headRef], cwd);
-    if (r.exitCode === 0) return { status: "clean", base } as const;
-    if (r.exitCode === 1 && r.stdout.trim()) {
+): Effect.fn.Return<MergeConflictProbe, ProcError> {
+  if (cwd && (yield* rebaseInProgress(cwd))) return { status: "rebasing", base } as const;
+  const r = yield* gitRun(["merge-tree", "--write-tree", "--name-only", "--no-messages", base, headRef], cwd);
+  if (r.exitCode === 0) return { status: "clean", base } as const;
+  if (r.exitCode === 1 && r.stdout.trim()) {
     // stdout: "<tree-oid>\n<file>\n<file>…" — first line is the result
     // tree OID, the rest are the conflicting paths.
     const files = r.stdout
@@ -194,11 +211,10 @@ export function mergeConflictProbe(
       .map((l) => l.trim())
       .filter(Boolean)
       .slice(1);
-      return { status: "conflict", base, files } as const;
-    }
-    return { status: "unknown", base } as const;
-  });
-}
+    return { status: "conflict", base, files } as const;
+  }
+  return { status: "unknown", base } as const;
+});
 export const mergeConflictProbePromise = (headRef: string, base: string, cwd?: string): Promise<MergeConflictProbe> =>
   Effect.runPromise(mergeConflictProbe(headRef, base, cwd));
 
@@ -265,14 +281,13 @@ export const baseTipShaPromise = (baseBranch: string | null): Promise<string | n
   Effect.runPromise(baseTipSha(baseBranch));
 
 /** First ref among `refs` that resolves to a commit in `cwd`, as a SHA. */
-export const firstSha = (cwd: string, refs: readonly string[]) =>
-  Effect.gen(function* () {
-    for (const ref of refs) {
-      const sha = yield* revParse(ref, cwd);
-      if (sha) return sha;
-    }
-    return null;
-  });
+export const firstSha = Effect.fn("firstSha")(function* (cwd: string, refs: readonly string[]) {
+  for (const ref of refs) {
+    const sha = yield* revParse(ref, cwd);
+    if (sha) return sha;
+  }
+  return null;
+});
 /** Does `branch` exist as a local head? */
 export const localBranchExists = (branch: string, cwd?: string) =>
   gitQuiet(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], cwd);
@@ -286,14 +301,6 @@ export const branchExists = (branch: string) => localBranchExists(branch).pipe(
 );
 export const branchExistsPromise = (branch: string): Promise<boolean> => Effect.runPromise(branchExists(branch));
 
-/**
- * `branch` itself when the local head exists, else `origin/<branch>` —
- * a ref other git commands can resolve either way. Doesn't verify the
- * origin ref; pair with `branchExists` when absence is an error.
- */
-export const localOrOriginRef = (branch: string) => localBranchExists(branch).pipe(
-  Effect.map((local) => local ? branch : `origin/${branch}`),
-);
 /**
  * `wtPath` is required for rift worktrees: an independent clone keeps
  * its branch + upstream config in its own `.git`, invisible to the main
@@ -381,13 +388,12 @@ export function firstCommitSubject(
  * objects are reachable in the main clone via `origin/<branch>`; an
  * unpushed tip is unknown there, and unknown-to-origin means unmerged.
  */
-export function branchIsMerged(wt: {
+export const branchIsMerged = Effect.fn("branchIsMerged")(function* (wt: {
   slug: string;
   branch: string;
   path?: string;
-}): Effect.Effect<boolean, ProcError> {
+}): Effect.fn.Return<boolean, GitError | ProcError> {
   const { branch, path: wtPath } = wt;
-  return Effect.gen(function* () {
   const branchSha = yield* git(["rev-parse", "--verify", branch], wtPath ?? config.paths.mainClone);
   const mainSha = yield* git(["rev-parse", "--verify", `origin/${config.branch.base}`]);
   // Real-divergence gate; FF-aligned branches skip out below.
@@ -407,9 +413,15 @@ export function branchIsMerged(wt: {
   // the branch via a second parent.
   const fps = yield* mainFirstParentShas();
   if (fps.has(branchSha)) return false;
-  return !(yield* forkBaseIsVacuousEffect(wt, branchSha));
-  }).pipe(Effect.catch(() => Effect.succeed(false)));
-}
+  return !(yield* forkBaseIsVacuous(wt, branchSha));
+}, Effect.catch((err) => Effect.sync(() => {
+  // Safe direction: a broken probe must never read as "merged" (closes
+  // GitHub issues, feeds the clean sweep). Logged so a persistently
+  // broken probe is visible in the daily log instead of silently always
+  // answering "not merged".
+  log.debug("branchIsMerged probe failed, folding to false", { err: err instanceof Error ? err.message : String(err) });
+  return false;
+})));
 export const branchIsMergedPromise = (wt: { slug: string; branch: string; path?: string }): Promise<boolean> =>
   Effect.runPromise(branchIsMerged(wt));
 
@@ -449,7 +461,7 @@ export const branchIsMergedPromise = (wt: { slug: string; branch: string; path?:
  * every legacy worktree from ever reading as merged, which breaks the
  * clean sweep for exactly the rows it should handle.
  */
-function forkBaseIsVacuousEffect(
+function forkBaseIsVacuous(
   wt: { slug: string; path?: string },
   branchSha: string,
 ): Effect.Effect<boolean, ProcError> {

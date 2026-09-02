@@ -454,5 +454,5 @@ export function createClaudeInjector(overrides: Partial<InjectDeps> = {}) {
 const injector = createClaudeInjector();
 export const deliverClaudeMessage = injector.deliverClaudeMessage;
 export const claudeInjectSelftest = injector.claudeInjectSelftest;
-/** Promise adapter for the messenger's DI seam; retire with that seam. */
+/** Promise adapter kept for this module's own tests; the messenger's DI seam is Effect-native. */
 export const deliverClaudeMessagePromise = injector.deliverClaudeMessagePromise;

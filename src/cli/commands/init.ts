@@ -10,12 +10,11 @@ import {
 } from "node:path";
 
 import { repositoryNamespace } from "../../core/config-layer.ts";
+import { operationErrors } from "../../core/errors.ts";
 import { hasHelpFlag } from "../args.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-export class InitCommandError extends Data.TaggedError("InitCommandError")<{
-  cause: unknown;
-}> {}
+const io = operationErrors("wt init");
 
 const USAGE = `usage: wt init [directory]
 
@@ -142,31 +141,28 @@ export function initializeRepository(
   return { ok: true, configPath, repoId, content };
 }
 
-export function run(argv: string[]): Effect.Effect<number, InitCommandError> {
-  return Effect.gen(function* () {
-    if (hasHelpFlag(argv)) {
-      console.log(USAGE);
-      return 0;
-    }
-    const unknown = argv.find((arg) => arg.startsWith("-") && arg !== "-");
-    if (unknown) {
-      console.error(`unknown flag: ${unknown}\n\n${USAGE}`);
-      return 2;
-    }
-    if (argv.length > 1) {
-      console.error(`expected at most one directory\n\n${USAGE}`);
-      return 2;
-    }
-    const result = yield* Effect.try({
-      try: () => initializeRepository(argv[0] ?? process.cwd()),
-      catch: (cause) => new InitCommandError({ cause }),
-    });
-    if (!result.ok) {
-      console.error(result.message);
-      return 1;
-    }
-    console.log(`created ${result.configPath}`);
-    console.log(`namespace ${result.repoId}`);
+export const run = Effect.fn("wt init")(function* (argv: string[]) {
+  if (hasHelpFlag(argv)) {
+    console.log(USAGE);
     return 0;
-  });
-}
+  }
+  const unknown = argv.find((arg) => arg.startsWith("-") && arg !== "-");
+  if (unknown) {
+    console.error(`unknown flag: ${unknown}\n\n${USAGE}`);
+    return 2;
+  }
+  if (argv.length > 1) {
+    console.error(`expected at most one directory\n\n${USAGE}`);
+    return 2;
+  }
+  const result = yield* io.sync("initialize repository", () =>
+    initializeRepository(argv[0] ?? process.cwd()),
+  );
+  if (!result.ok) {
+    console.error(result.message);
+    return 1;
+  }
+  console.log(`created ${result.configPath}`);
+  console.log(`namespace ${result.repoId}`);
+  return 0;
+});

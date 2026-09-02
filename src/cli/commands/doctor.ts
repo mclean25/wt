@@ -1,15 +1,16 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
 import { config } from "../../core/config.ts";
+import { operationErrors, type OperationError } from "../../core/errors.ts";
 import { branchIsMerged, gitQuiet } from "../../core/git.ts";
 import { fetchPrs } from "../../core/github.ts";
 import { claudeTmuxName } from "../../core/harness/claude/harness.ts";
 import { claudeInjectSelftest, shimDir, staleShims } from "../../core/harness/claude/inject.ts";
 import { humanAge, lockAge, lockLabel, lockStatus } from "../../core/locks.ts";
-import { run as runProcess, type RunResult } from "../../core/proc.ts";
+import { run as runProcess, type ProcError } from "../../core/proc.ts";
 import { buildReports, detectTargets, readSkillsMemory, reportIsActionable } from "../../core/skills.ts";
 import { computeStage } from "../../core/stage.ts";
 import { isOurStageDeployed } from "../../core/stage-safety.ts";
@@ -54,86 +55,77 @@ function mkCheck(name: string, status: CheckStatus, message: string, detail: str
   return { name, status, message, detail };
 }
 
-function procEffect(argv: readonly string[], opts: Parameters<typeof runProcess>[1] = {}): Effect.Effect<RunResult, DoctorCommandError> {
-  return runProcess(argv, opts).pipe(Effect.mapError((cause) => new DoctorCommandError({ cause })));
+const io = operationErrors("wt doctor");
+
+function checkWorkingTree(wt: Worktree): Effect.Effect<Check, ProcError> {
+  return runProcess(["git", "status", "--porcelain"], { cwd: wt.path }).pipe(
+    Effect.map((r) => {
+      if (r.exitCode !== 0) return mkCheck("working tree", "err", `git status failed: ${r.stderr.trim()}`);
+      if (!r.stdout.trim()) return mkCheck("working tree", "ok", "clean");
+      const lines = r.stdout.split("\n").filter(Boolean);
+      return mkCheck("working tree", "warn", `${lines.length} uncommitted change(s)`, lines.slice(0, 10));
+    }),
+  );
 }
 
-function syncEffect<A>(f: () => A): Effect.Effect<A, DoctorCommandError> {
-  return Effect.try({ try: f, catch: (cause) => new DoctorCommandError({ cause }) });
-}
-
-
-function checkWorkingTree(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
-  return procEffect(["git", "status", "--porcelain"], { cwd: wt.path }).pipe(Effect.map((r) => {
-    if (r.exitCode !== 0) return mkCheck("working tree", "err", `git status failed: ${r.stderr.trim()}`);
-    if (!r.stdout.trim()) return mkCheck("working tree", "ok", "clean");
-    const lines = r.stdout.split("\n").filter(Boolean);
-    return mkCheck("working tree", "warn", `${lines.length} uncommitted change(s)`, lines.slice(0, 10));
-  }));
-}
-
-function checkSync(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
-  return Effect.gen(function* () {
-    const r = yield* procEffect(["git", "rev-list", "--left-right", "--count", `origin/${config.branch.base}...HEAD`], { cwd: wt.path });
-    const trunk = `origin/${config.branch.base}`;
-    if (r.exitCode !== 0) return mkCheck("sync", "warn", `cannot compare to ${trunk}`);
-    const parts = r.stdout.trim().split(/\s+/);
-    const behind = parseInt(parts[0] ?? "0", 10);
-    const ahead = parseInt(parts[1] ?? "0", 10);
-    let unpushed = 0;
-    const upstreamR = yield* procEffect(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wt.path });
-    if (upstreamR.exitCode === 0) {
-      const cr = yield* procEffect(["git", "rev-list", "--count", "@{u}..HEAD"], { cwd: wt.path });
-      if (cr.exitCode === 0) unpushed = parseInt(cr.stdout.trim(), 10) || 0;
-    } else {
-      const branchR = yield* procEffect(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wt.path });
-      const branch = branchR.stdout.trim();
-      if (branch && branch !== "HEAD") {
-        const hasRemote = yield* gitQuiet(["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], wt.path).pipe(
-          Effect.mapError((cause) => new DoctorCommandError({ cause })),
-        );
-        if (hasRemote) {
-          const cr = yield* procEffect(["git", "rev-list", "--count", `origin/${branch}..HEAD`], { cwd: wt.path });
-          if (cr.exitCode === 0) unpushed = parseInt(cr.stdout.trim(), 10) || 0;
-        } else unpushed = ahead;
-      }
+const checkSync = Effect.fnUntraced(function* (wt: Worktree) {
+  const r = yield* runProcess(["git", "rev-list", "--left-right", "--count", `origin/${config.branch.base}...HEAD`], { cwd: wt.path });
+  const trunk = `origin/${config.branch.base}`;
+  if (r.exitCode !== 0) return mkCheck("sync", "warn", `cannot compare to ${trunk}`);
+  const parts = r.stdout.trim().split(/\s+/);
+  const behind = parseInt(parts[0] ?? "0", 10);
+  const ahead = parseInt(parts[1] ?? "0", 10);
+  let unpushed = 0;
+  const upstreamR = yield* runProcess(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wt.path });
+  if (upstreamR.exitCode === 0) {
+    const cr = yield* runProcess(["git", "rev-list", "--count", "@{u}..HEAD"], { cwd: wt.path });
+    if (cr.exitCode === 0) unpushed = parseInt(cr.stdout.trim(), 10) || 0;
+  } else {
+    const branchR = yield* runProcess(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wt.path });
+    const branch = branchR.stdout.trim();
+    if (branch && branch !== "HEAD") {
+      const hasRemote = yield* gitQuiet(["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], wt.path);
+      if (hasRemote) {
+        const cr = yield* runProcess(["git", "rev-list", "--count", `origin/${branch}..HEAD`], { cwd: wt.path });
+        if (cr.exitCode === 0) unpushed = parseInt(cr.stdout.trim(), 10) || 0;
+      } else unpushed = ahead;
     }
-    const bits: string[] = [];
-    if (ahead) bits.push(`${ahead} ahead of ${trunk}`);
-    if (behind) bits.push(`${behind} behind ${trunk}`);
-    if (unpushed) bits.push(`${unpushed} unpushed`);
-    if (bits.length === 0) return mkCheck("sync", "ok", "up to date");
-    const status: CheckStatus = behind || unpushed ? "warn" : "info";
-    return mkCheck("sync", status, bits.join("; "));
+  }
+  const bits: string[] = [];
+  if (ahead) bits.push(`${ahead} ahead of ${trunk}`);
+  if (behind) bits.push(`${behind} behind ${trunk}`);
+  if (unpushed) bits.push(`${unpushed} unpushed`);
+  if (bits.length === 0) return mkCheck("sync", "ok", "up to date");
+  const status: CheckStatus = behind || unpushed ? "warn" : "info";
+  return mkCheck("sync", status, bits.join("; "));
+});
+
+function checkSstStage(wt: Worktree): Effect.Effect<Check, OperationError> {
+  return io.sync("sst stage", () => {
+    const stageFile = join(wt.path, ".sst", "stage");
+    if (!existsSync(stageFile)) return mkCheck("sst stage", "warn", "no .sst/stage pinned");
+    let actual = "";
+    try {
+      actual = readFileSync(stageFile, "utf8").trim();
+    } catch {
+      return mkCheck("sst stage", "warn", "cannot read .sst/stage");
+    }
+    const expected = computeStage(wt.slug);
+    if (actual === expected) return mkCheck("sst stage", "ok", `pinned to ${actual}`);
+    return mkCheck("sst stage", "warn", `stage=${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
   });
 }
 
-function checkSstStage(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
-  return syncEffect(() => {
-  const stageFile = join(wt.path, ".sst", "stage");
-  if (!existsSync(stageFile)) return mkCheck("sst stage", "warn", "no .sst/stage pinned");
-  let actual = "";
-  try {
-    actual = readFileSync(stageFile, "utf8").trim();
-  } catch {
-    return mkCheck("sst stage", "warn", "cannot read .sst/stage");
-  }
-  const expected = computeStage(wt.slug);
-  if (actual === expected) return mkCheck("sst stage", "ok", `pinned to ${actual}`);
-  return mkCheck("sst stage", "warn", `stage=${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
-  });
-}
-
-function checkSstDeploy(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
-  return syncEffect(() => {
-  if (!isOurStageDeployed(wt)) return mkCheck("sst deploy", "info", "not deployed");
-  try {
-    const st = statSync(join(wt.path, ".sst", "outputs.json"));
-    const age = (Date.now() - st.mtimeMs) / 1000;
-    return mkCheck("sst deploy", "info", `deployed (${humanAge(age)} ago)`);
-  } catch {
-    return mkCheck("sst deploy", "info", "deployed");
-  }
+function checkSstDeploy(wt: Worktree): Effect.Effect<Check, OperationError> {
+  return io.sync("sst deploy", () => {
+    if (!isOurStageDeployed(wt)) return mkCheck("sst deploy", "info", "not deployed");
+    try {
+      const st = statSync(join(wt.path, ".sst", "outputs.json"));
+      const age = (Date.now() - st.mtimeMs) / 1000;
+      return mkCheck("sst deploy", "info", `deployed (${humanAge(age)} ago)`);
+    } catch {
+      return mkCheck("sst deploy", "info", "deployed");
+    }
   });
 }
 /**
@@ -265,46 +257,46 @@ export function pnpmPhantomTopLevel(nm: string): { phantoms: string[]; drifted: 
   return { phantoms, drifted };
 }
 
-function checkNodeModules(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
-  return syncEffect(() => {
-  const pm = detectPackageManager(wt.path);
-  if (!pm) return mkCheck("node_modules", "info", "no JS package manager");
-  const nm = join(wt.path, "node_modules");
-  const missing = !existsSync(nm) || (pm.store !== null && !existsSync(join(nm, pm.store)));
-  if (missing) {
-    return mkCheck("node_modules", "warn", `not installed — run \`${pm.install}\``);
-  }
-  const stray = pm.store === ".pnpm" ? pnpmPhantomTopLevel(nm) : null;
-  if (stray && stray.drifted.length > 0) {
-    // `pnpm install` cannot clear this — it reports the tree up to date
-    // and leaves the top level as it found it. The directory has to go.
-    return mkCheck(
-      "node_modules",
-      "warn",
-      `${stray.drifted.length} of ${stray.phantoms.length} unmanaged top-level package(s) resolve to a version the lockfile does not have — \`rm -rf node_modules && ${pm.install}\``,
-      stray.drifted.slice(0, 8),
-    );
-  }
-  if (stray && stray.phantoms.length > 0) {
-    return mkCheck(
-      "node_modules",
-      "info",
-      `installed — ${stray.phantoms.length} unmanaged top-level package(s), none drifted yet`,
-    );
-  }
-  return mkCheck("node_modules", "ok", "installed");
+function checkNodeModules(wt: Worktree): Effect.Effect<Check, OperationError> {
+  return io.sync("node_modules", () => {
+    const pm = detectPackageManager(wt.path);
+    if (!pm) return mkCheck("node_modules", "info", "no JS package manager");
+    const nm = join(wt.path, "node_modules");
+    const missing = !existsSync(nm) || (pm.store !== null && !existsSync(join(nm, pm.store)));
+    if (missing) {
+      return mkCheck("node_modules", "warn", `not installed — run \`${pm.install}\``);
+    }
+    const stray = pm.store === ".pnpm" ? pnpmPhantomTopLevel(nm) : null;
+    if (stray && stray.drifted.length > 0) {
+      // `pnpm install` cannot clear this — it reports the tree up to date
+      // and leaves the top level as it found it. The directory has to go.
+      return mkCheck(
+        "node_modules",
+        "warn",
+        `${stray.drifted.length} of ${stray.phantoms.length} unmanaged top-level package(s) resolve to a version the lockfile does not have — \`rm -rf node_modules && ${pm.install}\``,
+        stray.drifted.slice(0, 8),
+      );
+    }
+    if (stray && stray.phantoms.length > 0) {
+      return mkCheck(
+        "node_modules",
+        "info",
+        `installed — ${stray.phantoms.length} unmanaged top-level package(s), none drifted yet`,
+      );
+    }
+    return mkCheck("node_modules", "ok", "installed");
   });
 }
 
-function checkLock(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
-  return syncEffect(() => {
-  const info = lockStatus(wt.slug);
-  if (!info) return mkCheck("lock", "ok", "none");
-  const label = lockLabel(info);
-  const pid = info.pid ?? "?";
-  const age = lockAge(info);
-  const suffix = age ? `, ${age} ago` : "";
-  return mkCheck("lock", "warn", `${label} (pid ${pid}${suffix})`);
+function checkLock(wt: Worktree): Effect.Effect<Check, OperationError> {
+  return io.sync("lock", () => {
+    const info = lockStatus(wt.slug);
+    if (!info) return mkCheck("lock", "ok", "none");
+    const label = lockLabel(info);
+    const pid = info.pid ?? "?";
+    const age = lockAge(info);
+    const suffix = age ? `, ${age} ago` : "";
+    return mkCheck("lock", "warn", `${label} (pid ${pid}${suffix})`);
   });
 }
 
@@ -318,49 +310,47 @@ function checkLock(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
  * fork base when one exists (stacked PRs target their parent), else
  * `[branch] base`.
  */
-function checkGhMergeBase(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
-  return Effect.gen(function* () {
-    if (!wt.branch) return mkCheck("gh merge base", "info", "no branch");
-    const expected = readWtState().slugs[wt.slug]?.baseBranch ?? config.branch.base;
-    const r = yield* procEffect(["git", "config", `branch.${wt.branch}.gh-merge-base`], { cwd: wt.path });
-    const actual = r.exitCode === 0 ? r.stdout.trim() : "";
-    if (actual === expected) return mkCheck("gh merge base", "ok", expected);
-    return mkCheck(
-      "gh merge base", "warn",
-      actual ? `set to ${actual}, expected ${expected}` : `unset — a bare \`gh pr create\` targets the repo default branch`,
-      [`fix: git -C ${wt.path} config branch.${wt.branch}.gh-merge-base ${expected}`],
-    );
-  });
+const checkGhMergeBase = Effect.fnUntraced(function* (wt: Worktree) {
+  if (!wt.branch) return mkCheck("gh merge base", "info", "no branch");
+  const expected = readWtState().slugs[wt.slug]?.baseBranch ?? config.branch.base;
+  const r = yield* runProcess(["git", "config", `branch.${wt.branch}.gh-merge-base`], { cwd: wt.path });
+  const actual = r.exitCode === 0 ? r.stdout.trim() : "";
+  if (actual === expected) return mkCheck("gh merge base", "ok", expected);
+  return mkCheck(
+    "gh merge base", "warn",
+    actual ? `set to ${actual}, expected ${expected}` : `unset — a bare \`gh pr create\` targets the repo default branch`,
+    [`fix: git -C ${wt.path} config branch.${wt.branch}.gh-merge-base ${expected}`],
+  );
+});
+
+const checkMerged = Effect.fnUntraced(function* (wt: Worktree) {
+  if (!wt.branch) return mkCheck("merged", "info", "no branch");
+  const trunk = `origin/${config.branch.base}`;
+  const merged = yield* branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path });
+  if (merged) return mkCheck("merged", "info", `contained in last-fetched ${trunk}`);
+  return mkCheck("merged", "ok", `not in last-fetched ${trunk}`);
+});
+
+/** Best-effort JSON parse — `gh`'s stdout is untrusted, and a malformed
+ *  body is a "warn", not a command failure. */
+function parseJsonOrNull(text: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
-function checkMerged(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
-  return Effect.gen(function* () {
-    if (!wt.branch) return mkCheck("merged", "info", "no branch");
-    const trunk = `origin/${config.branch.base}`;
-    const merged = yield* branchIsMerged({ slug: wt.slug, branch: wt.branch, path: wt.path }).pipe(
-      Effect.mapError((cause) => new DoctorCommandError({ cause })),
-    );
-    if (merged) return mkCheck("merged", "info", `contained in last-fetched ${trunk}`);
-    return mkCheck("merged", "ok", `not in last-fetched ${trunk}`);
-  });
-}
-
-function checkPr(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
-  return Effect.gen(function* () {
+const checkPr = Effect.fnUntraced(function* (wt: Worktree) {
   if (!wt.branch) return mkCheck("pr", "info", "no branch");
-  const which = yield* procEffect(["which", "gh"]);
+  const which = yield* runProcess(["which", "gh"]);
   if (which.exitCode !== 0) return mkCheck("pr", "info", "gh not installed");
-  const r = yield* procEffect(["gh", "pr", "view", wt.branch, "--json", "number,state,isDraft,url,statusCheckRollup"], {
+  const r = yield* runProcess(["gh", "pr", "view", wt.branch, "--json", "number,state,isDraft,url,statusCheckRollup"], {
     cwd: wt.path,
     timeoutMs: 10_000,
   });
   if (r.exitCode !== 0) return mkCheck("pr", "info", "no PR");
-  const data = yield* Effect.try({
-    try: () => JSON.parse(r.stdout) as Record<string, unknown>,
-    catch: (cause) => new DoctorCommandError({ cause }),
-  }).pipe(
-    Effect.catch(() => Effect.succeed(null)),
-  );
+  const data = parseJsonOrNull(r.stdout);
   if (data === null) return mkCheck("pr", "warn", "gh returned non-JSON");
   const state = (data.state as string) || "UNKNOWN";
   const draft = Boolean(data.isDraft);
@@ -380,16 +370,15 @@ function checkPr(wt: Worktree): Effect.Effect<Check, DoctorCommandError> {
   else if (pending.length) status = "info";
   else if (state === "MERGED") status = "ok";
   return mkCheck("pr", status, parts.join(" "));
-  });
-}
+});
 
 /**
  * Machine-level banner: are wt's distributed agent skills/instructions
  * current? Pure fs reads; guarded so a skills-system bug can't break
  * doctor's actual job.
  */
-function checkSkillsFreshness(): Effect.Effect<Check, DoctorCommandError> {
-  return syncEffect(() => {
+function checkSkillsFreshness(): Effect.Effect<Check, never, never> {
+  return io.sync("agent skills", () => {
     const reports = buildReports(detectTargets(), readSkillsMemory());
     const pending = reports.filter(reportIsActionable);
     if (pending.length === 0) return mkCheck("agent skills", "ok", "up to date");
@@ -413,68 +402,66 @@ function checkSkillsFreshness(): Effect.Effect<Check, DoctorCommandError> {
  * One selftest, not one per session: the anchors are a property of the
  * Claude Code build, so the first live session answers for all of them.
  */
-function checkMessageTransport(): Effect.Effect<Check, DoctorCommandError> {
-  return Effect.gen(function* () {
-    const entries = [...(yield* listSessions()).claude];
-    if (entries.length === 0) return mkCheck("messaging", "ok", "no live claude sessions");
-    const names = entries.map((e) => claudeTmuxName(e.slug, e.name));
-    // Probe every session, not a representative one: a socket FILE
-    // proves nothing (a restarted session leaves a stale one behind),
-    // so reporting "working across N" off a single probe would vouch
-    // for sessions never connected to.
-    const probes = yield* Effect.all(
-      names.map((name) => claudeInjectSelftest(name).pipe(Effect.map((probe) => ({ name, probe })))),
-      { concurrency: "unbounded" },
-    );
-    const bad = probes.filter((p) => !p.probe.ok);
-    if (bad.length === 0) {
-      return mkCheck("messaging", "ok", `prompt injection working across ${names.length} sessions`);
-    }
-    // Machine-level causes first: they explain 100% of sessions, and
-    // every per-session remedy below is wasted breath while one holds.
-    // A leftover shim strips BUN_INSPECT at launch, so a fresh session
-    // fails exactly like an old one and "restart them from wt" — what
-    // this check used to say unconditionally — is guaranteed not to
-    // work. That is not a hypothetical: it went unnoticed for a day
-    // because "6 of 6" was reported as six per-session problems.
-    const stale = staleShims();
-    if (stale.length > 0) {
-      return mkCheck(
-        "messaging",
-        "err",
-        `no session can bind an inspector socket: a stale ${stale.join(", ")} shim in ${shimDir()} strips BUN_INSPECT at launch — delete it (wt regenerates this directory on the next session spawn). Restarting sessions will not help.`,
-      );
-    }
-    // An anchor break is a property of the Claude Code build, so it
-    // takes out EVERY session at once; a restart-shaped failure hits
-    // individual ones. Distinguishing them is the whole diagnostic
-    // value here, and blaming the anchors for one stale socket would
-    // send the reader to rewrite the injector for nothing.
-    const kinds = new Set(bad.map((p) => (p.probe.ok ? "" : p.probe.kind)));
-    if (bad.length === names.length && (kinds.has("not-ready") || kinds.has("failed"))) {
-      const first = bad[0]!;
-      return mkCheck(
-        "messaging",
-        "err",
-        `prompt injection failed on all ${names.length} sessions (${first.name}: ${first.probe.ok ? "" : first.probe.reason}) — Claude Code may have moved the injector's anchors; see \`wt claude selftest\``,
-      );
-    }
-    // Only reached with no machine-level cause standing, so a restart
-    // is genuinely the remedy — except when it covers EVERY session,
-    // where "all of them, independently" is the weaker explanation and
-    // saying so beats sending the reader round the restart loop again.
-    const all = bad.length === names.length;
+const checkMessageTransport = Effect.fnUntraced(function* () {
+  const entries = [...(yield* listSessions()).claude];
+  if (entries.length === 0) return mkCheck("messaging", "ok", "no live claude sessions");
+  const names = entries.map((e) => claudeTmuxName(e.slug, e.name));
+  // Probe every session, not a representative one: a socket FILE
+  // proves nothing (a restarted session leaves a stale one behind),
+  // so reporting "working across N" off a single probe would vouch
+  // for sessions never connected to.
+  const probes = yield* Effect.all(
+    names.map((name) => claudeInjectSelftest(name).pipe(Effect.map((probe) => ({ name, probe })))),
+    { concurrency: "unbounded" },
+  );
+  const bad = probes.filter((p) => !p.probe.ok);
+  if (bad.length === 0) {
+    return mkCheck("messaging", "ok", `prompt injection working across ${names.length} sessions`);
+  }
+  // Machine-level causes first: they explain 100% of sessions, and
+  // every per-session remedy below is wasted breath while one holds.
+  // A leftover shim strips BUN_INSPECT at launch, so a fresh session
+  // fails exactly like an old one and "restart them from wt" — what
+  // this check used to say unconditionally — is guaranteed not to
+  // work. That is not a hypothetical: it went unnoticed for a day
+  // because "6 of 6" was reported as six per-session problems.
+  const stale = staleShims();
+  if (stale.length > 0) {
     return mkCheck(
       "messaging",
-      "warn",
-      `${bad.length} of ${names.length} claude sessions are typed at instead (${bad.map((p) => p.name).join(", ")}) — restart them from wt${
-        all
-          ? ", and if a fresh session still fails, the cause is not per-session: check `wt doctor` again after it starts"
-          : ""
-      }`,
+      "err",
+      `no session can bind an inspector socket: a stale ${stale.join(", ")} shim in ${shimDir()} strips BUN_INSPECT at launch — delete it (wt regenerates this directory on the next session spawn). Restarting sessions will not help.`,
     );
-  });
-}
+  }
+  // An anchor break is a property of the Claude Code build, so it
+  // takes out EVERY session at once; a restart-shaped failure hits
+  // individual ones. Distinguishing them is the whole diagnostic
+  // value here, and blaming the anchors for one stale socket would
+  // send the reader to rewrite the injector for nothing.
+  const kinds = new Set(bad.map((p) => (p.probe.ok ? "" : p.probe.kind)));
+  if (bad.length === names.length && (kinds.has("not-ready") || kinds.has("failed"))) {
+    const first = bad[0]!;
+    return mkCheck(
+      "messaging",
+      "err",
+      `prompt injection failed on all ${names.length} sessions (${first.name}: ${first.probe.ok ? "" : first.probe.reason}) — Claude Code may have moved the injector's anchors; see \`wt claude selftest\``,
+    );
+  }
+  // Only reached with no machine-level cause standing, so a restart
+  // is genuinely the remedy — except when it covers EVERY session,
+  // where "all of them, independently" is the weaker explanation and
+  // saying so beats sending the reader round the restart loop again.
+  const all = bad.length === names.length;
+  return mkCheck(
+    "messaging",
+    "warn",
+    `${bad.length} of ${names.length} claude sessions are typed at instead (${bad.map((p) => p.name).join(", ")}) — restart them from wt${
+      all
+        ? ", and if a fresh session still fails, the cause is not per-session: check `wt doctor` again after it starts"
+        : ""
+    }`,
+  );
+});
 
 /**
  * Is `wt` reachable as a command, from a SCRIPT?
@@ -491,70 +478,72 @@ function checkMessageTransport(): Effect.Effect<Check, DoctorCommandError> {
  * `PATH` is resolved manually rather than via `command -v`, because
  * this process's own shell may have the alias and answer misleadingly.
  */
-function checkWtOnPath(): Effect.Effect<Check, DoctorCommandError> {
-  return syncEffect(() => {
-  const launcher = join(import.meta.dir, "..", "..", "..", "bin", "wt");
-  const dirs = (process.env.PATH ?? "").split(":").filter(Boolean);
-  for (const dir of dirs) {
-    const candidate = join(dir, "wt");
-    try {
-      if (!existsSync(candidate)) continue;
-      // Follow the link: a `wt` on PATH belonging to some other install
-      // is worse than none, since scripts would silently drive it.
-      const real = realpathSync(candidate);
-      if (real === realpathSync(launcher)) {
-        return mkCheck("wt on PATH", "ok", candidate);
+function checkWtOnPath(): Effect.Effect<Check, OperationError> {
+  return io.sync("wt on PATH", () => {
+    const launcher = join(import.meta.dir, "..", "..", "..", "bin", "wt");
+    const dirs = (process.env.PATH ?? "").split(":").filter(Boolean);
+    for (const dir of dirs) {
+      const candidate = join(dir, "wt");
+      try {
+        if (!existsSync(candidate)) continue;
+        // Follow the link: a `wt` on PATH belonging to some other install
+        // is worse than none, since scripts would silently drive it.
+        const real = realpathSync(candidate);
+        if (real === realpathSync(launcher)) {
+          return mkCheck("wt on PATH", "ok", candidate);
+        }
+        return mkCheck("wt on PATH", "warn", `${candidate} resolves to ${real}, not this clone's ${launcher}`);
+      } catch {
+        /* unreadable PATH entry — keep looking */
       }
-      return mkCheck("wt on PATH", "warn", `${candidate} resolves to ${real}, not this clone's ${launcher}`);
-    } catch {
-      /* unreadable PATH entry — keep looking */
     }
-  }
-  const target =
-    dirs.find((d) => d === join(homedir(), ".local", "bin")) ??
-    dirs.find((d) => d.startsWith(homedir())) ??
-    join(homedir(), ".local", "bin");
-  // The message carries the fix because this check renders as a BANNER
-  // in the common (summary) path, and banners print one line — detail
-  // is only seen in the per-worktree report.
-  return mkCheck(
-    "wt on PATH",
-    "warn",
-    `not on PATH — scripts can't call \`wt\`; fix: ln -s ${launcher} ${join(target, "wt")}`,
-    [
-      "a shell alias satisfies interactive use but does not exist inside a",
-      "script file, so a .sh looping over worktrees dies partway with",
-      "`wt: command not found` and leaves the fleet half-updated.",
-    ],
-  );
+    const target =
+      dirs.find((d) => d === join(homedir(), ".local", "bin")) ??
+      dirs.find((d) => d.startsWith(homedir())) ??
+      join(homedir(), ".local", "bin");
+    // The message carries the fix because this check renders as a BANNER
+    // in the common (summary) path, and banners print one line — detail
+    // is only seen in the per-worktree report.
+    return mkCheck(
+      "wt on PATH",
+      "warn",
+      `not on PATH — scripts can't call \`wt\`; fix: ln -s ${launcher} ${join(target, "wt")}`,
+      [
+        "a shell alias satisfies interactive use but does not exist inside a",
+        "script file, so a .sh looping over worktrees dies partway with",
+        "`wt: command not found` and leaves the fleet half-updated.",
+      ],
+    );
   });
 }
 
-function checkMainClone(): Effect.Effect<Check, DoctorCommandError> {
+function checkMainClone(): Effect.Effect<Check, ProcError> {
   const main = config.paths.mainClone;
   const base = config.branch.base;
-  return procEffect(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], {
+  return runProcess(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], {
     cwd: main,
-  }).pipe(Effect.map((r) => {
-    if (r.exitCode !== 0) {
-    return mkCheck("main clone", "err", `detached HEAD in ${main} — should be on ${base}`);
-    }
-    const head = r.stdout.trim();
-    if (head !== base) {
-    return mkCheck(
-      "main clone",
-      "err",
-      `on branch ${JSON.stringify(head)} — should be on ${base}. ` +
-        `Move that work into a worktree (\`wt new ${head}\`) and ` +
-        `\`git -C ${main} checkout ${base}\`.`,
-    );
-    }
-    return mkCheck("main clone", "ok", `on ${base}`);
-  }));
+  }).pipe(
+    Effect.map((r) => {
+      if (r.exitCode !== 0) {
+        return mkCheck("main clone", "err", `detached HEAD in ${main} — should be on ${base}`);
+      }
+      const head = r.stdout.trim();
+      if (head !== base) {
+        return mkCheck(
+          "main clone",
+          "err",
+          `on branch ${JSON.stringify(head)} — should be on ${base}. ` +
+            `Move that work into a worktree (\`wt new ${head}\`) and ` +
+            `\`git -C ${main} checkout ${base}\`.`,
+        );
+      }
+      return mkCheck("main clone", "ok", `on ${base}`);
+    }),
+  );
 }
 
-function runAllChecks(wt: Worktree, includePr: boolean): Effect.Effect<Check[], DoctorCommandError> {
-  const tasks: Effect.Effect<Check, DoctorCommandError>[] = [
+function runAllChecks(wt: Worktree, includePr: boolean): Effect.Effect<Check[], ProcError | OperationError> {
+  const tasks: Effect.Effect<Check, ProcError | OperationError>[] = [
     checkWorkingTree(wt),
     checkSync(wt),
     // Gated on the integration, not merely on `.sst/stage` being
@@ -593,8 +582,7 @@ function renderBanner(c: Check): void {
   console.log(`  ${MARKERS[c.status]}  ${bold(c.name.padEnd(14))} ${c.message}`);
 }
 
-function reportOne(wt: Worktree, jsonOut: boolean): Effect.Effect<void, DoctorCommandError> {
-  return Effect.gen(function* () {
+const reportOne = Effect.fnUntraced(function* (wt: Worktree, jsonOut: boolean) {
   const [mainBanner, skillsBanner, pathBanner, msgBanner, checks] = yield* Effect.all([
     jsonOut ? Effect.succeed(null) : checkMainClone(),
     jsonOut ? Effect.succeed(null) : checkSkillsFreshness(),
@@ -623,14 +611,12 @@ function reportOne(wt: Worktree, jsonOut: boolean): Effect.Effect<void, DoctorCo
   // anything when `[deploy.sst]` is configured. Printing it otherwise
   // advertises a preview environment that does not exist.
   if (config.sst) console.log(`     ${dim(`stage: ${wt.stage}`)}`);
-  });
-}
+});
 
-function reportSummary(wts: Worktree[], jsonOut: boolean): Effect.Effect<void, DoctorCommandError> {
-  return Effect.gen(function* () {
+const reportSummary = Effect.fnUntraced(function* (wts: Worktree[], jsonOut: boolean) {
   const skipPrs = jsonOut;
   const [prs, mainCheck, skillsCheck, pathCheck, msgCheck, allChecks] = yield* Effect.all([
-    skipPrs ? Effect.succeed(new Map()) : fetchPrs().pipe(Effect.mapError((cause) => new DoctorCommandError({ cause }))),
+    skipPrs ? Effect.succeed(new Map()) : fetchPrs(),
     jsonOut ? Effect.succeed(null) : checkMainClone(),
     jsonOut ? Effect.succeed(null) : checkSkillsFreshness(),
     jsonOut ? Effect.succeed(null) : checkWtOnPath(),
@@ -673,8 +659,7 @@ function reportSummary(wts: Worktree[], jsonOut: boolean): Effect.Effect<void, D
     },
   ]);
   console.log(table);
-  });
-}
+});
 
 type Flags = { slug?: string; all: boolean; json: boolean };
 
@@ -693,8 +678,7 @@ function parse(argv: string[]): Flags | { error: string } {
   return { slug, all, json };
 }
 
-function runEffectProgram(argv: string[]): Effect.Effect<number, DoctorCommandError> {
-  return Effect.gen(function* () {
+export const run = Effect.fn("wt doctor")(function* (argv: string[]) {
   if (hasHelpFlag(argv)) {
     console.log(USAGE);
     return 0;
@@ -704,7 +688,7 @@ function runEffectProgram(argv: string[]): Effect.Effect<number, DoctorCommandEr
     console.error(red(parsed.error));
     return 2;
   }
-  const wtsAll = (yield* listWorktrees().pipe(Effect.mapError((cause) => new DoctorCommandError({ cause })))).filter((w) => !w.isMain);
+  const wtsAll = (yield* listWorktrees()).filter((w) => !w.isMain);
   if (wtsAll.length === 0) {
     console.log(dim("No worktrees."));
     return 0;
@@ -725,13 +709,4 @@ function runEffectProgram(argv: string[]): Effect.Effect<number, DoctorCommandEr
   }
   yield* reportSummary(wtsAll, parsed.json);
   return 0;
-  });
-}
-
-class DoctorCommandError extends Data.TaggedError("DoctorCommandError")<{
-  readonly cause: unknown;
-}> {}
-
-export function run(argv: string[]): Effect.Effect<number, DoctorCommandError> {
-  return runEffectProgram(argv);
-}
+});

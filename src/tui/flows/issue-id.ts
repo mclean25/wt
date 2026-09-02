@@ -22,16 +22,16 @@
  * re-supplied it the moment the override went away. `wt issue <slug>
  * --clear-id` is the way back to the derived answer.
  */
+import { operationErrors } from "../../core/errors.ts";
 import { ISSUE_ID_RE, resolveIssueId } from "../../core/issue-tracker.ts";
+import { forkReported } from "../effect-boundary.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class IssueIdFlowError extends Data.TaggedError("IssueIdFlowError")<{
-  cause: unknown;
-}> {}
+const io = operationErrors("issue id flow");
 
 export type IssueIdFlowCtx = {
   current: WorktreeRow | undefined;
@@ -86,11 +86,8 @@ export function useIssueIdFlow(ctx: IssueIdFlowCtx) {
       // exactly the rows whose id you would want to remove: the ones
       // carrying it in the slug. `wt issue <slug> --clear-id` is the
       // way back to the derived value.
-      Effect.runFork(
-        Effect.tryPromise({
-          try: () => setIssueId(slug, ""),
-          catch: (cause) => new IssueIdFlowError({ cause }),
-        }).pipe(
+      forkReported(
+        io.promise("clear issue id", () => setIssueId(slug, "")).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
               const parsed = resolveIssueId(slug, null);
@@ -103,16 +100,8 @@ export function useIssueIdFlow(ctx: IssueIdFlowCtx) {
               );
             }),
           ),
-          Effect.catch((error) =>
-            Effect.sync(() => {
-              const message =
-                error.cause instanceof Error
-                  ? error.cause.message
-                  : String(error.cause);
-              toast(`clear issue id failed: ${message}`, theme.err, 3000);
-            }),
-          ),
         ),
+        (error) => toast(`clear issue id failed: ${error.message}`, theme.err, 3000),
       );
       return;
     }
@@ -127,24 +116,13 @@ export function useIssueIdFlow(ctx: IssueIdFlowCtx) {
       );
       return;
     }
-    Effect.runFork(
-      Effect.tryPromise({
-        try: () => setIssueId(slug, id),
-        catch: (cause) => new IssueIdFlowError({ cause }),
-      }).pipe(
+    forkReported(
+      io.promise("set issue id", () => setIssueId(slug, id)).pipe(
         Effect.tap(() =>
           Effect.sync(() => toast(`${slug} → ${id}`, theme.info, 2000)),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() => {
-            const message =
-              error.cause instanceof Error
-                ? error.cause.message
-                : String(error.cause);
-            toast(`set issue id failed: ${message}`, theme.err, 3000);
-          }),
-        ),
       ),
+      (error) => toast(`set issue id failed: ${error.message}`, theme.err, 3000),
     );
   }
 

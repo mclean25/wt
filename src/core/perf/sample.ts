@@ -20,7 +20,7 @@
  * `cores * 100`.
  */
 import { cpus, freemem, loadavg, totalmem } from "node:os";
-import { Data, Effect } from "effect";
+import { Clock, Data, Effect } from "effect";
 
 import { createLogger } from "../logger.ts";
 import { run } from "../proc.ts";
@@ -170,7 +170,7 @@ const HELPER_TIMEOUT_MS = 4_000;
  * conflating them renders a broken sampler as a reassuringly idle
  * machine — the exact opposite of the truth it exists to show.
  */
-function readLinesEffect(
+function readLines(
   cmd: string[],
   signal?: AbortSignal,
 ): Effect.Effect<string[] | null> {
@@ -197,49 +197,47 @@ function readLinesEffect(
  * successful-but-empty parse means the output shape wasn't what we
  * expect (a non-macOS `ps`, say) and is treated as failure too.
  */
-function sampleProcessesEffect(
+const sampleProcesses = Effect.fnUntraced(function* (
   signal?: AbortSignal,
-): Effect.Effect<RawProc[], PerfSampleError> {
-  return Effect.gen(function* () {
-    const lines = yield* readLinesEffect(
-      ["ps", "-Ao", "pid=,ppid=,pcpu=,rss=,etime=,args="],
-      signal,
-    );
-    if (lines === null) {
-      return yield* new PerfSampleError({
-        cause: new Error("ps failed — cannot sample processes"),
-      });
-    }
-    const rows: RawProc[] = [];
-    for (const line of lines) {
-      const m = PS_LINE.exec(line);
-      if (!m) continue;
-      const command = m[6]!.trim();
-      if (SELF_RE.test(command)) continue;
-      rows.push({
-        pid: Number(m[1]),
-        ppid: Number(m[2]),
-        cpu: Number(m[3]),
-        rssMb: Number(m[4]) / 1024,
-        etime: m[5]!,
-        command,
-      });
-    }
-    if (rows.length === 0) {
-      return yield* new PerfSampleError({
-        cause: new Error("ps returned no parseable processes"),
-      });
-    }
-    return rows;
-  });
-}
+) {
+  const lines = yield* readLines(
+    ["ps", "-Ao", "pid=,ppid=,pcpu=,rss=,etime=,args="],
+    signal,
+  );
+  if (lines === null) {
+    return yield* new PerfSampleError({
+      cause: new Error("ps failed — cannot sample processes"),
+    });
+  }
+  const rows: RawProc[] = [];
+  for (const line of lines) {
+    const m = PS_LINE.exec(line);
+    if (!m) continue;
+    const command = m[6]!.trim();
+    if (SELF_RE.test(command)) continue;
+    rows.push({
+      pid: Number(m[1]),
+      ppid: Number(m[2]),
+      cpu: Number(m[3]),
+      rssMb: Number(m[4]) / 1024,
+      etime: m[5]!,
+      command,
+    });
+  }
+  if (rows.length === 0) {
+    return yield* new PerfSampleError({
+      cause: new Error("ps returned no parseable processes"),
+    });
+  }
+  return rows;
+});
 
 /** pane pid → tmux session name, for the wt-private server. Empty when
  *  the server isn't running (no sessions yet, or it was killed) — that
  *  degrades the overlay to "no sessions", which is honest, rather than
  *  failing the whole snapshot. */
-function tmuxPanePidsEffect(signal?: AbortSignal): Effect.Effect<Map<number, string>> {
-  return readLinesEffect(
+function tmuxPanePids(signal?: AbortSignal): Effect.Effect<Map<number, string>> {
+  return readLines(
     [
       "tmux",
       "-L",
@@ -264,8 +262,8 @@ function tmuxPanePidsEffect(signal?: AbortSignal): Effect.Effect<Map<number, str
   );
 }
 
-function tmuxServerPidEffect(signal?: AbortSignal): Effect.Effect<number | null> {
-  return readLinesEffect(
+function tmuxServerPid(signal?: AbortSignal): Effect.Effect<number | null> {
+  return readLines(
     ["tmux", "-L", TMUX_SOCKET, "display-message", "-p", "#{pid}"],
     signal,
   ).pipe(
@@ -352,7 +350,7 @@ export function isOrphanedWtInstance(
  * costs a look (and now names the daemon it found), while a hidden one
  * is the leak this whole list exists to surface.
  */
-function launchdOwnedWtPidsEffect(
+function launchdOwnedWtPids(
   signal?: AbortSignal,
 ): Effect.Effect<Set<number>> {
   return run(["launchctl", "list"], { timeoutMs: 5_000, signal }).pipe(
@@ -412,8 +410,8 @@ export function classifyProcess(command: string): PerfCategory {
  * Returns null when `vm_stat` isn't parseable; the caller falls back to
  * the `os` numbers rather than dropping the row.
  */
-function macMemoryUsedMbEffect(signal?: AbortSignal): Effect.Effect<number | null> {
-  return readLinesEffect(["vm_stat"], signal).pipe(
+function macMemoryUsedMb(signal?: AbortSignal): Effect.Effect<number | null> {
+  return readLines(["vm_stat"], signal).pipe(
     Effect.map((lines) => {
       if (lines === null || lines.length === 0) return null;
       const pageSize = Number(/page size of (\d+) bytes/.exec(lines[0] ?? "")?.[1]);
@@ -517,6 +515,7 @@ export type SamplePerfOpts = {
  * still answers the system-level half of the question.
  */
 function assemblePerfSnapshot(
+  sampledAt: number,
   procs: RawProc[],
   panePids: Map<number, string>,
   serverPid: number | null,
@@ -581,7 +580,7 @@ function assemblePerfSnapshot(
   const memTotalMb = totalmem() / 1024 / 1024;
 
   return {
-    sampledAt: Date.now(),
+    sampledAt,
     cores: cpus().length,
     loadAvg: [one ?? 0, five ?? 0, fifteen ?? 0] as const,
     memTotalMb,
@@ -615,14 +614,16 @@ export function samplePerf(
   // A process that exits in that window can be mis-attributed for one sample;
   // the next two-second tick self-corrects without serializing shell-outs.
   return Effect.all({
-    procs: sampleProcessesEffect(signal),
-    panePids: tmuxPanePidsEffect(signal),
-    serverPid: tmuxServerPidEffect(signal),
-    memUsedMb: macMemoryUsedMbEffect(signal),
-    ownedPids: launchdOwnedWtPidsEffect(signal),
+    sampledAt: Clock.currentTimeMillis,
+    procs: sampleProcesses(signal),
+    panePids: tmuxPanePids(signal),
+    serverPid: tmuxServerPid(signal),
+    memUsedMb: macMemoryUsedMb(signal),
+    ownedPids: launchdOwnedWtPids(signal),
   }, { concurrency: "unbounded" }).pipe(
-    Effect.map(({ procs, panePids, serverPid, memUsedMb, ownedPids }) =>
+    Effect.map(({ sampledAt, procs, panePids, serverPid, memUsedMb, ownedPids }) =>
       assemblePerfSnapshot(
+        sampledAt,
         procs,
         panePids,
         serverPid,

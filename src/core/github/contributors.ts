@@ -1,4 +1,4 @@
-import { Clock, Effect } from "effect";
+import { Clock, DateTime, Effect } from "effect";
 
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
@@ -18,14 +18,13 @@ const ACTIVE_AUTHORS_MAX_PAGES = 5; // ≈ up to 500 commits
  * empty set on failure; callers should treat empty as "don't filter"
  * rather than "everyone is inactive".
  */
-function fetchActiveCommitAuthorsEffect(
+const fetchActiveCommitAuthors = Effect.fnUntraced(function* (
   slug: string,
   now: number,
   signal?: AbortSignal,
-): Effect.Effect<Set<string>> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<Set<string>> {
   const empty = new Set<string>();
-  const since = new Date(now - CONTRIB_RECENCY_MS).toISOString();
+  const since = DateTime.formatIso(DateTime.makeUnsafe(now - CONTRIB_RECENCY_MS));
   const authors = new Set<string>();
   for (let page = 1; page <= ACTIVE_AUTHORS_MAX_PAGES; page++) {
     const r = yield* run(
@@ -60,8 +59,7 @@ function fetchActiveCommitAuthorsEffect(
     if (arr.length < 100) break;
   }
   return authors;
-  });
-}
+});
 
 /**
  * Fetch the top-100 most-active human contributors for the repo via
@@ -79,59 +77,57 @@ function fetchActiveCommitAuthorsEffect(
  * the recency check fails (but contributors succeeded), we return
  * the unfiltered contributors so the picker isn't empty.
  */
-export function fetchRepoContributors(
-  signal?: AbortSignal,
-): Effect.Effect<Contributor[]> {
-  return Effect.gen(function* () {
-  if (!(yield* hasGh())) return [];
-  const slug = yield* repoSlug();
-  if (!slug) return [];
-  const now = yield* Clock.currentTimeMillis;
-  const [contribRes, activeAuthors] = yield* Effect.all([
-    run(["gh", "api", `repos/${slug}/contributors?per_page=100`], {
-      cwd: config.paths.mainClone,
-      timeoutMs: 15_000,
-      signal,
-    }).pipe(Effect.catch(() => Effect.succeed(null))),
-    fetchActiveCommitAuthorsEffect(slug, now, signal),
-  ], { concurrency: 2 });
-  if (contribRes === null) return [];
-  if (contribRes.exitCode !== 0) {
-    log.error("contributors fetch failed", {
-      stderr: contribRes.stderr.slice(0, 200),
-      exitCode: contribRes.exitCode,
-    });
-    return [];
-  }
-  const arr = yield* Effect.try(() => JSON.parse(contribRes.stdout) as Array<{
-    login?: string;
-    type?: string;
-    contributions?: number;
-  }>).pipe(
-    Effect.catch((err) => {
-      log.error(err instanceof Error ? err : String(err), {
-        stdout: contribRes.stdout.slice(0, 200),
+export const fetchRepoContributors = Effect.fn("fetchRepoContributors")(
+  function* (signal?: AbortSignal): Effect.fn.Return<Contributor[]> {
+    if (!(yield* hasGh())) return [];
+    const slug = yield* repoSlug();
+    if (!slug) return [];
+    const now = yield* Clock.currentTimeMillis;
+    const [contribRes, activeAuthors] = yield* Effect.all([
+      run(["gh", "api", `repos/${slug}/contributors?per_page=100`], {
+        cwd: config.paths.mainClone,
+        timeoutMs: 15_000,
+        signal,
+      }).pipe(Effect.catch(() => Effect.succeed(null))),
+      fetchActiveCommitAuthors(slug, now, signal),
+    ], { concurrency: 2 });
+    if (contribRes === null) return [];
+    if (contribRes.exitCode !== 0) {
+      log.error("contributors fetch failed", {
+        stderr: contribRes.stderr.slice(0, 200),
+        exitCode: contribRes.exitCode,
       });
-      return Effect.succeed(null);
-    }),
-  );
-  if (!arr) return [];
-  const out: Contributor[] = [];
-  for (const c of arr) {
-    if (!c.login) continue;
-    // GitHub flags bots with `type: "Bot"`, but some apps slip
-    // through as "User" with a `[bot]` login suffix.
-    if (c.type === "Bot") continue;
-    if (c.login.endsWith("[bot]")) continue;
-    // If we have an active-authors set, require membership; otherwise
-    // fall back to unfiltered so a recency-check failure doesn't empty
-    // the picker.
-    if (activeAuthors.size > 0 && !activeAuthors.has(c.login)) continue;
-    out.push({ login: c.login, contributions: c.contributions ?? 0 });
-  }
-  return out;
-  });
-}
+      return [];
+    }
+    const arr = yield* Effect.try(() => JSON.parse(contribRes.stdout) as Array<{
+      login?: string;
+      type?: string;
+      contributions?: number;
+    }>).pipe(
+      Effect.catch((err) => {
+        log.error(err instanceof Error ? err : String(err), {
+          stdout: contribRes.stdout.slice(0, 200),
+        });
+        return Effect.succeed(null);
+      }),
+    );
+    if (!arr) return [];
+    const out: Contributor[] = [];
+    for (const c of arr) {
+      if (!c.login) continue;
+      // GitHub flags bots with `type: "Bot"`, but some apps slip
+      // through as "User" with a `[bot]` login suffix.
+      if (c.type === "Bot") continue;
+      if (c.login.endsWith("[bot]")) continue;
+      // If we have an active-authors set, require membership; otherwise
+      // fall back to unfiltered so a recency-check failure doesn't empty
+      // the picker.
+      if (activeAuthors.size > 0 && !activeAuthors.has(c.login)) continue;
+      out.push({ login: c.login, contributions: c.contributions ?? 0 });
+    }
+    return out;
+  },
+);
 
 export function fetchRepoContributorsPromise(
   signal?: AbortSignal,

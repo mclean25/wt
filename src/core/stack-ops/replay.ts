@@ -8,11 +8,11 @@ import {
   rebaseInProgress,
   revParse,
 } from "../git.ts";
-import { run } from "../proc.ts";
-import { replayStepEffect, restackEngine } from "./engine.ts";
+import { run, type ProcError } from "../proc.ts";
+import { restackEngine, type RestackEngineError } from "./engine.ts";
 import { resolveChain, type ChainStep, type RestackChain } from "./chain.ts";
 import { advanceBaseAnchor } from "../wtstate.ts";
-import { fetchOrigin, worktreeHasTrackedChanges } from "../worktree.ts";
+import { fetchOrigin, worktreeHasTrackedChanges, type WorktreeError } from "../worktree.ts";
 import {
   log,
   retargetIfNeeded,
@@ -20,7 +20,7 @@ import {
   type Logger,
   withLockedChain,
 } from "./shared.ts";
-import { reconcileStack } from "./reconcile.ts";
+import { reconcileStack, type StackReconcileError } from "./reconcile.ts";
 import { causeMessage } from "../errors.ts";
 
 // ---------- reconcile / replay / rebase ----------
@@ -48,6 +48,15 @@ export class StackReplayError extends Data.TaggedError("StackReplayError")<{
     return `${this.operation}: ${causeMessage(this.cause)}`;
   }
 }
+
+/** Internal signal: a chain member's preflight check (or Pass-1 anchor
+ *  resolution) blocks the whole replay. Carries the exact `RebaseResult`
+ *  the caller returns; never escapes `replayStackLocked`. Run
+ *  concurrently via `Effect.forEach`, so this is what lets the first
+ *  member to fail interrupt the rest rather than waiting for all of them. */
+class ReplayPreflightBlocked extends Data.TaggedError("ReplayPreflightBlocked")<{
+  readonly result: RebaseResult;
+}> {}
 
 const replayError = (operation: string) => (cause: unknown) =>
   cause instanceof StackReplayError
@@ -80,12 +89,11 @@ const rebaseResult = (result: RebaseResult): RebaseResult => result;
  * a surviving sibling safe while a merged member is still on disk, and
  * makes the automation pre-clean's dispatch-then-restack ordering benign.
  */
-export function rebaseStack(
+export const rebaseStack = Effect.fn("rebaseStack")(function* (
   branch: string,
   opts: RebaseOptions,
   onLog: Logger,
-): Effect.Effect<RebaseResult, StackReplayError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<RebaseResult, WorktreeError | StackReconcileError | StackReplayError> {
   const trunk = opts.onto ?? config.branch.base;
   const pre = yield* resolveChain(branch);
   const landed = yield* reconcileStack(branch, trunk, onLog);
@@ -115,10 +123,7 @@ export function rebaseStack(
     });
   }
   return rebaseResult({ ok: true, output: outputs.join("; ") });
-  }).pipe(
-    Effect.mapError(replayError("rebase stack")),
-  );
-}
+}, Effect.mapError(replayError("rebase stack")));
 
 export function rebaseStackPromise(
   branch: string,
@@ -155,7 +160,7 @@ export function replayStack(
       error: `${branch} has no live worktree to restack`,
     });
   }
-  return replayStackLockedEffect(locked.chain, opts, onLog);
+  return replayStackLocked(locked.chain, opts, onLog);
   }).pipe(Effect.mapError(replayError("replay stack")));
 }
 
@@ -167,28 +172,29 @@ export function replayStackPromise(
   return Effect.runPromise(replayStack(branch, opts, onLog));
 }
 
-function replayStackLockedEffect(
+const replayStackLocked = Effect.fnUntraced(function* (
   // Resolved under the chain's locks by `lockChain` — post-reconcile
   // reparents are already visible, parents before children so each
   // parent replays before its dependents.
   chain: RestackChain,
   opts: RebaseOptions,
   onLog: Logger,
-): Effect.Effect<RebaseResult, StackReplayError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<RebaseResult, ProcError | StackReplayError | RestackEngineError> {
   const trunk = opts.onto ?? config.branch.base;
 
   // Every member replays IN ITS OWN WORKTREE (HEAD rebases in place);
   // refuse any dirty one up front — a rebase would clobber. Only
   // TRACKED changes block: untracked files ride through a rebase safely
-  // (git refuses cleanly if one would be overwritten).
-  for (const s of chain.steps) {
+  // (git refuses cleanly if one would be overwritten). Independent
+  // worktrees, so the checks run concurrently; a blocked member
+  // interrupts the rest instead of waiting them all out.
+  const preflightBlock = yield* Effect.forEach(chain.steps, (s) => Effect.gen(function* () {
     if (yield* worktreeHasTrackedChanges(s.worktreePath)) {
-      return rebaseResult({
+      return yield* new ReplayPreflightBlocked({ result: {
         ok: false,
         conflict: false,
         error: `worktree ${s.worktreePath} (${s.branch}) has uncommitted changes to tracked files — commit or stash before restacking`,
-      });
+      } });
     }
     // A worktree left mid-rebase by an earlier interrupted run can read
     // clean via `git status --porcelain` (no unmerged paths), so the
@@ -196,13 +202,17 @@ function replayStackLockedEffect(
     // engine abort and silently discard that in-flight state — refuse
     // up front instead.
     if (yield* rebaseInProgress(s.worktreePath)) {
-      return rebaseResult({
+      return yield* new ReplayPreflightBlocked({ result: {
         ok: false,
         conflict: false,
         error: `worktree ${s.worktreePath} (${s.branch}) is mid-rebase from an unfinished run — finish or \`git rebase --abort\` it there before restacking`,
-      });
+      } });
     }
-  }
+  }), { concurrency: 4, discard: true }).pipe(
+    Effect.as(null),
+    Effect.catchTag("ReplayPreflightBlocked", (e) => Effect.succeed(e.result)),
+  );
+  if (preflightBlock) return rebaseResult(preflightBlock);
 
   // Freshen origin before replaying. A failed fetch would silently
   // leave stale refs and replay every member onto an outdated base.
@@ -226,23 +236,29 @@ function replayStackLockedEffect(
   // Pass 1: resolve each member's anchor (the old parent tip its
   // commits sit on) BEFORE any rewrite — so the merge-base fallback
   // sees pre-replay tips, AND so an unresolvable anchor fails the whole
-  // run before a single branch has been pushed.
-  const anchorByBranch = new Map<string, string>();
-  for (const s of chain.steps) {
+  // run before a single branch has been pushed. Independent worktrees,
+  // so resolution runs concurrently; an unresolvable anchor interrupts
+  // the rest instead of waiting them all out.
+  const anchorPairs = yield* Effect.forEach(chain.steps, (s) => Effect.gen(function* () {
     const anchor = yield* resolveAnchor(
       s,
       yield* anchorParentRef(s, trunk, s.worktreePath),
       s.worktreePath,
     );
     if (!anchor) {
-      return rebaseResult({
+      return yield* new ReplayPreflightBlocked({ result: {
         ok: false,
         conflict: false,
         error: `could not resolve a replay anchor for ${s.branch} (no recorded base sha and no merge-base with ${parentRefOf(s, trunk)})`,
-      });
+      } });
     }
-    anchorByBranch.set(s.branch, anchor);
-  }
+    return [s.branch, anchor] as const;
+  }), { concurrency: 4 }).pipe(
+    Effect.map((pairs) => ({ blocked: null, pairs }) as const),
+    Effect.catchTag("ReplayPreflightBlocked", (e) => Effect.succeed({ blocked: e.result, pairs: null } as const)),
+  );
+  if (anchorPairs.blocked) return rebaseResult(anchorPairs.blocked);
+  const anchorByBranch = new Map(anchorPairs.pairs);
 
   // Pass 2: replay top-down, threading each member's new tip to its
   // children.
@@ -266,8 +282,7 @@ function replayStackLockedEffect(
     }
 
     onLog(`replay ${s.branch}`);
-    const out = yield* replayStepEffect(
-      restackEngine,
+    const out = yield* restackEngine.replayStep(
       { branch: s.branch, worktreePath: s.worktreePath, anchor, newBase },
       onLog,
     );
@@ -331,10 +346,7 @@ function replayStackLockedEffect(
     ok: true,
     output: `replayed ${replayed}/${chain.steps.length} worktree(s)`,
   });
-  }).pipe(
-    Effect.mapError(replayError("replay locked stack")),
-  );
-}
+}, Effect.mapError(replayError("replay locked stack")));
 
 /** The ref naming a member's parent tip as it stands now (pre-replay).
  *  Used only for the anchor-failure error message; the actual anchor
@@ -382,7 +394,7 @@ export function anchorParentRefPromise(
 
 /** Is `sha` a commit object present in `cwd`'s store? (`rev-parse` alone
  *  validates syntax, not presence, so a bare SHA can't be trusted.) */
-function hasCommitEffect(cwd: string, sha: string): Effect.Effect<boolean, StackReplayError> {
+function hasCommit(cwd: string, sha: string): Effect.Effect<boolean, StackReplayError> {
   return run(["git", "cat-file", "-e", `${sha}^{commit}`], { cwd }).pipe(
     Effect.map((result) => result.exitCode === 0),
     Effect.mapError(replayError("check commit")),
@@ -420,12 +432,11 @@ function hasCommitEffect(cwd: string, sha: string): Effect.Effect<boolean, Stack
  * commits sit ABOVE the pre-squash merge-base, so it stays the cut point that
  * excludes the squash-merged parent). Self-healing, no manual bookkeeping.
  */
-export function resolveAnchor(
+export const resolveAnchor = Effect.fn("resolveAnchor")(function* (
   step: Pick<ChainStep, "branch" | "baseSha">,
   parentRef: string,
   cwd: string,
-): Effect.Effect<string | null, StackReplayError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<string | null, ProcError> {
   const mb = yield* gitRun(["merge-base", step.branch, parentRef], cwd);
   const liveAnchor = mb.exitCode === 0 && mb.stdout.trim() ? mb.stdout.trim() : null;
 
@@ -448,8 +459,7 @@ export function resolveAnchor(
     }
   }
   return liveAnchor;
-  }).pipe(Effect.mapError(replayError("resolve anchor")));
-}
+}, Effect.mapError(replayError("resolve anchor")));
 
 export function resolveAnchorPromise(
   step: Pick<ChainStep, "branch" | "baseSha">,
@@ -480,14 +490,13 @@ export function resolveAnchorPromise(
  * that left stale phantom-conflict refs behind. Gated on `hasCommit`, so
  * the git-worktree path never fetches; composes across a mixed chain.
  */
-export function resolveNewBaseSha(
+export const resolveNewBaseSha = Effect.fn("resolveNewBaseSha")(function* (
   step: ChainStep,
   trunk: string,
   newTipByBranch: Map<string, string>,
   pathByBranch: ReadonlyMap<string, string>,
   cwd: string,
-): Effect.Effect<string | null, StackReplayError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<string | null, ProcError | StackReplayError> {
   if (step.parentBranch === null) {
     // Trunk root. A rift clone's `origin/<trunk>` is frozen at clone
     // time — the run's `fetchOrigin` only freshens the MAIN clone — so a
@@ -519,7 +528,7 @@ export function resolveNewBaseSha(
   }
   const replayed = newTipByBranch.get(step.parentBranch);
   if (replayed) {
-    if (yield* hasCommitEffect(cwd, replayed)) return replayed;
+    if (yield* hasCommit(cwd, replayed)) return replayed;
     const parentPath = pathByBranch.get(step.parentBranch);
     if (parentPath) {
       yield* run(
@@ -529,7 +538,7 @@ export function resolveNewBaseSha(
         ],
         { cwd },
       );
-      if (yield* hasCommitEffect(cwd, replayed)) return replayed;
+      if (yield* hasCommit(cwd, replayed)) return replayed;
     }
     return null;
   }
@@ -539,8 +548,7 @@ export function resolveNewBaseSha(
     step.parentBranch,
     `origin/${step.parentBranch}`,
   ]);
-  }).pipe(Effect.mapError(replayError("resolve new base")));
-}
+}, Effect.mapError(replayError("resolve new base")));
 
 export function resolveNewBaseShaPromise(
   step: ChainStep,

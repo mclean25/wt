@@ -11,15 +11,17 @@ import {
   AUTO_MERGE_METHOD,
   disableAutoMergePromise,
   editReviewersPromise,
+  enableAutoMerge,
   enableAutoMergePromise,
   markPullRequestReadyPromise,
-  streamFailedRunLogPromise,
+  streamFailedRunLog,
 } from "../../core/github.ts";
+import { causeMessage, operationErrors } from "../../core/errors.ts";
 import { createLogger } from "../../core/logger.ts";
 import type { PullRequest } from "../../core/types.ts";
 import { patchPullRequest, type GithubData } from "../../state/index.ts";
 import type { QueryFilters } from "@tanstack/react-query";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
 import { armedFromPr } from "../badges.ts";
 import {
@@ -32,16 +34,7 @@ import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import type { ActionSubject } from "../action-subject.ts";
 import { theme } from "../theme.ts";
 
-class GithubPrFlowError extends Data.TaggedError("GithubPrFlowError")<{
-  readonly operation: string;
-  readonly cause: unknown;
-}> {}
-
-const githubPromise = <A>(operation: string, run: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) => new GithubPrFlowError({ operation, cause }),
-  });
+const io = operationErrors("github pr flows");
 
 export type GithubPrFlowsCtx = {
   rows: readonly WorktreeRow[];
@@ -200,23 +193,23 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
         // a commit nobody saw.
         startAutoMergeRetry(
           prNumber,
-          () =>
-            enableAutoMergePromise(prId ?? "", {
-              baseRefName: pr.baseRefName,
-              headRefOid: pr.headRefOid,
-            }),
+          enableAutoMerge(prId ?? "", {
+            baseRefName: pr.baseRefName,
+            headRefOid: pr.headRefOid,
+          }),
           {
             onArmed: () => {
               log.event.ok(`merge when ready armed for #${prNumber} once its checks reported`, {
                 toast: true,
               });
-              Effect.runFork(
-                githubPromise("refresh GitHub", refreshGithub).pipe(
-                  Effect.catch((error) =>
-                    Effect.sync(() =>
-                      log.event.err(
-                        `GitHub refresh failed after arming #${prNumber}: ${String(error.cause)}`,
-                      ),
+              // Returned (not forked) — the retry fiber yields this
+              // itself, so a failure here can't outlive the fiber that's
+              // reporting it.
+              return io.promise("refresh GitHub", refreshGithub).pipe(
+                Effect.catch((error) =>
+                  Effect.sync(() =>
+                    log.event.err(
+                      `GitHub refresh failed after arming #${prNumber}: ${causeMessage(error.cause)}`,
                     ),
                   ),
                 ),
@@ -331,8 +324,8 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     const [readyRes, reviewerRes] = await Effect.runPromise(
       Effect.all(
         [
-          githubPromise("mark ready", () => markReadyP).pipe(Effect.result),
-          githubPromise("request reviewer", () => reviewerP).pipe(Effect.result),
+          io.promise("mark ready", () => markReadyP).pipe(Effect.result),
+          io.promise("request reviewer", () => reviewerP).pipe(Effect.result),
         ],
         { concurrency: 2 },
       ),
@@ -405,7 +398,9 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
    * aren't failing. Output is capped so a giant log can't flood the pane;
    * the tail keeps draining silently past the cap.
    */
-  async function doTailFailedChecks(slug: string): Promise<void> {
+  const tailFailedChecks = Effect.fn("tailFailedChecks")(function* (
+    slug: string,
+  ): Effect.fn.Return<void> {
     const log = createLogger(slug);
     const row = rows.find((r) => r.wt.slug === slug);
     if (!row?.pr) {
@@ -426,32 +421,24 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     toast("fetching failed CI logs…", theme.info, 2500);
     const CAP = 200;
     let emitted = 0;
-    let res: Awaited<ReturnType<typeof streamFailedRunLogPromise>>;
-    try {
-      res = await Effect.runPromise(
-        githubPromise("stream failed CI logs", () =>
-          streamFailedRunLogPromise(branch, (line) => {
-            if (emitted < CAP) log.event.dim(line);
-            else if (emitted === CAP) {
-              log.event.dim(`… (truncated at ${CAP} lines; \`gh run view --log-failed\` for the rest)`);
-            }
-            emitted++;
-          })),
-      );
-    } catch (error) {
-      const cause = error instanceof GithubPrFlowError ? error.cause : error;
-      const message = cause instanceof Error ? cause.message : String(cause);
-      log.event.err(`failed CI logs: ${message}`);
-      toast(`failed logs: ${message}`, theme.err, 4000);
-      return;
-    }
+    const res = yield* streamFailedRunLog(branch, (line) => {
+      if (emitted < CAP) log.event.dim(line);
+      else if (emitted === CAP) {
+        log.event.dim(`… (truncated at ${CAP} lines; \`gh run view --log-failed\` for the rest)`);
+      }
+      emitted++;
+    });
     if (!res.ok) {
       log.event.err(`failed CI logs: ${res.reason}`);
       toast(`failed logs: ${res.reason}`, theme.err, 4000);
       return;
     }
     log.event.ok(`failed CI logs for ${branch} (${Math.min(emitted, CAP)} shown)`);
+  });
+
+  function doTailFailedChecks(slug: string): Promise<void> {
+    return Effect.runPromise(tailFailedChecks(slug));
   }
 
-  return { doMarkReady, doAutoMerge, doShipPr, doTailFailedChecks };
+  return { doMarkReady, doAutoMerge, doShipPr, doTailFailedChecks, tailFailedChecks };
 }

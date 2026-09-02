@@ -17,16 +17,14 @@ import { buildSha, sameBuild } from "../../core/build-id.ts";
 import { config } from "../../core/config.ts";
 import { resolveWebhookSecret, runDaemonForeground } from "../../core/events/daemon.ts";
 import { EVENTS_DIR, ensureEventsDir, isProcessAlive, readSnapshot, readState } from "../../core/events/store.ts";
+import { operationErrors, type OperationError } from "../../core/errors.ts";
 import { run as shEffect } from "../../core/proc.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 
 const LAUNCHD_LABEL = "com.wt.events";
 
-class EventsCommandError extends Data.TaggedError("EventsCommandError")<{
-  readonly operation: "serve";
-  readonly cause: unknown;
-}> {}
+const io = operationErrors("wt events");
 
 const USAGE = `usage: wt events <subcommand>
 
@@ -214,8 +212,10 @@ function secretDisplay(info: SecretInfo): string {
   return info.alreadyConfigured ? dim("(your existing secret)") : info.secret;
 }
 
-function launchctlEffect(action: "load" | "unload", opts: { ignoreFailure?: boolean } = {}): Effect.Effect<number> {
-  return Effect.gen(function* () {
+const launchctlEffect = Effect.fnUntraced(function* (
+  action: "load" | "unload",
+  opts: { ignoreFailure?: boolean } = {},
+) {
     const plist = plistPath();
     if (!existsSync(plist)) {
       console.error(red(`no launchd agent at ${plist} — run \`wt events install\` first`));
@@ -255,8 +255,7 @@ function launchctlEffect(action: "load" | "unload", opts: { ignoreFailure?: bool
     }
     console.log(`${green("✓")} ${action === "load" ? "started" : "stopped"} ${LAUNCHD_LABEL}`);
     return 0;
-  });
-}
+});
 
 /**
  * Restart an installed agent, starting it even when it was not currently
@@ -292,19 +291,19 @@ export function waitForRestartedDaemon(
   );
 }
 
-export function restartLaunchdAgent(deps: RestartLaunchdDeps = {}): Effect.Effect<number> {
-  return Effect.gen(function* () {
-    const control = deps.control ?? launchctlEffect;
-    const previousPid = readState()?.pid ?? null;
-    yield* control("unload", { ignoreFailure: true });
-    const loaded = yield* control("load");
-    if (loaded !== 0) return loaded;
-    const running = yield* (deps.waitUntilRunning ?? waitForRestartedDaemon)(previousPid);
-    if (running) return 0;
-    console.error(red("events daemon did not become ready within 10s after restart"));
-    return 1;
-  });
-}
+export const restartLaunchdAgent = Effect.fn("restartLaunchdAgent")(function* (
+  deps: RestartLaunchdDeps = {},
+) {
+  const control = deps.control ?? launchctlEffect;
+  const previousPid = readState()?.pid ?? null;
+  yield* control("unload", { ignoreFailure: true });
+  const loaded = yield* control("load");
+  if (loaded !== 0) return loaded;
+  const running = yield* (deps.waitUntilRunning ?? waitForRestartedDaemon)(previousPid);
+  if (running) return 0;
+  console.error(red("events daemon did not become ready within 10s after restart"));
+  return 1;
+});
 
 function requireEventsConfigured(): boolean {
   if (!config.github.events) {
@@ -379,20 +378,18 @@ function cmdInstall(): number {
   return 0;
 }
 
-function cmdUninstallEffect(): Effect.Effect<number> {
-  return Effect.gen(function* () {
-    const plist = plistPath();
-    if (existsSync(plist)) {
-      // Best-effort unload before removing so launchd drops the live job.
-      yield* shEffect(["launchctl", "unload", "-w", plist]).pipe(Effect.ignore);
-      rmSync(plist, { force: true });
-      console.log(`${green("✓")} removed ${plist}`);
-    } else {
-      console.log(dim("no launchd agent to remove"));
-    }
-    return 0;
-  });
-}
+const cmdUninstallEffect = Effect.fnUntraced(function* () {
+  const plist = plistPath();
+  if (existsSync(plist)) {
+    // Best-effort unload before removing so launchd drops the live job.
+    yield* shEffect(["launchctl", "unload", "-w", plist]).pipe(Effect.ignore);
+    rmSync(plist, { force: true });
+    console.log(`${green("✓")} removed ${plist}`);
+  } else {
+    console.log(dim("no launchd agent to remove"));
+  }
+  return 0;
+});
 
 function cmdSecret(): number {
   if (!requireEventsConfigured()) return 1;
@@ -405,7 +402,7 @@ function cmdSecret(): number {
   return 0;
 }
 
-export function run(argv: string[]): Effect.Effect<number, EventsCommandError> {
+export function run(argv: string[]): Effect.Effect<number, OperationError> {
   const [sub, ...rest] = argv;
   if (hasHelpFlag(argv)) {
     return Effect.sync(() => {
@@ -422,10 +419,7 @@ export function run(argv: string[]): Effect.Effect<number, EventsCommandError> {
   }
   switch (sub) {
     case "serve":
-      return Effect.tryPromise({
-        try: runDaemonForeground,
-        catch: (cause) => new EventsCommandError({ operation: "serve", cause }),
-      });
+      return io.promise("serve", runDaemonForeground);
     case "status":
       return Effect.sync(cmdStatus);
     case "install":

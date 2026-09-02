@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Cause, Effect, Exit, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 
 import {
   createSessionMessengerPromise,
@@ -12,6 +13,21 @@ import {
 } from "./session-messaging.ts";
 import type { InjectFailureKind, InjectOutcome } from "./claude/inject.ts";
 import type { RegistryStatus } from "./claude/registry.ts";
+
+/**
+ * Run under a virtual clock so the 8s transcript-confirmation budget is
+ * free: fork, advance the TestClock past it, then join. Only the tests
+ * that exhaust that whole budget (confirmation never lands) need this —
+ * everything else resolves before its first scheduled sleep.
+ */
+const withVirtualTime = <A, E>(effect: Effect.Effect<A, E>, advanceMs = 10_000): Promise<A> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(effect);
+      yield* TestClock.adjust(advanceMs);
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 
 const original = process.env.WT_AGENT;
 
@@ -87,22 +103,21 @@ type FakeOpts = {
 };
 
 function fakes(opts: FakeOpts = {}) {
-  let now = 1_000;
   const calls = { deliver: 0, terminal: 0, ensure: 0, statusOf: 0 };
   const warnings: string[] = [];
   const locks: string[] = [];
   let readyBudget: number | null = null;
   const deps = {
     inspectorEnabled: () => true,
-    ensureInfo: async () => {
+    ensureInfo: () => {
       calls.ensure += 1;
-      return {
+      return Effect.succeed({
         session: {
           status: opts.status ?? ("idle" as RegistryStatus),
           waitingFor: opts.waitingFor ?? null,
         },
         coldStarted: opts.coldStarted ?? false,
-      };
+      });
     },
     statusOf: () => {
       calls.statusOf += 1;
@@ -113,39 +128,38 @@ function fakes(opts: FakeOpts = {}) {
         }
       );
     },
-    deliver: async (
+    deliver: (
       _name: string,
       _text: string,
       o: { readyBudgetMs: number; abortIfBlocked?: () => string | null },
-    ): Promise<InjectOutcome> => {
+    ): Effect.Effect<InjectOutcome> => {
       calls.deliver += 1;
       readyBudget = o.readyBudgetMs;
       // The injector polls this throughout its readiness wait; a
       // dialog that appears mid-wait must abort rather than fall back.
       const blocked = o.abortIfBlocked?.();
-      if (blocked) return { ok: false, kind: "blocked", reason: blocked };
+      if (blocked) return Effect.succeed({ ok: false, kind: "blocked", reason: blocked });
       if (opts.deliverFails) {
-        return { ok: false, kind: opts.deliverFails, reason: `probe says ${opts.deliverFails}` };
+        return Effect.succeed({
+          ok: false,
+          kind: opts.deliverFails,
+          reason: `probe says ${opts.deliverFails}`,
+        });
       }
-      return { ok: true, draftPreserved: false };
+      return Effect.succeed({ ok: true, draftPreserved: false });
     },
-    terminal: async () => {
+    terminal: () => {
       calls.terminal += 1;
-      if (opts.terminalFails) return { ok: false as const, reason: "no pane either" };
-      return { ok: true as const, coldStarted: false, delivered: true, resent: false };
+      if (opts.terminalFails) return Effect.succeed({ ok: false as const, reason: "no pane either" });
+      return Effect.succeed({ ok: true as const, coldStarted: false, delivered: true, resent: false });
     },
     landed: () => opts.landed ?? true,
     warn: (_slug: string, message: string) => {
       warnings.push(message);
     },
-    now: () => now,
-    sleep: async (ms: number) => {
-      now += ms;
-      await Promise.resolve();
-    },
-    lock: async <T>(key: string, body: () => Promise<T>): Promise<T> => {
+    lock: <A, E>(key: string, effect: Effect.Effect<A, E>): Effect.Effect<A, E> => {
       locks.push(key);
-      return await body();
+      return effect;
     },
   };
   return { deps, calls, warnings, locks, readyBudget: () => readyBudget };
@@ -305,9 +319,9 @@ describe("the claude transport ladder", () => {
 
   test("an unacknowledged submit that never lands fails loudly about the duplicate risk", async () => {
     const fake = fakes({ deliverFails: "submitted-unknown", landed: false });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    const res = await send(target);
+    const res = await withVirtualTime(send(target));
     expect(res).toMatchObject({ ok: false });
     expect(res.ok === false && res.reason).toContain("duplicate is possible");
     expect(fake.calls.terminal).toBe(0);
@@ -366,9 +380,12 @@ describe("the claude transport ladder", () => {
     // transcript won't show it until that turn ends — which can be many
     // minutes. Reporting it lost would be a lie the caller acts on.
     const fake = fakes({ status: "busy", landed: false });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({ transport: "inspector", delivered: true });
+    expect(await withVirtualTime(send(target))).toMatchObject({
+      transport: "inspector",
+      delivered: true,
+    });
   });
 
   test("an unrecognized status is treated as possibly-busy, not as idle", async () => {
@@ -376,16 +393,19 @@ describe("the claude transport ladder", () => {
     // wt doesn't know yet. Assuming it means idle would report a real
     // queued message as lost the first time Claude adds one.
     const fake = fakes({ status: "unknown", landed: false });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({ delivered: true });
+    expect(await withVirtualTime(send(target))).toMatchObject({ delivered: true });
   });
 
   test("an idle session that never records the prompt really did lose it", async () => {
     const fake = fakes({ status: "idle", landed: false });
-    const send = createSessionMessengerPromise(fake.deps);
+    const send = createSessionMessenger(fake.deps);
 
-    expect(await send(target)).toMatchObject({ transport: "inspector", delivered: false });
+    expect(await withVirtualTime(send(target))).toMatchObject({
+      transport: "inspector",
+      delivered: false,
+    });
   });
 
   test("a slash command reports delivery as unknown, not as lost", async () => {
@@ -439,10 +459,10 @@ describe("the claude transport ladder", () => {
     let entered = false;
     const send = createSessionMessenger({
       ...fake.deps,
-      deliver: (_name, _text, opts) => new Promise((_resolve, reject) => {
-        entered = true;
-        opts.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      }),
+      deliver: () =>
+        Effect.sync(() => {
+          entered = true;
+        }).pipe(Effect.andThen(Effect.never)),
     });
     const exit = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const fiber = yield* Effect.forkScoped(send(target));
@@ -456,22 +476,19 @@ describe("the claude transport ladder", () => {
 
   test("interrupting transcript confirmation stops polling and never falls back", async () => {
     const fake = fakes({ landed: false });
-    let sleeping = false;
+    let polls = 0;
     const send = createSessionMessenger({
       ...fake.deps,
-      sleep: (_ms, signal) =>
-        new Promise<void>((_resolve, reject) => {
-          sleeping = true;
-          signal?.addEventListener("abort", () => reject(new Error("aborted")), {
-            once: true,
-          });
-        }),
+      landed: () => {
+        polls += 1;
+        return false;
+      },
     });
     const exit = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const fiber = yield* Effect.forkScoped(send(target));
-          while (!sleeping) yield* Effect.sleep(1);
+          while (polls === 0) yield* Effect.sleep(1);
           yield* Fiber.interrupt(fiber);
           return yield* Fiber.await(fiber);
         }),

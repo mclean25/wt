@@ -4,7 +4,7 @@ import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
 import { run, type RunResult } from "../proc.ts";
 import type { MergeQueueEntry, PullRequest } from "../types.ts";
-import { listWorktrees } from "../worktree.ts";
+import { listWorktrees, type WorktreeError } from "../worktree.ts";
 import { hasGh, repoSlug } from "./gh-cli.ts";
 import { nodeToPr } from "./parse.ts";
 import type { GithubData, GqlResponse } from "./types.ts";
@@ -514,41 +514,39 @@ function parseChunk(
  * previous fetch returned — actually stops the subprocesses instead of
  * letting them burn graphql round trips on data nobody will read.
  */
-export function fetchGithub(
+export const fetchGithub = Effect.fn("fetchGithub")(function* (
   branches: string[],
-): Effect.Effect<GithubData, GithubFetchError> {
+): Effect.fn.Return<GithubData, GithubFetchError> {
   const empty: GithubData = { prs: new Map(), mergeQueue: new Map() };
-  return Effect.gen(function* () {
-    if (!(yield* hasGh())) return empty;
-    const slug = yield* repoSlug();
-    if (!slug) return empty;
-    const [owner, name] = slug.split("/");
-    if (!owner || !name || branches.length === 0) return empty;
+  if (!(yield* hasGh())) return empty;
+  const slug = yield* repoSlug();
+  if (!slug) return empty;
+  const [owner, name] = slug.split("/");
+  if (!owner || !name || branches.length === 0) return empty;
 
-    const groups = chunkBranches(branches, CHUNK_SIZE);
-    return yield* fetchChunks(owner, name, groups).pipe(
-      Effect.timeoutOrElse({
-        duration: RETRY_DEADLINE_MS,
-        orElse: () =>
-          Effect.fail(
-            new GithubTransientError({
-              message: "github fetch retry budget exhausted",
-              result: { stdout: "", stderr: "", exitCode: -1, timedOut: true },
-            }),
-          ),
-      }),
-      Effect.tapError((error) =>
-        Effect.sync(() =>
-          log.error("gh api graphql failed", {
-            totalChunks: groups.length,
-            branchCount: branches.length,
-            error: error.message,
+  const groups = chunkBranches(branches, CHUNK_SIZE);
+  return yield* fetchChunks(owner, name, groups).pipe(
+    Effect.timeoutOrElse({
+      duration: RETRY_DEADLINE_MS,
+      orElse: () =>
+        Effect.fail(
+          new GithubTransientError({
+            message: "github fetch retry budget exhausted",
+            result: { stdout: "", stderr: "", exitCode: -1, timedOut: true },
           }),
         ),
+    }),
+    Effect.tapError((error) =>
+      Effect.sync(() =>
+        log.error("gh api graphql failed", {
+          totalChunks: groups.length,
+          branchCount: branches.length,
+          error: error.message,
+        }),
       ),
-    );
-  });
-}
+    ),
+  );
+});
 
 /** TanStack/CLI compatibility boundary. Cancellation rejects as interruption. */
 export function fetchGithubPromise(
@@ -565,24 +563,26 @@ export function fetchGithubPromise(
  * listing without PR columns beats a crashed listing — but says so on
  * stderr instead of impersonating "no PRs".
  */
-export function fetchPrs(): Effect.Effect<Map<string, PullRequest>> {
-  return Effect.gen(function* () {
+export const fetchPrs = Effect.fn("fetchPrs")(
+  function* (): Effect.fn.Return<
+    Map<string, PullRequest>,
+    WorktreeError | GithubFetchError
+  > {
     const worktrees = yield* listWorktrees();
     const branches = worktrees
       .filter((worktree) => !worktree.isMain && worktree.branch)
       .map((worktree) => worktree.branch as string);
     return (yield* fetchGithub(branches)).prs;
-  }).pipe(
-    Effect.catch((error) =>
-      Effect.sync(() => {
-        console.error(
-          `wt: ${error instanceof Error ? error.message : String(error)} (PR info omitted)`,
-        );
-        return new Map<string, PullRequest>();
-      }),
-    ),
-  );
-}
+  },
+  Effect.catch((error) =>
+    Effect.sync(() => {
+      console.error(
+        `wt: ${error instanceof Error ? error.message : String(error)} (PR info omitted)`,
+      );
+      return new Map<string, PullRequest>();
+    }),
+  ),
+);
 
 export function fetchPrsPromise(): Promise<Map<string, PullRequest>> {
   return Effect.runPromise(fetchPrs());

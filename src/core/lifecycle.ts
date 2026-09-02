@@ -22,8 +22,6 @@ import {
   setSlugBase,
 } from "./wtstate.ts";
 import { getBackend, getBackendForPath } from "./backend.ts";
-import { createGitWorktree, removeGitWorktree } from "./backend/git.ts";
-import { createRiftWorktree, removeRiftWorktree } from "./backend/rift.ts";
 import { closeWorktreeBrowserSessions } from "./browser.ts";
 import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
@@ -54,7 +52,7 @@ import {
   animals,
   uniqueNamesGenerator,
 } from "unique-names-generator";
-import { Cause, Data, Effect, Schedule } from "effect";
+import { Cause, Clock, Data, DateTime, Effect, Schedule, Scope } from "effect";
 import { safeStage } from "./stage-safety.ts";
 import type { Worktree } from "./types.ts";
 import { fetchOrigin } from "./worktree.ts";
@@ -83,10 +81,6 @@ export class LifecycleError extends Data.TaggedError("LifecycleError")<{
   readonly operation: "create" | "remove";
   readonly message: string;
   readonly cause?: unknown;
-}> {}
-
-class BranchLookupError extends Data.TaggedError("BranchLookupError")<{
-  readonly cause: unknown;
 }> {}
 
 
@@ -122,37 +116,34 @@ const runDestroyCommandEffect = (opts: {
  * and local `X` collapse to a single entry (local preferred implicitly
  * — `git branch -a` lists locals before remotes in typical output).
  */
-export function findBranchesForIssue(
+export const findBranchesForIssue = Effect.fn("findBranchesForIssue")(function* (
   issueLower: string,
   opts: { anyAuthor?: boolean } = {},
-): Effect.Effect<string[]> {
-  return Effect.gen(function* () {
-    const out = yield* git(["branch", "-a", "--format=%(refname:short)"]).pipe(
-      Effect.mapError((cause) => new BranchLookupError({ cause })),
-      Effect.orElseSucceed(() => ""),
-    );
-    // In strict mode we only accept `<michael>/<id>-...`. With anyAuthor
-    // we relax to "id appears at a word boundary anywhere in the branch
-    // name". This catches non-standard layouts like
-    // `worktree-david+eng-4959-...` that don't use `/` as the separator.
-    // The picker modal handles false positives gracefully.
-    const pattern = opts.anyAuthor
-      ? new RegExp(`(?:^|[^a-z0-9])${escapeRegex(issueLower)}(?:-|$)`, "i")
-      : new RegExp(
-          `^(?:origin/)?${escapeRegex(config.branch.prefix)}/${escapeRegex(issueLower)}(?:-|$)`,
-        );
-    const seen = new Set<string>();
-    const branches: string[] = [];
-    for (const raw of out.split("\n")) {
-      if (!pattern.test(raw)) continue;
-      const normalized = raw.replace(/^origin\//, "");
-      if (seen.has(normalized)) continue;
-      seen.add(normalized);
-      branches.push(normalized);
-    }
-    return branches;
-  });
-}
+): Effect.fn.Return<string[]> {
+  const out = yield* git(["branch", "-a", "--format=%(refname:short)"]).pipe(
+    Effect.orElseSucceed(() => ""),
+  );
+  // In strict mode we only accept `<michael>/<id>-...`. With anyAuthor
+  // we relax to "id appears at a word boundary anywhere in the branch
+  // name". This catches non-standard layouts like
+  // `worktree-david+eng-4959-...` that don't use `/` as the separator.
+  // The picker modal handles false positives gracefully.
+  const pattern = opts.anyAuthor
+    ? new RegExp(`(?:^|[^a-z0-9])${escapeRegex(issueLower)}(?:-|$)`, "i")
+    : new RegExp(
+        `^(?:origin/)?${escapeRegex(config.branch.prefix)}/${escapeRegex(issueLower)}(?:-|$)`,
+      );
+  const seen = new Set<string>();
+  const branches: string[] = [];
+  for (const raw of out.split("\n")) {
+    if (!pattern.test(raw)) continue;
+    const normalized = raw.replace(/^origin\//, "");
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    branches.push(normalized);
+  }
+  return branches;
+});
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -163,36 +154,34 @@ function escapeRegex(s: string): string {
  * retried until the resulting branch is free. ~29k combos; if all five
  * draws collide something is deeply wrong, so give up loudly.
  */
-function randomFreeSuffixEffect(
+const randomFreeSuffixEffect = Effect.fnUntraced(function* (
   idLower: string,
-): Effect.Effect<string, ParseInputError> {
-  return Effect.gen(function* () {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const suffix = uniqueNamesGenerator({
-        dictionaries: [adjectives, animals],
-        separator: "-",
-        length: 2,
-        style: "lowerCase",
-      });
-      const exists = yield* branchExists(`${config.branch.prefix}/${idLower}-${suffix}`).pipe(
-        Effect.mapError((cause) => new ParseInputError({ message: "failed to inspect branches", cause })),
-      );
-      if (!exists) {
-        return suffix;
-      }
-    }
-    return yield* new ParseInputError({
-      message: `couldn't find a free random slug for ${idLower} (tried 5)`,
+): Effect.fn.Return<string, ParseInputError> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const suffix = uniqueNamesGenerator({
+      dictionaries: [adjectives, animals],
+      separator: "-",
+      length: 2,
+      style: "lowerCase",
     });
+    const exists = yield* branchExists(`${config.branch.prefix}/${idLower}-${suffix}`).pipe(
+      Effect.mapError((cause) => new ParseInputError({ message: "failed to inspect branches", cause })),
+    );
+    if (!exists) {
+      return suffix;
+    }
+  }
+  return yield* new ParseInputError({
+    message: `couldn't find a free random slug for ${idLower} (tried 5)`,
   });
-}
+});
 
 export class ParseInputError extends Data.TaggedError("ParseInputError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
-export type ParseInputOptions = {
+export type ParseInputOptions<E = never> = {
   slugHint?: string;
   /**
    * Widen the issue-ID search to branches from any author
@@ -210,11 +199,18 @@ export type ParseInputOptions = {
    * Pick one when multiple branches match (e.g. pair-programming
    * across authors). If omitted and there are multiple matches,
    * parseInput throws.
+   *
+   * Generic in `E` rather than `unknown`: callers implement this with
+   * their own effect (a TUI modal, `pickIndex`'s `PromptError`) and
+   * `parseInput` folds whatever it fails with into `ParseInputError`
+   * below — the caller's error type is real, just not this module's
+   * business, so it's threaded through as a type parameter instead of
+   * erased to `unknown`.
    */
   promptForChoice?: (
     id: string,
     branches: string[],
-  ) => Effect.Effect<string | null, unknown> | Promise<string | null>;
+  ) => Effect.Effect<string | null, E> | Promise<string | null>;
 };
 
 const parseInputFailure = (
@@ -222,11 +218,10 @@ const parseInputFailure = (
 ): Effect.Effect<never, ParseInputError> =>
   Effect.fail(new ParseInputError({ message }));
 
-export function parseInput(
+export const parseInput = Effect.fn("parseInput")(function* <E = never>(
   raw: string,
-  opts: ParseInputOptions = {},
-): Effect.Effect<string, ParseInputError> {
-  return Effect.gen(function* () {
+  opts: ParseInputOptions<E> = {},
+): Effect.fn.Return<string, ParseInputError> {
     raw = raw.trim();
     if (!raw) return yield* parseInputFailure("empty input");
 
@@ -309,13 +304,12 @@ export function parseInput(
     }
     // Anything else slugifies into a fresh `<prefix>/<slug>` branch.
     return `${config.branch.prefix}/${slugify(raw)}`;
-  });
-}
+});
 
 /** Promise boundary for React/TUI callers while their callback is modal-based. */
-export function parseInputPromise(
+export function parseInputPromise<E = never>(
   raw: string,
-  opts: ParseInputOptions = {},
+  opts: ParseInputOptions<E> = {},
 ): Promise<string> {
   return Effect.runPromise(parseInput(raw, opts));
 }
@@ -332,12 +326,11 @@ export type CreateOptions = {
   base?: string;
 };
 
-function createWorktreeProgram(
+const createWorktreeProgram = Effect.fnUntraced(function* (
   branch: string,
   opts: CreateOptions,
   handle: LockHandle,
 ) {
-  return Effect.gen(function* () {
   const slug = dirSlug(branch);
   const path = join(config.paths.worktreeRoot, slug);
   const stage = computeStage(slug);
@@ -412,9 +405,7 @@ function createWorktreeProgram(
       mainClone: config.paths.mainClone,
       onLog: opts.onLog,
     };
-    yield* backend.id === "rift"
-      ? createRiftWorktree(backendInput)
-      : createGitWorktree(backendInput);
+    yield* backend.create(backendInput);
 
     if (existing) {
       if (
@@ -555,70 +546,61 @@ function createWorktreeProgram(
       }
     }
   return { ok: true, path, branch, stage, slug } as const;
-  });
-}
+});
 
-export function createWorktree(
+export const createWorktree = Effect.fn("createWorktree")(function* (
   branch: string,
   opts: CreateOptions = {},
-): Effect.Effect<Extract<CreateResult, { ok: true }>, LifecycleError> {
+): Effect.fn.Return<Extract<CreateResult, { ok: true }>, LifecycleError, Scope.Scope> {
   const slug = dirSlug(branch);
   const path = join(config.paths.worktreeRoot, slug);
   if (RESERVED_SESSION_SLUGS.includes(slug)) {
-    return Effect.fail(
-      new LifecycleError({
-        operation: "create",
-        message: `"${slug}" is a reserved session name (${RESERVED_SESSION_SLUGS.join(", ")}) — pick different title words`,
-      }),
-    );
+    return yield* new LifecycleError({
+      operation: "create",
+      message: `"${slug}" is a reserved session name (${RESERVED_SESSION_SLUGS.join(", ")}) — pick different title words`,
+    });
   }
   if (existsSync(path)) {
-    return Effect.fail(
-      new LifecycleError({
-        operation: "create",
-        message: `Path already exists: ${path}`,
-      }),
-    );
+    return yield* new LifecycleError({
+      operation: "create",
+      message: `Path already exists: ${path}`,
+    });
   }
-  return Effect.scoped(
-    Effect.gen(function* () {
-      const handle = yield* Effect.acquireRelease(
-        Effect.try({
-          try: () => {
-            mkdirSync(config.paths.worktreeRoot, { recursive: true });
-            const acquired = tryAcquireLock(slug, "init", {
-              phase: "preparing",
-            });
-            if (!acquired)
-              throw new Error(`Another wt process is busy with ${slug}`);
-            return acquired;
-          },
-          catch: (cause) =>
-            new LifecycleError({
-              operation: "create",
-              message: cause instanceof Error ? cause.message : String(cause),
-              cause,
-            }),
-        }),
-        (acquired) => Effect.sync(() => acquired.release()),
-      );
-      const result = yield* createWorktreeProgram(branch, opts, handle).pipe(
-        Effect.catchCause((cause) => {
-          const detail = causeMessage(cause);
-          log.error(detail, { slug });
-          return Effect.fail(new LifecycleError({ operation: "create", message: detail, cause }));
-        }),
-      );
-      if (!result.ok) {
-        return yield* new LifecycleError({
-          operation: "create",
-          message: result.reason,
+  const handle = yield* Effect.acquireRelease(
+    Effect.try({
+      try: () => {
+        mkdirSync(config.paths.worktreeRoot, { recursive: true });
+        const acquired = tryAcquireLock(slug, "init", {
+          phase: "preparing",
         });
-      }
-      return result;
+        if (!acquired)
+          throw new Error(`Another wt process is busy with ${slug}`);
+        return acquired;
+      },
+      catch: (cause) =>
+        new LifecycleError({
+          operation: "create",
+          message: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+    }),
+    (acquired) => Effect.sync(() => acquired.release()),
+  );
+  const result = yield* createWorktreeProgram(branch, opts, handle).pipe(
+    Effect.catchCause((cause) => {
+      const detail = causeMessage(cause);
+      log.error(detail, { slug });
+      return Effect.fail(new LifecycleError({ operation: "create", message: detail, cause }));
     }),
   );
-}
+  if (!result.ok) {
+    return yield* new LifecycleError({
+      operation: "create",
+      message: result.reason,
+    });
+  }
+  return result;
+}, Effect.scoped);
 
 export function createWorktreePromise(
   branch: string,
@@ -652,12 +634,11 @@ export type RemoveResult = {
  * Foreground remove. Assumes caller already confirmed dirty-prompts
  * and resolved the destroyStage / deleteBranch decisions.
  */
-function removeWorktreeProgram(
+const removeWorktreeProgram = Effect.fnUntraced(function* (
   wt: Worktree,
   opts: RemoveOptions,
   handle: LockHandle,
 ) {
-  return Effect.gen(function* () {
   const { force = false, destroyStage = false, deleteBranch = false } = opts;
 
   // Acquire the per-slug lock, retrying briefly rather than failing on the
@@ -780,9 +761,7 @@ function removeWorktreeProgram(
       mainClone: config.paths.mainClone,
       onLog: opts.onLog,
     };
-    const removed = yield* backend.id === "rift"
-      ? removeRiftWorktree(backendInput)
-      : removeGitWorktree(backendInput);
+    const removed = yield* backend.remove(backendInput);
     if (!removed.ok) {
       return {
         ok: false,
@@ -875,12 +854,13 @@ function removeWorktreeProgram(
     // the CLI paths that never went through the TUI. Best-effort — a
     // durable-state IO failure must not fail an already-completed remove.
     if (wt.branch) {
+      const removedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
       yield* Effect.uninterruptible(Effect.try({
         try: () => recordRemovedWorktrees([
           {
             slug: wt.slug,
             branch: wt.branch,
-            removedAt: new Date().toISOString(),
+            removedAt,
           },
         ]),
         catch: (cause) => new LifecycleError({
@@ -899,18 +879,17 @@ function removeWorktreeProgram(
       destroyedStage,
       deletedBranch,
     };
-  });
-}
+});
 
 const removeLockSchedule = Schedule.spaced(150).pipe(
   Schedule.jittered,
   Schedule.upTo({ duration: LOCK_ACQUIRE_WAIT_MS }),
 );
 
-export function removeWorktree(
+export const removeWorktree = Effect.fn("removeWorktree")(function* (
   wt: Worktree,
   opts: RemoveOptions = {},
-): Effect.Effect<RemoveResult, LifecycleError> {
+): Effect.fn.Return<RemoveResult, LifecycleError, Scope.Scope> {
   const acquire = Effect.suspend(() => {
     const handle = tryAcquireLock(wt.slug, "remove", { phase: "preparing" });
     return handle
@@ -938,28 +917,24 @@ export function removeWorktree(
     }),
   );
 
-  return Effect.scoped(
-    Effect.gen(function* () {
-      const handle = yield* Effect.acquireRelease(acquire, (acquired) =>
-        Effect.sync(() => acquired.release()),
-      );
-      const result = yield* removeWorktreeProgram(wt, opts, handle).pipe(
-        Effect.catchCause((cause) => Effect.fail(new LifecycleError({
-          operation: "remove",
-          message: causeMessage(cause),
-          cause,
-        }))),
-      );
-      if (!result.ok) {
-        return yield* new LifecycleError({
-          operation: "remove",
-          message: result.message,
-        });
-      }
-      return result;
-    }),
+  const handle = yield* Effect.acquireRelease(acquire, (acquired) =>
+    Effect.sync(() => acquired.release()),
   );
-}
+  const result = yield* removeWorktreeProgram(wt, opts, handle).pipe(
+    Effect.catchCause((cause) => Effect.fail(new LifecycleError({
+      operation: "remove",
+      message: causeMessage(cause),
+      cause,
+    }))),
+  );
+  if (!result.ok) {
+    return yield* new LifecycleError({
+      operation: "remove",
+      message: result.message,
+    });
+  }
+  return result;
+}, Effect.scoped);
 
 export function removeWorktreePromise(
   wt: Worktree,
@@ -996,18 +971,16 @@ export function removeWorktreePromise(
  * one that silently stranded work. This mirrors why actions run under tmux
  * (`core/tmux/action-sessions.ts`): destroy work must outlive the TUI.
  */
-export function spawnBackgroundRemove(
+export const spawnBackgroundRemove = Effect.fn("spawnBackgroundRemove")(function* (
   slug: string,
   opts: {
     force: boolean;
     destroyStage: boolean;
     deleteBranch: boolean;
   },
-): Effect.Effect<string, LifecycleError> {
-  const logPath = join(
-    config.paths.logDir,
-    `${slug}-${new Date().toISOString().replace(/[:.]/g, "-")}.log`,
-  );
+): Effect.fn.Return<string, LifecycleError> {
+  const stamp = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)).replace(/[:.]/g, "-");
+  const logPath = join(config.paths.logDir, `${slug}-${stamp}.log`);
   const exe = join(import.meta.dir, "..", "..", "bin", "wt");
   // Open the log file in the parent and pass the fd to the child as
   // stdout+stderr. This captures not only the _destroy process's own
@@ -1018,7 +991,6 @@ export function spawnBackgroundRemove(
     message: cause instanceof Error ? cause.message : String(cause),
     cause,
   });
-  return Effect.gen(function* () {
     yield* Effect.try({
       try: () => mkdirSync(config.paths.logDir, { recursive: true }),
       catch: fail,
@@ -1057,8 +1029,7 @@ export function spawnBackgroundRemove(
       // Parent doesn't need the fd; the child has its own dup.
       (fd) => Effect.sync(() => closeSync(fd)),
     );
-  });
-}
+});
 
 export function spawnBackgroundRemovePromise(
   slug: string,

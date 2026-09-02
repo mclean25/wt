@@ -15,7 +15,7 @@ test("remove teardown keeps checkout-dependent cleanup before removal and browse
     "const destroyCommand = resolveTeardownCommand",
   );
   const reaper = source.indexOf("const reaped = yield* reapWorktreeListeners");
-  const backend = source.indexOf("const removed = yield* backend.id");
+  const backend = source.indexOf("const removed = yield* backend.remove");
   const browser = source.indexOf(
     "const browser = yield* closeWorktreeBrowserSessions",
     backend,

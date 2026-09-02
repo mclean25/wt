@@ -25,10 +25,12 @@ import {
 } from "../../core/actions.ts";
 import { recordRun as recordHistoryRun } from "../../core/actions.ts";
 import { config } from "../../core/config.ts";
+import { operationErrors } from "../../core/errors.ts";
 import { getHarness, type HarnessId } from "../../core/harness/index.ts";
 import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
 import { createLogger } from "../../core/logger.ts";
 import { sendWorktreeMessage } from "../../core/worktree-executor.ts";
+import { forkReported } from "../effect-boundary.ts";
 import { StatusKind } from "../../core/types.ts";
 import {
   isRemoteWorktreeTarget,
@@ -85,6 +87,9 @@ export type LaunchActionOpts = {
  * is fire-and-forget by design).
  */
 export type LaunchOutcome = { launched: boolean; reason?: string };
+
+const dispatchLog = createLogger("[actions]");
+const io = operationErrors("useActionDispatch");
 
 export function useActionDispatch(opts: ActionDispatchOpts): {
   launchAction: (
@@ -152,8 +157,10 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       }
     }
     return actionRegistry.subscribe(() => {
-      const forkRefresh = (operation: () => Promise<unknown>): void => {
-        Effect.runFork(Effect.tryPromise(operation).pipe(Effect.ignore));
+      const forkRefresh = (label: string, operation: () => Promise<unknown>): void => {
+        forkReported(io.promise(label, operation), (error) =>
+          dispatchLog.warn(`refresh failed: ${error.message}`),
+        );
       };
       for (const run of actionRegistry.getSnapshot().values()) {
         if (run.status === "running") continue;
@@ -173,33 +180,33 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
         for (const tag of run.affects) {
           switch (tag) {
             case "git":
-              if (remote) forkRefresh(rr);
+              if (remote) forkRefresh("refresh remote worktrees", rr);
               else {
-                forkRefresh(ro);
-                forkRefresh(() => inv(run.slug));
+                forkRefresh("refresh origin", ro);
+                forkRefresh(`invalidate ${run.slug}`, () => inv(run.slug));
               }
               // History-rewriting actions (rebase, modify, …) rewrite
               // commits under a fixed explicit parent, so the per-base
               // diff / sync queries need a re-run even though the parent
               // relationship is unchanged. `refreshStack` invalidates
               // those (see its doc in state/hooks.ts).
-              if (!remote) forkRefresh(rs);
+              if (!remote) forkRefresh("refresh stack", rs);
               break;
             case "github":
-              forkRefresh(rg);
+              forkRefresh("refresh github", rg);
               break;
             case "dev":
               // Dev-server start/stop — refresh the slug's per-worktree
               // fields so the dev row/bolt snap without waiting out the
               // staleTime. Slug-scoped; no cross-worktree state moved.
-              if (remote) forkRefresh(rr);
+              if (remote) forkRefresh("refresh remote worktrees", rr);
               else {
                 // The dev query key includes the batched tmux answer. Refresh
                 // that source as well as the slug, or an immediate slug
                 // refetch keeps using `sessionExists: false` and renders the
                 // just-started server as stopped until the 5s backstop poll.
-                forkRefresh(rt);
-                forkRefresh(() => inv(run.slug));
+                forkRefresh("refresh tmux sessions", rt);
+                forkRefresh(`invalidate ${run.slug}`, () => inv(run.slug));
               }
               break;
             default: {

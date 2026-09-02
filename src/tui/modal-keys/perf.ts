@@ -1,10 +1,14 @@
 import type { KeyEvent } from "@opentui/core";
 
+import { operationErrors } from "../../core/errors.ts";
 import { isShiftedLetter } from "../app-helpers.ts";
+import { forkReported } from "../effect-boundary.ts";
 import { cancelPerfInvestigate } from "../flows/perf-report.ts";
 import { handleOverlayScrollKey } from "../scrollbox.tsx";
 import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
+
+const io = operationErrors("modal-keys/perf");
 
 /**
  * Keys for the `P` perf overlay. Scrolling goes through the shared
@@ -19,7 +23,7 @@ import type { SimpleModalContext } from "./ctx.ts";
 export function handlePerfKey(
   k: KeyEvent,
   modal: Extract<Modal, { kind: "perf" }>,
-  { setModal, refreshPerf, doPerfInvestigate }: SimpleModalContext,
+  { setModal, refreshPerf, doPerfInvestigate, reportActionError }: SimpleModalContext,
 ): boolean {
   if (handleOverlayScrollKey(k)) return true;
   // Send the snapshot to the wt-source session and enter it. The flow
@@ -32,7 +36,9 @@ export function handlePerfKey(
     return true;
   }
   if (k.name === "r" && !k.ctrl && !k.meta) {
-    void refreshPerf();
+    forkReported(io.promise("refresh perf", refreshPerf), (error) =>
+      reportActionError("refresh perf", error),
+    );
     return true;
   }
   if (

@@ -65,8 +65,18 @@ const WT_DEBOUNCE_MS = 500;
 
 export type Debounced = {
   trigger: () => void;
+  /**
+   * Sync boundary adapter for the two non-Effect callers
+   * (`core/events/store.ts`, `tui/hooks/useManagerSignals.ts`): runs
+   * `cancel` to completion synchronously. Kept name- and
+   * behavior-compatible so those callers need no changes.
+   */
   cancelPromise: () => void;
-  /** Effect-native cancellation for scoped owners and deterministic tests. */
+  /**
+   * The PRIMARY cancellation implementation — disposes and interrupts
+   * the pending fiber. `cancelPromise` is a thin sync wrapper around
+   * this; scoped owners and tests should prefer yielding it directly.
+   */
   cancel: Effect.Effect<void>;
 };
 
@@ -75,10 +85,10 @@ export type Debounced = {
  * github-events marker watcher (`core/events/store.ts`) — FSEvents bursts,
  * one invalidation pass per burst is enough.
  */
-export const makeDebounced = (
+export const makeDebounced = Effect.fn("makeDebounced")(function* (
   onChange: () => void,
   ms: number,
-): Effect.Effect<Debounced, never, Scope.Scope> => Effect.gen(function* () {
+): Effect.fn.Return<Debounced, never, Scope.Scope> {
   const context = yield* Effect.context<never>();
   const scope = yield* Effect.scope;
   const disposed = yield* Ref.make(false);
@@ -88,17 +98,13 @@ export const makeDebounced = (
     const fiber = yield* Ref.getAndSet(current, null);
     if (fiber) yield* Fiber.interrupt(fiber);
   });
-  const cancelCurrentFromCallback = (): void => {
-    const fiber = Effect.runSyncWith(context)(Ref.getAndSet(current, null));
-    if (fiber) fiber.interruptUnsafe();
-  };
   const cancel = Ref.set(disposed, true).pipe(Effect.andThen(cancelCurrent));
   yield* Effect.addFinalizer(() => cancel);
 
   return {
     trigger: () => {
       if (Effect.runSyncWith(context)(Ref.get(disposed))) return;
-      cancelCurrentFromCallback();
+      Effect.runSyncWith(context)(cancelCurrent);
       const fiber = Effect.runSyncWith(context)(
         Effect.sleep(ms).pipe(
           Effect.andThen(Effect.sync(() => {
@@ -110,8 +116,7 @@ export const makeDebounced = (
       Effect.runSyncWith(context)(Ref.set(current, fiber));
     },
     cancelPromise: () => {
-      Effect.runSyncWith(context)(Ref.set(disposed, true));
-      cancelCurrentFromCallback();
+      Effect.runSyncWith(context)(cancel);
     },
     cancel,
   };
@@ -120,16 +125,18 @@ export const makeDebounced = (
 export function makeDebouncedPromise(onChange: () => void, ms: number): Debounced {
   const scope = Effect.runSync(Scope.make());
   const debounced = Effect.runSync(makeDebounced(onChange, ms).pipe(Scope.provide(scope)));
+  const cancel = debounced.cancel.pipe(
+    Effect.andThen(() => Scope.close(scope, Exit.void)),
+  );
   let cancelled = false;
   return {
     trigger: debounced.trigger,
     cancelPromise: () => {
       if (cancelled) return;
       cancelled = true;
-      debounced.cancelPromise();
-      Effect.runFork(Scope.close(scope, Exit.void));
+      Effect.runSync(cancel);
     },
-    cancel: Scope.close(scope, Exit.void),
+    cancel,
   };
 }
 

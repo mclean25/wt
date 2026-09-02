@@ -6,15 +6,15 @@
  * selection.
  */
 import { config } from "../../core/config.ts";
+import { operationErrors } from "../../core/errors.ts";
 import type { Worktree } from "../../core/types.ts";
 import type { Modal } from "../modal-state.ts";
+import { forkReported } from "../effect-boundary.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { theme } from "../theme.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class BaseFlowError extends Data.TaggedError("BaseFlowError")<{
-  cause: unknown;
-}> {}
+const io = operationErrors("base flows");
 
 type BaseFlowsCtx = {
   rows: WorktreeRow[];
@@ -91,11 +91,8 @@ export function makeBaseFlows(ctx: BaseFlowsCtx) {
     setModal(null);
     const row = rows.find((r) => r.wt.slug === slug);
     if (!row) return;
-    Effect.runFork(
-      Effect.tryPromise({
-        try: () => setBase(row.wt, item.branch),
-        catch: (cause) => new BaseFlowError({ cause }),
-      }).pipe(
+    forkReported(
+      io.promise("set base", () => setBase(row.wt, item.branch)).pipe(
         Effect.tap(() =>
           Effect.sync(() =>
             toast(
@@ -107,10 +104,8 @@ export function makeBaseFlows(ctx: BaseFlowsCtx) {
             ),
           ),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() => reportActionError("set base", error.cause)),
-        ),
       ),
+      (error) => reportActionError("set base", error),
     );
   }
 

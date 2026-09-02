@@ -2,6 +2,7 @@ import { Data, Effect } from "effect";
 
 import { branchExists } from "../git.ts";
 import { viewPrInfo } from "../github/mutations.ts";
+import type { ProcError } from "../proc.ts";
 import { setSlugBase } from "../wtstate.ts";
 import { type ChainStep, type RestackChain } from "./chain.ts";
 import { STACK_BUSY, type Logger, withLockedChain } from "./shared.ts";
@@ -39,7 +40,7 @@ export function reconcileStack(
     return Effect.succeed(new Set<string>());
   }
   if (locked.status === "gone") return Effect.succeed(new Set<string>());
-  return reconcileStackLockedEffect(locked.chain, trunk, onLog);
+  return reconcileStackLocked(locked.chain, trunk, onLog);
   }).pipe(
     Effect.mapError((cause) =>
       cause instanceof StackReconcileError ? cause : new StackReconcileError({ cause }),
@@ -55,12 +56,11 @@ export function reconcileStackPromise(
   return Effect.runPromise(reconcileStack(branch, trunk, onLog));
 }
 
-function reconcileStackLockedEffect(
+const reconcileStackLocked = Effect.fnUntraced(function* (
   chain: RestackChain,
   trunk: string,
   onLog: Logger,
-): Effect.Effect<Set<string>, StackReconcileError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<Set<string>, ProcError> {
   const stepByBranch = new Map<string, ChainStep>(
     chain.steps.map((s) => [s.branch, s]),
   );
@@ -125,9 +125,6 @@ function reconcileStackLockedEffect(
     onLog(`reparented ${s.branch} onto ${newParent}`);
   }
   return landed;
-  }).pipe(
-    Effect.mapError((cause) =>
-      cause instanceof StackReconcileError ? cause : new StackReconcileError({ cause }),
-    ),
-  );
-}
+}, Effect.mapError((cause) =>
+  cause instanceof StackReconcileError ? cause : new StackReconcileError({ cause }),
+));

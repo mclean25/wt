@@ -8,10 +8,7 @@ import { runPromise, run, runStreaming, terminateSubprocess } from "./proc.ts";
 
 test("terminateSubprocess escalates and joins a child that ignores SIGTERM", async () => {
   const signals: Array<number | NodeJS.Signals | undefined> = [];
-  let resolveExit!: (code: number) => void;
-  const exited = new Promise<number>((resolve) => {
-    resolveExit = resolve;
-  });
+  const { promise: exited, resolve: resolveExit } = Promise.withResolvers<number>();
   const proc = {
     exitCode: null as number | null,
     exited,

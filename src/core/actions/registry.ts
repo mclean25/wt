@@ -45,7 +45,9 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Deferred, Effect, Fiber, Semaphore } from "effect";
+import { Clock, Deferred, Effect, Fiber, Semaphore } from "effect";
+
+import { causeMessage } from "../errors.ts";
 
 import {
   type ActionLine,
@@ -80,7 +82,7 @@ import {
 } from "../worktree-target.ts";
 import { listSessions } from "../tmux/admin.ts";
 import {
-  killActionSession as killActionTmuxSessionEffect,
+  killActionSession as killActionTmuxSession,
   startActionSession,
 } from "../tmux/action-sessions.ts";
 import { CUSTOM_ACTION_ID, MAX_RETAINED_RUNS, RECENT_WINDOW_MS } from "./builtins.ts";
@@ -171,7 +173,7 @@ class ActionRegistry {
         return true;
       }),
       (reserved) => reserved
-        ? this.startInnerEffect(def, slug, cwd, extras, vars, harnessId, opts)
+        ? this.startInner(def, slug, cwd, extras, vars, harnessId, opts)
         : Effect.succeed({
             ok: false as const,
             reason: "an action is already running for this worktree",
@@ -284,7 +286,7 @@ class ActionRegistry {
         this.starting.add(actionKey);
         return true;
       }),
-      (reserved) => reserved ? this.startInnerEffect(
+      (reserved) => reserved ? this.startInner(
         def,
         actionKey,
         supervisorCwd,
@@ -320,7 +322,8 @@ class ActionRegistry {
     ));
   }
 
-  private startInnerEffect(
+  private startInner = Effect.fnUntraced(function* (
+    this: ActionRegistry,
     def: ActionDef,
     slug: string,
     cwd: string,
@@ -328,8 +331,7 @@ class ActionRegistry {
     vars: ActionVars,
     harnessId: HarnessId,
     opts: StartOpts,
-  ): Effect.Effect<ActionStartResult> {
-    return Effect.gen({ self: this }, function* () {
+  ): Effect.fn.Return<ActionStartResult> {
     // `kill()` synchronously closes the prior run's tail + done
     // watcher and tmux-kills the session, so by the time we reach
     // here `liveHandles[slug]` should be empty. Defense-in-depth:
@@ -338,19 +340,20 @@ class ActionRegistry {
     // handles installed below.
     const stale = this.liveHandles.get(slug);
     if (stale) {
-      try { stale.tail.close(); } catch { /* best-effort */ }
-      try { stale.done.close(); } catch { /* best-effort */ }
+      yield* Effect.try(() => stale.tail.close()).pipe(Effect.ignore);
+      yield* Effect.try(() => stale.done.close()).pipe(Effect.ignore);
       this.liveHandles.delete(slug);
     }
 
-    const startedAt = Date.now();
+    const startedAt = yield* Clock.currentTimeMillis;
     const runId = formatRunId(slug, startedAt);
     const runDir = join(actionsDir(), runId);
-    try {
-      mkdirSync(runDir, { recursive: true });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { ok: false, reason: `mkdir run dir: ${msg}` };
+    const mkdirErr = yield* Effect.try(() => mkdirSync(runDir, { recursive: true })).pipe(
+      Effect.as(null),
+      Effect.catch((err) => Effect.succeed(causeMessage(err))),
+    );
+    if (mkdirErr !== null) {
+      return { ok: false, reason: `mkdir run dir: ${mkdirErr}` };
     }
 
     const renderedExtras = applyVars(extras, vars);
@@ -398,11 +401,12 @@ class ActionRegistry {
       startedAt,
       status: "running",
     };
-    try {
-      writeMetaSync(runDir, meta);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { ok: false, reason: `write meta: ${msg}` };
+    const metaWriteErr = yield* Effect.try(() => writeMetaSync(runDir, meta)).pipe(
+      Effect.as(null),
+      Effect.catch((err) => Effect.succeed(causeMessage(err))),
+    );
+    if (metaWriteErr !== null) {
+      return { ok: false, reason: `write meta: ${metaWriteErr}` };
     }
 
     const spawnResult = yield* startActionSession({
@@ -410,29 +414,34 @@ class ActionRegistry {
       cwd: opts.execution?.cwd ?? cwd,
       runDir,
       argv,
-    }).pipe(Effect.onInterrupt(() => Effect.sync(() => {
-      const endedAt = Date.now();
+    }).pipe(Effect.onInterrupt(() => Effect.gen(function* () {
+      const endedAt = yield* Clock.currentTimeMillis;
       writeDoneSentinelBestEffort(runDir, -1);
       const existing = readMetaSafe(runDir);
       if (existing) {
-        try {
-          writeMetaSync(runDir, { ...existing, status: "failed", endedAt });
-        } catch (err) {
-          log.warn("interrupted start meta persist failed", {
-            slug,
-            runDir,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
+        yield* Effect.try(() =>
+          writeMetaSync(runDir, { ...existing, status: "failed", endedAt })
+        ).pipe(
+          Effect.catch((err) =>
+            Effect.sync(() => {
+              log.warn("interrupted start meta persist failed", {
+                slug,
+                runDir,
+                err: causeMessage(err),
+              });
+            })
+          ),
+        );
       }
     })));
     if (!spawnResult.ok) {
       // Persist a failed sentinel so a later boot doesn't see a
       // "running" run with no tmux session.
       writeDoneSentinelBestEffort(runDir, -1);
+      const endedAt = yield* Clock.currentTimeMillis;
       void this.persistMetaUpdatePromise(runDir, {
         status: "failed",
-        endedAt: Date.now(),
+        endedAt,
       });
       return { ok: false, reason: spawnResult.reason };
     }
@@ -468,8 +477,7 @@ class ActionRegistry {
     this.attachLive(slug, runDir, runKind, false);
     this.scheduleCleanup();
     return { ok: true, run };
-    });
-  }
+  });
 
   startCustom(
     slug: string,
@@ -615,8 +623,7 @@ class ActionRegistry {
    * `-A`) fails loudly rather than corrupting state — the intended
    * backstop, not dead code.
    */
-  kill(slug: string): Effect.Effect<boolean> {
-    return Effect.gen({ self: this }, function* () {
+  kill = Effect.fn("ActionRegistry.kill")(function* (this: ActionRegistry, slug: string) {
     const run = this.runs.get(slug);
     if (!run || run.status !== "running") return false;
 
@@ -625,8 +632,8 @@ class ActionRegistry {
     // so the line ordering matches what the user saw streaming.
     const handles = this.liveHandles.get(slug);
     if (handles) {
-      try { handles.tail.close(); } catch { /* best-effort */ }
-      try { handles.done.close(); } catch { /* best-effort */ }
+      yield* Effect.try(() => handles.tail.close()).pipe(Effect.ignore);
+      yield* Effect.try(() => handles.done.close()).pipe(Effect.ignore);
       this.liveHandles.delete(slug);
     }
 
@@ -637,7 +644,7 @@ class ActionRegistry {
     // sees a terminal run (status !== "running") and bails instead of
     // appending a second exit line.
     const cur = this.runs.get(slug)!;
-    const endedAt = Date.now();
+    const endedAt = yield* Clock.currentTimeMillis;
     const dur = formatDuration(endedAt - cur.startedAt);
     const exitLine: ActionLine = {
       id: this.nextLineId(),
@@ -655,34 +662,33 @@ class ActionRegistry {
     // see meta.status="killed" + done.json present and correctly hold
     // the killed status (boot reconciler prefers terminal meta over
     // done.json's exit code).
-    try {
-      const existing = readMetaSafe(run.runDir);
-      if (existing) {
-        writeMetaSync(run.runDir, {
-          ...existing,
-          status: "killed",
-          endedAt,
-        });
-      }
-    } catch (err) {
-      log.warn("kill meta persist failed", {
-        slug,
-        runDir: run.runDir,
-        err: err instanceof Error ? err.message : String(err),
-      });
+    const existing = readMetaSafe(run.runDir);
+    if (existing) {
+      yield* Effect.try(() =>
+        writeMetaSync(run.runDir, { ...existing, status: "killed", endedAt })
+      ).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() => {
+            log.warn("kill meta persist failed", {
+              slug,
+              runDir: run.runDir,
+              err: causeMessage(err),
+            });
+          })
+        ),
+      );
     }
 
     // Free the tmux session name so a follow-up start() can reclaim it;
     // awaited last, after the in-memory teardown above. The wrapper's
     // EXIT trap fires once the session dies and writes done.json, but
     // no one watches it — the run is already terminal here.
-    yield* killActionTmuxSessionEffect(slug);
+    yield* killActionTmuxSession(slug);
 
     log.event.warn(`${slug}: ${cur.actionName} killed (${dur})`);
     this.scheduleCleanup();
     return true;
-    });
-  }
+  });
 
   killPromise(slug: string): Promise<boolean> {
     return Effect.runPromise(this.kill(slug));
@@ -696,29 +702,27 @@ class ActionRegistry {
    * mtime, dropping older runs from the in-memory cache (their files
    * stay on disk).
    */
-  boot(liveSlugs: ReadonlySet<string>): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
+  boot = Effect.fn("ActionRegistry.boot")(function* (this: ActionRegistry, liveSlugs: ReadonlySet<string>) {
     const dir = actionsDir();
     if (!existsSync(dir)) return;
-    let names: string[];
-    try {
-      names = readdirSync(dir);
-    } catch (err) {
-      log.warn("boot: read actions dir failed", {
-        err: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
+    const names = yield* Effect.try(() => readdirSync(dir)).pipe(
+      Effect.catch((err) =>
+        Effect.sync(() => {
+          log.warn("boot: read actions dir failed", { err: causeMessage(err) });
+          return null;
+        })
+      ),
+    );
+    if (names === null) return;
     const candidates: { name: string; mtime: number }[] = [];
     for (const name of names) {
       const path = join(dir, name);
-      try {
-        const st = statSync(path);
-        if (!st.isDirectory()) continue;
-        candidates.push({ name, mtime: st.mtimeMs });
-      } catch {
-        // skip unreadable entries
-      }
+      // skip unreadable entries
+      const st = yield* Effect.try(() => statSync(path)).pipe(
+        Effect.catch(() => Effect.succeed(null)),
+      );
+      if (!st || !st.isDirectory()) continue;
+      candidates.push({ name, mtime: st.mtimeMs });
     }
     candidates.sort((a, b) => b.mtime - a.mtime);
     const keep = candidates.slice(0, MAX_RETAINED_RUNS);
@@ -776,7 +780,7 @@ class ActionRegistry {
           });
         } else if (!sessionExists) {
           orphans++;
-          const endedAt = Date.now();
+          const endedAt = yield* Clock.currentTimeMillis;
           metaResolved = { ...meta, status: "failed", endedAt };
           // Write a sentinel so future boots see the same "completed"
           // file shape as a normally-terminated run; -1 marks "exit
@@ -826,8 +830,7 @@ class ActionRegistry {
       log.info("boot rehydrated runs", { restored, orphans });
     }
     this.scheduleCleanup();
-    });
-  }
+  });
 
   bootPromise(liveSlugs: ReadonlySet<string>): Promise<void> {
     return Effect.runPromise(this.boot(liveSlugs));
@@ -957,24 +960,20 @@ class ActionRegistry {
    * is that running actions outlive wt restarts. The next `wt`
    * invocation rehydrates them via `boot`.
    */
-  shutdown(): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
-      for (const handles of this.liveHandles.values()) {
-        yield* Effect.sync(() => {
-          try { handles.tail.close(); } catch { /* best-effort */ }
-          try { handles.done.close(); } catch { /* best-effort */ }
-        });
-      }
-      this.liveHandles.clear();
-      if (this.cleanupFiber) yield* Fiber.interrupt(this.cleanupFiber);
-      this.cleanupFiber = null;
-      yield* Effect.forEach(
-        [...this.pendingMetaWrites],
-        (fiber) => Fiber.await(fiber),
-        { concurrency: "unbounded", discard: true },
-      );
-    });
-  }
+  shutdown = Effect.fn("ActionRegistry.shutdown")(function* (this: ActionRegistry) {
+    for (const handles of this.liveHandles.values()) {
+      yield* Effect.try(() => handles.tail.close()).pipe(Effect.ignore);
+      yield* Effect.try(() => handles.done.close()).pipe(Effect.ignore);
+    }
+    this.liveHandles.clear();
+    if (this.cleanupFiber) yield* Fiber.interrupt(this.cleanupFiber);
+    this.cleanupFiber = null;
+    yield* Effect.forEach(
+      [...this.pendingMetaWrites],
+      (fiber) => Fiber.await(fiber),
+      { concurrency: "unbounded", discard: true },
+    );
+  });
 
   shutdownPromise(): Promise<void> {
     return Effect.runPromise(this.shutdown());
@@ -1253,7 +1252,7 @@ class ActionRegistry {
   }
 
   private persistMetaUpdatePromise(runDir: string, patch: Partial<ActionMeta>): void {
-    const tracked = Effect.runSync(Deferred.make<void>());
+    const tracked = Deferred.makeUnsafe<void>();
     let fiber: Fiber.Fiber<void, never>;
     fiber = Effect.runFork(
       Deferred.await(tracked).pipe(
@@ -1262,7 +1261,7 @@ class ActionRegistry {
       ),
     );
     this.pendingMetaWrites.add(fiber);
-    Effect.runSync(Deferred.succeed(tracked, undefined));
+    Deferred.doneUnsafe(tracked, Effect.void);
   }
 
   private scheduleCleanup(): void {

@@ -94,32 +94,33 @@ export class DiffContextError extends Data.TaggedError("DiffContextError")<{
  * preimage includes the base, so the AI memo cache stays correct
  * across base changes — equivalent diffs against different bases hash
  * to different keys.
+ *
+ * Cancellation is a boundary concern, not something this graph checks for
+ * itself: `buildDiffContextPromise` runs it via `Effect.runPromise(effect,
+ * { signal })`, which converts an external abort into genuine fiber
+ * interruption — and `run()`'s scoped acquire/release (`proc.ts`) always
+ * kills and joins the subprocess on interruption, `signal` or no. Manual
+ * `signal?.aborted` polling between steps duplicated that for no reason
+ * (worse: it let `fullDiff` spawn and buffer a megabyte of stdout before
+ * its own late check unwound).
  */
-export function buildDiffContext(
+export const buildDiffContext = Effect.fn("buildDiffContext")(function* (
   wtPath: string,
   effectiveBase?: string | null,
-  signal?: AbortSignal,
-): Effect.Effect<DiffContext | null, DiffContextError> {
+): Effect.fn.Return<DiffContext | null, DiffContextError> {
   const naming = config.naming;
-  if (!naming) return Effect.succeed(null);
-  return Effect.gen(function* () {
+  if (!naming) return null;
   const base = yield* effectiveBaseOrTrunk(wtPath, effectiveBase).pipe(
     Effect.mapError((cause) =>
       new DiffContextError({ operation: "resolve base", cause }),
     ),
   );
 
-  // Short-circuit between awaits when the caller has cancelled. Without
-  // these checks the post-stat git invocations still spawn just to be
-  // SIGTERM'd; `fullDiff` in particular can buffer a megabyte of stdout
-  // before its drain unwinds.
-  const stat = yield* diffStatEffect(wtPath, base, signal);
-  if (!stat || signal?.aborted) return null;
+  const stat = yield* diffStat(wtPath, base);
+  if (!stat) return null;
 
-  const log = yield* commitLogEffect(wtPath, base, signal);
-  if (signal?.aborted) return null;
-  const rawDiff = yield* fullDiffEffect(wtPath, base, signal);
-  if (signal?.aborted) return null;
+  const log = yield* commitLog(wtPath, base);
+  const rawDiff = yield* fullDiff(wtPath, base);
 
   // Nothing in `base...HEAD` — a freshly created worktree, or one
   // whose only changes are uncommitted (never in the diff context) or
@@ -166,15 +167,14 @@ export function buildDiffContext(
     counts: fit.counts,
     filesTotal,
   };
-  });
-}
+});
 
 export function buildDiffContextPromise(
   wtPath: string,
   effectiveBase?: string | null,
   signal?: AbortSignal,
 ): Promise<DiffContext | null> {
-  return Effect.runPromise(buildDiffContext(wtPath, effectiveBase, signal));
+  return Effect.runPromise(buildDiffContext(wtPath, effectiveBase), { signal });
 }
 
 // Three-dot (`base...HEAD` = `merge-base(base, HEAD)..HEAD`) so the diff
@@ -182,27 +182,27 @@ export function buildDiffContextPromise(
 // tree delta between base and HEAD, which on a branch that's purely
 // behind base produces the *inverse* of the commits base has gained —
 // the LLM then summarises those as if they were this branch's work.
-function diffStatEffect(wtPath: string, base: string, signal?: AbortSignal) {
+function diffStat(wtPath: string, base: string) {
   return run(
     ["git", "diff", "--stat", `${base}...HEAD`, "--", ...STATIC_EXCLUDES],
-    { cwd: wtPath, timeoutMs: 10_000, signal },
+    { cwd: wtPath, timeoutMs: 10_000 },
   ).pipe(
     Effect.map((r) => r.exitCode === 0 ? r.stdout.trim() : ""),
     Effect.mapError((cause) => new DiffContextError({ operation: "diff stat", cause })),
   );
 }
 
-function commitLogEffect(wtPath: string, base: string, signal?: AbortSignal) {
+function commitLog(wtPath: string, base: string) {
   return run(
     ["git", "log", "--reverse", "--format=%s", `${base}..HEAD`],
-    { cwd: wtPath, timeoutMs: 5_000, signal },
+    { cwd: wtPath, timeoutMs: 5_000 },
   ).pipe(
     Effect.map((r) => r.exitCode === 0 ? r.stdout.trim() : ""),
     Effect.mapError((cause) => new DiffContextError({ operation: "commit log", cause })),
   );
 }
 
-function fullDiffEffect(wtPath: string, base: string, signal?: AbortSignal) {
+function fullDiff(wtPath: string, base: string) {
   return run(
     [
       "git",
@@ -216,7 +216,7 @@ function fullDiffEffect(wtPath: string, base: string, signal?: AbortSignal) {
       "--",
       ...STATIC_EXCLUDES,
     ],
-    { cwd: wtPath, timeoutMs: 15_000, signal },
+    { cwd: wtPath, timeoutMs: 15_000 },
   ).pipe(
     Effect.map((r) => r.exitCode === 0 ? r.stdout : ""),
     Effect.mapError((cause) => new DiffContextError({ operation: "full diff", cause })),

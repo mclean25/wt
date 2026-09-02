@@ -4,11 +4,12 @@
  * tmux work, while each refresh re-renders only that leaf rather than
  * the whole App tree.
  */
-import { useEffect, useState } from "react";
-import { Data, Effect, Fiber } from "effect";
+import { useState } from "react";
+import { Data, Effect } from "effect";
 
 import type { WorktreeTarget } from "../../core/worktree-target.ts";
 import { readWorktreeDevLogsPromise } from "../../core/worktree-executor.ts";
+import { useEffectFiber } from "./useEffectFiber.ts";
 
 const POLL_MS = 1_000;
 
@@ -39,19 +40,13 @@ export function useDevServerLog(
 ): string | null {
   const [output, setOutput] = useState<string | null>(null);
 
-  useEffect(() => {
+  useEffectFiber(() => {
     setOutput(null);
     const read = () =>
       target ? readWorktreeDevLogsPromise(target) : Promise.resolve(null);
-    const fiber = Effect.runFork(
-      devServerLogPoll(read, (next) =>
-        setOutput((previous) => (previous === next ? previous : next)),
-      ),
+    return devServerLogPoll(read, (next) =>
+      setOutput((previous) => (previous === next ? previous : next)),
     );
-
-    return () => {
-      Effect.runFork(Fiber.interrupt(fiber));
-    };
   }, [slug, target?.ref.kind, target?.ref.kind === "remote" ? target.ref.host : ""]);
 
   return output;

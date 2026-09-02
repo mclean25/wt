@@ -1,44 +1,26 @@
 import { createHash } from "node:crypto";
 
 import { queryOptions } from "@tanstack/react-query";
-import { Data, Effect } from "effect";
+import { Clock, Effect } from "effect";
 
 import {
-  summarizeDiffPromise,
-  summarizeStackPromise,
+  summarizeDiff,
+  summarizeStack,
   type AiSummary,
 } from "../../core/ai.ts";
 import { config } from "../../core/config.ts";
 import type { DiffContext } from "../../core/diff/index.ts";
-import { buildDiffContextViaPoolPromise } from "../../core/diff/pool.ts";
+import { buildDiffContextViaPool } from "../../core/diff/pool.ts";
 import type { Worktree } from "../../core/types.ts";
 import { createLogger } from "../../core/logger.ts";
 import { pluralize } from "../../core/text.ts";
 import { stackIdFromSectionKey } from "../../core/wtstate.ts";
 
 import { qk } from "../keys.ts";
+import { operationErrors, runQuery } from "./boundary.ts";
 import { KEEP_PREV, NO_CTX_HASH, STALE } from "./shared.ts";
 
-class AiQueryError extends Data.TaggedError("AiQueryError")<{
-  operation: string;
-  cause: unknown;
-}> {
-  override get message(): string {
-    return this.cause instanceof Error
-      ? this.cause.message
-      : String(this.cause);
-  }
-}
-
-const queryPromise = <A, E>(effect: Effect.Effect<A, E>, signal: AbortSignal) =>
-  Effect.runPromise(effect, { signal });
-
-const promiseEffect = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => new AiQueryError({ operation, cause }),
-  });
-
+const io = operationErrors("ai");
 const aiLog = createLogger("ai");
 
 /**
@@ -62,12 +44,7 @@ export const wtDiffContextQuery = (
   return queryOptions({
     queryKey: qk.wt(wt.slug).diffContext(base),
     queryFn: ({ signal }): Promise<DiffContext | null> =>
-      queryPromise(
-        promiseEffect("build diff context", () =>
-          buildDiffContextViaPoolPromise(wt.path, base, signal),
-        ),
-        signal,
-      ),
+      runQuery(buildDiffContextViaPool(wt.path, base), signal),
     staleTime: STALE.mid,
     ...KEEP_PREV,
   });
@@ -109,48 +86,46 @@ export const aiSummaryQuery = (
     // triggered the fetch.
     queryKey: qk.aiSummary(ctx?.hash ?? NO_CTX_HASH),
     queryFn: ({ signal }): Promise<AiSummary> =>
-      queryPromise(
+      runQuery(
         Effect.gen(function* () {
           // The `enabled: !!ctx` guard at the call site makes this branch
           // unreachable. We throw rather than caching `null` defensively:
           // a `null` entry under `NO_CTX_HASH` with `staleTime: Infinity`
           // would be a forever-stuck "no summary" if this ever fired.
           if (!ctx) {
-            return yield* new AiQueryError({
-              operation: "summarize diff",
-              cause: new Error(
+            return yield* io.sync("summarize diff", () => {
+              throw new Error(
                 "aiSummaryQuery: ctx is null (enabled guard missed)",
-              ),
+              );
             });
           }
           aiLog.event.dim(
             `asking naming harness for ${slug} (${pluralize(ctx.prompt.length, "char")})...`,
           );
-          const start = Date.now();
-          return yield* promiseEffect("summarize diff", () =>
-            summarizeDiffPromise(ctx.prompt, signal),
-          ).pipe(
+          const start = yield* Clock.currentTimeMillis;
+          return yield* summarizeDiff(ctx.prompt).pipe(
             Effect.tap(() =>
-              Effect.sync(() => {
-                aiLog.event.dim(
-                  `named ${slug} (${formatDuration(Date.now() - start)})`,
-                );
-              }),
+              Clock.currentTimeMillis.pipe(
+                Effect.map((end) => {
+                  aiLog.event.dim(
+                    `named ${slug} (${formatDuration(end - start)})`,
+                  );
+                }),
+              ),
             ),
             Effect.tapError((err) =>
-              Effect.sync(() => {
-                // A cancelled observer (diff hash flipped again, row unmounted)
-                // aborts the in-flight call — routine supersession, not a
-                // failure worth an activity-pane line.
-                if (signal.aborted) return;
-                const msg =
-                  err.cause instanceof Error
-                    ? err.cause.message
-                    : String(err.cause);
-                aiLog.event.err(
-                  `naming harness failed for ${slug} (${formatDuration(Date.now() - start)}): ${msg}`,
-                );
-              }),
+              Clock.currentTimeMillis.pipe(
+                Effect.map((end) => {
+                  // A cancelled observer (diff hash flipped again, row
+                  // unmounted) aborts the in-flight call — routine
+                  // supersession, not a failure worth an activity-pane
+                  // line.
+                  if (signal.aborted) return;
+                  aiLog.event.err(
+                    `naming harness failed for ${slug} (${formatDuration(end - start)}): ${err.message}`,
+                  );
+                }),
+              ),
             ),
           );
         }),
@@ -224,14 +199,13 @@ export const stackTitleQuery = (
   queryOptions({
     queryKey: qk.stackTitle(buildStackSignature(members)),
     queryFn: ({ signal }): Promise<string> =>
-      queryPromise(
+      runQuery(
         Effect.gen(function* () {
           if (members.length === 0) {
-            return yield* new AiQueryError({
-              operation: "summarize stack",
-              cause: new Error(
+            return yield* io.sync("summarize stack", () => {
+              throw new Error(
                 "stackTitleQuery: members empty (enabled guard missed)",
-              ),
+              );
             });
           }
           // Log the stack id, not the raw section key — the key carries a
@@ -241,30 +215,28 @@ export const stackTitleQuery = (
           aiLog.event.dim(
             `naming stack ${displayName} (${members.length} members)...`,
           );
-          const start = Date.now();
-          return yield* promiseEffect("summarize stack", () =>
-            summarizeStackPromise(members, signal),
-          ).pipe(
+          const start = yield* Clock.currentTimeMillis;
+          return yield* summarizeStack(members).pipe(
             Effect.tap((title) =>
-              Effect.sync(() => {
-                aiLog.event.dim(
-                  `named stack ${displayName} → "${title}" (${formatDuration(Date.now() - start)})`,
-                );
-              }),
+              Clock.currentTimeMillis.pipe(
+                Effect.map((end) => {
+                  aiLog.event.dim(
+                    `named stack ${displayName} → "${title}" (${formatDuration(end - start)})`,
+                  );
+                }),
+              ),
             ),
             Effect.tapError((err) =>
-              Effect.sync(() => {
-                // Same cancellation gate as aiSummaryQuery: an aborted signal
-                // is supersession, not a failure.
-                if (signal.aborted) return;
-                const msg =
-                  err.cause instanceof Error
-                    ? err.cause.message
-                    : String(err.cause);
-                aiLog.event.err(
-                  `naming stack ${displayName} failed (${formatDuration(Date.now() - start)}): ${msg}`,
-                );
-              }),
+              Clock.currentTimeMillis.pipe(
+                Effect.map((end) => {
+                  // Same cancellation gate as aiSummaryQuery: an aborted
+                  // signal is supersession, not a failure.
+                  if (signal.aborted) return;
+                  aiLog.event.err(
+                    `naming stack ${displayName} failed (${formatDuration(end - start)}): ${err.message}`,
+                  );
+                }),
+              ),
             ),
           );
         }),

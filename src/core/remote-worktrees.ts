@@ -50,11 +50,10 @@ export function parseRemoteWorkerWorktrees(
 }
 
 /** Read the authoritative execution snapshot from one configured SSH worker. */
-export function fetchRemoteWorktrees(
+export const fetchRemoteWorktrees = Effect.fn("fetchRemoteWorktrees")(function* (
   remote: RemoteConfig,
   signal?: AbortSignal,
-): Effect.Effect<RemoteWorktreeSummary[], RemoteWorktreesError> {
-  return Effect.gen(function* () {
+): Effect.fn.Return<RemoteWorktreeSummary[], RemoteWorktreesError> {
   yield* fetchRemoteWorkerInfo(remote).pipe(
     Effect.mapError((cause) => new RemoteWorktreesError({
       operation: "handshake",
@@ -96,8 +95,7 @@ export function fetchRemoteWorktrees(
   });
   yield* Effect.sync(() => reapRemoteLayouts(remote.host, new Set(rows.map((row) => row.slug))));
   return rows;
-  });
-}
+});
 
 export const fetchRemoteWorktreesPromise = (
   remote: RemoteConfig,

@@ -78,7 +78,7 @@ export class AiNamingError extends Data.TaggedError("AiNamingError")<{
  * burning latency on a result nobody sees.
  */
 export const summarizeDiff = (prompt: string) =>
-  callNamingHarnessEffect(SYSTEM_PROMPT, prompt).pipe(Effect.map(parseTitleDescription));
+  callNamingHarness(SYSTEM_PROMPT, prompt).pipe(Effect.map(parseTitleDescription));
 export const summarizeDiffPromise = (prompt: string, external?: AbortSignal): Promise<AiSummary> =>
   Effect.runPromise(summarizeDiff(prompt), { signal: external });
 
@@ -93,9 +93,9 @@ export const summarizeDiffPromise = (prompt: string, external?: AbortSignal): Pr
  * transport / HTTP errors; if the model emits a non-TITLE response
  * the whole content is used as a last-resort fallback.
  */
-export function summarizeStack(
+export const summarizeStack = Effect.fn("summarizeStack")(function* (
   members: ReadonlyArray<{ branch: string; brief: string }>,
-): Effect.Effect<string, AiNamingError> {
+): Effect.fn.Return<string, AiNamingError> {
   const userPrompt = `Branches in this stack:\n${members
     .map((m) => `- ${m.branch}: ${m.brief}`)
     .join("\n")}`;
@@ -107,13 +107,12 @@ export function summarizeStack(
   // rejected text quoted back, and if it still won't name the work,
   // throw — the section falls back to its bare issue label (ENG-5202)
   // rather than baking in junk.
-  return Effect.gen(function* () {
   let lastRejected: string | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const prompt: string = lastRejected
       ? `${userPrompt}\n\nYour previous answer "${lastRejected}" just echoed words from the instructions. Name the actual WORK these branches do, not the tool or the grouping.`
       : userPrompt;
-    const content: string = yield* callNamingHarnessEffect(STACK_SYSTEM_PROMPT, prompt);
+    const content: string = yield* callNamingHarness(STACK_SYSTEM_PROMPT, prompt);
     const titleMatch: RegExpMatchArray | null = content.match(/^TITLE:\s*(.+?)\s*$/m);
     const raw: string = (titleMatch?.[1] ?? content).trim();
     const cleaned = cleanInline(raw);
@@ -124,8 +123,7 @@ export function summarizeStack(
   }
   return yield* new AiNamingError({ kind: "invalid-title", detail:
     `stack title: model only echoed meta-vocabulary ("${lastRejected}")` });
-  });
-}
+});
 export const summarizeStackPromise = (
   members: ReadonlyArray<{ branch: string; brief: string }>, external?: AbortSignal,
 ): Promise<string> => Effect.runPromise(summarizeStack(members), { signal: external });
@@ -182,7 +180,18 @@ export const withNamingPermit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
  * model-swapping server recover on the spot); an external abort — the
  * observer was cancelled, nobody wants the result — does not.
  */
-function callNamingHarnessEffect(
+/**
+ * One retry (transient resets from a busy / model-swapping server recover
+ * on the spot), jittered so a burst of naming calls after a restack doesn't
+ * retry in lockstep. Exported so its timing is pinned directly against
+ * `TestClock` rather than only through the call count.
+ */
+export const NAMING_RETRY_SCHEDULE = Schedule.max([
+  Schedule.recurs(1),
+  Schedule.spaced("500 millis"),
+]).pipe(Schedule.jittered);
+
+function callNamingHarness(
   systemPrompt: string,
   userPrompt: string,
 ): Effect.Effect<string, AiNamingError> {
@@ -196,7 +205,7 @@ function callNamingHarnessEffect(
           config.paths.mainClone,
         ).pipe(
           Effect.mapError((cause: HarnessCompletionError) => new AiNamingError({ kind: "completion", detail: cause.message, cause })),
-          Effect.retry(Schedule.max([Schedule.recurs(1), Schedule.spaced("500 millis")])),
+          Effect.retry(NAMING_RETRY_SCHEDULE),
         );
   // Semaphore acquisition is interruptible. A query cancelled while queued
   // is removed from the waiter set and never invokes the harness.

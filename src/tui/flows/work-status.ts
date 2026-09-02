@@ -11,17 +11,17 @@
  */
 import type { WorkState, WorkStatusRecord } from "../../core/work-status.ts";
 import { effectiveWorkState, WORK_STATES } from "../../core/work-status.ts";
+import { operationErrors } from "../../core/errors.ts";
 import type { Modal, StatusPickerItem } from "../modal-state.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { markSelfStatusWrite } from "../../state/self-writes.ts";
+import { forkReported } from "../effect-boundary.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import { emptyEdit, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
-class WorkStatusFlowError extends Data.TaggedError("WorkStatusFlowError")<{
-  cause: unknown;
-}> {}
+const io = operationErrors("work status flows");
 
 export type { StatusPickerItem };
 
@@ -266,11 +266,8 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     // line still lands in the pane feed). A clear writes no record, so
     // there's nothing to narrate or mute.
     if (record) markSelfStatusWrite(slug, record.at);
-    Effect.runFork(
-      Effect.tryPromise({
-        try: () => setWorkStatus(slug, record),
-        catch: (cause) => new WorkStatusFlowError({ cause }),
-      }).pipe(
+    forkReported(
+      io.promise("set status", () => setWorkStatus(slug, record)).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             toast(
@@ -280,10 +277,8 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
             );
           }),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() => reportActionError("set status", error.cause)),
-        ),
       ),
+      (error) => reportActionError("set status", error),
     );
   }
 
@@ -350,11 +345,8 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
     }
     const record = statusTextRecord(pending, text, new Date().toISOString());
     markSelfStatusWrite(pending.slug, record.at);
-    Effect.runFork(
-      Effect.tryPromise({
-        try: () => setWorkStatus(pending.slug, record),
-        catch: (cause) => new WorkStatusFlowError({ cause }),
-      }).pipe(
+    forkReported(
+      io.promise("set status", () => setWorkStatus(pending.slug, record)).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (pending.field !== "verifyAfterMerge") {
@@ -380,10 +372,8 @@ export function makeWorkStatusFlows(ctx: WorkStatusFlowsCtx) {
             }
           }),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() => reportActionError("set status", error.cause)),
-        ),
       ),
+      (error) => reportActionError("set status", error),
     );
   }
 

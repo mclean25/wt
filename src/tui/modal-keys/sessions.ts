@@ -12,9 +12,11 @@ import {
 } from "../../core/harness/index.ts";
 import { sessionOutputId } from "../../core/outputs.ts";
 import {
-  closeHarnessSessionGracefullyPromise,
-  killHarnessSessionPromise,
+  closeHarnessSessionGracefully,
+  killHarnessSession,
 } from "../../core/tmux.ts";
+import { operationErrors } from "../../core/errors.ts";
+import { forkReported } from "../effect-boundary.ts";
 import { isBareShiftedKey } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import { applyEditKey, emptyEdit, insertText } from "../text-edit.tsx";
@@ -22,16 +24,9 @@ import { previewFocusPatch } from "../picker-preview.ts";
 import { isSyntheticLiveSessionId } from "../hooks/useHarnessSessions.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleListPickerKey } from "./list-picker.ts";
-import { Data, Duration, Effect } from "effect";
+import { Duration, Effect } from "effect";
 
-class SessionsModalError extends Data.TaggedError("SessionsModalError")<{
-  cause: unknown;
-}> {}
-const modalPromise = <A>(evaluate: () => PromiseLike<A>) =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: (cause) => new SessionsModalError({ cause }),
-  });
+const io = operationErrors("modal-keys/sessions");
 
 export function handleClaudeSessionsPickerKey(
   k: KeyEvent,
@@ -126,14 +121,9 @@ export function handleClaudeSessionsPickerKey(
           // — forgetting a dead name is harmless.
           if (e.extras.managedName !== null) {
             removeClaudeName(slug, e.extras.managedName);
-            Effect.runFork(
-              modalPromise(() => refreshClaudeSummaries(slug)).pipe(
-                Effect.catch((error) =>
-                  Effect.sync(() =>
-                    reportActionError("refresh summaries", error.cause),
-                  ),
-                ),
-              ),
+            forkReported(
+              io.promise("refresh summaries", () => refreshClaudeSummaries(slug)),
+              (error) => reportActionError("refresh summaries", error),
             );
             logInfo(
               `forgot ghost session "${e.extras.managedName}" on ${slug}`,
@@ -144,13 +134,13 @@ export function handleClaudeSessionsPickerKey(
       } else if (e.isLive) {
         const harnessId = e.harnessId;
         setModal(null);
-        Effect.runFork(
+        forkReported(
           Effect.gen(function* () {
-            yield* modalPromise(() => killHarnessSessionPromise(slug, harnessId));
+            yield* killHarnessSession(slug, harnessId);
             yield* Effect.all(
               [
-                modalPromise(refreshTmuxSessions),
-                modalPromise(() => refreshHarnessSessions(slug)),
+                io.promise("refresh tmux sessions", refreshTmuxSessions),
+                io.promise("refresh harness sessions", () => refreshHarnessSessions(slug)),
               ],
               { concurrency: "unbounded", discard: true },
             );
@@ -159,17 +149,9 @@ export function handleClaudeSessionsPickerKey(
                 `killed ${getHarness(harnessId).label} session on ${slug}`,
               ),
             );
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.sync(() => {
-                const msg =
-                  error.cause instanceof Error
-                    ? error.cause.message
-                    : String(error.cause);
-                logErr(`kill ${harnessId} session failed for ${slug}: ${msg}`);
-              }),
-            ),
-          ),
+          }),
+          (error) =>
+            logErr(`kill ${harnessId} session failed for ${slug}: ${error.message}`),
         );
       } else {
         toast(
@@ -190,28 +172,24 @@ export function handleClaudeSessionsPickerKey(
         return true;
       }
       logInfo(`closing ${getHarness(e.harnessId).label} session on ${slug}`);
-      Effect.runFork(
-        modalPromise(() =>
-          closeHarnessSessionGracefullyPromise(
-            slug,
-            e.harnessId,
-            e.extras.managedName,
-          ),
+      forkReported(
+        closeHarnessSessionGracefully(
+          slug,
+          e.harnessId,
+          e.extras.managedName,
         ).pipe(
           Effect.andThen(Effect.sleep(Duration.millis(800))),
           Effect.andThen(
             Effect.all(
               [
-                modalPromise(refreshTmuxSessions),
-                modalPromise(() => refreshHarnessSessions(slug)),
+                io.promise("refresh tmux sessions", refreshTmuxSessions),
+                io.promise("refresh harness sessions", () => refreshHarnessSessions(slug)),
               ],
               { concurrency: "unbounded", discard: true },
             ),
           ),
-          Effect.catch((error) =>
-            Effect.sync(() => reportActionError("close session", error.cause)),
-          ),
         ),
+        (error) => reportActionError("close session", error),
       );
       setModal(null);
     }

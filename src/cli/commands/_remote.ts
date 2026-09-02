@@ -1,11 +1,29 @@
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 
+import { operationErrors } from "../../core/errors.ts";
 import { decodeRemoteArgs } from "../../core/remote-protocol.ts";
 
-class RemoteCommandError extends Data.TaggedError("RemoteCommandError")<{
-  readonly operation: "load config" | "load dispatcher";
-  readonly cause: unknown;
-}> {}
+const io = operationErrors("wt _remote");
+
+function decodeOrError(raw: string): { decoded: string[] } | { error: string } {
+  try {
+    return { decoded: decodeRemoteArgs(raw) };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+const runDecoded = Effect.fn("wt _remote")(function* (decoded: string[]) {
+  if (decoded[0] !== "_hello") {
+    const { config } = yield* io.promise("load config", () => import("../../core/config.ts"));
+    if (config.instance.role !== "worker") {
+      console.error('remote execution requires [instance] role = "worker" on this host');
+      return 1;
+    }
+  }
+  const { dispatch } = yield* io.promise("load dispatcher", () => import("../index.ts"));
+  return yield* dispatch(decoded);
+});
 
 /** Decode SSH-safe argv and re-enter the normal CLI dispatcher remotely. */
 export function run(argv: string[]): Effect.Effect<number, Error> {
@@ -15,34 +33,12 @@ export function run(argv: string[]): Effect.Effect<number, Error> {
       return 2;
     });
   }
-  let decoded: string[];
-  try {
-    decoded = decodeRemoteArgs(argv[0]!);
-  } catch (err) {
+  const parsed = decodeOrError(argv[0]!);
+  if ("error" in parsed) {
     return Effect.sync(() => {
-      console.error(err instanceof Error ? err.message : String(err));
+      console.error(parsed.error);
       return 2;
     });
   }
-  return Effect.gen(function* () {
-    if (decoded[0] !== "_hello") {
-      const { config } = yield* Effect.tryPromise({
-        try: () => import("../../core/config.ts"),
-        catch: (cause) => new RemoteCommandError({ operation: "load config", cause }),
-      });
-      if (config.instance.role !== "worker") {
-        yield* Effect.sync(() =>
-          console.error(
-            'remote execution requires [instance] role = "worker" on this host',
-          ),
-        );
-        return 1;
-      }
-    }
-    const { dispatch } = yield* Effect.tryPromise({
-      try: () => import("../index.ts"),
-      catch: (cause) => new RemoteCommandError({ operation: "load dispatcher", cause }),
-    });
-    return yield* dispatch(decoded);
-  });
+  return runDecoded(parsed.decoded);
 }
