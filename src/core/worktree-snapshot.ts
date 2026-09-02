@@ -10,6 +10,7 @@ import { parseWorkStatus, type WorkStatusRecord } from "./work-status.ts";
 import { readWtState } from "./wtstate.ts";
 import { listWorktreesEffect, pushCountsEffect, worktreeStatusEffect } from "./worktree.ts";
 import { WORKER_PROTOCOL_VERSION } from "./worker-info.ts";
+import { causeMessage } from "./errors.ts";
 
 /**
  * Location-neutral execution state for one checkout.
@@ -49,7 +50,12 @@ export class WorktreeSnapshotError extends Data.TaggedError("WorktreeSnapshotErr
   readonly slug?: string;
   readonly operation: "discover" | "status" | "dev";
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    const where = this.slug ? `${this.slug} ${this.operation}` : this.operation;
+    return `${where}: ${causeMessage(this.cause)}`;
+  }
+}
 
 /** Collect the authoritative execution state once for CLI and SSH consumers. */
 export function collectWorktreeSnapshotsEffect(

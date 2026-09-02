@@ -19,6 +19,7 @@ import {
   startDevServerEffect,
   stopDevServerEffect,
   waitForDevReadyEffect,
+  waitForDevSlotEffect,
   type DevSlotHolder,
 } from "../../core/dev-server.ts";
 import type { Worktree } from "../../core/types.ts";
@@ -116,12 +117,6 @@ function runStart(wt: Worktree, argv: readonly string[]) {
   }
 
   if (wait) {
-    // Imported lazily so a plain start never pays for the queue module
-    // graph, and so a broken one can't take `wt dev start` with it.
-    const { waitForDevSlotEffect } = yield* Effect.tryPromise({
-      try: () => import("../../core/dev-server.ts"),
-      catch: (cause) => new DevCommandError({ cause }),
-    });
     let announced = false;
     const got = yield* waitForDevSlotEffect(wt.slug, {
       timeoutMs,

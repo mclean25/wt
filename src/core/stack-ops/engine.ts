@@ -19,7 +19,7 @@
  * whole replay. The `RestackEngine` seam stays so the replay mechanism
  * can be swapped or tested in isolation.
  */
-import { Data, Effect } from "effect";
+import { Clock, Data, Effect } from "effect";
 
 import {
   gitRunEffect,
@@ -27,6 +27,7 @@ import {
   revParseEffect,
 } from "../git.ts";
 import type { RunResult } from "../proc.ts";
+import { causeMessage } from "../errors.ts";
 
 export type ReplayLogger = (line: string) => void;
 
@@ -64,7 +65,11 @@ export interface RestackEngine {
 export class RestackEngineError extends Data.TaggedError("RestackEngineError")<{
   readonly step: ReplayStep;
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.step.branch}: ${causeMessage(this.cause)}`;
+  }
+}
 
 export function replayStepEffect(
   engine: RestackEngine,
@@ -118,9 +123,15 @@ function safeGitRunEffect(args: readonly string[], cwd: string): Effect.Effect<R
   );
 }
 
+/**
+ * A probe that cannot answer reads as "still mid-rebase": the only thing
+ * that hangs on the answer is whether the backup ref may be dropped, and
+ * an unknown tree state must keep it. (The probe itself distinguishes
+ * "no rebase" from "cannot tell"; only the latter lands here.)
+ */
 function safeRebaseInProgressEffect(cwd: string): Effect.Effect<boolean> {
   return rebaseInProgressEffect(cwd).pipe(
-    Effect.catch(() => Effect.succeed(false)),
+    Effect.catch(() => Effect.succeed(true)),
   );
 }
 
@@ -446,7 +457,7 @@ function deleteBackupEffect(
 }
 
 /** Epoch ms as a ref-safe token. Split out so it's easy to see/replace. */
-const epochMsEffect = Effect.clockWith((clock) => clock.currentTimeMillis);
+const epochMsEffect = Clock.currentTimeMillis;
 
 function short(sha: string): string {
   return sha.slice(0, 9);

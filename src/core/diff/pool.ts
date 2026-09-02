@@ -24,6 +24,7 @@ import { chainSignal } from "../proc.ts";
 
 import type { DiffContext } from "./index.ts";
 import type { DiffJobMessage, DiffJobResult } from "./protocol.ts";
+import { causeMessage } from "../errors.ts";
 
 // Keep git I/O concurrency reasonable without spawning a worker per
 // core. A handful is plenty — diffs feed background AI summaries, not
@@ -51,7 +52,11 @@ let disposed = false;
 
 export class DiffPoolError extends Data.TaggedError("DiffPoolError")<{
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return causeMessage(this.cause);
+  }
+}
 
 /** Typed send so a `protocol.ts` field rename is a compile error rather
  *  than a runtime surprise (`postMessage` itself is untyped). */

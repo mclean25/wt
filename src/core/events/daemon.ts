@@ -19,7 +19,7 @@ import { Clock, Data, Duration, Effect, Exit, Queue, Ref, Scope, Semaphore } fro
 
 import { buildSha, currentSourceSha } from "../build-id.ts";
 import { config, type GithubEventsConfig } from "../config.ts";
-import { fetchGithub } from "../github.ts";
+import { fetchGithubEffect, type GithubData } from "../github.ts";
 import { createLogger, flushLoggerEffect } from "../logger.ts";
 import { fetchOriginEffect, listWorktreesEffect } from "../worktree.ts";
 
@@ -215,7 +215,7 @@ export class DaemonOperationError extends Data.TaggedError("DaemonOperationError
   readonly cause: unknown;
 }> {}
 
-type GithubResult = Awaited<ReturnType<typeof fetchGithub>>;
+type GithubResult = GithubData;
 type Delivery = {
   readonly event: string;
   readonly branches: readonly string[] | null;
@@ -251,11 +251,6 @@ const trySync = <A>(operation: string, evaluate: () => A) => Effect.try({
   catch: (cause) => new DaemonOperationError({ operation, cause }),
 });
 
-const tryPromise = <A>(operation: string, evaluate: () => PromiseLike<A>) => Effect.tryPromise({
-  try: evaluate,
-  catch: (cause) => new DaemonOperationError({ operation, cause }),
-});
-
 function productionDependencies(): DaemonDependencies {
   return {
     ensureEventsDir,
@@ -266,7 +261,11 @@ function productionDependencies(): DaemonDependencies {
     fetchOrigin: fetchOriginEffect().pipe(
       Effect.mapError((cause) => new DaemonOperationError({ operation: "fetch origin", cause })),
     ),
-    fetchGithub: (branches) => tryPromise("fetch GitHub", () => fetchGithub([...branches])),
+    // The native Effect, not its Promise twin: a scope close must reach the
+    // in-flight `gh` subprocess, and a `runPromise` island would hide it.
+    fetchGithub: (branches) => fetchGithubEffect([...branches]).pipe(
+      Effect.mapError((cause) => new DaemonOperationError({ operation: "fetch GitHub", cause })),
+    ),
     writeSnapshot,
     touchMarker,
     writeState,

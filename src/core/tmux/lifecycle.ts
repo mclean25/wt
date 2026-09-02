@@ -7,7 +7,7 @@ import {
   type HarnessId,
 } from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
-import { buildInnerArgs, sessionsDir, tmuxClientCwd } from "./attach.ts";
+import { buildInnerArgs, ensureHarnessTrusted, sessionsDir, tmuxClientCwd } from "./attach.ts";
 import { ensureConfig } from "./config.ts";
 import { prepareInspectorSocketEffect, wrapInnerArgs } from "./inner-process.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
@@ -80,7 +80,7 @@ export function startHarnessSessionDetachedEffect(
     const sessions = discovered.success;
     resumeSessionId = primarySingleSlotSession(sessions)?.sessionId ?? null;
   }
-  // buildInnerArgs also calls harness.ensureTrusted?.(cwd).
+  yield* ensureHarnessTrusted(harness, cwd);
   const innerArgs = buildInnerArgs({
     slug,
     cwd,

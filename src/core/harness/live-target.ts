@@ -24,8 +24,8 @@
  * mistake that routes a message to a fresh session while the real one
  * is sitting there.
  */
-import { probeSessionNames } from "../tmux/process.ts";
-import { Data, Effect } from "effect";
+import { probeSessionNamesEffect } from "../tmux/process.ts";
+import { Effect } from "effect";
 import { CLAUDE_NAMED_SEP, sessionName, type SessionKind } from "../tmux/naming.ts";
 
 import { readPrimaryHarness } from "./primary.ts";
@@ -43,7 +43,6 @@ export type HarnessChoice = {
   source: "live" | "primary" | "primary-unknown";
 };
 
-export class LiveTargetError extends Data.TaggedError("LiveTargetError")<{ readonly cause: unknown }> {}
 
 /**
  * Harnesses with a live tmux session for `slug`, in registry order.
@@ -97,11 +96,12 @@ function liveHarnesses(
 export function resolveWorktreeHarnessEffect(
   slug: string,
   knownSlugs: ReadonlySet<string>,
-): Effect.Effect<HarnessChoice, LiveTargetError> {
-  return Effect.tryPromise({
-    try: () => probeSessionNames(),
-    catch: (cause) => new LiveTargetError({ cause }),
-  }).pipe(Effect.map((names) => chooseHarness(slug, names, knownSlugs, readPrimaryHarness())));
+): Effect.Effect<HarnessChoice> {
+  // The probe is three-valued and never fails (an unreachable tmux reads
+  // as "no sessions known"), so there is no error channel to wrap.
+  return probeSessionNamesEffect().pipe(
+    Effect.map((names) => chooseHarness(slug, names, knownSlugs, readPrimaryHarness())),
+  );
 }
 export const resolveWorktreeHarness = (slug: string, knownSlugs: ReadonlySet<string>) =>
   Effect.runPromise(resolveWorktreeHarnessEffect(slug, knownSlugs));

@@ -13,6 +13,7 @@
  * Switching codex sessions on the same worktree requires detaching
  * and respawning; multi-tmux-per-slug is a followup.
  */
+import { Effect } from "effect";
 import {
   existsSync,
   readdirSync,
@@ -90,7 +91,9 @@ export const codexHarness: Harness = {
     // Same rationale as Claude's: only a rift checkout (an independent clone)
     // trips Codex's per-project trust gate; a git worktree inherits the main
     // repo's trust.
-    if (isRiftWorktree(wtPath)) trustCodexWorkspace(wtPath);
+    return Effect.sync(() => {
+      if (isRiftWorktree(wtPath)) trustCodexWorkspace(wtPath);
+    });
   },
 
   reapState(liveSlugs) {

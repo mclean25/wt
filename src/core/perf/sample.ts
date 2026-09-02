@@ -25,6 +25,7 @@ import { Data, Effect } from "effect";
 import { createLogger } from "../logger.ts";
 import { runEffect } from "../proc.ts";
 import { TMUX_SOCKET } from "../tmux.ts";
+import { causeMessage } from "../errors.ts";
 
 const log = createLogger("[perf]");
 
@@ -128,7 +129,11 @@ export type PerfSnapshot = {
 
 export class PerfSampleError extends Data.TaggedError("PerfSampleError")<{
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return causeMessage(this.cause);
+  }
+}
 
 // ── Sampling ───────────────────────────────────────────────────────────
 

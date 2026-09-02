@@ -35,12 +35,39 @@
 
     // Effect-specific correctness diagnostics run in editors, `lint`, and
     // the patched `tsc` used by `typecheck`.
+    // `bun run lint` / the patched tsc only surface error/warning/message
+    // severities, so every rule this project relies on is promoted to
+    // "warning" here — at their default "suggestion" severity the
+    // Effect-native rules never reach a CLI run and lint silence proves
+    // nothing. (Verified: `effectFnOpportunity` is inert in this plugin
+    // version even when promoted; `Effect.fn` adoption is a review habit.)
     "plugins": [
       {
         "name": "@effect/language-service",
-        "diagnostics": true,
         "diagnosticsName": true,
-        "includeSuggestionsInTsc": true
+        "includeSuggestionsInTsc": true,
+        "diagnosticSeverity": {
+          "anyUnknownInErrorContext": "warning",
+          "catchUnfailableEffect": "warning",
+          "unnecessaryEffectGen": "warning",
+          "runEffectInsideEffect": "warning",
+          "tryCatchInEffectGen": "warning",
+          "returnEffectInGen": "warning",
+          "flatMapToMap": "warning",
+          "catchAllToMapError": "warning",
+          "effectMapVoid": "warning",
+          "effectSucceedWithVoid": "warning",
+          "unnecessaryFailYieldableError": "warning",
+          "unnecessaryPipe": "warning",
+          "unnecessaryPipeChain": "warning",
+          "effectMapFlatten": "warning",
+          "nestedEffectGenYield": "warning",
+          "lazyPromiseInEffectSync": "warning",
+          "globalDateInEffect": "warning",
+          "globalTimersInEffect": "warning",
+          "globalRandomInEffect": "warning",
+          "newPromise": "warning"
+        }
       }
     ],
 

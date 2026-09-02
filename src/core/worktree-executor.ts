@@ -10,7 +10,7 @@ import {
 } from "./proc.ts";
 import { sendSessionMessageEffect } from "./harness/session-messaging.ts";
 import type { HarnessId } from "./harness/index.ts";
-import { devServerLogs, readDevCrashLog } from "./dev-server.ts";
+import { devServerLogsEffect, readDevCrashLog } from "./dev-server.ts";
 import {
   interactiveRemoteSshArgv,
   remoteWtSshArgv,
@@ -106,11 +106,8 @@ export function readWorktreeDevLogsEffect(
   target: WorktreeTarget,
 ): Effect.Effect<string | null, WorktreeExecutorError> {
   if (target.location.kind === "local") {
-    return Effect.tryPromise({
-      try: () => devServerLogs(target.slug),
-      catch: (cause) => new WorktreeExecutorError({ operation: "logs", cause }),
-    }).pipe(
-      Effect.orElseSucceed(() => null),
+    return devServerLogsEffect(target.slug).pipe(
+      Effect.orElseSucceed((): string | null => null),
       Effect.map((logs) => logs ?? readDevCrashLog(target.slug)),
     );
   }

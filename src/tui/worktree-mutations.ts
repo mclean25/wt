@@ -1,3 +1,4 @@
+import { Data, Effect } from "effect";
 import type { WorktreeTarget } from "../core/worktree-target.ts";
 import { worktreeTargetKey } from "../core/worktree-target.ts";
 
@@ -31,4 +32,3 @@ export function makeWorktreeMutations(deps: WorktreeMutationDeps) {
 
   return { setSection, setSectionEffect };
 }
-import { Data, Effect } from "effect";

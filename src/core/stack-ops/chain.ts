@@ -3,6 +3,7 @@
  * the ordered list of worktrees the replay walks, straight from live
  * worktrees + per-slug fork-base records (no stored stack state).
  */
+import { Effect } from "effect";
 import { config } from "../config.ts";
 import { buildStackIndex, type ChainMember } from "../stack-layout.ts";
 import { listWorktreesEffect } from "../worktree.ts";
@@ -115,4 +116,3 @@ export function resolveChainEffect(branch: string) {
 export function resolveChain(branch: string): Promise<RestackChain | null> {
   return Effect.runPromise(resolveChainEffect(branch));
 }
-import { Effect } from "effect";

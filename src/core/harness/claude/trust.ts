@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { Data, Effect } from "effect";
 
 import { listRiftWorktreePaths } from "../../backend.ts";
 import { createLogger } from "../../logger.ts";
@@ -19,9 +20,73 @@ const BACKOFF_MS = [0, 60, 200];
 
 type Projects = Record<string, Record<string, unknown>>;
 
+export class TrustFileError extends Data.TaggedError("TrustFileError")<{
+  readonly jsonPath: string;
+  readonly cause: unknown;
+}> {
+  override get message(): string {
+    const detail = this.cause instanceof Error ? this.cause.message : String(this.cause);
+    return `${this.jsonPath}: ${detail}`;
+  }
+}
+
 /** Paths in `wanted` that the parsed file does not (yet) mark trusted. */
 function untrusted(projects: Projects, wanted: readonly string[]): string[] {
   return wanted.filter((p) => projects[p]?.hasTrustDialogAccepted !== true);
+}
+
+function readUntrusted(jsonPath: string, wanted: readonly string[]): string[] {
+  const raw = readFileSync(jsonPath, "utf8");
+  return untrusted((JSON.parse(raw) as { projects?: Projects }).projects ?? {}, wanted);
+}
+
+/**
+ * One read-modify-write-verify pass. Returns the paths still untrusted
+ * after the read-back — empty means the write stuck (or nothing needed
+ * writing). Synchronous on purpose: the whole pass is ~2.3ms and must not
+ * interleave with anything of ours.
+ */
+function applyOnce(
+  jsonPath: string,
+  wanted: readonly string[],
+  state: { backedUp: boolean },
+  afterWrite: ((jsonPath: string) => void) | undefined,
+): string[] {
+  const raw = readFileSync(jsonPath, "utf8");
+  const data = JSON.parse(raw) as Record<string, unknown>;
+  if (typeof data !== "object" || data === null) return [...wanted];
+  const projects = (data.projects ??= {}) as Projects;
+
+  const missing = untrusted(projects, wanted);
+  // Steady state: everything already trusted, so no write at all. That
+  // is what keeps this from being a clobber source in its own right.
+  if (missing.length === 0) return [];
+  for (const p of missing) {
+    const entry = (projects[p] ??= {});
+    entry.hasTrustDialogAccepted = true;
+  }
+
+  // The backup is written from the bytes we just READ, not copied off
+  // disk. copyFileSync ran after the read, so a concurrent write in
+  // between made `.bak` a snapshot NEWER than the one being replaced —
+  // a backup of the wrong thing, which is worse than none because it
+  // reads as a safety net. Once per call: a later attempt must not
+  // overwrite the good backup with an already-clobbered file.
+  if (!state.backedUp) {
+    try {
+      writeFileSync(`${jsonPath}.bak`, raw);
+      state.backedUp = true;
+    } catch {
+      // A locked or unwritable backup target must not abort the trust write.
+    }
+  }
+  const tmp = `${jsonPath}.wt-${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
+  renameSync(tmp, jsonPath);
+  afterWrite?.(jsonPath);
+
+  const after = JSON.parse(readFileSync(jsonPath, "utf8")) as { projects?: Projects };
+  return untrusted(after.projects ?? {}, wanted);
 }
 
 /**
@@ -38,61 +103,30 @@ function untrusted(projects: Projects, wanted: readonly string[]): string[] {
  * `setSlugWorkStatus`: the log said trusted eight times while Michael
  * answered the dialog on three of six worktrees.
  *
- * Returns the paths still untrusted after the last attempt.
+ * Succeeds with the paths still untrusted after the last attempt. The
+ * backoff between attempts is an Effect sleep, so the retry never blocks
+ * the thread that is about to attach a session.
  *
  * `opts.afterWrite` fires between the rename and the read-back, and is
  * how the tests stand in for the foreign flush — the race is the entire
  * contract here, so a suite that cannot reproduce it is only testing
  * that JSON round-trips.
  */
-export function ensureTrustInFile(
+export const ensureTrustInFile = Effect.fn("ensureTrustInFile")(function* (
   jsonPath: string,
   wanted: readonly string[],
   opts: { afterWrite?: (jsonPath: string) => void } = {},
-): string[] {
-  let backedUp = false;
+) {
+  const state = { backedUp: false };
+  const pass = (f: () => string[]) =>
+    Effect.try({ try: f, catch: (cause) => new TrustFileError({ jsonPath, cause }) });
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    if (attempt > 0) Bun.sleepSync(BACKOFF_MS[attempt] ?? 200);
-    const raw = readFileSync(jsonPath, "utf8");
-    const data = JSON.parse(raw) as Record<string, unknown>;
-    if (typeof data !== "object" || data === null) return [...wanted];
-    const projects = (data.projects ??= {}) as Projects;
-
-    const missing = untrusted(projects, wanted);
-    // Steady state: everything already trusted, so no write at all. That
-    // is what keeps this from being a clobber source in its own right.
-    if (missing.length === 0) return [];
-    for (const p of missing) {
-      const entry = (projects[p] ??= {});
-      entry.hasTrustDialogAccepted = true;
-    }
-
-    // The backup is written from the bytes we just READ, not copied off
-    // disk. copyFileSync ran after the read, so a concurrent write in
-    // between made `.bak` a snapshot NEWER than the one being replaced —
-    // a backup of the wrong thing, which is worse than none because it
-    // reads as a safety net. Once per call: a later attempt must not
-    // overwrite the good backup with an already-clobbered file.
-    if (!backedUp) {
-      try {
-        writeFileSync(`${jsonPath}.bak`, raw);
-        backedUp = true;
-      } catch {
-        // A locked or unwritable backup target must not abort the trust write.
-      }
-    }
-    const tmp = `${jsonPath}.wt-${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
-    renameSync(tmp, jsonPath);
-    opts.afterWrite?.(jsonPath);
-
-    const after = JSON.parse(readFileSync(jsonPath, "utf8")) as { projects?: Projects };
-    const lost = untrusted(after.projects ?? {}, wanted);
-    if (lost.length === 0) return [];
+    if (attempt > 0) yield* Effect.sleep(BACKOFF_MS[attempt] ?? 200);
+    const lost = yield* pass(() => applyOnce(jsonPath, wanted, state, opts.afterWrite));
+    if (lost.length === 0) return [] as string[];
   }
-  const raw = readFileSync(jsonPath, "utf8");
-  return untrusted((JSON.parse(raw) as { projects?: Projects }).projects ?? {}, wanted);
-}
+  return yield* pass(() => readUntrusted(jsonPath, wanted));
+});
 
 /**
  * Mark `wtPath` as trusted in Claude Code's `~/.claude.json` so opening a
@@ -115,17 +149,18 @@ export function ensureTrustInFile(
  * The sibling set is derived from disk (`listRiftWorktreePaths` on the
  * shared parent) and filtered to entries Claude already knows about, so
  * there is no list to maintain and a destroyed worktree drops out on its
- * own. Every error is swallowed; trust bookkeeping must never block a
- * session spawn (worst case, Claude shows its prompt once, as before).
+ * own. Never fails: trust bookkeeping must never block a session spawn
+ * (worst case, Claude shows its prompt once, as before).
  */
-export function trustClaudeWorkspace(wtPath: string): void {
-  try {
+export const trustClaudeWorkspace = Effect.fn("trustClaudeWorkspace")(
+  function* (wtPath: string) {
     // Claude seeds this file itself on first run; if it's absent, there's
     // nothing to edit and Claude will create + prompt on its own.
     if (!existsSync(CLAUDE_JSON)) return;
-    const known = (
-      JSON.parse(readFileSync(CLAUDE_JSON, "utf8")) as { projects?: Projects }
-    ).projects;
+    const known = yield* Effect.try({
+      try: () => (JSON.parse(readFileSync(CLAUDE_JSON, "utf8")) as { projects?: Projects }).projects,
+      catch: (cause) => new TrustFileError({ jsonPath: CLAUDE_JSON, cause }),
+    });
 
     // Siblings are repaired, never introduced: only paths Claude has an
     // entry for, so wt cannot pre-trust a directory nobody has opened.
@@ -134,7 +169,7 @@ export function trustClaudeWorkspace(wtPath: string): void {
     );
     const wanted = [wtPath, ...siblings];
 
-    const lost = ensureTrustInFile(CLAUDE_JSON, wanted);
+    const lost = yield* ensureTrustInFile(CLAUDE_JSON, wanted);
     if (lost.length === 0) {
       log.debug("trusted rift workspaces in ~/.claude.json", { wtPath, count: wanted.length });
       return;
@@ -147,10 +182,13 @@ export function trustClaudeWorkspace(wtPath: string): void {
         .map((p) => p.split("/").pop())
         .join(", ")}`,
     );
-  } catch (err) {
-    log.warn("could not set claude workspace trust", {
-      wtPath,
-      err: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
+  },
+  (effect, wtPath) =>
+    effect.pipe(
+      Effect.catch((err) =>
+        Effect.sync(() => {
+          log.warn("could not set claude workspace trust", { wtPath, err: err.message });
+        }),
+      ),
+    ),
+);

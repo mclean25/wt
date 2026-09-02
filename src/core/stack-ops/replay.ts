@@ -21,6 +21,7 @@ import {
   withLockedChainEffect,
 } from "./shared.ts";
 import { reconcileStackEffect } from "./reconcile.ts";
+import { causeMessage } from "../errors.ts";
 
 // ---------- reconcile / replay / rebase ----------
 
@@ -42,7 +43,11 @@ export type RebaseResult =
 export class StackReplayError extends Data.TaggedError("StackReplayError")<{
   readonly operation: string;
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.operation}: ${causeMessage(this.cause)}`;
+  }
+}
 
 const replayError = (operation: string) => (cause: unknown) =>
   cause instanceof StackReplayError

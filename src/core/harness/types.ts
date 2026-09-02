@@ -11,6 +11,7 @@
  * extras are missing. The `extras` field exposes the optional Claude-
  * only data without bloating the core interface.
  */
+import type { Effect } from "effect";
 import type { DerivedState } from "./status.ts";
 
 export type HarnessId = "claude" | "codex" | "opencode";
@@ -218,9 +219,10 @@ export interface Harness {
    * idempotent and best-effort. Only harnesses whose trust is keyed by an
    * independent path need it — Claude does, for rift worktrees (each is an
    * independent clone Claude treats as a new project); omit for harnesses
-   * that inherit trust from the main repo or have no such gate.
+   * that inherit trust from the main repo or have no such gate. Returns an
+   * Effect so a retrying implementation waits on the fiber, never the thread.
    */
-  ensureTrusted?(wtPath: string): void;
+  ensureTrusted?(wtPath: string): Effect.Effect<void>;
 
   /**
    * Reap on-disk state for slugs no longer present. Called at startup.

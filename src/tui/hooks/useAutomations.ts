@@ -643,7 +643,13 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       return { declined: null };
     }
     const def = resolveActionDef(rule.run);
-    if (!def) throw new Error(`action "${rule.run}" not found in config`);
+    // A typed failure, so the caller's ledger/breaker bookkeeping and the
+    // error toast see it; a thrown Error would be a defect that skips both.
+    if (!def) {
+      return yield* new AutomationDispatchError({
+        cause: new Error(`action "${rule.run}" not found in config`),
+      });
+    }
     // A fleet-level fire belongs to no worktree, so it cannot go
     // through `launchAction` (row guards, row template vars, a row
     // cwd). It runs in the MAIN CLONE — the only checkout that is

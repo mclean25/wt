@@ -313,6 +313,10 @@ export function run(argv: string[]): Effect.Effect<number, EdgeCommandError> {
     };
     if (why?.trim()) edge.why = why.trim();
     yield* commandIo("set merge edge", () => setMergeEdge(edge));
+    if (json) {
+      console.log(JSON.stringify(edge));
+      return 0;
+    }
     const arrow = kind === "conflicts" ? "×" : "▶";
     console.log(
       `${green("✓")} ${cyan(from.slug)} ─${kind}─${arrow} ${cyan(to.slug)} (${strength}${edge.why ? `: ${edge.why}` : ""})`,
@@ -329,7 +333,6 @@ export function run(argv: string[]): Effect.Effect<number, EdgeCommandError> {
         ),
       );
     }
-    if (!json) return 0;
     return 0;
   });
 }

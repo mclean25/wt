@@ -24,7 +24,7 @@ import {
 import { getBackend, getBackendForPath } from "./backend.ts";
 import { createGitWorktreeEffect, removeGitWorktreeEffect } from "./backend/git.ts";
 import { createRiftWorktreeEffect, removeRiftWorktreeEffect } from "./backend/rift.ts";
-import { closeWorktreeBrowserSessions } from "./browser.ts";
+import { closeWorktreeBrowserSessionsEffect } from "./browser.ts";
 import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { clearDevServerFiles } from "./dev-server.ts";
@@ -45,7 +45,7 @@ import {
   type LockHandle,
 } from "./locks.ts";
 import { runStreamingEffect } from "./proc.ts";
-import { reapWorktreeListeners } from "./reaper.ts";
+import { reapWorktreeListenersEffect } from "./reaper.ts";
 import { resolveTeardownCommand, TEARDOWN_TIMEOUT_MS } from "./teardown.ts";
 import { RESERVED_SESSION_SLUGS } from "./tmux/naming.ts";
 import { computeStage, dirSlug, slugify } from "./stage.ts";
@@ -89,17 +89,6 @@ class BranchLookupError extends Data.TaggedError("BranchLookupError")<{
   readonly cause: unknown;
 }> {}
 
-const lifecyclePromise = <A>(
-  operation: "create" | "remove",
-  run: (signal: AbortSignal) => Promise<A>,
-): Effect.Effect<A, LifecycleError> => Effect.tryPromise({
-  try: run,
-  catch: (cause) => new LifecycleError({
-    operation,
-    message: cause instanceof Error ? cause.message : String(cause),
-    cause,
-  }),
-});
 
 const runDestroyCommandEffect = (opts: {
   command: string;
@@ -770,7 +759,7 @@ function removeWorktreeProgram(
     // restart, while a closed tab's state is gone for good. wt-managed
     // sessions are already dead by now (callers run killAllSessionsFor
     // first), so this only ever sees processes wt doesn't manage.
-    const reaped = yield* lifecyclePromise("remove", () => reapWorktreeListeners(wt.path));
+    const reaped = yield* reapWorktreeListenersEffect(wt.path);
     for (const p of reaped) {
       opts.onLog?.(
         `reaped ${p.command} (pid ${p.pid}, port ${p.ports.join(", ") || "?"})`,
@@ -807,10 +796,10 @@ function removeWorktreeProgram(
     // bailed above leaves a worktree the user is still working in, and
     // closing its tabs would be pure loss. Best-effort and silent when
     // there was nothing to close, which is the common case.
-    const browser = yield* lifecyclePromise("remove", () => closeWorktreeBrowserSessions(
+    const browser = yield* closeWorktreeBrowserSessionsEffect(
       wt.slug,
       readWtState().slugs[wt.slug]?.devPort ?? null,
-    ));
+    );
     if (browser.sessions.length > 0) {
       opts.onLog?.(`closed browser session ${browser.sessions.join(", ")}`);
     }

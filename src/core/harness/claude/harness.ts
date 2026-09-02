@@ -15,6 +15,7 @@
  * fast and lets the picker render the entry list before the summary
  * scan resolves.
  */
+import { Effect } from "effect";
 import { isRiftWorktree } from "../../backend.ts";
 import {
   claudeStatus,
@@ -189,7 +190,7 @@ export const claudeHarness: Harness = {
     // Only rift checkouts trip Claude's trust gate — a git worktree
     // resolves to the already-trusted main repo, but an independent rift
     // clone reads as a brand-new project.
-    if (isRiftWorktree(wtPath)) trustClaudeWorkspace(wtPath);
+    return isRiftWorktree(wtPath) ? trustClaudeWorkspace(wtPath) : Effect.void;
   },
 
   reapState(liveSlugs) {

@@ -21,6 +21,7 @@ import { runEffect } from "../proc.ts";
 
 import { fitParts, formatCompaction, type ModeCounts } from "./fit.ts";
 import { parseDiff } from "./parts.ts";
+import { causeMessage } from "../errors.ts";
 
 /**
  * Pathspec excludes applied to every git invocation. Things in here
@@ -78,7 +79,11 @@ export type DiffContext = {
 export class DiffContextError extends Data.TaggedError("DiffContextError")<{
   readonly operation: string;
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `${this.operation}: ${causeMessage(this.cause)}`;
+  }
+}
 
 /**
  * `effectiveBase` lets stacked worktrees diff against their parent

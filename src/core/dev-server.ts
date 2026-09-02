@@ -1205,8 +1205,8 @@ export function startDevServerEffect(wt: {
   // past the wait really is foreign, and reallocation is then correct.
   const recorded = readWtState().slugs[wt.slug]?.devPort;
   if (recorded !== undefined) {
-    const deadline = Date.now() + 3_000;
-    while (Date.now() < deadline && (yield* portInUseEffect(recorded))) {
+    const deadline = (yield* Clock.currentTimeMillis) + 3_000;
+    while ((yield* Clock.currentTimeMillis) < deadline && (yield* portInUseEffect(recorded))) {
       yield* Effect.sleep(Duration.millis(150));
     }
   }

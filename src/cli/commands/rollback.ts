@@ -7,11 +7,12 @@
  * config-free (see core/update.ts): a rollback offer is most valuable
  * precisely when the new code can't even load the config.
  */
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 
 import {
   gitSync,
   listRunningWtInstancesEffect,
+  logSafe,
   performRollbackEffect,
   readUpdateMemory,
   repoUpdateStateEffect,
@@ -197,7 +198,7 @@ export function maybeOfferCrashRollbackEffect(): Effect.Effect<void> {
       return;
     }
     if ((yield* rollBackTo(ctx.target)) === 0) return yield* reexecTuiEffect;
-  }).pipe(Effect.catchCause(() => Effect.void));
+  }).pipe(Effect.catchCause(swallowOfferFailure("crash rollback offer")));
 }
 
 /**
@@ -222,5 +223,15 @@ export function maybeOfferStaleBootRollbackEffect(): Effect.Effect<void> {
       false,
     );
     if (yes && (yield* rollBackTo(ctx.target)) === 0) return yield* reexecTuiEffect;
-  }).pipe(Effect.catchCause(() => Effect.void));
+  }).pipe(Effect.catchCause(swallowOfferFailure("stale boot rollback offer")));
+}
+
+/**
+ * The offers must never throw (one runs inside the crash handler), but a
+ * recovery path that fails silently is the one failure nobody can
+ * diagnose afterwards — leave the cause in the config-free update log.
+ */
+function swallowOfferFailure(what: string) {
+  return (cause: Cause.Cause<unknown>): Effect.Effect<void> =>
+    Effect.sync(() => logSafe("error", `${what} failed: ${Cause.pretty(cause)}`));
 }

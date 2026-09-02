@@ -164,15 +164,23 @@ export function resolveSessionIdentity(
 /**
  * Resolve the inner-program argv for a session: `harness.buildArgs` for
  * AI harness kinds (claude/codex/opencode), the user's diff command via
- * their login shell for `diff`, or a bare login shell for `shell`. Calls
- * `harness.ensureTrusted?.(cwd)` as a side effect for harness kinds so
- * the workspace-trust gate doesn't fire on first launch (rift checkouts
- * otherwise read as new projects to Claude).
+ * their login shell for `diff`, or a bare login shell for `shell`. Pure:
+ * run `ensureHarnessTrusted` first so the workspace-trust gate doesn't
+ * fire on first launch (rift checkouts otherwise read as new projects).
  *
  * Shared with the detached starter in inject.ts so the two
  * creation paths can never drift on what argv a given (kind, opts)
  * produces.
  */
+/**
+ * Trust `cwd` for the harness about to be spawned there. Runs on the
+ * fiber, so a trust write that has to retry (`claude/trust.ts`) waits
+ * without blocking the thread that owns the terminal.
+ */
+export function ensureHarnessTrusted(harness: Harness | null, cwd: string): Effect.Effect<void> {
+  return harness?.ensureTrusted?.(cwd) ?? Effect.void;
+}
+
 export function buildInnerArgs(params: {
   slug: string;
   cwd: string;
@@ -194,7 +202,6 @@ export function buildInnerArgs(params: {
     base,
   } = params;
   if (harness) {
-    harness.ensureTrusted?.(cwd);
     return harness.buildArgs({
       wtPath: cwd,
       slug,
@@ -260,13 +267,7 @@ export function attachOrCreateEffect(opts: {
    */
   base?: string;
 }): Effect.Effect<AttachResult, AttachOperationError> {
-  return attachOrCreateEffectInternal(opts).pipe(
-    Effect.mapError((cause) =>
-      cause instanceof AttachOperationError
-        ? cause
-        : new AttachOperationError({ message: "tmux attach failed", cause }),
-    ),
-  );
+  return attachOrCreateEffectInternal(opts);
 }
 
 /** Promise boundary for terminal/CLI callers. */
@@ -357,6 +358,7 @@ function attachOrCreateEffectInternal(
   // to the configured command via the user's login shell so PATH/init
   // (pyenv, mise, …) apply. The shell branch is just the login shell
   // with no command — exit (Ctrl+D / `exit`) ends the session.
+  yield* ensureHarnessTrusted(harness, cwd);
   const innerArgs = buildInnerArgs({
     slug,
     cwd,
@@ -493,35 +495,6 @@ function attachOrCreateEffectInternal(
       const trimmed = text.trim();
       if (trimmed) log.debug("tmux stderr", { slug, kind, text: trimmed });
   });
-  /*
-        // NOT the worktree — see tmuxClientCwd. The session's start
-        // directory comes from `-c` above; the client cwd only matters
-        // as the potential birth cwd of the tmux server.
-        cwd: tmuxClientCwd(),
-        stdin: "inherit",
-        stdout: "inherit",
-        // Pipe (not inherit) so tmux client noise like
-        // `[detached (from session X)]` and `[exited]` doesn't leak
-        // into the user's terminal. opentui's alt-screen hides them
-        // while wt is running, but they stick around in the main-screen
-        // buffer and become visible after wt exits — multiplied by every
-        // F12 cycle the user did. Claude's UI is unaffected; it flows
-        // through tmux's pty into our inherited stdout.
-        stderr: "pipe",
-        env: {
-          ...process.env,
-          TERM: process.env.TERM ?? "xterm-256color",
-          COLORTERM: process.env.COLORTERM ?? "truecolor",
-          FORCE_COLOR: process.env.FORCE_COLOR ?? "3",
-        },
-      },
-    );
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    log.error("spawn failed", { slug, kind, reason });
-    return { kind: "spawn-failed", reason };
-  }
-  */
   // tmux client exits with 0 on detach AND on session-end (inner
   // program exit). Distinguish by re-querying the raw set: if the
   // session still exists, the user detached; if not, the inner program
@@ -540,10 +513,11 @@ function attachOrCreateEffectInternal(
   // be reported as the reason for this exit.
   let stderrText: string | null = null;
   if (capturesInnerStderr(kind)) {
-    const raw = yield* Effect.try({
-      try: () => readFileSync(stderrPath, "utf8"),
-      catch: () => null,
-    });
+    // A missing `.err` file (a session created before the capture wrapper
+    // existed) is a clean exit with nothing to report, not an attach failure.
+    const raw = yield* Effect.try(() => readFileSync(stderrPath, "utf8")).pipe(
+      Effect.orElseSucceed((): string | null => null),
+    );
     stderrText = raw === null ? null : scrubStderr(raw);
   }
   return { kind: "exited", code, stderr: stderrText } as AttachResult;

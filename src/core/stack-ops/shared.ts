@@ -15,6 +15,7 @@ import { createLogger } from "../logger.ts";
 import { retargetPrBaseEffect, viewPrInfoEffect } from "../github/mutations.ts";
 import { gitQuietEffect } from "../git.ts";
 import { resolveChainEffect, type RestackChain } from "./chain.ts";
+import { causeMessage } from "../errors.ts";
 
 /** PRs already warned about as closed-by-base-deletion (once per process). */
 const warnedClosedPrs = new Set<number>();
@@ -36,7 +37,11 @@ export type ChainLockResult =
 
 export class StackLockError extends Data.TaggedError("StackLockError")<{
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return causeMessage(this.cause);
+  }
+}
 
 function releaseHandles(handles: readonly LockHandle[]): void {
   for (const handle of handles) handle.release();
@@ -200,10 +205,12 @@ export function retargetIfNeededEffect(
   // process (this runs on every replay pass of an active chain).
   if (live.state === "CLOSED" && live.baseRefName !== expectedBase) {
     if (warnedClosedPrs.has(live.number)) return;
+    // A probe that cannot run is not evidence the ref is gone: skip the
+    // warning this pass rather than send the human to open a PR on a guess.
     const baseStillExists = yield* gitQuietEffect(
       ["rev-parse", "--verify", "--quiet", `origin/${live.baseRefName}`],
       config.paths.mainClone,
-    ).pipe(Effect.catch(() => Effect.succeed(false)));
+    ).pipe(Effect.catch(() => Effect.succeed(true)));
     if (baseStillExists) return;
     warnedClosedPrs.add(live.number);
     log.attention.warn(

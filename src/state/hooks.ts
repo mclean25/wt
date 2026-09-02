@@ -717,9 +717,12 @@ export function useWtActions() {
     ): Promise<void> {
       return Effect.runPromise(
         Effect.gen(function* () {
-          const { writePrimaryHarness } = yield* Effect.promise(
-            () => import("../core/harness/primary.ts"),
-          );
+          // A broken module on a hot update is an expected failure here,
+          // not a defect: keep it on the typed channel.
+          const { writePrimaryHarness } = yield* Effect.tryPromise({
+            try: () => import("../core/harness/primary.ts"),
+            catch: (cause) => hookError("load primary harness", cause),
+          });
           yield* Effect.sync(() => writePrimaryHarness(id));
           yield* invalidate({ queryKey: qk.primaryHarness() });
         }),
@@ -734,9 +737,10 @@ export function useWtActions() {
     > {
       return Effect.runPromise(
         Effect.gen(function* () {
-          const { cyclePrimaryHarness } = yield* Effect.promise(
-            () => import("../core/harness/primary.ts"),
-          );
+          const { cyclePrimaryHarness } = yield* Effect.tryPromise({
+            try: () => import("../core/harness/primary.ts"),
+            catch: (cause) => hookError("load primary harness", cause),
+          });
           const next = yield* Effect.sync(() => cyclePrimaryHarness());
           yield* invalidate({ queryKey: qk.primaryHarness() });
           return next;

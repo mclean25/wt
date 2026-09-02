@@ -5,10 +5,15 @@ import { viewPrInfoEffect } from "../github/mutations.ts";
 import { setSlugBase } from "../wtstate.ts";
 import { type ChainStep, type RestackChain } from "./chain.ts";
 import { STACK_BUSY, type Logger, withLockedChainEffect } from "./shared.ts";
+import { causeMessage } from "../errors.ts";
 
 export class StackReconcileError extends Data.TaggedError("StackReconcileError")<{
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return causeMessage(this.cause);
+  }
+}
 
 /**
  * Reconcile the fork-base records of the stack containing `branch`
@@ -36,7 +41,9 @@ export function reconcileStackEffect(
   if (locked.status === "gone") return Effect.succeed(new Set<string>());
   return reconcileStackLockedEffect(locked.chain, trunk, onLog);
   }).pipe(
-    Effect.mapError((cause) => new StackReconcileError({ cause })),
+    Effect.mapError((cause) =>
+      cause instanceof StackReconcileError ? cause : new StackReconcileError({ cause }),
+    ),
   );
 }
 
@@ -119,6 +126,8 @@ function reconcileStackLockedEffect(
   }
   return landed;
   }).pipe(
-    Effect.mapError((cause) => new StackReconcileError({ cause })),
+    Effect.mapError((cause) =>
+      cause instanceof StackReconcileError ? cause : new StackReconcileError({ cause }),
+    ),
   );
 }

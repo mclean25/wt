@@ -310,6 +310,11 @@ export const branchIsGone = (branch: string, wtPath?: string): Promise<boolean> 
   Effect.runPromise(branchIsGoneEffect(branch, wtPath));
 
 let _mainFirstParents: Set<string> | null = null;
+// Bumped by every invalidation. A read captures it before spawning and
+// commits its value only if nothing invalidated in between — otherwise a
+// `rev-list` started before a fetch would overwrite the fresh `null` with
+// the pre-fetch chain, quietly undoing the invalidation it lost the race to.
+let _mainFirstParentsEpoch = 0;
 const mainFirstParentsSemaphore = Semaphore.makeUnsafe(1);
 
 /**
@@ -324,12 +329,17 @@ const mainFirstParentsSemaphore = Semaphore.makeUnsafe(1);
 export function mainFirstParentShasEffect() {
   return mainFirstParentsSemaphore.withPermits(1)(Effect.suspend(() => {
     if (_mainFirstParents) return Effect.succeed(_mainFirstParents);
-    return runEffect(
+    const epoch = _mainFirstParentsEpoch;
+    // A failed `rev-list` fails the read rather than caching an empty chain:
+    // an empty set reads as "no branch tip is an old trunk commit" for the
+    // rest of the process, and every consumer already folds a failure into
+    // the conservative answer.
+    return runOkEffect(
       ["git", "rev-list", "--first-parent", `origin/${config.branch.base}`],
       { cwd: config.paths.mainClone },
-    ).pipe(Effect.map((r) => {
-      const value = new Set(r.exitCode === 0 ? r.stdout.split("\n").filter(Boolean) : []);
-      _mainFirstParents = value;
+    ).pipe(Effect.map((out) => {
+      const value = new Set(out.split("\n").filter(Boolean));
+      if (epoch === _mainFirstParentsEpoch) _mainFirstParents = value;
       return value;
     }));
   }));
@@ -337,6 +347,7 @@ export function mainFirstParentShasEffect() {
 /** Invalidate cached first-parent set after a fetch. */
 export function invalidateMainFirstParents(): void {
   _mainFirstParents = null;
+  _mainFirstParentsEpoch++;
 }
 
 /**

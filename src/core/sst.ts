@@ -3,13 +3,18 @@ import { Data, Effect } from "effect";
 import { createLogger } from "./logger.ts";
 import { runEffect } from "./proc.ts";
 import type { SstStage } from "./types.ts";
+import { causeMessage } from "./errors.ts";
 
 const log = createLogger("[sst]");
 
 class SstStateParseError extends Data.TaggedError("SstStateParseError")<{
   readonly stage: string;
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return `stage ${this.stage}: ${causeMessage(this.cause)}`;
+  }
+}
 
 /**
  * Run `aws s3 ...` with the configured profile. Throws if SST is not
