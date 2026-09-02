@@ -66,7 +66,7 @@ base = "main"
 [lifecycle]
 env_files_to_copy = []
 copy_globs = [".agents/**", ".git/**", "./.git/**"]
-install_command = ${JSON.stringify(`touch ${join(root, "install-started")}; exec sleep 3`)}
+install_command = ${JSON.stringify(`touch ${join(root, "install-started")}; printf '%s\\n' "$WT_INSTALL_READY"; exec sleep 3`)}
 `,
   );
 
@@ -128,7 +128,7 @@ exec sleep 3
     const installInterrupted = await Effect.runPromiseExit(
       createWorktreeEffect("test/install-interrupted", {
         onLog: (line) => {
-          if (line.includes("install-started")) setTimeout(() => installController.abort(), 40);
+          if (line === "install-ready") setTimeout(() => installController.abort(), 40);
         },
       }),
       { signal: installController.signal },
@@ -185,6 +185,7 @@ exec sleep 3
     GIT_AUTHOR_EMAIL: "wt@example.test",
     GIT_COMMITTER_NAME: "wt test",
     GIT_COMMITTER_EMAIL: "wt@example.test",
+    WT_INSTALL_READY: "install-ready",
   };
   delete env[REPOSITORY_CONFIG_ENV];
   const result = Bun.spawnSync([process.execPath, "-e", script], {
