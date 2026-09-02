@@ -114,11 +114,10 @@ const RUNNERS: Record<string, Loader> = {
 
 /**
  * Load one command module and run it, tagging load vs. run failures
- * distinctly. `dispatch` below uses this through the lazy-loader map;
- * main.ts's self-update family (`update`/`rollback`/`version`) routes
- * around the map entirely (it must work when the dispatcher itself is
- * what a bad update broke) but wants the same load/run split, so this
- * is exported for it to call directly with its own static loader.
+ * distinctly. `dispatch` below uses this through the lazy-loader map.
+ * main.ts's self-update family (`update`/`rollback`/`version`) keeps its
+ * own copy of this shape on purpose: it must work when THIS module is
+ * what a bad update broke, so it cannot import anything from here.
  */
 export function loadAndRunCommand(
   command: string,

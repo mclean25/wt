@@ -734,12 +734,20 @@ export function App({ onExit }: Props) {
       toast(`no ${label} to yank`, theme.warn, 1500);
       return;
     }
-    forkReported(writeClipboard(value), (error) => {
-      log.event.err(`pbcopy failed: ${error.message}`);
-      toast(`copy failed: ${label}`, theme.err, 3000);
-    });
-    log.event.info(`yanked ${label}: ${value}`);
-    toast(`copied ${label}`, theme.info, 1500);
+    forkReported(
+      writeClipboard(value).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            log.event.info(`yanked ${label}: ${value}`);
+            toast(`copied ${label}`, theme.info, 1500);
+          }),
+        ),
+      ),
+      (error) => {
+        log.event.err(`pbcopy failed: ${error.message}`);
+        toast(`copy failed: ${label}`, theme.err, 3000);
+      },
+    );
   }
 
   // Reviewer-picker flows (`v`) — extracted to `flows/reviewers.ts`.

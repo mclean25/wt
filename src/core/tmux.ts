@@ -35,37 +35,37 @@ export { buildConfig, writeConfig } from "./tmux/config.ts";
 
 export {
   closeHarnessSessionGracefully,
-    diffCommandUsesBase,
+  diffCommandUsesBase,
   killAllSessionsFor,
-    killClaudeNamedSession,
-    killDiffSession,
-    killHarnessSession,
-    killServer,
-    killSession,
-    killShellSession,
-    listSessions,
-    reapOrphanedSessions,
-  } from "./tmux/admin.ts";
+  killClaudeNamedSession,
+  killDiffSession,
+  killHarnessSession,
+  killServer,
+  killSession,
+  killShellSession,
+  listSessions,
+  reapOrphanedSessions,
+} from "./tmux/admin.ts";
 export type { ClaudeSessionEntry } from "./tmux/admin.ts";
 
 export {
   killActionSession,
-    startActionSession,
-  } from "./tmux/action-sessions.ts";
+  startActionSession,
+} from "./tmux/action-sessions.ts";
 
 export {
   capturePane,
-    listAllSessionsRaw,
-  } from "./tmux/process.ts";
+  listAllSessionsRaw,
+} from "./tmux/process.ts";
 
 export { attachOrCreate,  AttachOperationError } from "./tmux/attach.ts";
 export type { AttachResult } from "./tmux/attach.ts";
 
 export {
   startHarnessSessionDetached,
-  } from "./tmux/lifecycle.ts";
+} from "./tmux/lifecycle.ts";
 export type { StartHarnessSessionResult } from "./tmux/lifecycle.ts";
 
 export {
   injectIntoSession,
-  } from "./tmux/inject.ts";
+} from "./tmux/inject.ts";

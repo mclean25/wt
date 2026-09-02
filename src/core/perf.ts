@@ -29,7 +29,7 @@ export {
   PERF_CATEGORIES,
   samplePerf,
   PerfSampleError,
-    shortCommand,
+  shortCommand,
 } from "./perf/sample.ts";
 export type {
   PerfBucket,

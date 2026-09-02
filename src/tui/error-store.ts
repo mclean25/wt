@@ -21,7 +21,7 @@
  * a "restart when convenient" banner. Unhandled rejections don't set
  * the flag — a dangling promise is annoying, not corrupting.
  * `src/main.ts`'s top-level catch stays the final fallback for errors
- * that escape the TUI entirely (failed through `runTuiEffect` itself);
+ * that escape the TUI entirely (failed through `runTui` itself);
  * capture detaches before the renderer is destroyed on that path, so
  * the crash-rollback offer and its verbatim stderr print still work.
  */

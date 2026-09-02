@@ -6,7 +6,7 @@ import { setWezTermTabTitle, type WezTermError } from "../../core/wezterm.ts";
 import { NF } from "../../tui/icons.ts";
 import { red } from "../colors.ts";
 
-const titleEffect = (title: string) => setWezTermTabTitle(title, config.paths.weztermCli);
+const setTitle = (title: string) => setWezTermTabTitle(title, config.paths.weztermCli);
 
 export const run = Effect.fn("wt remote")(function* (
   argv: string[],
@@ -27,9 +27,10 @@ export const run = Effect.fn("wt remote")(function* (
   });
   return yield* interactive
     ? Effect.acquireUseRelease(
-        titleEffect(`${NF.remote} ${remote.label} · wt`),
+        // Tab naming is cosmetic: a failed title must not cost the session.
+        setTitle(`${NF.remote} ${remote.label} · wt`).pipe(Effect.orElseSucceed(() => undefined)),
         () => command,
-        () => titleEffect("wt").pipe(Effect.orElseSucceed(() => undefined)),
+        () => setTitle("wt").pipe(Effect.orElseSucceed(() => undefined)),
       )
     : command;
 });

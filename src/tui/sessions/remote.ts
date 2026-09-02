@@ -35,6 +35,8 @@ export const enterRemoteWorktreeSession = Effect.fn("enterRemoteWorktreeSession"
       `${NF.remote} ${worktree.slug} · ${remote.label}`,
       config.paths.weztermCli,
     ).pipe(
+      // Tab naming is cosmetic: a failed title must not cost the session.
+      Effect.orElseSucceed(() => undefined),
       Effect.andThen(handoffTerminal(
         renderer,
         process.cwd(),

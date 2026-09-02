@@ -414,15 +414,13 @@ export async function runOptimisticMutation<TData, E = unknown>(
               qc.setQueryData<TData>(event.query.queryKey, patch);
             }),
           );
-          // `run` is either an Effect (pass it straight through, typed
-          // failure preserved on `cause`) or a legacy Promise thunk
-          // (adopted at the boundary, same as before).
+          // `run` is either an Effect — passed straight through, so the
+          // caller's typed failure (and its message) is what `mutate`
+          // rejects with, exactly as a direct call would — or a legacy
+          // Promise thunk adopted at the boundary.
           yield* Effect.isEffect(run)
-            ? run.pipe(Effect.mapError(io.wrap("run optimistic mutation")))
-            : Effect.tryPromise({
-                try: run,
-                catch: io.wrap("run optimistic mutation"),
-              });
+            ? run
+            : Effect.tryPromise({ try: run, catch: io.wrap("mutation") });
         }),
       ),
     onError: () => {

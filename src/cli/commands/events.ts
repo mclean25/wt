@@ -18,7 +18,7 @@ import { config } from "../../core/config.ts";
 import { resolveWebhookSecret, runDaemonForeground } from "../../core/events/daemon.ts";
 import { EVENTS_DIR, ensureEventsDir, isProcessAlive, readSnapshot, readState } from "../../core/events/store.ts";
 import { operationErrors, type OperationError } from "../../core/errors.ts";
-import { run as shEffect } from "../../core/proc.ts";
+import { run as sh } from "../../core/proc.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
 
@@ -212,7 +212,7 @@ function secretDisplay(info: SecretInfo): string {
   return info.alreadyConfigured ? dim("(your existing secret)") : info.secret;
 }
 
-const launchctlEffect = Effect.fnUntraced(function* (
+const runLaunchctl = Effect.fnUntraced(function* (
   action: "load" | "unload",
   opts: { ignoreFailure?: boolean } = {},
 ) {
@@ -237,7 +237,7 @@ const launchctlEffect = Effect.fnUntraced(function* (
         console.log(`${yellow("↻")} refreshed the launchd agent${stale}`);
       }
     }
-    const r = yield* shEffect(["launchctl", action, "-w", plist]).pipe(
+    const r = yield* sh(["launchctl", action, "-w", plist]).pipe(
       Effect.orElseSucceed(() => ({
         stdout: "",
         stderr: "",
@@ -294,7 +294,7 @@ export function waitForRestartedDaemon(
 export const restartLaunchdAgent = Effect.fn("restartLaunchdAgent")(function* (
   deps: RestartLaunchdDeps = {},
 ) {
-  const control = deps.control ?? launchctlEffect;
+  const control = deps.control ?? runLaunchctl;
   const previousPid = readState()?.pid ?? null;
   yield* control("unload", { ignoreFailure: true });
   const loaded = yield* control("load");
@@ -378,11 +378,11 @@ function cmdInstall(): number {
   return 0;
 }
 
-const cmdUninstallEffect = Effect.fnUntraced(function* () {
+const cmdUninstall = Effect.fnUntraced(function* () {
   const plist = plistPath();
   if (existsSync(plist)) {
     // Best-effort unload before removing so launchd drops the live job.
-    yield* shEffect(["launchctl", "unload", "-w", plist]).pipe(Effect.ignore);
+    yield* sh(["launchctl", "unload", "-w", plist]).pipe(Effect.ignore);
     rmSync(plist, { force: true });
     console.log(`${green("✓")} removed ${plist}`);
   } else {
@@ -425,11 +425,11 @@ export function run(argv: string[]): Effect.Effect<number, OperationError> {
     case "install":
       return Effect.sync(cmdInstall);
     case "uninstall":
-      return cmdUninstallEffect();
+      return cmdUninstall();
     case "start":
-      return requireEventsConfigured() ? launchctlEffect("load") : Effect.succeed(1);
+      return requireEventsConfigured() ? runLaunchctl("load") : Effect.succeed(1);
     case "stop":
-      return launchctlEffect("unload");
+      return runLaunchctl("unload");
     case "restart":
       return requireEventsConfigured() ? restartLaunchdAgent() : Effect.succeed(1);
     case "secret":

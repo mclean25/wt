@@ -56,7 +56,7 @@ const log = createLogger("[dev-server]");
 
 export class DevServerOperationError extends Data.TaggedError("DevServerOperationError")<{
   readonly slug: string;
-  readonly operation: "slot" | "status" | "health" | "port";
+  readonly operation: "slot" | "status" | "health" | "port" | "start";
   readonly cause: unknown;
 }> {
   override get message(): string {
@@ -1186,7 +1186,7 @@ export const startDevServer = Effect.fn("startDevServer")(function* (wt: {
       mkdirSync(DEV_DIR, { recursive: true });
       writeFileSync(script, supervisorScript(wt.slug, command, port), { mode: 0o755 });
     },
-    catch: (cause) => new DevServerOperationError({ slug: wt.slug, operation: "status", cause }),
+    catch: (cause) => new DevServerOperationError({ slug: wt.slug, operation: "start", cause }),
   });
 
   const userShell = process.env.SHELL || "/bin/bash";

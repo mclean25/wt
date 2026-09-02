@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 
 import { operationErrors } from "../../core/errors.ts";
-import { run as shEffect } from "../../core/proc.ts";
+import { run as sh } from "../../core/proc.ts";
 import {
   buildReports,
   clearSkillsMemory,
@@ -156,7 +156,7 @@ function diff(name: string | undefined) {
             console.log(r.expected);
             continue;
           }
-          const d = yield* shEffect(["diff", "-u", installedFile, expectedFile]).pipe(
+          const d = yield* sh(["diff", "-u", installedFile, expectedFile]).pipe(
             Effect.mapError(io.wrap("diff")),
           );
           console.log(d.stdout.trim() === "" ? dim("(differs only by stamp)") : d.stdout);

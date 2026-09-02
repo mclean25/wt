@@ -132,6 +132,8 @@ Open a worktree in your editor (`[editor] command`; the default is Zed, with foc
 
 ## Inspection & maintenance
 
+A failing command prints the failure's message chain (`operation: cause`) and exits non-zero; `WT_DEBUG=1` appends the stack, which an unexpected (untagged) crash always prints.
+
 ### `wt stages`
 
 List SST stages in the configured state bucket and flag orphans (no matching live worktree). Requires `[deploy.sst]`.

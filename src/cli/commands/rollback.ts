@@ -163,7 +163,7 @@ const offerContext = Effect.fnUntraced(function* () {
 });
 
 /** Re-exec a fresh TUI after a successful offered rollback; never returns. */
-const reexecTuiEffect: Effect.Effect<never> = Effect.sync((): void => {
+const reexecTui: Effect.Effect<never> = Effect.sync((): void => {
   console.log(dim("restarting wt …"));
   process.exit(spawnFreshWt());
 }).pipe(Effect.andThen(Effect.never));
@@ -192,7 +192,7 @@ export const maybeOfferCrashRollback = Effect.fn("maybeOfferCrashRollback")(
       console.error(dim(`  staying on ${shortSha(ctx.head)} (roll back later with \`wt rollback\`)`));
       return;
     }
-    if ((yield* rollBackTo(ctx.target)) === 0) return yield* reexecTuiEffect;
+    if ((yield* rollBackTo(ctx.target)) === 0) return yield* reexecTui;
   },
   Effect.catchCause(swallowOfferFailure("crash rollback offer")),
 );
@@ -218,7 +218,7 @@ export const maybeOfferStaleBootRollback = Effect.fn("maybeOfferStaleBootRollbac
       `${cyan("•")} Roll back to ${shortSha(ctx.target)} before starting?`,
       false,
     );
-    if (yes && (yield* rollBackTo(ctx.target)) === 0) return yield* reexecTuiEffect;
+    if (yes && (yield* rollBackTo(ctx.target)) === 0) return yield* reexecTui;
   },
   Effect.catchCause(swallowOfferFailure("stale boot rollback offer")),
 );

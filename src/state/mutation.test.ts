@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient } from "@tanstack/react-query";
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 
 import {
   patchArchivedKeys,
@@ -81,6 +81,33 @@ describe("runOptimisticMutation", () => {
     gate.resolve();
     await done;
     expect(qc.getQueryData<Data>(["github", "x"])?.v).toBe("optimistic");
+  });
+
+  test("an Effect `run` rejects with its own typed failure and rolls back", async () => {
+    class ArmFailed extends Data.TaggedError("ArmFailed")<{ readonly reason: string }> {
+      override get message(): string { return this.reason; }
+    }
+    const qc = new QueryClient();
+    qc.setQueryData<Data>(["github", "x"], { v: "server" });
+    const gate = deferred();
+    const done = runOptimisticMutation<Data>(qc, {
+      filter: { queryKey: ["github"] },
+      patch: (prev) => (prev ? { v: "optimistic" } : prev),
+      run: Effect.promise(() => gate.promise).pipe(
+        Effect.andThen(Effect.fail(new ArmFailed({ reason: "too many requests" }))),
+      ),
+    });
+    const settled = done.then(() => null, (err: unknown) => err);
+    await tick();
+    expect(qc.getQueryData<Data>(["github", "x"])?.v).toBe("optimistic");
+    gate.resolve();
+    const caught = await settled;
+    // The failure reaches the caller unwrapped: the toast a flow builds
+    // from `.message` must read "too many requests", not an internal
+    // "run optimistic mutation:" prefix.
+    expect(caught).toBeInstanceOf(ArmFailed);
+    expect((caught as Error).message).toBe("too many requests");
+    expect(qc.getQueryData<Data>(["github", "x"])?.v).toBe("server");
   });
 
   test("serializes same-filter calls in submission order", async () => {

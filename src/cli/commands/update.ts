@@ -1,6 +1,6 @@
 /**
  * `wt update` — fast-forward the wt source clone — plus the pre-TUI
- * startup prompt (`startupUpdatePromptEffect`, wired in main.ts the same way
+ * startup prompt (`startupUpdatePrompt`, wired in main.ts the same way
  * as the skills check). The git/decision machinery lives in
  * core/update.ts (config-free — see the barrel comment); this file is
  * presentation and consent.
@@ -97,7 +97,7 @@ function gateCaveat(gate: GateResult, target: string): string | null {
  * Stamps the daily check BEFORE fetching (one attempt per day even
  * when offline). Null = fetch failed.
  */
-const fetchAndSelectEffect = Effect.fnUntraced(function* (
+const fetchAndSelect = Effect.fnUntraced(function* (
   useGate: boolean,
 ): Effect.fn.Return<
   | { fresh: RepoUpdateState; gate: GateResult; decision: ReturnType<typeof selectOffer>; commits: PendingCommit[] }
@@ -193,7 +193,7 @@ export const run = Effect.fn("wt update")(function* (argv: string[]) {
   }
 
   console.log(dim(`fetching ${state.upstream.split("/")[0]} …`));
-  const sel = yield* fetchAndSelectEffect(!argv.includes("--head"));
+  const sel = yield* fetchAndSelect(!argv.includes("--head"));
   if (!sel) {
     console.error(red("git fetch failed (offline? auth?) — see the app log"));
     return 1;
@@ -294,7 +294,7 @@ export const startupUpdatePrompt = Effect.fn("startupUpdatePrompt")(
     if (!state) return null;
     const nowMs = yield* Clock.currentTimeMillis;
     if (startupCheckGate(state, readUpdateMemory(), nowMs) !== "run") return null;
-    const sel = yield* fetchAndSelectEffect(true);
+    const sel = yield* fetchAndSelect(true);
     if (!sel || sel.decision.action !== "offer") return null;
     const target = sel.decision.target;
     const applying = commitsUpTo(sel.commits, target);

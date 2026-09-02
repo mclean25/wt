@@ -747,7 +747,9 @@ export const runTui = Effect.gen(function* () {
           Effect.sync(() => {
             fetchOriginFailures++;
             const msg = causeMessage(error.cause);
-            if (fetchOriginFailures >= FETCH_ORIGIN_ATTENTION_THRESHOLD) {
+            // Once, when the run stops being a blip; the counter resets on
+            // the next success, so a second outage escalates again.
+            if (fetchOriginFailures === FETCH_ORIGIN_ATTENTION_THRESHOLD) {
               startupLog.attention.warn(
                 `periodic origin fetch has failed ${fetchOriginFailures} times in a row: ${msg}`,
               );

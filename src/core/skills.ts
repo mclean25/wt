@@ -54,7 +54,7 @@ export {
 } from "./skills/report.ts";
 export {
   applyReport,
-    regenRulesync,
-    touchedRulesyncRoots,
+  regenRulesync,
+  touchedRulesyncRoots,
   type RegenResult,
 } from "./skills/apply.ts";
