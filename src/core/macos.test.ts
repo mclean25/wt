@@ -13,10 +13,7 @@ describe("openUrlCommand", () => {
   test("opens web links in the configured Chrome profile", () => {
     expect(openUrlCommand("https://github.com/acme/repo/pull/1", "Profile 3"))
       .toEqual([
-        "open",
-        "-a",
-        "Google Chrome",
-        "--args",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "--profile-directory=Profile 3",
         "--ignore-profile-directory-if-not-exists",
         "https://github.com/acme/repo/pull/1",

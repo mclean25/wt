@@ -9,6 +9,9 @@ import { config } from "./config.ts";
 import { causeMessage } from "./errors.ts";
 import { run } from "./proc.ts";
 
+const CHROME_EXECUTABLE =
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
 export class MacosCommandError extends Data.TaggedError("MacosCommandError")<{
   readonly operation: "open" | "pbcopy";
   readonly cause: unknown;
@@ -29,10 +32,11 @@ export function openUrlCommand(
 ): string[] {
   if (chromeProfile && /^https?:\/\//i.test(url)) {
     return [
-      "open",
-      "-a",
-      "Google Chrome",
-      "--args",
+      // Launch Services drops `--args` when Chrome is already running: it
+      // activates the app but never delivers the URL. Calling Chrome itself
+      // uses its process-singleton handoff, which routes the URL to the
+      // requested running profile and selects the resulting tab.
+      CHROME_EXECUTABLE,
       `--profile-directory=${chromeProfile}`,
       "--ignore-profile-directory-if-not-exists",
       url,
