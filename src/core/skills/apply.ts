@@ -108,7 +108,38 @@ export function touchedRulesyncRoots(applied: UnitReport[]): RulesyncInfo[] {
   return [...byRoot.values()];
 }
 
-export type RegenResult = { root: string; ok: boolean; output: string };
+export type RegenResult = {
+  root: string;
+  ok: boolean;
+  output: string;
+  /**
+   * Files left uncommitted in the pipeline's repo, or null when that
+   * can't be determined (not a git repo, git unavailable, regen
+   * failed).
+   */
+  uncommitted: number | null;
+};
+
+/**
+ * Uncommitted files in a rulesync root, or null when the question
+ * doesn't apply. A dotfiles pipeline commits BOTH its `.rulesync/`
+ * source and the generated output, so wt writing + regenerating
+ * leaves the repo dirty; unmentioned, that update survives only until
+ * the next fresh clone or `git checkout --`, and the repo's own
+ * `--check` gate then fails on a change nobody remembers making.
+ */
+function uncommittedCount(root: string): Effect.Effect<number | null> {
+  return run(["git", "status", "--porcelain"], { cwd: root, timeoutMs: 30_000 }).pipe(
+    Effect.map((r) =>
+      // A timed-out (SIGKILLed) git has captured nothing, which is
+      // indistinguishable from a clean tree — report unknown.
+      r.exitCode !== 0 || r.timedOut
+        ? null
+        : r.stdout.split("\n").filter((line) => line.trim() !== "").length,
+    ),
+    Effect.catch(() => Effect.succeed(null)),
+  );
+}
 
 /** Run each root's regenerate command; the sources are already durable, so a failure is reported, not fatal. */
 export function regenRulesync(roots: RulesyncInfo[]): Effect.Effect<RegenResult[]> {
@@ -117,15 +148,21 @@ export function regenRulesync(roots: RulesyncInfo[]): Effect.Effect<RegenResult[
     // missing (ENOENT on bash/npx) — that must degrade to a per-root
     // failure like any non-zero exit, not abort the remaining roots.
     run(rs.regen, { cwd: rs.root, timeoutMs: 180_000 }).pipe(
-      Effect.map((r) => ({
-        root: rs.root,
-        ok: r.exitCode === 0,
-        output: [r.stdout, r.stderr].filter((s) => s.trim() !== "").join("\n"),
-      })),
+      Effect.flatMap((r) =>
+        (r.exitCode === 0 ? uncommittedCount(rs.root) : Effect.succeed(null)).pipe(
+          Effect.map((uncommitted) => ({
+            root: rs.root,
+            ok: r.exitCode === 0,
+            output: [r.stdout, r.stderr].filter((s) => s.trim() !== "").join("\n"),
+            uncommitted,
+          })),
+        ),
+      ),
       Effect.catch((err) => Effect.succeed({
         root: rs.root,
         ok: false,
         output: causeMessage(err),
+        uncommitted: null,
       })),
     ),
     { concurrency: 1 },

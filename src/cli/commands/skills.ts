@@ -18,6 +18,7 @@ import {
   buildReports,
   clearSkillsMemory,
   detectTargets,
+  NO_TOOLS_HINT,
   extractInstructionsBlock,
   readSkillsMemory,
   reportIsActionable,
@@ -35,7 +36,8 @@ const USAGE = `usage: wt skills [status|sync|diff|reset] [options]
 
 wt is the single source of the agent skills + instructions it relies
 on. This command keeps the installed copies current across every
-harness on the machine (claude / codex / opencode), following
+coding agent on the machine (claude / codex / opencode / pi),
+following
 symlinks and writing through rulesync pipelines when one manages the
 target (durable source + regenerate, never the generated output).
 
@@ -73,7 +75,7 @@ function targetName(r: UnitReport): string {
 function status(): number {
   const targets = detectTargets();
   if (targets.harnesses.length === 0) {
-    console.log(dim("no agent harness dirs found (~/.claude, ~/.codex, ~/.config/opencode)"));
+    console.log(dim(NO_TOOLS_HINT));
     return 0;
   }
   const memory = readSkillsMemory();

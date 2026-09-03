@@ -17,6 +17,7 @@ import {
   buildReports,
   declineKey,
   detectTargets,
+  NO_TOOLS_HINT,
   readSkillsMemory,
   regenRulesync,
   rememberAnswer,
@@ -87,7 +88,7 @@ export const runSkillsSync = Effect.fn("runSkillsSync")(function* (mode: SyncMod
   if (targets.harnesses.length === 0) {
     if (!mode.startup)
       console.log(
-        dim("no agent harness dirs found (~/.claude, ~/.codex, ~/.config/opencode) — nothing to install into"),
+        dim(`${NO_TOOLS_HINT} — nothing to install into`),
       );
     return 0;
   }
@@ -255,6 +256,16 @@ export const runSkillsSync = Effect.fn("runSkillsSync")(function* (mode: SyncMod
         for (const result of results) {
           if (result.ok) {
             console.log(`${green("✓")} rulesync regenerated ${dim(result.root)}`);
+            if (result.uncommitted !== null && result.uncommitted > 0) {
+              // The pipeline's repo tracks both source and generated
+              // output; leaving it dirty silently means the update is
+              // one `git checkout --` away from being gone.
+              console.log(
+                dim(
+                  `  ${result.uncommitted} uncommitted file(s) in ${result.root} — commit them so the update survives a fresh checkout`,
+                ),
+              );
+            }
           } else {
             failures++;
             console.error(red(`✗ rulesync regenerate failed in ${result.root}:`));

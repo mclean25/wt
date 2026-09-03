@@ -12,7 +12,7 @@ wt checkout and offer themselves on the next launch.
 
 | unit | what it is |
 |---|---|
-| `instructions` | a managed block spliced into each harness's **global instructions file** (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`): the always-on ownership rules for agents working in wt worktrees (work status, decision ownership and the `needs-human` refusal test, manual testing, the dev server) |
+| `instructions` | a managed block spliced into each tool's **global instructions file** (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `$PI_CODING_AGENT_DIR/AGENTS.md`, `~/.config/opencode/AGENTS.md`): the always-on ownership rules for agents working in wt worktrees (work status, decision ownership and the `needs-human` refusal test, manual testing, the dev server) |
 | `wt` skill | orientation: subcommands, conventions, the stacked-PR model, gotchas |
 | `restack` skill | the conflict-resolution playbook behind `/restack` |
 | `manager` skill | the fleet-coordinator playbook for the [manager session](manager.md) |
@@ -103,21 +103,33 @@ ever rewrites the region between its own markers.
 
 ## Where things get installed
 
-Detection follows the real filesystem, per harness present on the machine:
+Detection follows the real filesystem, per tool configured on the machine.
+The tools here are the ones wt installs *into* — a superset of the harnesses
+it can start sessions for (`core/harness/`). Pi, for instance, reads the
+shared instructions file and `~/.agents/skills` without wt ever spawning it.
 
+- **Configured means the config dir has CONTENT.** An empty `~/.config/<tool>`
+  is a stow mount point a dotfiles package left behind when it stopped
+  generating for that tool, not a tool to serve. Counting it would put a unit
+  in the pending list that no sync can ever clear.
 - **Native**: `~/.claude/skills/<name>/` (Claude; OpenCode reads the same
-  dir), `~/.agents/skills/` or `$CODEX_HOME/skills/` (Codex), and the global
+  dir), `~/.agents/skills/` or `$CODEX_HOME/skills/` (Codex),
+  `~/.agents/skills/` or `$PI_CODING_AGENT_DIR/skills/` (Pi), and the global
   instructions files listed above.
-- **Symlinks are resolved and deduped**: when several harnesses point at one
+- **Symlinks are resolved and deduped**: when several tools point at one
   real directory (stow-style dotfiles, `.agents` → `.claude`), wt writes
-  once and credits every harness it serves.
+  once and credits every tool it serves. Resolution works on paths that
+  don't exist yet — an instructions file a pipeline hasn't generated is
+  resolved through its parent, so it can't be mistaken for a native file.
 - **rulesync pipelines are first-class**: if the resolved location lives
   inside a repo with a `.rulesync/` dir, the generated output is a wipe-on-
   regenerate artifact — so wt writes to the durable SOURCE instead
   (`.rulesync/skills/<name>/`, and the `root: true` rules file for the
   instructions block) and then regenerates: via the repo's own
   `scripts/rulesync.sh` when it has one, else `npx rulesync generate`.
-  One regenerate per sync, not per unit.
+  One regenerate per sync, not per unit. Those repos commit their generated
+  output, so wt reports how many files are left uncommitted afterwards —
+  an update nobody commits is one `git checkout --` from being gone.
 
 ## Template values
 

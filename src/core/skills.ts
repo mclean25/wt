@@ -29,8 +29,9 @@ export {
 export {
   detectTargets,
   findRulesyncRoot,
+  NO_TOOLS_HINT,
   targetKey,
-  type HarnessId,
+  type AgentToolId,
   type InstructionsTarget,
   type RulesyncInfo,
   type SkillsTarget,

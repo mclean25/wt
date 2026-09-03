@@ -45,6 +45,19 @@ function reportsFor(mem: SkillsMemory = emptySkillsMemory()): UnitReport[] {
   return buildReports(detectTargets(home, {}), mem);
 }
 
+/**
+ * A tool's config dir as it really exists. Detection requires CONTENT
+ * (an empty dir is a retired stow mount point, not a configured
+ * tool), so a test that creates a bare directory would be modelling a
+ * machine nobody has.
+ */
+function configDir(...parts: string[]): string {
+  const dir = join(home, ...parts);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "settings.json"), "{}\n");
+  return dir;
+}
+
 function findReport(reports: UnitReport[], unit: Unit): UnitReport {
   const r = reports.find((x) => x.unit === unit);
   expect(r).toBeDefined();
@@ -53,7 +66,7 @@ function findReport(reports: UnitReport[], unit: Unit): UnitReport {
 
 describe("native claude-only machine", () => {
   beforeEach(() => {
-    mkdirSync(join(home, ".claude"), { recursive: true });
+    configDir(".claude");
   });
 
   test("everything reports missing, one native target", () => {
@@ -128,8 +141,9 @@ describe("native claude-only machine", () => {
   });
 });
 
-describe("stow-style rulesync machine (all harnesses one real tree)", () => {
+describe("stow-style rulesync machine (every tool one real tree)", () => {
   let dotfiles: string;
+  let piDir: string;
 
   beforeEach(() => {
     dotfiles = join(home, "dotfiles");
@@ -143,25 +157,25 @@ describe("stow-style rulesync machine (all harnesses one real tree)", () => {
     mkdirSync(join(dotfiles, "ai", ".claude", "skills"), { recursive: true });
     writeFileSync(join(dotfiles, "ai", ".claude", "AGENTS.md"), "generated\n");
     // Harness dirs symlink into the generated tree (file + dir links).
-    mkdirSync(join(home, ".claude"));
+    configDir(".claude");
     symlinkSync(join(dotfiles, "ai", ".claude", "skills"), join(home, ".claude", "skills"));
     symlinkSync(join(dotfiles, "ai", ".claude", "AGENTS.md"), join(home, ".claude", "CLAUDE.md"));
-    mkdirSync(join(home, ".codex"));
+    configDir(".codex");
     symlinkSync(join(dotfiles, "ai", ".claude", "AGENTS.md"), join(home, ".codex", "AGENTS.md"));
     symlinkSync(join(dotfiles, "ai", ".claude"), join(home, ".agents"));
-    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
-    symlinkSync(
-      join(dotfiles, "ai", ".claude", "AGENTS.md"),
-      join(home, ".config", "opencode", "AGENTS.md"),
-    );
+    // Pi is pointed at a deliberately unstowed config dir whose
+    // AGENTS.md symlinks back into the same generated tree.
+    piDir = join(dotfiles, "pi", "agent");
+    mkdirSync(piDir, { recursive: true });
+    symlinkSync(join(dotfiles, "ai", ".claude", "AGENTS.md"), join(piDir, "AGENTS.md"));
   });
 
-  test("all three harnesses dedupe to ONE rulesync target each way", () => {
-    const targets = detectTargets(home, {});
-    expect(targets.harnesses).toEqual(["claude", "codex", "opencode"]);
+  test("every configured tool dedupes to ONE rulesync target each way", () => {
+    const targets = detectTargets(home, { PI_CODING_AGENT_DIR: piDir });
+    expect(targets.harnesses).toEqual(["claude", "codex", "pi"]);
     expect(targets.skills).toHaveLength(1);
     expect(targets.skills[0]!.kind).toBe("rulesync");
-    expect([...targets.skills[0]!.harnesses].sort()).toEqual(["claude", "codex", "opencode"]);
+    expect([...targets.skills[0]!.harnesses].sort()).toEqual(["claude", "codex", "pi"]);
     expect(targets.instructions).toHaveLength(1);
     expect(targets.instructions[0]!.kind).toBe("rulesync");
     if (targets.skills[0]!.kind === "rulesync") {
@@ -216,7 +230,7 @@ describe("multi-target machines", () => {
     // Claude native with a personal copy; Codex native with nothing.
     mkdirSync(join(home, ".claude", "skills", "wt"), { recursive: true });
     writeFileSync(join(home, ".claude", "skills", "wt", "SKILL.md"), "my own\n");
-    mkdirSync(join(home, ".codex"), { recursive: true });
+    configDir(".codex");
     const reports = reportsFor();
     const wtReports = reports.filter((r) => r.unit === WT_UNIT);
     expect(wtReports).toHaveLength(2);
@@ -245,7 +259,7 @@ describe("multi-target machines", () => {
 
 describe("instructions-file hazards", () => {
   test("dangling symlink instructions file is blocked, not clobbered", () => {
-    mkdirSync(join(home, ".claude"), { recursive: true });
+    configDir(".claude");
     symlinkSync(join(home, "not-cloned-yet", "CLAUDE.md"), join(home, ".claude", "CLAUDE.md"));
     const r = findReport(reportsFor(), INSTRUCTIONS_UNIT);
     expect(r.state).toBe("blocked");
@@ -254,7 +268,7 @@ describe("instructions-file hazards", () => {
   });
 
   test("duplicate managed blocks are blocked with a hand-fix hint", () => {
-    mkdirSync(join(home, ".claude"), { recursive: true });
+    configDir(".claude");
     const claudeMd = join(home, ".claude", "CLAUDE.md");
     writeFileSync(claudeMd, "x\n");
     const r = findReport(reportsFor(), INSTRUCTIONS_UNIT);
@@ -282,7 +296,7 @@ describe("apply hygiene", () => {
 
 describe("template vars flow through hashing", () => {
   test("answering a var changes the canonical hash (re-arms declines)", () => {
-    mkdirSync(join(home, ".claude"), { recursive: true });
+    configDir(".claude");
     const start = UNITS.find((u) => u.name === "start")!;
     const before = findReport(reportsFor(), start);
     const mem = emptySkillsMemory();
@@ -290,5 +304,56 @@ describe("template vars flow through hashing", () => {
     const after = findReport(reportsFor(mem), start);
     expect(before.canonicalHash).not.toBe(after.canonicalHash);
     expect(after.expected).toContain("Design reviews go through /grill.");
+  });
+});
+
+describe("tool presence is evidence, not a mount point", () => {
+  test("an emptied config dir left behind by a retired tool does not count", () => {
+    configDir(".claude");
+    // What a dotfiles package looks like after it stops generating for
+    // a tool: the stow mount point survives with nothing in it.
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+
+    const targets = detectTargets(home, {});
+    expect(targets.harnesses).toEqual(["claude"]);
+    expect(targets.instructions).toHaveLength(1);
+    expect(targets.instructions[0]!.harnesses).toEqual(["claude"]);
+  });
+
+  test("PI_CODING_AGENT_DIR names Pi's config dir; an unpopulated one is not configured", () => {
+    configDir(".claude");
+    const piDir = join(home, "dotfiles", "pi", "agent");
+    mkdirSync(piDir, { recursive: true });
+    expect(detectTargets(home, { PI_CODING_AGENT_DIR: piDir }).harnesses).toEqual(["claude"]);
+
+    writeFileSync(join(piDir, "settings.json"), "{}\n");
+    const targets = detectTargets(home, { PI_CODING_AGENT_DIR: piDir });
+    expect(targets.harnesses).toEqual(["claude", "pi"]);
+    const pi = targets.instructions.find((t) => t.harnesses.includes("pi"))!;
+    expect(pi.kind).toBe("native");
+    if (pi.kind === "native") expect(pi.file).toBe(join(piDir, "AGENTS.md"));
+  });
+
+  test("an instructions file not generated YET still resolves into its rulesync pipeline", () => {
+    // The write-through trap: realpath fails on the missing leaf, so
+    // without resolving the parent this reads as a plain native file,
+    // wt writes it into the generated output root, and the pipeline's
+    // next regenerate deletes it — pending forever.
+    const dotfiles = join(home, "dotfiles");
+    mkdirSync(join(dotfiles, ".rulesync", "rules"), { recursive: true });
+    writeFileSync(
+      join(dotfiles, ".rulesync", "rules", "CLAUDE.md"),
+      "---\nroot: true\n---\n## My rules\n",
+    );
+    mkdirSync(join(dotfiles, "ai", ".claude"), { recursive: true });
+    writeFileSync(join(dotfiles, "ai", ".claude", "settings.json"), "{}\n");
+    symlinkSync(join(dotfiles, "ai", ".claude"), join(home, ".claude"));
+
+    const targets = detectTargets(home, {});
+    expect(existsSync(join(home, ".claude", "CLAUDE.md"))).toBe(false);
+    expect(targets.instructions).toHaveLength(1);
+    expect(targets.instructions[0]!.kind).toBe("rulesync");
+    const r = findReport(reportsFor(), INSTRUCTIONS_UNIT);
+    expect(r.path).toBe(join(dotfiles, ".rulesync", "rules", "CLAUDE.md"));
   });
 });
