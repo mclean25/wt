@@ -197,7 +197,10 @@ export function useOutputs(opts: {
       // Codex/opencode: one live slot per slug per harness.
       const harnessKinds: TailHarnessId[] = ["codex", "opencode"];
       for (const kind of harnessKinds) {
-        for (const slug of sessions.slugsByHarness[kind]) {
+        // The cache buster rejects pre-OpenCode values, while the fallback
+        // keeps a malformed/transitional cache entry from taking down the
+        // renderer before the first live refresh can repair it.
+        for (const slug of sessions.slugsByHarness[kind] ?? []) {
           const tail = harnessTails.get(harnessTailKey(slug, kind));
           const startedAt = tail?.startedAt ?? Date.now();
           const lastLineTs = tail?.lines[tail.lines.length - 1]?.ts;

@@ -117,7 +117,10 @@ export const CACHE_DB = config.paths.cacheDb;
 // An old cached row has no value and would briefly render as falsely stopped.
 // v30: remote inventory now restores the canonical nested snapshot shape
 // (`status` and `work` objects) rather than the former flattened CLI fields.
-const CACHE_BUSTER = "v30";
+// v31: `TmuxSessionsData.slugsByHarness` gained the required `opencode`
+// member. A restored v30 entry lacks it, and consumers enumerating harnesses
+// can otherwise fail during the first render before the live poll replaces it.
+const CACHE_BUSTER = "v31";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
