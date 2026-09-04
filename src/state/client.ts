@@ -24,7 +24,7 @@ export const CACHE_DB = config.paths.cacheDb;
 // `experimental_createQueryPersister` per-query model. Storage layout
 // changed (one row per query, prefixed `wt-<queryHash>`), and the
 // older single-row `wt.cache.v1` blob will never be read.
-// v7: TmuxSessionsData replaced the `claudeSlugs`/`codex`/`opencode`
+// v7: TmuxSessionsData replaced the per-harness top-level slug fields
 // fields with a single `slugsByHarness` record; a restored v6 entry
 // would lack it and break consumers that index `slugsByHarness[id]`.
 // v8: worktree discovery now ignores non-main worktrees outside the
@@ -165,7 +165,7 @@ export function createWtQueryClient(): WtQueryClient {
         const key = query.queryKey;
         if (key[0] === "claudeRegistry") return false;
         // Session discovery is ephemeral (live-session state, polled for
-        // codex/opencode) and worthless across runs — restoring it would
+        // Codex) and worthless across runs — restoring it would
         // flash stale sessions on boot. Keep it in-memory only.
         if (key[0] === "harnessSessions") return false;
         // Summaries are keyed only by slug, but the VALUE is derived from

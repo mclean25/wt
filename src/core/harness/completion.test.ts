@@ -10,7 +10,6 @@ const naming = (
   models: {
     claude: "cheap-claude",
     codex: "cheap-codex",
-    opencode: "provider/cheap-opencode",
   },
   reasoningEffort: "low",
   maxInputTokens: 8000,
@@ -42,20 +41,6 @@ describe("buildHarnessCompletion", () => {
     expect(out.argv).toContain("--no-session-persistence");
     expect(out.argv).toContain("--tools");
     expect(out.argv.slice(-2)).toEqual(["--effort", "low"]);
-  });
-
-  test("OpenCode uses its pure one-shot runner and variant", () => {
-    const out = buildHarnessCompletion(
-      naming({ harness: "opencode", reasoningEffort: "high" }),
-      "claude",
-      "name this",
-      "/repo",
-    );
-    expect(out.argv).toEqual([
-      "opencode", "run", "--pure", "--format", "default", "--dir", "/repo",
-      "--model", "provider/cheap-opencode", "--variant", "high", "--", "name this",
-    ]);
-    expect(out.input).toBeUndefined();
   });
 
   test("omits a model override when config leaves it unset", () => {

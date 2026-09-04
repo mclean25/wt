@@ -4,18 +4,16 @@
  * "+ new X" sub-affordances.
  *
  * Order is intentional: Claude first because it's the default primary
- * and the most feature-complete impl; Codex / OpenCode after because
- * they're partial-feature impls today (no busy/idle, no summaries).
+ * and the most feature-complete impl; Codex follows because it has no
+ * Claude registry or summaries.
  */
 import { claudeHarness } from "./claude/harness.ts";
 import { codexHarness } from "./codex/harness.ts";
-import { opencodeHarness } from "./opencode/harness.ts";
 import type { Harness, HarnessId } from "./types.ts";
 
 export const HARNESSES: readonly Harness[] = [
   claudeHarness,
   codexHarness,
-  opencodeHarness,
 ];
 
 const BY_ID = new Map<HarnessId, Harness>(HARNESSES.map((h) => [h.id, h]));

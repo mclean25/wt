@@ -388,8 +388,8 @@ export type NamingConfig = {
  * Pre-built action surfaced by the `!` modal. Two flavors:
  *
  *   - `claude`: prompt action; headless launches the selected primary
- *     harness's non-interactive CLI (`claude -p`, `codex exec`, or
- *     `opencode run`) with the configured prompt; the edit modal
+ *     harness's non-interactive CLI (`claude -p` or `codex exec`) with
+ *     the configured prompt; the edit modal
  *     exposes an extras textarea that gets appended.
  *   - `shell`: launches `$SHELL -lc <shell>` in the worktree path; the
  *     edit modal is skipped and Enter launches directly.
@@ -400,7 +400,7 @@ export type NamingConfig = {
  * vars pass through unchanged so typos surface in the rendered prompt.
  *
  * `{{skill_prefix}}` is the harness skill-invocation prefix (`/` for
- * Claude Code, `$` for OpenCode / Codex), chosen per launch from the
+ * Claude Code, `$` for Codex), chosen per launch from the
  * row's primary harness.
  * Use it for any prompt that invokes a named skill: `{{skill_prefix}}restack`.
  *
@@ -1165,7 +1165,7 @@ function build(
     harnessRaw,
     "harness",
     "primary",
-    ["claude", "codex", "opencode"] as const,
+    ["claude", "codex"] as const,
     GENERIC_DEFAULTS.harness.primary,
   );
 
@@ -1392,7 +1392,6 @@ function build(
   const namingModelsRaw = namingRaw ? obj(namingRaw.models) : null;
   const namingClaudeModel = errs.optStrOrNull(namingModelsRaw, "claude");
   const namingCodexModel = errs.optStrOrNull(namingModelsRaw, "codex");
-  const namingOpencodeModel = errs.optStrOrNull(namingModelsRaw, "opencode");
   if (obj(raw.ai) !== null) {
     errs.add("[ai] is no longer supported; use [naming] with a coding-agent harness");
   }
@@ -1403,13 +1402,12 @@ function build(
         namingRaw,
         "naming",
         "harness",
-        ["primary", "claude", "codex", "opencode"] as const,
+        ["primary", "claude", "codex"] as const,
         GENERIC_DEFAULTS.naming.harness,
       ),
       models: {
         ...(namingClaudeModel ? { claude: namingClaudeModel } : {}),
         ...(namingCodexModel ? { codex: namingCodexModel } : {}),
-        ...(namingOpencodeModel ? { opencode: namingOpencodeModel } : {}),
       },
       reasoningEffort: errs.optEnum(
         namingRaw,

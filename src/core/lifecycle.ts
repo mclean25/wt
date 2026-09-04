@@ -12,7 +12,6 @@ import { clearArchived } from "./archive.ts";
 import { clearClaudeNames } from "./harness/claude/names.ts";
 import { clearCodexNames } from "./harness/codex/names.ts";
 import { untrustCodexWorkspace } from "./harness/codex/trust.ts";
-import { clearOpencodeNames } from "./harness/opencode/names.ts";
 import {
   clearRemovedWorktree,
   clearSlugState,
@@ -356,7 +355,6 @@ const createWorktreeProgram = Effect.fnUntraced(function* (
     clearRemovedWorktree(slug);
     clearClaudeNames(slug);
     clearCodexNames(slug);
-    clearOpencodeNames(slug);
     clearDevServerFiles(slug);
   }));
 

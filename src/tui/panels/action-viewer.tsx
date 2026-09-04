@@ -101,8 +101,8 @@ export function SessionContent({
 }
 
 /**
- * Live trail of a codex/opencode session, tailed from its rollout jsonl
- * (codex) or SQLite DB (opencode) via `harnessTailRegistry`. Single slot
+ * Live trail of a Codex session, tailed from its rollout jsonl via
+ * `harnessTailRegistry`. Single slot
  * per slug per harness, so no `name`. Same `ActionLine[]` rows as claude.
  */
 export function HarnessSessionContent({

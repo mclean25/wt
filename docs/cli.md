@@ -351,7 +351,7 @@ Drive a worktree's coding-agent harness from scripts or another session.
 
 **Both commands address the harness with a LIVE session in that worktree**, and
 fall back to the `Shift+Tab` primary only when nothing is running there.
-`--harness <claude|codex|opencode>` addresses one explicitly; an unknown value
+`--harness <claude|codex>` addresses one explicitly; an unknown value
 is an error rather than a silent default.
 
 That routing rule is the whole point of the command. The primary is one
@@ -368,7 +368,7 @@ quietly reading as "nothing is live".
 | sub | what it does |
 |---|---|
 | `send <slug> [text...]` | ensure the worktree's live harness session exists, then submit text at its prompt; reads stdin when no text args |
-| `start <slug>` | ensure that session exists and invoke the bundled `start` skill using that harness's native prefix (`/start` for Claude, `$start` for Codex/OpenCode) |
+| `start <slug>` | ensure that session exists and invoke the bundled `start` skill using that harness's native prefix (`/start` for Claude, `$start` for Codex) |
 
 Both commands are fire-and-forget with respect to the receiving agent's work,
 but fail when delivery is known not to have reached the conversation. Use

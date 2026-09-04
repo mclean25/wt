@@ -36,7 +36,7 @@ const USAGE = `usage: wt skills [status|sync|diff|reset] [options]
 
 wt is the single source of the agent skills + instructions it relies
 on. This command keeps the installed copies current across every
-coding agent on the machine (claude / codex / opencode / pi),
+coding agent on the machine (claude / codex / pi),
 following
 symlinks and writing through rulesync pipelines when one manages the
 target (durable source + regenerate, never the generated output).

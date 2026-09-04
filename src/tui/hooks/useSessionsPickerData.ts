@@ -41,10 +41,10 @@ export function useSessionsPickerData(opts: {
     enabled: !!pickerWt,
   });
   // Sessions-picker rows for the current modal slug. Built from
-  // `currentHarnessSessions` so claude/codex/opencode entries surface
+  // `currentHarnessSessions` so Claude/Codex entries surface
   // in one list. Trailing "+ new" affordances are appended one per
   // harness so per-harness letters (`c`/`o`/`x`) land on distinct
-  // rows. Index space: [sessions...] [new-claude] [new-codex] [new-opencode].
+  // rows. Index space: [sessions...] [new-claude] [new-codex].
   const pickerSlug =
     modal?.kind === "claudeSessionsPicker" ? modal.slug : null;
   const pickerRows = useMemo<ReadonlyArray<PickerRow>>(() => {
@@ -61,7 +61,7 @@ export function useSessionsPickerData(opts: {
     return out;
   }, [pickerSlug, currentHarnessSessions.sessions]);
   // Summaries keyed by session id for the picker's bottom panel.
-  // Claude-only today; codex / opencode entries fall back to the
+  // Claude-only today; Codex entries fall back to the
   // "(no summary yet)" placeholder.
   const pickerSummaries = useMemo(() => {
     const m = new Map<string, { text: string } | null>();

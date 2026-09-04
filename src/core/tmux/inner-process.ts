@@ -176,7 +176,14 @@ export function wrapInnerArgs(opts: {
   // human's F10 shell sending mail signed as whichever agent opened it,
   // and its browser tabs closing with that agent's worktree.
   const unset: string[] = ["TMUX", "TMUX_PANE", "WT_AGENT", "BROWSER_CONTROL_SESSION"];
-  if (slug && harnessIdForKind(kind) !== null) extraEnv.push(`WT_AGENT=${slug}`);
+  const harnessId = harnessIdForKind(kind);
+  if (harnessId !== null) {
+    // wt is commonly launched from a shell that disables color for command
+    // parsing. Interactive harnesses own a terminal UI, so inheriting either
+    // spelling strips Codex/Claude styling despite the truecolor tmux setup.
+    unset.push("NO_COLOR", "NO_COLOUR");
+    if (slug) extraEnv.push(`WT_AGENT=${slug}`);
+  }
   const sessionPath = kind === "claude"
     ? `${launcherBinDir()}${delimiter}${pathWithShims()}`
     : `${launcherBinDir()}${delimiter}${process.env.PATH ?? ""}`;

@@ -13,7 +13,6 @@ describe("closeHarnessUsesPaneInput", () => {
 
   test("preserves graceful pane input for other harnesses", () => {
     expect(closeHarnessUsesPaneInput("codex")).toBe(true);
-    expect(closeHarnessUsesPaneInput("opencode")).toBe(true);
   });
 });
 
@@ -23,7 +22,6 @@ describe("classifySessions", () => {
       "eng-1234-foo",
       "eng-1234-foo~scratch",
       "eng-5678-bar-codex",
-      "eng-5678-bar-opencode",
       "eng-9999-baz-diff",
       "eng-9999-baz-shell",
       "eng-1111-qux-action",
@@ -34,7 +32,6 @@ describe("classifySessions", () => {
     ]);
     expect(result.claudeSlugs).toEqual(new Set(["eng-1234-foo"]));
     expect(result.codex).toEqual(new Set(["eng-5678-bar"]));
-    expect(result.opencode).toEqual(new Set(["eng-5678-bar"]));
     expect(result.diff).toEqual(new Set(["eng-9999-baz"]));
     expect(result.shell).toEqual(new Set(["eng-9999-baz"]));
     expect(result.action).toEqual(new Set(["eng-1111-qux"]));

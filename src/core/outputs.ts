@@ -23,11 +23,11 @@ export type OutputKind = "events" | "action" | "session" | "destroy";
 /**
  * Subkind of a `kind: "session"` output. Drives both the title label
  * and the OutputViewer's content dispatch. claude/shell tail via
- * `core/harness/claude/tail.ts` (stream-json / pipe-pane); codex + opencode
- * tail via `core/harness/tail.ts` (rollout jsonl / SQLite).
+ * `core/harness/claude/tail.ts` (stream-json / pipe-pane); Codex tails via
+ * `core/harness/tail.ts` (rollout jsonl).
  * F11 diff is deliberately excluded (see file header).
  */
-export type OutputSessionKind = "claude" | "shell" | "codex" | "opencode";
+export type OutputSessionKind = "claude" | "shell" | "codex";
 export type OutputStatus = "live" | "running" | "done" | "failed" | "killed";
 
 /**
@@ -121,7 +121,6 @@ const SESSION_LABEL: Record<OutputSessionKind, string> = {
   claude: "F12 claude",
   shell: "F10 shell",
   codex: "codex",
-  opencode: "opencode",
 };
 
 export function eventsOutput(lastEventTs: number): Output {

@@ -23,8 +23,8 @@ export const qk = {
    * Harness session discovery for one (slug, harness) pair. Each impl
    * (`core/harness/<id>.ts`) defines what "discoverable" means: Claude
    * reads its persisted-name file + jsonl tails + the registry; Codex
-   * scans rollouts under `~/.codex/sessions/`; OpenCode reads
-   * `opencode.db`. Live-status is annotated on top by the consumer
+   * scans rollouts under `~/.codex/sessions/`. Live status is annotated
+   * on top by the consumer
    * hook against `tmuxSessionsQuery.all`, so the key intentionally
    * does NOT include the tmux name set — that would invalidate this
    * query on every tmux-sessions refresh.
@@ -84,8 +84,6 @@ export const qk = {
   claudeUsage: () => ["claudeUsage"] as const,
   /** Codex rate-limit usage (5h/7d %), read from the newest rollout. */
   codexUsage: () => ["codexUsage"] as const,
-  /** OpenCode spend (5h/7d $), summed from its message-cost rows. */
-  opencodeCost: () => ["opencodeCost"] as const,
   /**
    * Live registry of running claude processes from
    * `~/.claude/sessions/<pid>.json`. Single global key; consumers

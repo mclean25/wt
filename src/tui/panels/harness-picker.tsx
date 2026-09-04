@@ -4,8 +4,8 @@
  * confirm + j/k + digits + per-harness letter shortcut pattern shared
  * across every list-picker in the TUI.
  *
- * Per-harness letters come from each impl's `letter` field — `c` for
- * Claude, `o` for OpenCode, `x` for Codex. Pressing the letter jumps
+ * Per-harness letters come from each impl's `letter` field: `c` for
+ * Claude and `x` for Codex. Pressing the letter jumps
  * the highlight to that row; Shift+F12 (re-press, the trigger-key
  * convention), bare F12, or Enter then confirms.
  */
@@ -26,10 +26,10 @@ export function HarnessPickerModal({ slug, selectedIndex }: Props) {
       inset={{ top: "30%", right: "30%", bottom: "30%", left: "30%" }}
       hints={[
         ["j/k", "move"],
-        // HARNESSES is always ≤9 entries (3 today), so digits are
+        // HARNESSES is always ≤9 entries (2 today), so digits are
         // unconditionally live — see handleListPickerKey's default.
         ["1-9", "quick pick"],
-        ["c / o / x", "jump"],
+        ["c / x", "jump"],
         ["⇧F12 / F12 / ⏎", "spawn"],
         ["esc / q", "cancel"],
       ]}

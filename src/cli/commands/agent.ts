@@ -14,7 +14,7 @@ import { parseAgentArgs, skillPrompt } from "./agent-args.ts";
 
 const USAGE = `usage: wt agent send <worktree> [text...]   send to the worktree's live agent
        wt agent start <worktree>            start that agent on its prompt.txt brief
-       --harness <claude|codex|opencode>    address one explicitly
+       --harness <claude|codex>             address one explicitly
 
 Both pick the harness with a LIVE session in that worktree, and fall
 back to the Shift+Tab primary only when nothing is running there. The

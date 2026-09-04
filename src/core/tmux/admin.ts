@@ -157,7 +157,6 @@ export type SessionClassification = {
   claude: ClaudeSessionEntry[];
   claudeSlugs: Set<string>;
   codex: Set<string>;
-  opencode: Set<string>;
   diff: Set<string>;
   shell: Set<string>;
   action: Set<string>;
@@ -174,7 +173,6 @@ export function classifySessions(names: Iterable<string>): SessionClassification
   const claude: ClaudeSessionEntry[] = [];
   const claudeSlugs = new Set<string>();
   const codex = new Set<string>();
-  const opencode = new Set<string>();
   const diff = new Set<string>();
   const shell = new Set<string>();
   const action = new Set<string>();
@@ -182,8 +180,6 @@ export function classifySessions(names: Iterable<string>): SessionClassification
   for (const name of names) {
     if (name.endsWith(SUFFIX.codex)) {
       codex.add(name.slice(0, -SUFFIX.codex.length));
-    } else if (name.endsWith(SUFFIX.opencode)) {
-      opencode.add(name.slice(0, -SUFFIX.opencode.length));
     } else if (name.endsWith(SUFFIX.diff)) {
       diff.add(name.slice(0, -SUFFIX.diff.length));
     } else if (name.endsWith(SUFFIX.shell)) {
@@ -205,7 +201,7 @@ export function classifySessions(names: Iterable<string>): SessionClassification
       }
     }
   }
-  return { claude, claudeSlugs, codex, opencode, diff, shell, action, dev };
+  return { claude, claudeSlugs, codex, diff, shell, action, dev };
 }
 
 /**
@@ -215,8 +211,8 @@ export function classifySessions(names: Iterable<string>): SessionClassification
  * One CLI call regardless of worktree count.
  *
  * `claude` is a list of `(slug, name)` because a single worktree can
- * host multiple claude sessions (primary + N named). `codex` and
- * `opencode` are slug sets — for v1 they're single-tmux-per-slug.
+ * host multiple claude sessions (primary + N named). `codex` is a slug
+ * set because it is single-tmux-per-slug.
  * The legacy `claudeSlugs` set is the unique-slug projection of
  * `claude` — preserved so "row has any live claude" checks stay a
  * Set lookup.

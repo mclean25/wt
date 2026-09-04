@@ -27,7 +27,7 @@ export type EnterHarnessSessionOptions = {
   harnessId: HarnessId;
   /**
    * Claude-only: null = primary tmux slot (`<slug>`), string = named
-   * additional session (`<slug>~<name>`). Codex / OpenCode ignore the
+   * additional session (`<slug>~<name>`). Codex ignores the
    * name for tmux naming (single-tmux-per-slug) but pass it through
    * to the harness's buildArgs.
    */
@@ -35,7 +35,7 @@ export type EnterHarnessSessionOptions = {
   /**
    * Harness session id to resume. `null` (or omitted) spawns fresh.
    * The harness impl decides what "fresh" means — claude derives a
-   * deterministic UUID from (slug, name); codex / opencode let their
+   * deterministic UUID from (slug, name); Codex lets its
    * own CLI generate one.
    */
   resumeSessionId?: string | null;
@@ -45,12 +45,12 @@ export type EnterHarnessSessionOptions = {
    */
   claudeDisplayName?: string;
   /**
-   * Codex / OpenCode only: ensure the single-tmux-per-slug slot starts
+   * Codex only: ensure the single-tmux-per-slug slot starts
    * fresh by killing any existing slot before attaching. Needed for
    * "+ new" and for "resume a specific dead session" — without it,
    * `tmux new-session -A` silently attaches to whatever's already in
    * the slot and the harness argv (`codex` / `codex resume <id>` /
-   * `opencode -s <id>`) is ignored. Claude has per-name tmux slots so
+   * `codex resume <id>`) is ignored. Claude has per-name tmux slots so
    * it never needs this; the flag is ignored for `harnessId === claude`.
    */
   freshSlot?: boolean;

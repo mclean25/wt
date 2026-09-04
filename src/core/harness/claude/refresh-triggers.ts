@@ -15,7 +15,7 @@
  * already cheaply polled, so it isn't worth a trigger — the value is
  * specifically the GitHub state behind a rate-limited API.
  *
- * Claude-only for now. Codex / OpenCode expose tool calls too (their
+ * Claude-only for now. Codex exposes tool calls too (its
  * event pollers already parse them), so extending later is cheap, but
  * there's no second implementation yet to justify the seam.
  */

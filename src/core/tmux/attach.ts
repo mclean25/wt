@@ -163,7 +163,7 @@ export function resolveSessionIdentity(
 
 /**
  * Resolve the inner-program argv for a session: `harness.buildArgs` for
- * AI harness kinds (claude/codex/opencode), the user's diff command via
+ * AI harness kinds (Claude/Codex), the user's diff command via
  * their login shell for `diff`, or a bare login shell for `shell`. Pure:
  * run `ensureHarnessTrusted` first so the workspace-trust gate doesn't
  * fire on first launch (rift checkouts otherwise read as new projects).
@@ -237,9 +237,9 @@ export function attachOrCreate(opts: {
   cwd: string;
   kind: Exclude<SessionKind, "action" | "dev">;
   /**
-   * For AI harness kinds (`claude` / `codex` / `opencode`). Claude:
+   * For AI harness kinds (`claude` / `codex`). Claude:
    * `null` → primary tmux slot, string → named additional session
-   * (`<slug>~<name>`). Codex / OpenCode ignore the managed name for
+   * (`<slug>~<name>`). Codex ignores the managed name for
    * the tmux name (single-tmux-per-slug) but pass it through to
    * `harness.buildArgs` so the impl can surface it where relevant.
    */
@@ -344,7 +344,7 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
 
   // AI harness branches delegate argv to the registered impl. Each
   // impl decides resume-vs-create at attach time (claude: presence of
-  // its jsonl; codex / opencode: presence of `resumeSessionId`) so
+  // its jsonl; Codex: presence of `resumeSessionId`) so
   // recovery from external deletes is automatic — the next attach
   // re-evaluates and picks the right form. The diff branch shells out
   // to the configured command via the user's login shell so PATH/init

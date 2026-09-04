@@ -139,7 +139,7 @@ export function senderTag(): string | null {
  * and unbroken, and must be the whole first token. That keeps a message
  * opening with an absolute path out of the command path — `/Users/…` fails
  * the lowercase rule and `/tmp/foo` fails the token boundary — while also
- * recognizing Codex/OpenCode's `$start` form.
+ * recognizing Codex's `$start` form.
  */
 function isHarnessCommand(text: string): boolean {
   return /^[/$][a-z][a-z0-9_-]*(\s|$)/.test(text.trimStart());

@@ -605,7 +605,7 @@ export function buildActionVars(row: WorktreeRow, skillPrefix: string): ActionVa
     // wants a stage handle (e.g. `sst remove --stage {{stage}}`) reads this.
     stage: expectedStage(row.wt),
     // Harness skill-invocation prefix (`/` for Claude Code, `$` for
-    // OpenCode / Codex). Lets a prompt like `{{skill_prefix}}restack`
+    // Codex). Lets a prompt like `{{skill_prefix}}restack`
     // route to the right skill regardless of which harness receives it.
     // See `actionSkillPrefix` for how the target harness is picked.
     skill_prefix: skillPrefix,
@@ -623,7 +623,7 @@ export function buildActionVars(row: WorktreeRow, skillPrefix: string): ActionVa
  *    operator's current harness, so primary is the best guess.
  *  - Headless prompt actions (the default `target`) run the selected
  *    primary harness's non-interactive CLI (`claude -p`, `codex exec`,
- *    `opencode run`), so the prefix follows that harness too.
+ *    `codex exec`), so the prefix follows that harness too.
  *  - `def === null` is the "Custom prompt…" entry, which is also a
  *    headless prompt action.
  */

@@ -2,29 +2,29 @@
  * Sessions picker for `;` — multi-harness list of every session known
  * to wt for the current worktree plus a per-harness "+ new" affordance.
  * Two phases: a list view, and an input view for typing a custom name
- * when "+ new claude" is chosen (codex / opencode generate their own
+ * when "+ new claude" is chosen (Codex generates its own
  * session ids so they skip the name-input phase).
  *
  * UX rules:
  *  - Sort: live sessions first (most-recently-active inside each
  *    harness's live set wins), then dead sessions (by recency across
  *    harnesses). Heterogeneous status (claude has busy/idle, codex /
- *    opencode don't) makes a strict state-priority sort impossible
+ *    Codex does not) makes a strict state-priority sort impossible
  *    across the whole list — the dead-vs-live split is the most
  *    legible thing left.
  *  - Status color drives the right-side label. Claude entries surface
  *    their derived state (working / waiting / abandoned / idle) via
- *    the per-state color; codex / opencode show a simple "live" or
+ *    the per-state color; Codex shows a simple "live" or
  *    age glyph in dim.
  *  - The summary panel below the list shows the LLM-authored snippet
  *    for the selected entry when one exists. Today only Claude
- *    supplies summaries — codex / opencode entries fall back to
+ *    supplies summaries — Codex entries fall back to
  *    "(no summary yet)".
  *  - Quick-pick digits track the rendered order of the SESSION rows
  *    only; "+ new" rows are reached via per-harness letters.
  *  - `x` on a row kills that session (matches the universal modal
  *    kill key in AGENTS.md). Claude rows: kills the named slot or
- *    forgets the ghost. Codex/OpenCode rows: kills the shared tmux
+ *    forgets the ghost. Codex rows: kills the shared tmux
  *    slot when live; toasts a hint when dead (those stores are owned
  *    by the harness CLI, not wt).
  *  - Live-preview: j/k on a live claude entry points the bottom pane
@@ -62,7 +62,7 @@ type ListProps = {
   /**
    * Per-claude-session summary snippets (ai-title / away_summary /
    * last-prompt). Keyed by session UUID; passed through from the
-   * existing `claudeSummariesQuery`. Codex / opencode entries don't
+   * existing `claudeSummariesQuery`. Codex entries do not
    * have summaries today.
    */
   summaries: SummaryBySessionId;
@@ -70,7 +70,7 @@ type ListProps = {
 
 /**
  * Render the LLM-authored summary blob for the selected entry. Empty
- * for codex / opencode (no summary source yet). Italicized so the
+ * for Codex (no summary source yet). Italicized so the
  * prose reads as "context about", not "row content".
  */
 function SummaryPanel({

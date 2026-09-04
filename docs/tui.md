@@ -92,12 +92,12 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 | key | action |
 |---|---|
 | `F12` | enter the row's coding-agent session (the selected primary harness when live, else another live harness, else resume that harness's mapped primary conversation or spawn it when none exists); from another worktree session, switch straight to it; press again to return home; while attached, `Ctrl+D` closes it gracefully |
-| `Shift+F12` | pick a harness (claude / codex / opencode) for a fresh spawn |
+| `Shift+F12` | pick a harness (Claude / Codex) for a fresh spawn |
 | `Shift+Tab` | cycle the primary harness |
 | `F11` | enter the row's diff session (`[diff].command`, default `revdiff`, against the resolved diff base); from another session, switch straight to it; press again to return home |
 | `F10` | enter the row's plain shell session; from another session, switch straight to it; press again to return home |
 | `Shift+F10` / `Shift+F11` | kill the shell / diff session (confirm) |
-| `;` | sessions picker — attach (`; ;`), new named claude (`; c`), new codex/opencode (`; x` / `; o`), graceful close (`; d`), kill (`; x` on a live session row — fires directly, no confirm; getting there already took two deliberate steps). Codex rows use wt's stable `primary` / `2` / `3` names rather than Codex-generated thread summaries. |
+| `;` | sessions picker — attach (`; ;`), new named Claude (`; c`), new Codex (`; x`), graceful close (`; d`), kill (`; x` on a live session row — fires directly, no confirm; getting there already took two deliberate steps). Codex rows use wt's stable `primary` / `2` / `3` names rather than Codex-generated thread summaries. |
 | `!` | action picker — identical on local and remote rows (remote execution uses SSH): run a configured `[[actions]]` entry, `! c` for a custom prompt; `!` on a running action offers to kill it. Two agent-delegation builtins are pinned at the top: `! u` has the row's agent re-assess and assert `wt status`, `! g` has it continue the work per the current status (both send to the primary harness session, cold-starting it if needed); with `[dev_server]` configured, start/restart (`d`), stop (`s`), and scrollable logs (`l`) are pinned below them. `! m` toggles auto-merge (group "github") |
 | `,` / `.` / `/` | attach the persistent harness session for the wt repo / main clone / dotfiles (`[paths] dotfiles`, default `~/.dotfiles`). The dotfiles slot is dropped entirely when that directory doesn't exist, freeing `/` and `\` |
 | `<` / `>` / `\` | slot command palette for the wt repo / main clone / dotfiles session — the shift analog of the attach key (dotfiles rides `\` because shift+`/` is `?`, help). Entries: continue current work (`g`), `/compact` (`m`, fires directly), open the slot in your editor (`z`), custom free-text message (`c`). Prompt entries send to the slot's session, cold-starting it detached if needed |

@@ -12,7 +12,7 @@ wt checkout and offer themselves on the next launch.
 
 | unit | what it is |
 |---|---|
-| `instructions` | a managed block spliced into each tool's **global instructions file** (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `$PI_CODING_AGENT_DIR/AGENTS.md`, `~/.config/opencode/AGENTS.md`): the always-on ownership rules for agents working in wt worktrees (work status, decision ownership and the `needs-human` refusal test, manual testing, the dev server) |
+| `instructions` | a managed block spliced into each tool's **global instructions file** (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `$PI_CODING_AGENT_DIR/AGENTS.md`): the always-on ownership rules for agents working in wt worktrees (work status, decision ownership and the `needs-human` refusal test, manual testing, the dev server) |
 | `wt` skill | orientation: subcommands, conventions, the stacked-PR model, gotchas |
 | `restack` skill | the conflict-resolution playbook behind `/restack` |
 | `manager` skill | the fleet-coordinator playbook for the [manager session](manager.md) |
@@ -112,8 +112,8 @@ shared instructions file and `~/.agents/skills` without wt ever spawning it.
   is a stow mount point a dotfiles package left behind when it stopped
   generating for that tool, not a tool to serve. Counting it would put a unit
   in the pending list that no sync can ever clear.
-- **Native**: `~/.claude/skills/<name>/` (Claude; OpenCode reads the same
-  dir), `~/.agents/skills/` or `$CODEX_HOME/skills/` (Codex),
+- **Native**: `~/.claude/skills/<name>/` (Claude),
+  `~/.agents/skills/` or `$CODEX_HOME/skills/` (Codex),
   `~/.agents/skills/` or `$PI_CODING_AGENT_DIR/skills/` (Pi), and the global
   instructions files listed above.
 - **Symlinks are resolved and deduped**: when several tools point at one

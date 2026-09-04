@@ -29,7 +29,7 @@ export type TmuxSessionsData = {
   /**
    * Live-session slug lists keyed by harness id. `claude` is the
    * unique-slug projection of the `claude` entry list (a worktree can
-   * host several named claude sessions); `codex`/`opencode` are the
+   * host several named claude sessions); `codex` contains the
    * single-slot slugs. One uniform `Record<HarnessId, string[]>` so
    * consumers index by harness id instead of branching on it. Arrays
    * (not Sets) because this query is persisted.
@@ -77,7 +77,6 @@ export const tmuxSessionsQuery = () =>
             claude,
             claudeSlugs,
             codex,
-            opencode,
             diff,
             shell,
             action,
@@ -89,7 +88,6 @@ export const tmuxSessionsQuery = () =>
             slugsByHarness: {
               claude: [...claudeSlugs],
               codex: [...codex],
-              opencode: [...opencode],
             },
             diff: [...diff],
             shell: [...shell],
@@ -136,11 +134,11 @@ export const harnessSessionsQuery = (
     },
     staleTime: STALE.fast,
     // Claude session state is kept fresh by `watchRegistry` invalidation
-    // (its status lives in the fs-watched registry). Codex/OpenCode bake
-    // their state into discovery and have no such watcher, so a working
+    // (its status lives in the fs-watched registry). Codex bakes its
+    // state into discovery and has no such watcher, so a working
     // session would otherwise show stale state until spawn/kill/refresh —
     // poll while the tmux slot is CURRENTLY live (not merely "ever had a
-    // session on disk" — a worktree with old rollouts/DB rows but no live
+    // session on disk" — a worktree with old rollouts but no live
     // tmux slot must not poll forever).
     refetchInterval: () =>
       harnessId === "claude" ? false : isLive ? 3_000 : false,

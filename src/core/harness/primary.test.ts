@@ -15,8 +15,8 @@ describe("resolvePrimaryHarness", () => {
     expect(
       resolvePrimaryHarness(
         { primary: "gemini" as never },
-        "opencode",
+        "codex",
       ),
-    ).toBe("opencode");
+    ).toBe("codex");
   });
 });

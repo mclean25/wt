@@ -88,7 +88,7 @@ import { shQuote } from "../../../tmux/naming.ts";
  * imports this module transitively; `shims.test.ts` asserts the two
  * agree, so drift fails a test instead of the fleet.
  */
-const NEVER_SHIM = ["claude", "codex", "opencode"] as const;
+const NEVER_SHIM = ["claude", "codex"] as const;
 
 /**
  * Shimmed whenever present, even if discovery misses them. Discovery is

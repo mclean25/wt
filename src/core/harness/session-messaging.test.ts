@@ -76,7 +76,7 @@ describe("sender stamping", () => {
     expect(stampSender("/compact keep the fleet state")).toBe("/compact keep the fleet state");
   });
 
-  test("a dollar-prefixed Codex/OpenCode skill is never stamped", () => {
+  test("a dollar-prefixed Codex skill is never stamped", () => {
     process.env.WT_AGENT = "wt";
     expect(stampSender("$start")).toBe("$start");
     expect(stampSender("$handoff next task")).toBe("$handoff next task");

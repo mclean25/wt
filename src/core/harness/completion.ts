@@ -4,8 +4,8 @@
  * This is deliberately separate from interactive session spawning and
  * tracked prompt actions. Naming needs the harness's existing authentication
  * and model access without attaching to the user's interactive session or
- * gaining permission to modify the repository. Codex and Claude suppress
- * persistence; OpenCode currently offers only its isolated `--pure` run.
+ * gaining permission to modify the repository. Both harnesses suppress
+ * persistence for these calls.
  */
 import type {
   NamingConfig,
@@ -92,24 +92,6 @@ export function buildHarnessCompletion(
           "-",
         ],
         input: prompt,
-      };
-    case "opencode":
-      return {
-        harnessId,
-        argv: [
-          "opencode",
-          "run",
-          "--pure",
-          "--format",
-          "default",
-          "--dir",
-          cwd,
-          ...(model ? ["--model", model] : []),
-          "--variant",
-          naming.reasoningEffort,
-          "--",
-          prompt,
-        ],
       };
   }
 }

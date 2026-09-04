@@ -40,7 +40,7 @@ export type ActionAvailability =
  * `pr`, `issue_id` (the tracker id in the slug, `""` when it has none),
  * `stage`, `arg` (when the action collects one), and
  * `skill_prefix` (the harness skill-invocation prefix — `/` for Claude
- * Code, `$` for OpenCode / Codex; see `actionSkillPrefix` in
+ * Code, `$` for Codex; see `actionSkillPrefix` in
  * `tui/hooks/useActionDispatch.ts` for how the target harness is picked per launch).
  * Kept loose (`Record<string, string>`) so adding a new var is a
  * one-liner at the callsite — no schema dance.

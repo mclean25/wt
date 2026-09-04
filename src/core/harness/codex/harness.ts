@@ -471,8 +471,7 @@ function setCached(
 /**
  * Liveness-independent best guess for a codex session's state from its
  * rollout tail: an unmatched `task_started` (mid-turn) reads as `working`,
- * a cleanly-closed turn as `waiting`. This mirrors opencode's
- * `deriveOpencodeState` — `computeHarnessSessions` finalizes it against
+ * a cleanly-closed turn as `waiting`. `computeHarnessSessions` finalizes it against
  * real tmux liveness, demoting a cleanly closed dead slot to `idle` and
  * a mid-turn dead slot to `abandoned` while a live slot keeps this guess
  * (so a working codex reads `working`, not the floor-`waiting` the old

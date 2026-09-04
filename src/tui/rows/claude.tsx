@@ -3,7 +3,7 @@
  * the F12-target session's state for the row's worktree, with the
  * harness identity rendered via its glyph + color. Claude entries
  * surface their derived state (working / waiting / abandoned / idle).
- * Claude gets this from its registry/jsonl tail; Codex and OpenCode use
+ * Claude gets this from its registry/jsonl tail; Codex uses
  * their local rollout/DB tails plus tmux liveness.
  *
  * Empty state (no discoverable session on any harness): show
@@ -43,7 +43,7 @@ function AiLine({ wt }: { wt: Worktree }) {
   const stateText = state ?? (f12Target.isLive ? "live" : "dead");
   const stateFg = state ? stateColor(harness.id, state) : theme.fgDim;
   // Tint the glyph by state too (matching the list pane); fall back to
-  // the harness brand color when state is unknown (live codex/opencode).
+  // the harness brand color when state is unknown (live Codex).
   const glyphFg = state ? stateColor(harness.id, state) : harness.color;
   // When asking, append the registry's reason (e.g. "permission prompt"
   // → "permission") so the row says *what* claude is blocked on.
@@ -85,7 +85,7 @@ export const claudeRow: RowModule = {
   // `usePrimaryHarness` inside `AiLine`, not from the row aggregator's
   // `fields` channel. Tying the row's staleness glyph to the legacy
   // `fields.claude` (which only knows about Claude jsonl tails) would
-  // misrepresent codex/opencode-only worktrees, so it stays unset
+  // misrepresent Codex-only worktrees, so it stays unset
   // until the harness queries plumb in their own staleness signal.
   render: ({ row }) => <AiLine wt={row.wt} />,
 };

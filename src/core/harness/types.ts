@@ -1,6 +1,6 @@
 /**
  * AI coding harness abstraction. wt supports running multiple harnesses
- * (Claude Code, Codex, OpenCode) concurrently per worktree. Each impl
+ * (Claude Code and Codex) concurrently per worktree. Each impl
  * lives in its own file under `core/harness/` and registers via
  * `index.ts`.
  *
@@ -14,7 +14,7 @@
 import type { Effect } from "effect";
 import type { DerivedState } from "./status.ts";
 
-export type HarnessId = "claude" | "codex" | "opencode";
+export type HarnessId = "claude" | "codex";
 
 /**
  * Optional cross-harness session metadata. Harnesses fill only the
@@ -56,7 +56,7 @@ export type HarnessExtras = {
   /**
    * Timestamp (ms-since-epoch) of the last message row seen, used by
    * `useHarnessSessions` to finalize `derivedState` once liveness is
-   * known. OpenCode populates this; Claude / Codex leave it undefined.
+   * known. Reserved for harnesses that expose message timestamps.
    * Timestamp of the latest harness-native event/message. Kept separate
    * from `lastActiveMs` because some stores update session metadata and
    * message rows independently.
@@ -76,17 +76,16 @@ export type HarnessSession = {
   displayName: string;
   /**
    * Stable handle to resume this exact session. Format is harness-
-   * specific (UUID for Claude, rollout id for Codex, `ses_…` for
-   * OpenCode). Pass back as `resumeSessionId` to `buildArgs`.
+   * specific (UUID for Claude, rollout id for Codex). Pass back as
+   * `resumeSessionId` to `buildArgs`.
    */
   sessionId: string;
   /**
    * Tmux session name that would currently host this session. The
    * consumer cross-references against the live tmux name set to derive
    * `isLive` — see `useHarnessSessions`. Claude returns the legacy
-   * `<slug>` / `<slug>~<name>` format; Codex / OpenCode return
-   * `<slug>-codex` / `<slug>-opencode` (single tmux slot per slug per
-   * harness for v1).
+   * `<slug>` / `<slug>~<name>` format; Codex returns
+   * `<slug>-codex` (a single tmux slot per slug).
    */
   tmuxSessionName: string;
   /** Last meaningful activity ms-since-epoch, or null if unknown. */
@@ -138,13 +137,12 @@ export interface Harness {
    * whatever's running in the slot (`freshSlot`), and only one
    * discovered session can be live at a time. False for claude, which
    * gets a unique tmux name per managed session. This is the capability
-   * that used to be spelled `id === "codex" || id === "opencode"` at
-   * every call site.
+   * that used to be spelled `id === "codex"` at every call site.
    */
   readonly singleSlot: boolean;
   /**
    * Prefix this harness uses to invoke named skills / slash commands in
-   * a prompt. Claude Code uses `/`; OpenCode and Codex use `$`.
+   * a prompt. Claude Code uses `/`; Codex uses `$`.
    * Substituted into action prompts as `{{skill_prefix}}` at launch
    * time (see `buildActionVars` in `tui/app-helpers.ts`), so a single prompt
    * like `{{skill_prefix}}restack` lands correctly regardless of which
@@ -156,7 +154,7 @@ export interface Harness {
   /**
    * tmux `send-keys` key sequence submitted after a bracketed paste,
    * for messages delivered through terminal input. Every harness needs
-   * one: it is the only transport for codex/opencode, and Claude's
+   * one: it is the only transport for Codex, and Claude's
    * fallback when its prompt can't be submitted into directly (see
    * `harness/session-messaging.ts`). Keys are sent in order with a
    * small gap between each. Override per harness when a different
@@ -184,7 +182,7 @@ export interface Harness {
    * Tmux session name for a (slug, managedName). Each impl encodes its
    * own scheme so harnesses can coexist on the same slug without
    * colliding. Claude preserves the legacy `<slug>` / `<slug>~<name>`
-   * format; Codex/OpenCode use `<slug>-<id>` / `<slug>-<id>~<name>`.
+   * format; Codex uses `<slug>-codex`.
    */
   tmuxSessionName(slug: string, managedName: string | null): string;
 

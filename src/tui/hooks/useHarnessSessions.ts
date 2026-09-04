@@ -37,7 +37,7 @@ export type HarnessSessionEntry = HarnessSession & { harnessId: HarnessId };
 
 /**
  * Sentinel sessionId prefix used by the synthesized live-slot placeholder
- * for codex/opencode when the tmux slot is alive but no on-disk session
+ * for Codex when the tmux slot is alive but no on-disk session
  * record exists yet. `commitRow` strips this and passes
  * `resumeSessionId: null` so the spawn just attaches to the slot.
  */
@@ -128,7 +128,7 @@ export function computeHarnessSessions(
   for (const h of HARNESSES) {
     if (harnessIds && !harnessIds.includes(h.id)) continue;
     const raw = rawByHarness.get(h.id) ?? EMPTY;
-    // Single-tmux-per-slug for codex/opencode means at most ONE
+    // Single-tmux-per-slug for Codex means at most ONE
     // discovered session can actually be running in the slot at any
     // time. The previous "any session whose tmuxSessionName matches a
     // live tmux name is live" rule marked EVERY discovered session
@@ -137,7 +137,7 @@ export function computeHarnessSessions(
     // here: when the slot is alive, the most-recently-active
     // discovered session represents the slot; all others are dead.
     // When the slot is alive but no discovered session points at it
-    // yet (fresh codex/opencode before the first prompt — the only
+    // yet (fresh Codex before the first prompt — the only
     // moment when rollout/DB write hasn't happened), synthesize a
     // placeholder so the picker isn't blank for an actively-running
     // session.
@@ -155,7 +155,7 @@ export function computeHarnessSessions(
       const isLive = isSingleSlot
         ? s.sessionId === liveDiscoveredId
         : tmuxNames.has(s.tmuxSessionName);
-      // Finalize codex/opencode derived state now that we know liveness.
+      // Finalize Codex derived state now that we know liveness.
       // discoverSessions() returns a liveness-independent best guess
       // (working = mid-turn/streaming, waiting = turn closed). A live slot
       // keeps that guess, falling back to `waiting` when no tail/DB message
@@ -191,7 +191,7 @@ export function computeHarnessSessions(
     });
     if (isSingleSlot && slotAlive && liveDiscoveredId === null) {
       // Slot is alive but nothing on disk points at it yet — codex
-      // and opencode don't persist a rollout/DB row until the first
+      // Codex does not persist a rollout row until the first
       // user prompt, so a freshly spawned session is invisible to
       // discovery. Surface a placeholder so the user can re-attach
       // (or kill) it from the picker. Sentinel sessionId is consumed
@@ -292,7 +292,7 @@ export function useHarnessSessions(
  */
 export type ActiveSessionGlyph = {
   harnessId: HarnessId;
-  /** Cross-harness derived state, or null (live codex/opencode w/o one). */
+  /** Cross-harness derived state, or null (live Codex without one). */
   state: DerivedState | null;
 };
 

@@ -712,7 +712,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     }
     // Shift+F12 — open the harness selector for a fresh spawn.
     // Replaces the old "auto-name new claude" semantics; the user now
-    // picks which harness to spawn (claude / codex / opencode). The
+    // picks which harness to spawn (Claude or Codex). The
     // claude option preserves the prior auto-name behavior (see the
     // `harnessSelect` handler above).
     if (isBareShiftedKey(k, "f12")) {
@@ -768,7 +768,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       if (target) {
         // Mirror the picker's commitRow logic: synthetic placeholders
         // ride the live slot (no resume id, no kill), real live entries
-        // attach, and dead codex/opencode entries need `freshSlot` to
+        // attach, and dead Codex entries need `freshSlot` to
         // displace whatever's in the shared slot — without it, the
         // resume argv is silently ignored.
         const isSyntheticLive = isSyntheticLiveSessionId(target.sessionId);

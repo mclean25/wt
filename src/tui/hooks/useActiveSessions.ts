@@ -80,7 +80,7 @@ export function useActiveShellSessions(): ReadonlySet<string> {
   }, [list]);
 }
 
-/** Slugs with a live codex/opencode tmux slot. Drives the harness-tail
+/** Slugs with a live Codex tmux slot. Drives the harness-tail
  *  reconcile so the bottom pane tails only live sessions. */
 export function useActiveHarnessSessions(
   harnessId: TailHarnessId,

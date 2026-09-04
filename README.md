@@ -4,7 +4,7 @@
 
 <p align="center"><a href="https://discord.gg/DDnxyXQgF7"><img src="https://img.shields.io/discord/1534621499665813627?label=Discord&logo=discord&logoColor=white&color=5865F2" alt="Discord"></a></p>
 
-Each row shows live status, PR state, preview deployment, issue link, and coding-agent session activity (Claude Code, Codex, OpenCode) for one worktree, so the whole pile of in-progress work is visible on one screen. The configured coding-agent harness can also generate a title and description for each branch through its existing CLI authentication.
+Each row shows live status, PR state, preview deployment, issue link, and coding-agent session activity (Claude Code or Codex) for one worktree, so the whole pile of in-progress work is visible on one screen. The configured coding-agent harness can also generate a title and description for each branch through its existing CLI authentication.
 
 The design principle behind all of it: **the human does only the work only a human can do** (merges, logins, judgment calls). Agents assert a per-worktree work status (`wt status` — blocked-on-you / needs-testing / ready-to-merge, with a merge-risk level), the list auto-sorts by what needs you, automations ping only when human action is genuinely required, and a singleton manager session coordinates the fleet. The full rationale and agency model: **[docs/fleet.md](docs/fleet.md)**.
 
@@ -29,8 +29,8 @@ The design principle behind all of it: **the human does only the work only a hum
 - Issue tracker — no CLI or token; the issue id is parsed from branch slugs and linked via a URL template (`[issue_tracker]`, with a Linear preset), and PRs can open in Linear Reviews.
 - Dev server — one supervised `npm run dev`-style process per worktree (`[dev_server]`): wt-owned ports, crash restarts with give-up, tmux-backed so it survives wt restarts.
 - Review bot — the CodeRabbit badge/automation track, retargetable at any PR-review bot (`[review_bot]`), including checklist-style GitHub Actions reviewers.
-- Coding agents — live sessions are *detected* by reading each agent's local files, no CLI needed; *spawning* from the TUI needs that agent's CLI on PATH (`claude`, `codex`, `opencode`). Claude is the most complete integration; Codex and OpenCode are partial today.
-- A coding-agent CLI (`claude`, `codex`, or `opencode`) — live sessions and, when `[naming]` is configured, generated worktree titles and descriptions.
+- Coding agents — live sessions are *detected* by reading each agent's local files, no CLI needed; *spawning* from the TUI needs that agent's CLI on PATH (`claude` or `codex`). Claude is the most complete integration; Codex has fewer native status signals.
+- A coding-agent CLI (`claude` or `codex`) — live sessions and, when `[naming]` is configured, generated worktree titles and descriptions.
 - [`rift`](https://github.com/anomalyco/rift) — an opt-in copy-on-write worktree backend (`[backend] kind = "rift"`): near-instant checkouts that bring `node_modules` across for free. See [docs/backends.md](docs/backends.md).
 
 ## Install

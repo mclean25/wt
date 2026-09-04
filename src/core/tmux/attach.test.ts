@@ -83,6 +83,29 @@ describe("tmux inner-process browser identity", () => {
     expect(stdout.trim()).toBe("eng-1-slug");
   });
 
+  test("interactive harnesses do not inherit no-color flags", async () => {
+    for (const kind of ["claude", "codex"] as const) {
+      const proc = Bun.spawn(
+        wrapInnerArgs({
+          kind,
+          stderrPath: "/dev/null",
+          innerArgs: ["sh", "-c", "printenv NO_COLOR NO_COLOUR"],
+          slug: "eng-1-slug",
+        }),
+        {
+          stdout: "pipe",
+          stderr: "ignore",
+          env: { ...process.env, NO_COLOR: "1", NO_COLOUR: "1" },
+        },
+      );
+      const [, stdout] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+      ]);
+      expect(stdout.trim()).toBe("");
+    }
+  });
+
   test("a claude session does not inherit the caller's own Claude identity", async () => {
     // wt is usually run BY an agent, so its environment IS a Claude
     // session's. `CLAUDE_CODE_CHILD_SESSION` in particular makes the new

@@ -24,7 +24,6 @@ import { getHarness, type HarnessId } from "../core/harness/index.ts";
 import {
   claudeUsageQuery,
   codexUsageQuery,
-  opencodeCostQuery,
 } from "../state/index.ts";
 
 import { theme } from "./theme.ts";
@@ -47,11 +46,8 @@ export function PrimaryHarnessBadge({ primary }: { primary: HarnessId }) {
 
 /**
  * Top-right usage slot, following the Shift+TAB-selected primary harness:
- *   - claude / codex → rate-limit windows as `5h X% / 7d Y%`
- *   - opencode       → spend over the same windows as `5h $X / 7d $Y`
- *     (it has no rate-limit window — it bills per token)
- * Each source is gated to its primary so we don't scan rollouts / hit
- * the opencode DB when that harness isn't selected.
+ * Both harnesses expose rate-limit windows as `5h X% / 7d Y%`.
+ * Each source is gated to its primary so we do not scan unused stores.
  */
 export function UsageBadge({ primary }: { primary: HarnessId }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -66,26 +62,6 @@ export function UsageBadge({ primary }: { primary: HarnessId }) {
     enabled: primary === "claude",
   });
   const codex = useQuery({ ...codexUsageQuery(), enabled: primary === "codex" });
-  const opencode = useQuery({
-    ...opencodeCostQuery(),
-    enabled: primary === "opencode",
-  });
-
-  if (primary === "opencode") {
-    const cost = opencode.data;
-    if (!cost) return null;
-    return (
-      <box flexShrink={0} flexDirection="row">
-        <text>
-          <span fg={theme.fg}>{`5h ${formatCost(cost.fiveHour)}`}</span>
-          <span fg={theme.fgDim}>{" · "}</span>
-          <span fg={theme.fg}>{`7d ${formatCost(cost.sevenDay)}`}</span>
-          <span fg={theme.fgDim}>{" · "}</span>
-        </text>
-      </box>
-    );
-  }
-
   const clusters = formatPctUsage(
     primary === "claude" ? claude.data : codex.data,
     nowMs,
@@ -128,11 +104,6 @@ export function UsageBadge({ primary }: { primary: HarnessId }) {
       <text>{nodes}</text>
     </box>
   );
-}
-
-/** Compact USD: cents-precise under $100, whole dollars above. */
-function formatCost(n: number): string {
-  return n >= 100 ? `$${Math.round(n)}` : `$${n.toFixed(2)}`;
 }
 
 /**

@@ -280,7 +280,7 @@ function tmuxServerPid(signal?: AbortSignal): Effect.Effect<number | null> {
 // `build` so `npm exec vitest run eslint-rules` is a test run, not a
 // lint, and `build` precedes `dev` so `vite build` isn't a dev server.
 const WT_RE = /\/\.?wt\/(bin|src)\/|(^|\/)wt\s+(ls|new|rm|logs|doctor|status)\b/;
-const HARNESS_RE = /(^|\/|\s)(claude|codex|opencode)(\s|$)/;
+const HARNESS_RE = /(^|\/|\s)(claude|codex)(\s|$)/;
 const TEST_RE = /\b(vitest|jest|playwright)\b|\bdeno\s+test\b/;
 const BUILD_RE = /\b(tsc|eslint|biome|esbuild|rollup|webpack|swc|prettier)\b|\bvite\s+build\b/;
 const DEV_RE = /\bvite\b|\bnext\s+dev\b|\.cache\/wt\/dev\//;

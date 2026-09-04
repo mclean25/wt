@@ -33,12 +33,6 @@ export const theme = {
   // working contrasts its orange waiting.
   codex: "#4d56d6",
   codexAlt: "#e0a94f",
-  // OpenCode brand violet. `opencode` mirrors OPENCODE_COLOR in
-  // core/harness/opencode.ts and lights `waiting`. `opencodeAlt` is
-  // lime-green — the violet complement — so `working` reads as a
-  // distinct hue, not a dimmed brand shade.
-  opencode: "#a78bfa",
-  opencodeAlt: "#9ccf6e",
 };
 
 /**

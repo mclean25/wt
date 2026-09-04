@@ -8,10 +8,10 @@
  * color` table via {@link stateColor}. `waiting` takes the harness brand
  * color and `working` its complement, so a glance reads vendor *and*
  * state through a contrasting hue pair (claude cyan/orange, codex
- * amber/indigo, opencode lime/violet). The remaining states stay
+ * amber/indigo). The remaining states stay
  * semantic and shared: `abandoned` is always red (the process exited
  * mid-turn) and `idle` always dim, while `asking`/`polling`/`unknown`
- * come only from claude's registry — codex/opencode never emit them —
+ * come only from claude's registry — Codex never emits them —
  * so they keep claude's values everywhere for exhaustiveness.
  *
  * The glyph table ({@link STATE_DOT}) stays shared: shape encodes state,
@@ -45,15 +45,10 @@ export const STATE_FG_BY_HARNESS: Record<
 > = {
   // `waiting` ("your move") takes the harness brand color everywhere;
   // `working` takes that brand's complement, so the two states contrast
-  // in hue (claude cyan/orange, codex amber/indigo, opencode lime/violet)
+  // in hue (claude cyan/orange, codex amber/indigo)
   // rather than differing only in brightness.
   claude: { working: theme.accent, waiting: theme.claude, ...SHARED },
   codex: { working: theme.codexAlt, waiting: theme.codex, ...SHARED },
-  opencode: {
-    working: theme.opencodeAlt,
-    waiting: theme.opencode,
-    ...SHARED,
-  },
 };
 
 /** Per-harness foreground for a `DerivedState`. */

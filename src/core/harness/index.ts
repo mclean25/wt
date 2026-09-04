@@ -18,4 +18,3 @@ export {
   parseClaudeTmuxName,
 } from "./claude/harness.ts";
 export { isCodexTmuxName } from "./codex/harness.ts";
-export { closeOpencodeDb, isOpencodeTmuxName } from "./opencode/harness.ts";

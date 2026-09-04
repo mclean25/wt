@@ -99,7 +99,7 @@ function OutputContent({ output, height }: { output: Output; height: number }) {
     if (output.sessionKind === "shell") {
       return <ShellContent slug={output.slug} height={height} />;
     }
-    if (output.sessionKind === "codex" || output.sessionKind === "opencode") {
+    if (output.sessionKind === "codex") {
       return (
         <HarnessSessionContent
           slug={output.slug}
@@ -122,4 +122,3 @@ function OutputContent({ output, height }: { output: Output; height: number }) {
   }
   return null;
 }
-
