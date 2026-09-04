@@ -14,14 +14,13 @@ export {
   logSafe,
   runIn,
   runInResult,
-  restartEventsDaemonAfterUpdate,
   shortSha,
   spawnFreshWt,
   WT_REPO_ROOT,
   wtVersion,
   updateGitLock,
 } from "./update/exec.ts";
-export type { EventsDaemonRestartResult } from "./update/exec.ts";
+export type { RunResult } from "./update/exec.ts";
 export {
   armBootSentinel,
   completeBootSentinel,

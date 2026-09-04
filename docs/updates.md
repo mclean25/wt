@@ -58,13 +58,15 @@ that version (so the daily check skips it until origin moves), and
 leaves the user on what they had. A broken push therefore usually
 costs its author a red X, not a user a broken install.
 
-After a successful **startup** update, wt runs the newly checked-out
-`bin/wt events restart` when the launchd agent is installed, then re-execs the
-TUI. This keeps the long-lived snapshot writer on the same parsing build as
-the reader immediately, rather than waiting for its next webhook fetch to
-notice that the source moved. The restart runs out of process because the
-updater still has the old build loaded in memory. Failure is visible but does
-not strand the user before the TUI; `wt events restart` is the manual retry.
+Every interactive startup reconciles an installed events daemon against the
+freshly loaded wt build. The daemon records its build in `state.json`; a live
+daemon with the same build is untouched, while a stopped, older, or unstamped
+daemon is restarted through the newly checked-out `bin/wt events restart`.
+This happens after the update process re-execs, rather than only in the process
+that applied the update: that old process may itself predate the restart hook,
+and the source clone may also have moved outside the startup updater. Failure
+is visible but does not strand the user before the TUI; `wt events restart` is
+the manual retry.
 
 **What the gate does not do is tell anyone it is holding.** A red `main`
 stops shipping silently: users stay on their last green version, which is

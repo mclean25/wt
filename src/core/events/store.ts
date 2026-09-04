@@ -70,6 +70,8 @@ export type GithubSnapshot = GithubSnapshotData & {
 export type EventsState = {
   pid: number;
   port: number;
+  /** The wt build loaded by this daemon process. Missing means a pre-stamp daemon. */
+  writerSha?: string | null;
   startedAt: number;
   /** Last accepted (signature-valid, relevant) webhook delivery. */
   lastEventAt: number | null;

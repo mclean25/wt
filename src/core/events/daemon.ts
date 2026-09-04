@@ -287,6 +287,7 @@ export const makeDaemonCore = Effect.fn("makeDaemonCore")(function* (
   const initialState: EventsState = {
     pid: process.pid,
     port: events.port,
+    writerSha: buildSha(),
     startedAt: yield* Clock.currentTimeMillis,
     lastEventAt: null,
     lastFetchAt: null,

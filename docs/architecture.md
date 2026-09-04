@@ -92,6 +92,12 @@ The big core modules are directories behind a same-named flat barrel: `core/gith
 
 Per-harness code (Claude/Codex session discovery, naming, events, usage, tails) lives under `core/harness/<harness>/` behind the generic `Harness` interface (`core/harness/types.ts`); `core/harness/status.ts` is the shared `DerivedState` vocabulary.
 
+The GitHub events daemon stamps its loaded wt build into `events/state.json`.
+`core/events/startup.ts` checks that stamp on every interactive startup and
+restarts an installed stopped, stale, or pre-stamp daemon out of process. The
+check belongs to the fresh startup rather than the old updater process, so the
+first upgrade from a version without the hook repairs itself too.
+
 Codex session UUIDs are harness-owned resume handles, while wt owns a persistent per-worktree `primary` / `2` / `3` name mapping. That mapping is identity, not presentation: the picker shows it, F12 resumes the mapped `primary` when no session is live, and detached cold starts used by `wt agent send/start` resolve the same UUID before spawning. When both harnesses are live on one worktree, the Shift+Tab-selected primary harness wins the F12 target and list glyph; recency only breaks ties inside that bucket and is a fallback for unmapped legacy data. Explicit `+ new` picker rows are the only path that intentionally starts a fresh single-slot conversation.
 
 **The CLI dispatcher imports lazily.** `cli/index.ts` maps each subcommand to a `() => import("./commands/<name>.ts")` thunk, so `wt <cmd>` loads that command's module graph and nothing else (35 modules for `wt status`, against 153 for all commands at once). This is containment, not speed: users update hot from main, so any push can put a broken module in front of every agent on the machine, and a static barrel turns one bad export into a total outage — which is exactly what happened, taking `wt status` down with the transport it doesn't use. Commands whose branches differ in what they need split further: `wt manager report` imports no session machinery at all, so the fleet keeps its ability to report that delivery is broken. `scripts/broken-module-check.sh` asserts the property by breaking a module in a throwaway copy of `src/` and printing which commands survive. `main.ts` still routes `update`/`rollback`/`version` around the dispatcher entirely, because those must work when the dispatcher itself is what failed to parse ([updates.md](updates.md)).

@@ -9,7 +9,7 @@
  * `logSafe` is a best-effort lazy logger that silently no-ops when the
  * logging chain itself can't load.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { constants as osConstants, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { Clock, Data, Duration, Effect, Option, Schedule, Scope } from "effect";
@@ -202,40 +202,6 @@ export function spawnFreshWt(): number {
     ? osConstants.signals[child.signalCode as keyof typeof osConstants.signals]
     : undefined;
   return signum ? 128 + signum : 1;
-}
-
-export type EventsDaemonRestartResult =
-  | { status: "not-installed" }
-  | { status: "restarted" }
-  | { status: "failed"; detail: string };
-
-/**
- * Rotate the optional events daemon after a successful pre-launch update.
- *
- * This deliberately launches the newly checked-out `bin/wt` instead of
- * importing the events command. The updater is still the old in-memory build
- * at this point, and mixing its loaded modules with new source is exactly what
- * the immediate TUI re-exec avoids. No plist means the daemon was never
- * installed, so there is nothing to do.
- */
-export function restartEventsDaemonAfterUpdate(
-  deps: {
-    plist?: string;
-    run?: typeof runInResult;
-  } = {},
-): Effect.Effect<EventsDaemonRestartResult> {
-  return Effect.suspend(() => {
-    const plist = deps.plist ?? join(homedir(), "Library", "LaunchAgents", "com.wt.events.plist");
-    if (!existsSync(plist)) return Effect.succeed({ status: "not-installed" });
-    return (deps.run ?? runInResult)(
-      [join(WT_REPO_ROOT, "bin", "wt"), "events", "restart"],
-      { cwd: WT_REPO_ROOT, timeoutMs: 30_000 },
-    ).pipe(Effect.map((result): EventsDaemonRestartResult => {
-      if (result.exitCode === 0) return { status: "restarted" };
-      const detail = result.stderr.trim().split("\n").at(-1) || `exit ${result.exitCode}`;
-      return { status: "failed", detail };
-    }));
-  });
 }
 
 /**

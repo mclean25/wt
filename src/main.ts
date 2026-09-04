@@ -115,6 +115,23 @@ const main = Effect.fn("wt")(function* () {
         return yield* Effect.sync(spawnFreshWt);
       }
     }
+  // Reconcile from the freshly loaded build on every TUI startup. Doing this
+  // only inside the updater misses the first upgrade from a version that
+  // predates the restart hook, and misses source changes applied elsewhere.
+  // Installed + stale (including an unstamped legacy daemon) restarts; current
+  // daemons are untouched. A daemon failure must not prevent the TUI booting.
+    if (process.env.WT_UPDATE !== "off") {
+      const { reconcileEventsDaemonAtStartup } = yield* io.promise(
+        "load events daemon startup reconciliation",
+        () => import("./core/events/startup.ts"),
+      );
+      const daemon = yield* reconcileEventsDaemonAtStartup();
+      if (daemon.status === "restarted") {
+        console.log("  restarted the events daemon on the current build");
+      } else if (daemon.status === "failed") {
+        console.error(`wt: events daemon restart failed (${daemon.detail}); starting anyway`);
+      }
+    }
   // Boot sentinel: record that this version is starting; core/update
   // promotes it to "known good" once it survives the health window (or
   // exits cleanly). A leftover sentinel on the next launch is evidence
