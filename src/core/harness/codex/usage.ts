@@ -1,10 +1,11 @@
 /**
  * Reader for Codex's rate-limit usage. Codex writes a `token_count`
- * event into its rollout jsonl on each turn, carrying the same two
- * windows the Claude statusline exposes: `primary` (5h, 300 min) and
- * `secondary` (7d, 10080 min), each with a `used_percent` and a
- * `resets_at` epoch-seconds stamp. We read the most-recently-modified
- * rollout's latest such event — no HTTP call, no separate cache file.
+ * event into its rollout jsonl on each turn. Depending on the account,
+ * that block may contain both a 5h and 7d window or only one of them.
+ * Window identity comes from `window_minutes`, not the `primary` /
+ * `secondary` slot: current Pro payloads put the 7d window in `primary`.
+ * We read the most-recently-modified rollout's latest such event — no
+ * HTTP call, no separate cache file.
  *
  * Account-global: any recent rollout reflects current limits, so the
  * newest one across the whole sessions tree is the freshest source
@@ -23,13 +24,9 @@ const log = createLogger("[codex-usage]");
 const SESSIONS_DIR = join(homedir(), ".codex", "sessions");
 /** Trailing bytes to scan for the latest `token_count` event. */
 const TAIL_BYTES = 96 * 1024;
-/** Day-dirs to consider when finding the newest rollout (covers a
- *  session running across a midnight boundary). */
-const SCAN_DAY_DIRS = 3;
-
 export type CodexUsage = {
-  fiveHour: UsagePeriod;
-  sevenDay: UsagePeriod;
+  fiveHour: UsagePeriod | null;
+  sevenDay: UsagePeriod | null;
   /** Plan tier from the rate-limit payload (e.g. "plus"), or null. */
   planType: string | null;
   /** Newest rollout mtime, epoch ms — drives the staleness gate. */
@@ -37,55 +34,38 @@ export type CodexUsage = {
 };
 
 /**
- * Walk the date-partitioned sessions tree newest-first and return the
- * rollout with the greatest mtime across the most recent `SCAN_DAY_DIRS`
- * day directories. Bounded so the scan stays cheap on every refetch.
+ * Walk the date-partitioned sessions tree and return the rollout with
+ * the greatest mtime. Sessions retain their original date path when
+ * resumed, so limiting this to the newest date directories misses the
+ * exact rollout that is currently producing fresh usage data.
  */
-function findLatestRollout(): { path: string; mtimeMs: number; size: number } | null {
+function findLatestRollout(
+  sessionsDir: string,
+): { path: string; mtimeMs: number; size: number } | null {
   let best: { path: string; mtimeMs: number; size: number } | null = null;
-  let daysSeen = 0;
-  let years: string[];
-  try {
-    years = readdirSync(SESSIONS_DIR).sort().reverse();
-  } catch {
-    return null;
-  }
-  for (const y of years) {
-    let months: string[];
+  const dirs = [sessionsDir];
+  while (dirs.length > 0) {
+    const dir = dirs.pop()!;
+    let entries;
     try {
-      months = readdirSync(join(SESSIONS_DIR, y)).sort().reverse();
+      entries = readdirSync(dir, { withFileTypes: true });
     } catch {
       continue;
     }
-    for (const m of months) {
-      let days: string[];
-      try {
-        days = readdirSync(join(SESSIONS_DIR, y, m)).sort().reverse();
-      } catch {
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        dirs.push(path);
         continue;
       }
-      for (const d of days) {
-        if (daysSeen >= SCAN_DAY_DIRS) return best;
-        daysSeen++;
-        const dir = join(SESSIONS_DIR, y, m, d);
-        let files: string[];
-        try {
-          files = readdirSync(dir);
-        } catch {
-          continue;
+      if (!entry.name.startsWith("rollout-") || !entry.name.endsWith(".jsonl")) continue;
+      try {
+        const st = statSync(path);
+        if (!best || st.mtimeMs > best.mtimeMs) {
+          best = { path, mtimeMs: st.mtimeMs, size: st.size };
         }
-        for (const f of files) {
-          if (!f.startsWith("rollout-") || !f.endsWith(".jsonl")) continue;
-          const path = join(dir, f);
-          try {
-            const st = statSync(path);
-            if (!best || st.mtimeMs > best.mtimeMs) {
-              best = { path, mtimeMs: st.mtimeMs, size: st.size };
-            }
-          } catch {
-            // skip unreadable
-          }
-        }
+      } catch {
+        // skip unreadable
       }
     }
   }
@@ -105,13 +85,19 @@ function period(raw: unknown): UsagePeriod | null {
   return { utilization: r.used_percent, resetsAt };
 }
 
+function windowMinutes(raw: unknown): number | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = (raw as Record<string, unknown>).window_minutes;
+  return typeof value === "number" ? value : null;
+}
+
 /**
  * Read the newest rollout's last `token_count.rate_limits`. Returns null
  * when no rollout exists or none carries a rate-limit block (e.g. a
  * fresh session before its first turn).
  */
-export function readCodexUsage(): CodexUsage | null {
-  const latest = findLatestRollout();
+export function readCodexUsage(sessionsDir = SESSIONS_DIR): CodexUsage | null {
+  const latest = findLatestRollout(sessionsDir);
   if (!latest || latest.size === 0) return null;
 
   const start = Math.max(0, latest.size - TAIL_BYTES);
@@ -139,9 +125,29 @@ export function readCodexUsage(): CodexUsage | null {
     if (!payload || payload.type !== "token_count") continue;
     const rl = payload.rate_limits as Record<string, unknown> | undefined;
     if (!rl) continue;
-    const five = period(rl.primary);
-    const seven = period(rl.secondary);
-    if (!five || !seven) continue;
+    const primary = period(rl.primary);
+    const secondary = period(rl.secondary);
+    const primaryMinutes = windowMinutes(rl.primary);
+    const secondaryMinutes = windowMinutes(rl.secondary);
+    // Older payloads omitted `window_minutes` but consistently used the
+    // original primary=5h / secondary=7d ordering. Prefer explicit window
+    // lengths and retain that positional fallback only where identity is
+    // absent.
+    const five = primaryMinutes === 300
+      ? primary
+      : secondaryMinutes === 300
+      ? secondary
+      : primaryMinutes === null
+      ? primary
+      : null;
+    const seven = primaryMinutes === 10_080
+      ? primary
+      : secondaryMinutes === 10_080
+      ? secondary
+      : secondaryMinutes === null
+      ? secondary
+      : null;
+    if (!five && !seven) continue;
     return {
       fiveHour: five,
       sevenDay: seven,

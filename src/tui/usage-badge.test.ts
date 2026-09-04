@@ -117,6 +117,19 @@ describe("formatPctUsage", () => {
     expect(render(out)).toBe("5h 20% (5m) · 7d 40% (1d13h)");
   });
 
+  test("codex can render only the weekly window", () => {
+    const out = formatPctUsage(
+      {
+        fiveHour: null,
+        sevenDay: { utilization: 97, resetsAt: IN_1D13H_A },
+        planType: "pro",
+        cachedAtMs: NOW,
+      },
+      NOW,
+    );
+    expect(render(out)).toBe("7d 97% (1d13h)");
+  });
+
   test("nothing to show", () => {
     expect(formatPctUsage(null, NOW)).toEqual([]);
     expect(
