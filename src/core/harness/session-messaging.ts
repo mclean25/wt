@@ -24,12 +24,12 @@
  * TWO FAILURES MUST NOT FALL BACK, and they are the reason the ladder
  * is a ladder rather than a try/catch:
  *
- *  - `blocked` — the session is waiting on a human (a permission
- *    prompt). Typing there presses the submit key on somebody's dialog,
- *    answering it on their behalf. Checked before the attempt AND
- *    re-checked throughout the readiness wait, because a dialog that
- *    appears mid-wait is indistinguishable, to the probe, from a prompt
- *    that hasn't mounted yet.
+ *  - `blocked` — the session is waiting on a human (a question or
+ *    permission prompt). Typing there presses the submit key on somebody's
+ *    dialog, answering it on their behalf. The send stays queued under the
+ *    per-session lock until the registry says the dialog closed. Checked
+ *    before the attempt AND re-checked throughout the readiness wait,
+ *    because a dialog can appear after the first status read.
  *  - `submitted-unknown` — the submit reached the target and we stopped
  *    waiting for its answer. Closing our socket doesn't cancel it, so
  *    typing the same text would double-submit. We confirm against the
@@ -52,6 +52,7 @@ import {
   shimDir,
   staleShims,
   type InjectFailureKind,
+  type InjectOutcome,
 } from "./claude/inject.ts";
 import { claudeTmuxName } from "./claude/harness.ts";
 import { injectedPromptLanded } from "./claude/jsonl.ts";
@@ -117,6 +118,10 @@ const READY_COLD_MS = 20_000;
 /** Transcript-confirmation window for an injected prompt. */
 const CONFIRM_MS = 8_000;
 const CONFIRM_POLL_MS = 250;
+/** Registry polling while a question or permission dialog owns the input. */
+const HUMAN_WAIT_POLL_MS = 250;
+/** A human may leave a dialog open for hours; ordinary send-lock timing is too short. */
+const SEND_LOCK_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
 
 /**
  * The sending agent's identity (`core/agent-identity.ts`).
@@ -194,7 +199,7 @@ const defaults: Dependencies = {
       : injectIntoSession({ ...target, harnessId: target.harnessId }),
   landed: injectedPromptLanded,
   warn: (slug, message) => createLogger(slug).attention.warn(message),
-  lock: withAsyncFileLock,
+  lock: (key, effect) => withAsyncFileLock(key, effect, { timeoutMs: SEND_LOCK_TIMEOUT_MS }),
 };
 
 /**
@@ -264,8 +269,29 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     if (!snapshot || snapshot.status !== "waiting") return null;
     return `${tmuxName} is waiting on a human${
       snapshot.waitingFor ? ` (${snapshot.waitingFor})` : ""
-    } — answer it first, then resend`;
+    }`;
   }
+
+  /**
+   * Keep the active sender holding the cross-process session lock while a
+   * human-facing dialog is open. Later senders remain serialized behind it,
+   * and Effect interruption releases it cleanly if the originating CLI/TUI
+   * goes away.
+   */
+  const waitUntilUnblocked = Effect.fnUntraced(function* (
+    identity: SessionIdentity,
+    initial: SessionSnapshot | null,
+    requireObservedReady: boolean,
+  ) {
+    let snapshot = initial;
+    // Once waiting was observed, a transient missing registry file during
+    // Claude's atomic rewrite is not evidence that the dialog closed.
+    while (snapshot?.status === "waiting" || (requireObservedReady && snapshot === null)) {
+      yield* Effect.sleep(HUMAN_WAIT_POLL_MS);
+      snapshot = deps.statusOf(identity);
+    }
+    return snapshot;
+  });
 
   /**
    * Poll the transcript for the injected prompt until it lands or
@@ -315,15 +341,28 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
       if (!ensured.ok) return { ok: false, reason: ensured.error.message };
 
       const coldStarted = ensured.value.coldStarted;
-      const idleAtSubmit = ensured.value.session.status === "idle";
-      const blocked = blockedReason(ensured.value.session, tmuxName);
-      if (blocked) return { ok: false, reason: blocked };
-
-      const sinceMs = yield* Clock.currentTimeMillis;
-      const delivery = yield* deps.deliver(tmuxName, text, {
-        readyBudgetMs: coldStarted ? READY_COLD_MS : READY_WARM_MS,
-        abortIfBlocked: () => blockedReason(deps.statusOf(identity), tmuxName),
-      });
+      let snapshot: SessionSnapshot | null = ensured.value.session;
+      let requireObservedReady = snapshot.status === "waiting";
+      let delivery: InjectOutcome;
+      let sinceMs: number;
+      for (;;) {
+        snapshot = yield* waitUntilUnblocked(identity, snapshot, requireObservedReady);
+        requireObservedReady = false;
+        sinceMs = yield* Clock.currentTimeMillis;
+        delivery = yield* deps.deliver(tmuxName, text, {
+          readyBudgetMs: coldStarted ? READY_COLD_MS : READY_WARM_MS,
+          abortIfBlocked: () => blockedReason(deps.statusOf(identity), tmuxName),
+        });
+        // A dialog can mount between the status read above and the injector's
+        // first probe. Rejoin the same queue instead of failing or typing.
+        if (!delivery.ok && delivery.kind === "blocked") {
+          snapshot = deps.statusOf(identity);
+          requireObservedReady = true;
+          continue;
+        }
+        break;
+      }
+      const idleAtSubmit = snapshot?.status === "idle";
 
       if (delivery.ok) {
         // A Claude slash command is recorded in the transcript as an EXPANDED
@@ -335,8 +374,6 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
           : yield* confirmInjectedEffect({ cwd, managedName, text, sinceMs, idleAtSubmit });
         return { ok: true, coldStarted, delivered, resent: false, transport: "inspector" };
       }
-
-      if (delivery.kind === "blocked") return { ok: false, reason: delivery.reason };
 
       if (delivery.kind === "submitted-unknown") {
         // Retyping could double-submit, so ask the transcript instead.

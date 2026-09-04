@@ -31,7 +31,9 @@ in-process. It lands as an ordinary user turn in the live conversation
 with its existing context — not a headless \`claude -p\` run, and not
 peer-framed text the receiver has to decide whether to act on. A slash
 command runs. A draft in the session's input box is preserved. A busy
-session queues it. Fire-and-forget: there is no completion signal;
+session queues it. If Claude is showing a question or permission
+dialog, wt waits and submits only after that dialog closes. There is no
+completion signal;
 attach via the TUI (F12) to watch.
 
 Messages are stamped with the sending agent (\`[<slug>] …\`) when sent

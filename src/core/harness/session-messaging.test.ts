@@ -98,6 +98,8 @@ type FakeOpts = {
   waitingFor?: string | null;
   /** Status observed on the re-reads during the readiness wait. */
   becomes?: { status: RegistryStatus; waitingFor: string | null };
+  /** Ordered registry snapshots; the final entry remains current. */
+  statusReads?: Array<{ status: RegistryStatus; waitingFor: string | null } | null>;
   coldStarted?: boolean;
   deliverFails?: InjectFailureKind;
   terminalFails?: boolean;
@@ -109,6 +111,7 @@ function fakes(opts: FakeOpts = {}) {
   const warnings: string[] = [];
   const locks: string[] = [];
   let readyBudget: number | null = null;
+  let statusRead = 0;
   const deps = {
     inspectorEnabled: () => true,
     ensureInfo: () => {
@@ -123,6 +126,11 @@ function fakes(opts: FakeOpts = {}) {
     },
     statusOf: () => {
       calls.statusOf += 1;
+      if (opts.statusReads?.length) {
+        const snapshot = opts.statusReads[Math.min(statusRead, opts.statusReads.length - 1)]!;
+        statusRead += 1;
+        return snapshot;
+      }
       return (
         opts.becomes ?? {
           status: opts.status ?? ("idle" as RegistryStatus),
@@ -279,33 +287,63 @@ describe("the claude transport ladder", () => {
     expect(fake.warnings).toEqual([]);
   });
 
-  test("a session waiting on a human is never typed at", async () => {
-    // The submit key would answer whatever dialog is up — deciding a
-    // permission on the human's behalf.
-    const fake = fakes({ status: "waiting", waitingFor: "permission prompt" });
+  test("a session waiting on a human queues until the dialog closes", async () => {
+    // The submit key would answer whatever dialog is up. Keep the prompt
+    // queued, then inject it normally once the native registry reports idle.
+    const fake = fakes({
+      status: "waiting",
+      waitingFor: "input needed",
+      statusReads: [
+        // Missing during an atomic registry rewrite is still blocked: only a
+        // positive non-waiting snapshot releases the queued prompt.
+        null,
+        { status: "idle", waitingFor: null },
+      ],
+    });
     const send = createSessionMessenger(fake.deps);
 
-    const res = await run(send(target));
-    expect(res).toMatchObject({ ok: false });
-    expect(res.ok === false && res.reason).toContain("permission prompt");
+    const res = await withVirtualTime(send(target), 1_000);
+    expect(res).toMatchObject({ ok: true, transport: "inspector" });
     expect(fake.calls.terminal).toBe(0);
-    expect(fake.calls.deliver).toBe(0);
+    expect(fake.calls.deliver).toBe(1);
+    expect(fake.calls.statusOf).toBeGreaterThanOrEqual(2);
   });
 
-  test("a dialog that appears DURING the readiness wait also blocks typing", async () => {
+  test("a dialog that appears DURING readiness rejoins the queue", async () => {
     // The dangerous case: the status check passed, then a permission
     // prompt came up. To the injector's probe that is indistinguishable
     // from a prompt that hasn't mounted yet, so without re-reading the
     // status wt would fall back and type into the dialog.
     const fake = fakes({
       status: "idle",
-      becomes: { status: "waiting", waitingFor: "permission prompt" },
+      statusReads: [
+        { status: "waiting", waitingFor: "permission prompt" },
+        { status: "idle", waitingFor: null },
+      ],
     });
     const send = createSessionMessenger(fake.deps);
 
-    const res = await run(send(target));
-    expect(res).toMatchObject({ ok: false });
-    expect(res.ok === false && res.reason).toContain("permission prompt");
+    const res = await withVirtualTime(send(target), 1_000);
+    expect(res).toMatchObject({ ok: true, transport: "inspector" });
+    expect(fake.calls.terminal).toBe(0);
+    expect(fake.calls.deliver).toBe(2);
+  });
+
+  test("interrupting a human-wait queue never submits or types", async () => {
+    const fake = fakes({ status: "waiting", waitingFor: "input needed" });
+    const send = createSessionMessenger(fake.deps);
+
+    const exit = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkScoped(send(target));
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(fiber);
+        return yield* Fiber.await(fiber);
+      }).pipe(Effect.scoped),
+    );
+
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    expect(fake.calls.deliver).toBe(0);
     expect(fake.calls.terminal).toBe(0);
   });
 

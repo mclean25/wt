@@ -383,7 +383,7 @@ and its fallback.
 
 | sub | what it does |
 |---|---|
-| `send <slug> [text...]` | ensure the target Claude session exists, then submit the text at its prompt; reads stdin when no text args. Accepts a branch name plus `wt` / `main` / `dotfiles` / `manager`. Sent from inside a wt harness session, the message is stamped `[<sender slug>]` automatically. Delivery is confirmed against the target transcript before success is reported |
+| `send <slug> [text...]` | ensure the target Claude session exists, then submit the text at its prompt; reads stdin when no text args. Accepts a branch name plus `wt` / `main` / `dotfiles` / `manager`. Sent from inside a wt harness session, the message is stamped `[<sender slug>]` automatically. If Claude is asking the human a question or showing a permission dialog, the send waits in the serialized per-session queue until the dialog closes. Delivery is confirmed against the target transcript before success is reported |
 | `ls [--json]` | list slugs with a live Claude tmux session. `--json` adds `session_id`, `pid`, `cwd`, `socket_path`, `transport`, `tmux_session`, `status`, `waiting_for`, `busy`, and `last_activity` |
 | `selftest [<slug>]` | check that prompt injection still works against live sessions (one line each; nonzero if any fails). This is what tells you a Claude Code update moved the injector's structural anchors — `wt doctor` runs it too |
 | `stop <slug>` | stop the target Claude session without typing into its pane (`kill` remains an alias) |

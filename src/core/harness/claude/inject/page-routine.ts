@@ -33,8 +33,9 @@
  *   * app instance = boundThis of process.stdin's 'readable' listener
  *     (Ink wires its input reader as a bound method of the root App).
  *   * prompt fiber = a fiber whose memoizedProps has onSubmit:function
- *     AND one of messagesRef / commands / onAgentSubmit (the prompt
- *     input's own props; these English names are stable).
+ *     AND either the current draft/transcript/scope prop set or one of
+ *     the older messagesRef / commands / onAgentSubmit props. These are
+ *     prompt semantics, not minified component names.
  *   * input fiber  = a fiber with value:string + onChange:function (the
  *     controlled text input). Its `value` IS the user's current draft,
  *     and a sibling pair on the same fiber — cursorOffset:number +
@@ -56,11 +57,12 @@ export const PAGE_ROUTINE = `function(msg, probeOnly){
     let root = this._reactInternals || this._reactInternalFiber;
     if (!root) return JSON.stringify({ok:false, err:"no react root on app instance"});
     while (root.return) root = root.return;
-    // 1) the prompt fiber: onSubmit + a prompt-only prop (messagesRef/commands/onAgentSubmit).
+    // 1) the prompt fiber: onSubmit + a prompt-only semantic prop set. Claude 2.1.260
+    //    replaced messagesRef/commands/onAgentSubmit with draft/transcript/scope.
     let prompt=null; const seen=new Set();
     (function v(f){ if(!f||seen.has(f)||prompt)return; seen.add(f);
       let p; try{ p=f.memoizedProps; }catch(e){ p=null; }
-      if(p && typeof p==="object" && typeof p.onSubmit==="function" && (("messagesRef"in p)||("commands"in p)||("onAgentSubmit"in p))) { prompt=f; return; }
+      if(p && typeof p==="object" && typeof p.onSubmit==="function" && ((("draft"in p)&&("transcript"in p)&&("scope"in p))||("messagesRef"in p)||("commands"in p)||("onAgentSubmit"in p))) { prompt=f; return; }
       v(f.child); v(f.sibling); v(f.alternate);
     })(root);
     if(!prompt) return JSON.stringify({ok:false, err:"prompt fiber not found"});
