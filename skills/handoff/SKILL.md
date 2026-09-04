@@ -92,7 +92,7 @@ After the brief is safely written:
 
 `wt agent start` reads wt's configured primary harness, cold-starts that
 harness if needed, and invokes its native form of the `start` skill (`/start`
-for Claude, `$start` for Codex). Do not address a harness directly or
+for Claude, `$start` for Codex/OpenCode). Do not address a harness directly or
 guess its command prefix.
 
 If launch fails, leave the worktree and `prompt.txt` intact in `todo`, report

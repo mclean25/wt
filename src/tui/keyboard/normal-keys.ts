@@ -19,7 +19,7 @@ import { actionRegistry } from "../../core/actions.ts";
 import { emptyEdit } from "../text-edit.tsx";
 import type { WorkState } from "../../core/work-status.ts";
 import { config, type PullRequestTarget } from "../../core/config.ts";
-import { getHarness, HARNESSES, type HarnessId } from "../../core/harness/index.ts";
+import { getHarness, VISIBLE_HARNESSES, type HarnessId } from "../../core/harness/index.ts";
 import {
   issueUrlForId,
   specificIssueUrl,
@@ -712,7 +712,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     }
     // Shift+F12 — open the harness selector for a fresh spawn.
     // Replaces the old "auto-name new claude" semantics; the user now
-    // picks which harness to spawn (Claude or Codex). The
+    // picks which harness to spawn (claude / codex / opencode). The
     // claude option preserves the prior auto-name behavior (see the
     // `harnessSelect` handler above).
     if (isBareShiftedKey(k, "f12")) {
@@ -732,7 +732,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       }
       // Default highlight = current primary, so the muscle-memory
       // "Shift+F12, F12 again" path spawns whatever TAB selected.
-      const initialIdx = HARNESSES.findIndex((h) => h.id === primaryHarness);
+      const initialIdx = VISIBLE_HARNESSES.findIndex((h) => h.id === primaryHarness);
       setModal({
         kind: "harnessSelect",
         slug,
@@ -768,7 +768,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       if (target) {
         // Mirror the picker's commitRow logic: synthetic placeholders
         // ride the live slot (no resume id, no kill), real live entries
-        // attach, and dead Codex entries need `freshSlot` to
+        // attach, and dead codex/opencode entries need `freshSlot` to
         // displace whatever's in the shared slot — without it, the
         // resume argv is silently ignored.
         const isSyntheticLive = isSyntheticLiveSessionId(target.sessionId);

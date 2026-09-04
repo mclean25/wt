@@ -1,24 +1,29 @@
 /**
- * Per-slug tail for Codex sessions, the non-Claude analogue of
- * `core/harness/claude/tail.ts`. Produces the same
+ * Per-(slug, harness) tail for Codex and OpenCode sessions — the
+ * non-claude analogue of `core/harness/claude/tail.ts`. Produces the same
  * `ActionLine[]` shape the claude tailer and action runner produce, so
- * the bottom pane renders Codex sessions with the same row components.
+ * the bottom pane (OutputViewer / footer) renders codex/opencode
+ * sessions with the exact same row components.
  *
  * Claude gets a purpose-built fs.watch tailer over its stream-json
- * jsonl. Codex persists rollout jsonl under `~/.codex/sessions/` and has
+ * jsonl. Codex and OpenCode persist elsewhere — Codex in a rollout
+ * jsonl under `~/.codex/sessions/`, OpenCode in a SQLite DB — and have
  * no per-line push signal, so this registry polls each live slot on a
  * shared interval, seeding history on first sight and appending deltas
  * after. Codex's filesystem walk + JSONL parse run in
  * `codex/tail-worker.ts`; the main thread only applies its ActionLine
- * batches. The event-pane poller (`codex/events.ts`) emits terse global
- * one-liners and skips history, which is a different job from this detailed,
+ * batches. The event-pane pollers (`codex/events.ts` / `opencode/events.ts`)
+ * stay as-is: they emit terse global one-liners
+ * and skip history, which is a different job from this detailed,
  * history-seeded per-session trail.
  *
- * Codex has one tmux slot per slug (`<slug>-codex`), so the registry key
- * is `${slug}:codex` and there is at most one run per slug.
+ * Single tmux slot per slug per harness (`<slug>-codex` /
+ * `<slug>-opencode`), so the registry key is `${slug}:${harnessId}` and
+ * there's at most one run per pair.
  */
 import { statSync } from "node:fs";
 
+import type { Statement } from "bun:sqlite";
 import { Effect, Fiber } from "effect";
 
 import {
@@ -27,7 +32,7 @@ import {
   MAX_BUFFERED_LINES,
 } from "./claude/events.ts";
 import { createLogger } from "../logger.ts";
-import { jsonlTimestamp, readFileSlice } from "../tail-util.ts";
+import { jsonlTimestamp, prepareTailQuery, readFileSlice } from "../tail-util.ts";
 
 import { latestRolloutForCwd } from "./codex/harness.ts";
 import type {
@@ -35,12 +40,13 @@ import type {
   CodexTailWorkerMessage,
   CodexTailWorkerResult,
 } from "./codex/tail-protocol.ts";
+import { openDb } from "./opencode/harness.ts";
 import type { HarnessId } from "./types.ts";
 
 const log = createLogger("[harness-tail]");
 
 /** Harnesses this registry tails. Claude has its own (`claude/tail.ts`). */
-export type TailHarnessId = Extract<HarnessId, "codex">;
+export type TailHarnessId = Extract<HarnessId, "codex" | "opencode">;
 
 export type HarnessRun = {
   slug: string;
@@ -71,6 +77,8 @@ const MAX_LINES_PER_BLOCK = 8;
 /** Per-line character cap before ellipsis (the row truncates by width too,
  *  but bounding here keeps the buffer small). */
 const MAX_LINE_CHARS = 240;
+/** How many trailing OpenCode parts to seed from on first sight. */
+const OPENCODE_SEED_PARTS = 120;
 
 // ---------------------------------------------------------------------------
 // Per-entry tail state
@@ -87,11 +95,23 @@ export type CodexCursor = {
   seedDrop: boolean;
 };
 
+type OpencodeCursor = {
+  /** Session id currently tracked (most-recent in the slot's dir). */
+  sessionId: string | null;
+  /** Max `time_created` consumed so far, ms-since-epoch. */
+  afterMs: number;
+};
+
 type Entry = {
   slug: string;
   wtPath: string;
   harnessId: TailHarnessId;
   startedAt: number;
+  /** Monotonic per-entry line id (same role as the claude tailer's). */
+  nextLineId: number;
+  /** True once the history seed has run. */
+  seeded: boolean;
+  opencode: OpencodeCursor;
 };
 
 /** Minimal mutable state owned by the Codex tail worker for one live slot. */
@@ -311,6 +331,164 @@ export function pumpCodexTail(entry: CodexTailPumpState): ActionLine[] {
 }
 
 // ---------------------------------------------------------------------------
+// OpenCode SQLite parsing
+// ---------------------------------------------------------------------------
+
+type LatestSessionRow = { id: string };
+type TailPartRow = {
+  id: string;
+  time_created: number;
+  ptype: string | null;
+  pdata: string | null;
+  role: string | null;
+};
+
+type OcStmts = {
+  latestSession: Statement<LatestSessionRow, [{ $dir: string }]>;
+  partsAfter: Statement<TailPartRow, [{ $sid: string; $after: number }]>;
+  seedParts: Statement<TailPartRow, [{ $sid: string; $limit: number }]>;
+};
+
+let ocStmts: OcStmts | null = null;
+
+function ensureOcStmts(): OcStmts | null {
+  if (ocStmts) return ocStmts;
+  const db = openDb();
+  if (!db) return null;
+  try {
+    ocStmts = {
+      latestSession: prepareTailQuery<LatestSessionRow, { $dir: string }>(
+        db,
+        `SELECT id FROM session
+         WHERE directory = $dir AND time_archived IS NULL
+         ORDER BY time_updated DESC LIMIT 1`,
+      ),
+      partsAfter: prepareTailQuery<TailPartRow, { $sid: string; $after: number }>(
+        db,
+        `SELECT p.id AS id,
+                p.time_created AS time_created,
+                json_extract(p.data,'$.type') AS ptype,
+                p.data AS pdata,
+                json_extract(m.data,'$.role') AS role
+         FROM part p JOIN message m ON m.id = p.message_id
+         WHERE p.session_id = $sid AND p.time_created > $after
+         ORDER BY p.time_created ASC`,
+      ),
+      seedParts: prepareTailQuery<TailPartRow, { $sid: string; $limit: number }>(
+        db,
+        `SELECT id, time_created, ptype, pdata, role FROM (
+           SELECT p.id AS id,
+                  p.time_created AS time_created,
+                  json_extract(p.data,'$.type') AS ptype,
+                  p.data AS pdata,
+                  json_extract(m.data,'$.role') AS role
+           FROM part p JOIN message m ON m.id = p.message_id
+           WHERE p.session_id = $sid
+           ORDER BY p.time_created DESC LIMIT $limit
+         ) ORDER BY time_created ASC`,
+      ),
+    };
+    return ocStmts;
+  } catch (err) {
+    log.warn("opencode tail: prepare stmts failed", { err: String(err) });
+    return null;
+  }
+}
+
+function opencodePartLines(row: TailPartRow, nextId: () => number): ActionLine[] {
+  const ts = row.time_created;
+  if (!row.pdata) return [];
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(row.pdata) as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+  switch (row.ptype) {
+    case "text": {
+      const text = typeof data.text === "string" ? data.text : "";
+      if (!text.trim()) return [];
+      return row.role === "user"
+        ? textLines(text, "user", ts, nextId, "› ")
+        : textLines(text, "assistant", ts, nextId);
+    }
+    case "reasoning": {
+      const text = typeof data.text === "string" ? data.text : "";
+      return text.trim()
+        ? textLines(text, "thinking", ts, nextId, "… ").slice(0, 1)
+        : [];
+    }
+    case "tool": {
+      const tool =
+        typeof data.tool === "string"
+          ? data.tool
+          : typeof data.name === "string"
+            ? data.name
+            : "tool";
+      const state = data.state as Record<string, unknown> | undefined;
+      const status =
+        state && typeof state.status === "string" ? state.status : null;
+      const title =
+        state && typeof state.title === "string" ? ` ${state.title}` : "";
+      const kind: ActionLineKind =
+        status === "error"
+          ? "tool-err"
+          : status === "completed"
+            ? "tool-ok"
+            : "tool";
+      return [oneLine(`⚒ ${tool}${title}`, kind, ts, nextId)];
+    }
+    case "patch":
+      return [oneLine("⚒ patch", "tool", ts, nextId)];
+    default:
+      return [];
+  }
+}
+
+function opencodePump(entry: Entry): ActionLine[] {
+  const s = ensureOcStmts();
+  if (!s) return [];
+  const nextId = () => entry.nextLineId++;
+  const cur = entry.opencode;
+
+  let session: LatestSessionRow | null;
+  try {
+    session = s.latestSession.get({ $dir: entry.wtPath }) ?? null;
+  } catch {
+    return [];
+  }
+  if (!session) return [];
+
+  // New slot session (fresh spawn or first sight): reset the cursor.
+  const isNewSession = cur.sessionId !== session.id;
+  if (isNewSession) {
+    cur.sessionId = session.id;
+    cur.afterMs = 0;
+  }
+
+  let rows: TailPartRow[];
+  try {
+    rows =
+      !entry.seeded || isNewSession
+        ? s.seedParts.all({ $sid: session.id, $limit: OPENCODE_SEED_PARTS })
+        : s.partsAfter.all({ $sid: session.id, $after: cur.afterMs });
+  } catch (err) {
+    log.debug("opencode tail query failed", {
+      slug: entry.slug,
+      err: String(err),
+    });
+    return [];
+  }
+
+  const out: ActionLine[] = [];
+  for (const row of rows) {
+    if (row.time_created > cur.afterMs) cur.afterMs = row.time_created;
+    out.push(...opencodePartLines(row, nextId));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -356,12 +534,18 @@ export class HarnessTailRegistry {
       wtPath,
       harnessId,
       startedAt: Date.now(),
+      nextLineId: 1,
+      seeded: false,
+      opencode: { sessionId: null, afterMs: 0 },
     };
     this.state.set(key, entry);
     this.commit((m) =>
       m.set(key, { slug, harnessId, startedAt: entry.startedAt, lines: [] }),
     );
-    this.requestCodexPump();
+    // OpenCode's indexed SQLite seed is cheap. Codex history discovery walks
+    // date-partitioned rollout files, so seed it asynchronously in the worker.
+    if (harnessId === "codex") this.requestCodexPump();
+    else this.pumpOpencode(key);
     this.ensurePoller();
   }
 
@@ -372,7 +556,7 @@ export class HarnessTailRegistry {
   private stopByKey(key: string): void {
     const entry = this.state.get(key);
     if (!entry || !this.state.delete(key)) return;
-    if (this.codexWorker) {
+    if (entry.harnessId === "codex" && this.codexWorker) {
       this.postCodex(this.codexWorker, { type: "stop", key });
     }
     this.commit((m) => {
@@ -412,7 +596,12 @@ export class HarnessTailRegistry {
 
   private ensurePoller(): void {
     if (this.poller) return;
-    const tick = Effect.sync(() => this.requestCodexPump());
+    const tick = Effect.sync(() => {
+      this.requestCodexPump();
+      for (const [key, entry] of this.state) {
+        if (entry.harnessId === "opencode") this.pumpOpencode(key);
+      }
+    });
     this.poller = Effect.runFork(
       Effect.sleep(POLL_INTERVAL_MS).pipe(Effect.andThen(tick), Effect.forever),
     );
@@ -422,6 +611,26 @@ export class HarnessTailRegistry {
     if (!this.poller) return;
     Effect.runFork(Fiber.interrupt(this.poller));
     this.poller = null;
+  }
+
+  private pumpOpencode(key: string): void {
+    const entry = this.state.get(key);
+    if (!entry || entry.harnessId !== "opencode") return;
+    let appended: ActionLine[];
+    try {
+      appended = opencodePump(entry);
+    } catch (err) {
+      log.warn("harness tail pump failed", {
+        slug: entry.slug,
+        harness: entry.harnessId,
+        err: String(err),
+      });
+      // Leave `seeded` untouched: a failed initial SQLite read must not
+      // count as a completed seed, or the retry could skip history.
+      return;
+    }
+    entry.seeded = true;
+    this.append(key, appended);
   }
 
   private append(key: string, appended: readonly ActionLine[]): void {

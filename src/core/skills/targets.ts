@@ -28,7 +28,7 @@ import { basename, dirname, join, parse as parsePath } from "node:path";
  * session integration, and a tool can perfectly well be worth
  * installing into without wt ever spawning it.
  */
-export type AgentToolId = "claude" | "codex" | "pi";
+export type AgentToolId = "claude" | "codex" | "opencode" | "pi";
 
 /**
  * What "nothing detected" means, in the reader's terms. Lives next to
@@ -36,7 +36,7 @@ export type AgentToolId = "claude" | "codex" | "pi";
  * from the ones actually probed.
  */
 export const NO_TOOLS_HINT =
-  "no configured coding-agent dirs found (~/.claude, ~/.codex or ~/.agents, $PI_CODING_AGENT_DIR)";
+  "no configured coding-agent dirs found (~/.claude, ~/.codex or ~/.agents, ~/.config/opencode, $PI_CODING_AGENT_DIR)";
 
 export type RulesyncInfo = {
   /** Repo root containing `.rulesync/`. */
@@ -202,6 +202,7 @@ export function detectTargets(
   if (configured(codexHome(home, env)) || configured(join(home, ".agents"))) {
     present.push("codex");
   }
+  if (configured(join(home, ".config", "opencode"))) present.push("opencode");
   const piDir = piAgentDir(home, env);
   if (piDir !== null) present.push("pi");
 
@@ -210,6 +211,10 @@ export function detectTargets(
   for (const h of present) {
     switch (h) {
       case "claude":
+        skillDirCandidates.push({ harness: h, dir: join(home, ".claude", "skills") });
+        break;
+      case "opencode":
+        // OpenCode reads ~/.claude/skills via its standard fallback.
         skillDirCandidates.push({ harness: h, dir: join(home, ".claude", "skills") });
         break;
       case "codex": {
@@ -258,6 +263,9 @@ export function detectTargets(
         break;
       case "codex":
         insCandidates.push({ harness: h, file: join(codexHome(home, env), "AGENTS.md") });
+        break;
+      case "opencode":
+        insCandidates.push({ harness: h, file: join(home, ".config", "opencode", "AGENTS.md") });
         break;
       case "pi":
         insCandidates.push({ harness: h, file: join(piDir!, "AGENTS.md") });

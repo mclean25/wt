@@ -18,7 +18,7 @@ export { githubQuery, reviewRequestsQuery, contributorsQuery } from "./queries/g
 export type { TmuxSessionsData, ClaudeSessionEntry } from "./queries/sessions.ts";
 export { tmuxSessionsQuery, harnessSessionsQuery, primaryHarnessQuery } from "./queries/sessions.ts";
 
-export { claudeUsageQuery, codexUsageQuery } from "./queries/usage.ts";
+export { claudeUsageQuery, codexUsageQuery, opencodeCostQuery } from "./queries/usage.ts";
 
 export type { ClaudeRegistryData } from "./queries/claude.ts";
 export { claudeRegistryQuery, claudeSummariesQuery } from "./queries/claude.ts";

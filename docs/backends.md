@@ -145,7 +145,8 @@ and it drives the rest of the design:
   `core/harness/codex/trust.ts`). Idempotent and best-effort; skipped once
   already trusted. The Codex entry lives in a tracked (stowed) config, so
   it's removed on teardown — Claude's `~/.claude.json` is its own churny,
-  untracked file and is left. Both mirror the `unseamless-coop` fleet.
+  untracked file and is left. OpenCode has no such gate. (Both mirror the
+  `unseamless-coop` fleet.)
 
   **The Claude write is verified, and repairs its siblings.** `~/.claude.json`
   is one shared blob that Claude Code also read-modify-writes, and its window

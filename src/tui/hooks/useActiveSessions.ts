@@ -15,6 +15,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { config } from "../../core/config.ts";
 import type { TailHarnessId } from "../../core/harness/tail.ts";
 import { tmuxSessionsQuery } from "../../state/queries.ts";
 
@@ -80,13 +81,15 @@ export function useActiveShellSessions(): ReadonlySet<string> {
   }, [list]);
 }
 
-/** Slugs with a live Codex tmux slot. Drives the harness-tail
+/** Slugs with a live codex/opencode tmux slot. Drives the harness-tail
  *  reconcile so the bottom pane tails only live sessions. */
 export function useActiveHarnessSessions(
   harnessId: TailHarnessId,
 ): ReadonlySet<string> {
   const q = useQuery(tmuxSessionsQuery());
-  const list = q.data?.slugsByHarness[harnessId];
+  const list = config.harness.hidden.has(harnessId)
+    ? undefined
+    : q.data?.slugsByHarness[harnessId];
   return useMemo(() => {
     if (!list || list.length === 0) return EMPTY;
     return new Set(list);

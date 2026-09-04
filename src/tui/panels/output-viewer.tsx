@@ -40,7 +40,6 @@ function borderColor(o: Output): string {
       return theme.border;
   }
 }
-
 function titleFor(o: Output): string {
   if (o.kind === "events") return o.title;
   if (o.kind === "session") return o.title;
@@ -99,7 +98,7 @@ function OutputContent({ output, height }: { output: Output; height: number }) {
     if (output.sessionKind === "shell") {
       return <ShellContent slug={output.slug} height={height} />;
     }
-    if (output.sessionKind === "codex") {
+    if (output.sessionKind === "codex" || output.sessionKind === "opencode") {
       return (
         <HarnessSessionContent
           slug={output.slug}

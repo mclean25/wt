@@ -403,7 +403,7 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     if (!sess) return null;
     // ActiveSessionGlyph only exists for LIVE sessions. waiting/idle/
     // abandoned are safe to inject into; working/asking/polling are
-    // not, and a live session with no derived state (Codex
+    // not, and a live session with no derived state (codex/opencode
     // without event data) is treated as busy — conservative, because
     // the paste's trailing Enter could answer a dialog we can't see.
     if (sess.state === "waiting" || sess.state === "idle" || sess.state === "abandoned") {

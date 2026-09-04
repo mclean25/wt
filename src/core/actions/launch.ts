@@ -15,7 +15,7 @@ export function actionsDir(): string {
 export function headlessPromptRunner(
   harnessId: HarnessId,
   prompt: string,
-  _cwd: string,
+  cwd: string,
 ): { kind: ActionRunKind; argv: string[] } {
   switch (harnessId) {
     case "claude":
@@ -36,6 +36,11 @@ export function headlessPromptRunner(
       return {
         kind: "harness",
         argv: ["codex", "exec", "--color", "never", "--", prompt],
+      };
+    case "opencode":
+      return {
+        kind: "harness",
+        argv: ["opencode", "run", "--dir", cwd, "--", prompt],
       };
     default: {
       const _exhaustive: never = harnessId;

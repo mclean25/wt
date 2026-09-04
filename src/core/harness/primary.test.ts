@@ -15,8 +15,18 @@ describe("resolvePrimaryHarness", () => {
     expect(
       resolvePrimaryHarness(
         { primary: "gemini" as never },
-        "codex",
+        "opencode",
       ),
-    ).toBe("codex");
+    ).toBe("opencode");
+  });
+
+  test("falls back when the persisted harness is hidden", () => {
+    expect(
+      resolvePrimaryHarness(
+        { primary: "opencode" },
+        "claude",
+        [{ id: "claude" }, { id: "codex" }],
+      ),
+    ).toBe("claude");
   });
 });

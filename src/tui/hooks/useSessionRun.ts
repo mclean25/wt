@@ -1,6 +1,6 @@
 /**
  * Observer hooks for the session-tail registries (claude jsonl + shell
- * pipe-pane + Codex). Each hook subscribes with a PER-KEY
+ * pipe-pane + codex/opencode). Each hook subscribes with a PER-KEY
  * selector snapshot: the registries replace only the touched entry on
  * an append (per-entry identity is their update discipline), so a
  * component tailing session A doesn't re-render when session B
@@ -51,7 +51,7 @@ export function useShellRun(slug: string | undefined): ShellRun | null {
 }
 
 /**
- * Live tail for a Codex slot (single slot per slug per
+ * Live tail for a codex/opencode slot (single slot per slug per
  * harness). Backed by `harnessTailRegistry`, which polls the rollout
  * jsonl / SQLite and produces the same `ActionLine[]` shape as claude.
  */

@@ -180,7 +180,7 @@ export function wrapInnerArgs(opts: {
   if (harnessId !== null) {
     // wt is commonly launched from a shell that disables color for command
     // parsing. Interactive harnesses own a terminal UI, so inheriting either
-    // spelling strips Codex/Claude styling despite the truecolor tmux setup.
+    // spelling strips their styling despite the truecolor tmux setup.
     unset.push("NO_COLOR", "NO_COLOUR");
     if (slug) extraEnv.push(`WT_AGENT=${slug}`);
   }

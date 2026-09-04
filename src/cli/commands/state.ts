@@ -253,11 +253,11 @@ export function mergeAdoptedState(stray: WtState, current: WtState): WtState {
  * the world.
  *
  * A repository that gained its own namespace also gained a new cache root, and
- * these four do not regenerate into it correctly. `automations.json` is the
+ * these five do not regenerate into it correctly. `automations.json` is the
  * once-only fire ledger: an empty one is not a slow start, it is every
  * satisfied condition firing a second time. `harness.json` is the primary
  * harness the human picked with Tab, and losing it silently reverts to the
- * configured default. The two session registries are the managed conversation
+ * configured default. The three session registries are the managed conversation
  * NAMES — without them a cold start opens a new conversation instead of
  * resuming the one the row has been holding all along.
  *
@@ -267,7 +267,11 @@ export function mergeAdoptedState(stray: WtState, current: WtState): WtState {
  * manager spool is a delivery channel whose contents are meant to expire.
  */
 const CARRY_WHOLE = ["automations.json", "harness.json"] as const;
-const CARRY_MERGED = ["claude-sessions.json", "codex-sessions.json"] as const;
+const CARRY_MERGED = [
+  "claude-sessions.json",
+  "codex-sessions.json",
+  "opencode-sessions.json",
+] as const;
 
 /**
  * Union two session-name registries, the destination winning every conflict.

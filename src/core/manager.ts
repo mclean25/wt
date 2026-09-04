@@ -13,7 +13,7 @@
  * must pass `MANAGER_CLAUDE_NAME` as the managed name — import from
  * here, never restate the strings.
  *
- * Codex ignores managed names for tmux naming (single slot
+ * Codex / OpenCode ignore managed names for tmux naming (single slot
  * per slug), so passing it unconditionally is harmless there.
  */
 import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";

@@ -453,11 +453,13 @@ selection use this configured default.
 ```toml
 [harness]
 primary = "codex"
+hidden = ["opencode"]
 ```
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `primary` | no | `"claude"` | `"claude"` or `"codex"`. Used when this repository has no persisted override. |
+| `primary` | no | `"claude"` | `"claude"`, `"codex"`, or `"opencode"`. Used when this repository has no persisted override. |
+| `hidden` | no | `[]` | Harnesses omitted from Tab cycling, automatic live-session routing, TUI session discovery, picker entries, and activity polling. Explicit CLI addressing such as `wt agent send --harness opencode …` remains available. The configured `primary` cannot be hidden, and at least one harness must remain visible. |
 
 ## `[naming]` — optional generated worktree names
 
@@ -465,7 +467,8 @@ Omit to disable generated title/brief/description text. Naming invokes the
 configured coding-agent harness's non-interactive CLI using its existing
 authentication; wt does not require or call a separate model API. Runs are
 serialized, short-lived, and read-only. Codex runs ephemerally without project
-rules, and Claude disables tools and session persistence.
+rules, Claude disables tools and session persistence, and OpenCode uses its
+isolated `--pure` mode.
 
 ```toml
 [naming]
@@ -478,8 +481,8 @@ codex = "gpt-5.6-luna"
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `harness` | no | `"primary"` | `"primary"` follows the repository's effective primary harness; `"claude"` or `"codex"` pins naming independently. |
-| `models.<harness>` | no | *(harness default)* | Harness-native model override for `claude` or `codex`. Per-harness keys keep `harness = "primary"` valid when the selected primary changes. |
+| `harness` | no | `"primary"` | `"primary"` follows the repository's effective primary harness; `"claude"`, `"codex"`, or `"opencode"` pins naming independently. |
+| `models.<harness>` | no | *(harness default)* | Harness-native model override for `claude`, `codex`, or `opencode`. Per-harness keys keep `harness = "primary"` valid when the selected primary changes. |
 | `reasoning_effort` | no | `"low"` | Naming-only effort/variant: `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Claude maps `minimal` to `low`. Model support is enforced by the selected CLI. |
 | `max_input_tokens` | no | `8000` | Soft prompt budget; diff hunks are dropped largest-first to stay under it. |
 | `timeout_ms` | no | `120000` | Per-process timeout, including harness startup. |
@@ -636,7 +639,7 @@ Leaving the section out keeps the behavior wt had before it existed: **Zed**, wi
 
 Pre-built actions surfaced by the `!` picker (and available as automation targets). Two kinds, distinguished by which field you set:
 
-- **Prompt actions** (`prompt = "…"`): run the worktree's primary coding agent. Default delivery is a tracked headless run (`claude -p` / `codex exec`); `target = "session"` instead sends the prompt to the live F12 session, and `target = "manager"` sends it to the singleton [manager session](manager.md) prefixed `[re: <slug>]` (both fire-and-forget: no completion signal, so `affects` won't auto-refresh). Claude prompts are submitted at the live session's own prompt (see [manager.md](manager.md#how-a-message-reaches-a-session)); Codex retains its pane adapter. Manager-target actions appear in **both** pickers: row-scoped in `!`, and again in the `M` [manager palette](manager.md#the-command-palette-m), where they launch against the row selected when the palette opened.
+- **Prompt actions** (`prompt = "…"`): run the worktree's primary coding agent. Default delivery is a tracked headless run (`claude -p` / `codex exec` / `opencode run`); `target = "session"` instead sends the prompt to the live F12 session, and `target = "manager"` sends it to the singleton [manager session](manager.md) prefixed `[re: <slug>]` (both fire-and-forget: no completion signal, so `affects` won't auto-refresh). Claude prompts are submitted at the live session's own prompt (see [manager.md](manager.md#how-a-message-reaches-a-session)); other harnesses retain their pane adapters. Manager-target actions appear in **both** pickers: row-scoped in `!`, and again in the `M` [manager palette](manager.md#the-command-palette-m), where they launch against the row selected when the palette opened.
 - **Shell actions** (`shell = "…"`): run `$SHELL -lc <shell>` in the worktree path; Enter launches directly with no edit step.
 
 **Replacement semantics:** when `[[actions]]` is absent, two built-ins apply (`rebase-main` "Rebase on base", `address-review` "Address PR review"). The moment you define *any* entry, your list fully replaces the defaults — to drop one default, list everything you keep.
@@ -676,7 +679,7 @@ Fields:
 | `label_extract` | both | *(unset)* | Regex (source string, no flags) scanned against the run's output; the last per-line match (capture group 1, or the full match) becomes the history label for the `{{arg}}` value. |
 | `external` | both | `false` | This action's effect **leaves the repository** — it moves a ticket, posts a message, calls someone else's API. Terminal success *and* failure then narrate on the **attention feed** instead of the firehose. Same rule [`builtin:close-issue`](automations.md) follows and for the same reason: wt's undo does not reach outside and the board shows nothing, so a success nobody saw is a change nobody can find, and a failure nobody saw is a change everybody assumes happened. Deliberately not implied by `affects`, which says which of *wt's own* caches to invalidate — a statement about the inside. A kill stays on the firehose either way: you pressed the key, and nothing ran. |
 
-**Template variables** (`{{var}}`, unknown vars pass through so typos are visible): `{{base}}` resolved diff base, `{{base_branch}}` parent branch or trunk, `{{branch}}`, `{{slug}}`, `{{cwd}}` worktree path, `{{pr}}` PR number or empty, `{{issue_id}}` the worktree's tracker id — the `wt issue --id` / `#` override when set, else the id carried in the slug (`coz-2176-active-louse` → `COZ-2176`); empty when neither exists, empty rather than the slug, because an obviously-wrong request beats a plausible one against the wrong issue, `{{stage}}` the worktree's SST stage, `{{skill_prefix}}` the harness's skill-invocation prefix (`/` for Claude Code, `$` for Codex — write `{{skill_prefix}}restack` to invoke a skill portably), and `{{arg}}` for the collected `arg_prompt` value. One var needs no subject worktree and so works in the row-less manager/slot palettes too: `{{today}}` renders the current weekday and date at dispatch time (`Tuesday, August 11, 2026`) — a long-lived session's weakest fact, since the model has a training cutoff and a compaction summary carries no timestamp. The built-in compact actions use it; an explicit var of the same name overrides it.
+**Template variables** (`{{var}}`, unknown vars pass through so typos are visible): `{{base}}` resolved diff base, `{{base_branch}}` parent branch or trunk, `{{branch}}`, `{{slug}}`, `{{cwd}}` worktree path, `{{pr}}` PR number or empty, `{{issue_id}}` the worktree's tracker id — the `wt issue --id` / `#` override when set, else the id carried in the slug (`coz-2176-active-louse` → `COZ-2176`); empty when neither exists, empty rather than the slug, because an obviously-wrong request beats a plausible one against the wrong issue, `{{stage}}` the worktree's SST stage, `{{skill_prefix}}` the harness's skill-invocation prefix (`/` for Claude Code, `$` for Codex/OpenCode — write `{{skill_prefix}}restack` to invoke a skill portably), and `{{arg}}` for the collected `arg_prompt` value. One var needs no subject worktree and so works in the row-less manager/slot palettes too: `{{today}}` renders the current weekday and date at dispatch time (`Tuesday, August 11, 2026`) — a long-lived session's weakest fact, since the model has a training cutoff and a compaction summary carries no timestamp. The built-in compact actions use it; an explicit var of the same name overrides it.
 
 ## `[[automations]]` — optional, strictly opt-in
 

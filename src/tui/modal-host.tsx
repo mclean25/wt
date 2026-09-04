@@ -8,7 +8,7 @@
  * between them.
  */
 import { nextAutoName } from "../core/harness/claude/names.ts";
-import { HARNESSES, type HarnessId } from "../core/harness/index.ts";
+import { VISIBLE_HARNESSES, type HarnessId } from "../core/harness/index.ts";
 import type { PerfSnapshot } from "../core/perf.ts";
 import { actionSkillPrefix, buildActionVars } from "./app-helpers.ts";
 import {
@@ -112,7 +112,7 @@ export function PreFooterModals({
           slug={modal.slug}
           selectedIndex={Math.min(
             Math.max(0, modal.index),
-            HARNESSES.length - 1,
+            VISIBLE_HARNESSES.length - 1,
           )}
         />
       ) : null}

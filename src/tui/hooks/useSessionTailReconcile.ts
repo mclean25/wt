@@ -24,6 +24,7 @@ type Args = {
   claudeSessionsBySlug: ReadonlyMap<string, ReadonlyArray<string | null>>;
   activeShellSessions: ReadonlySet<string>;
   activeCodexSessions: ReadonlySet<string>;
+  activeOpencodeSessions: ReadonlySet<string>;
   activeDiffSessions: ReadonlySet<string>;
   refreshTmuxSessions: () => Promise<unknown>;
 };
@@ -35,6 +36,7 @@ export function useSessionTailReconcile({
   claudeSessionsBySlug,
   activeShellSessions,
   activeCodexSessions,
+  activeOpencodeSessions,
   activeDiffSessions,
   refreshTmuxSessions,
 }: Args): void {
@@ -66,12 +68,16 @@ export function useSessionTailReconcile({
     for (const slot of SESSION_SLOTS) pathBySlug.set(slot.slug, slot.path);
     for (const r of rows) pathBySlug.set(r.wt.slug, r.wt.path);
     const live: LiveHarnessSlot[] = [];
-    for (const slug of activeCodexSessions) {
-      const wtPath = pathBySlug.get(slug);
-      if (wtPath) live.push({ slug, wtPath, harnessId: "codex" });
-    }
+    const add = (slugs: ReadonlySet<string>, harnessId: "codex" | "opencode") => {
+      for (const slug of slugs) {
+        const wtPath = pathBySlug.get(slug);
+        if (wtPath) live.push({ slug, wtPath, harnessId });
+      }
+    };
+    add(activeCodexSessions, "codex");
+    add(activeOpencodeSessions, "opencode");
     harnessTailRegistry.reconcile(live);
-  }, [rows, activeCodexSessions]);
+  }, [rows, activeCodexSessions, activeOpencodeSessions]);
 
   const lastDiffBase = useRef<Map<string, string>>(new Map());
   useEffect(() => {

@@ -310,6 +310,10 @@ describe("template vars flow through hashing", () => {
 describe("tool presence is evidence, not a mount point", () => {
   test("an emptied config dir left behind by a retired tool does not count", () => {
     configDir(".claude");
+    // What a dotfiles package looks like after it stops generating for
+    // a tool: the stow mount point survives with nothing in it.
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+
     const targets = detectTargets(home, {});
     expect(targets.harnesses).toEqual(["claude"]);
     expect(targets.instructions).toHaveLength(1);

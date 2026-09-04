@@ -22,7 +22,7 @@ import type { NotifyOnChangeProps } from "@tanstack/react-query";
 
 import {
   getHarness,
-  HARNESSES,
+  VISIBLE_HARNESSES,
   primarySingleSlotSession,
   type HarnessId,
   type HarnessSession,
@@ -37,7 +37,7 @@ export type HarnessSessionEntry = HarnessSession & { harnessId: HarnessId };
 
 /**
  * Sentinel sessionId prefix used by the synthesized live-slot placeholder
- * for Codex when the tmux slot is alive but no on-disk session
+ * for codex/opencode when the tmux slot is alive but no on-disk session
  * record exists yet. `commitRow` strips this and passes
  * `resumeSessionId: null` so the spawn just attaches to the slot.
  */
@@ -125,10 +125,10 @@ export function computeHarnessSessions(
   harnessIds?: readonly HarnessId[],
 ): UseHarnessSessionsResult {
   const all: HarnessSessionEntry[] = [];
-  for (const h of HARNESSES) {
+  for (const h of VISIBLE_HARNESSES) {
     if (harnessIds && !harnessIds.includes(h.id)) continue;
     const raw = rawByHarness.get(h.id) ?? EMPTY;
-    // Single-tmux-per-slug for Codex means at most ONE
+    // Single-tmux-per-slug for codex/opencode means at most ONE
     // discovered session can actually be running in the slot at any
     // time. The previous "any session whose tmuxSessionName matches a
     // live tmux name is live" rule marked EVERY discovered session
@@ -137,7 +137,7 @@ export function computeHarnessSessions(
     // here: when the slot is alive, the most-recently-active
     // discovered session represents the slot; all others are dead.
     // When the slot is alive but no discovered session points at it
-    // yet (fresh Codex before the first prompt — the only
+    // yet (fresh codex/opencode before the first prompt — the only
     // moment when rollout/DB write hasn't happened), synthesize a
     // placeholder so the picker isn't blank for an actively-running
     // session.
@@ -155,7 +155,7 @@ export function computeHarnessSessions(
       const isLive = isSingleSlot
         ? s.sessionId === liveDiscoveredId
         : tmuxNames.has(s.tmuxSessionName);
-      // Finalize Codex derived state now that we know liveness.
+      // Finalize codex/opencode derived state now that we know liveness.
       // discoverSessions() returns a liveness-independent best guess
       // (working = mid-turn/streaming, waiting = turn closed). A live slot
       // keeps that guess, falling back to `waiting` when no tail/DB message
@@ -191,7 +191,7 @@ export function computeHarnessSessions(
     });
     if (isSingleSlot && slotAlive && liveDiscoveredId === null) {
       // Slot is alive but nothing on disk points at it yet — codex
-      // Codex does not persist a rollout row until the first
+      // and opencode don't persist a rollout/DB row until the first
       // user prompt, so a freshly spawned session is invisible to
       // discovery. Surface a placeholder so the user can re-attach
       // (or kill) it from the picker. Sentinel sessionId is consumed
@@ -246,7 +246,7 @@ export function useHarnessSessions(
 ): UseHarnessSessionsResult {
   const tmux = useQuery(tmuxSessionsQuery());
   // One discovery query per harness, in registry order. `useQueries`
-  // keeps the call count stable (HARNESSES is a fixed constant) and
+  // keeps the call count stable (VISIBLE_HARNESSES is a fixed constant) and
   // mirrors `useActiveSessionsBySlug` so the two hooks can't drift. The
   // query factory short-circuits to `enabled: false` when wtPath is "".
   // `combine` is load-bearing: the raw `useQueries` results array is a
@@ -254,7 +254,7 @@ export function useHarnessSessions(
   // the combined data array IS structurally shared by TanStack, making
   // the memos below real.
   const rawData = useQueries({
-    queries: HARNESSES.map((h) => ({
+    queries: VISIBLE_HARNESSES.map((h) => ({
       ...harnessSessionsQuery(
         h.id,
         slug,
@@ -267,7 +267,7 @@ export function useHarnessSessions(
   });
   const rawByHarness = useMemo(() => {
     const m = new Map<HarnessId, ReadonlyArray<HarnessSession>>();
-    HARNESSES.forEach((h, i) => m.set(h.id, rawData[i] ?? EMPTY));
+    VISIBLE_HARNESSES.forEach((h, i) => m.set(h.id, rawData[i] ?? EMPTY));
     return m;
   }, [rawData]);
 
@@ -292,11 +292,11 @@ export function useHarnessSessions(
  */
 export type ActiveSessionGlyph = {
   harnessId: HarnessId;
-  /** Cross-harness derived state, or null (live Codex without one). */
+  /** Cross-harness derived state, or null (live codex/opencode w/o one). */
   state: DerivedState | null;
 };
 
-const ALL_HARNESS_IDS: readonly HarnessId[] = HARNESSES.map((h) => h.id);
+const ALL_HARNESS_IDS: readonly HarnessId[] = VISIBLE_HARNESSES.map((h) => h.id);
 
 /**
  * Shared `useQueries` combiner: project each result down to its data.

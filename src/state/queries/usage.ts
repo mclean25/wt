@@ -1,4 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
+import { Clock, Effect } from "effect";
 
 import {
   readClaudeUsage,
@@ -8,6 +9,11 @@ import {
   readCodexUsage,
   type CodexUsage,
 } from "../../core/harness/codex/usage.ts";
+import {
+  readOpencodeCost,
+  type OpencodeCost,
+} from "../../core/harness/opencode/usage.ts";
+
 import { qk } from "../keys.ts";
 import { operationErrors, runQuery } from "./boundary.ts";
 
@@ -39,6 +45,27 @@ export const codexUsageQuery = () =>
     queryKey: qk.codexUsage(),
     queryFn: ({ signal }): Promise<CodexUsage | null> =>
       runQuery(io.sync("read Codex usage", () => readCodexUsage()), signal),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+
+/**
+ * OpenCode spend (5h/7d $), summed from its message-cost rows. Windows
+ * slide with wall-clock, so this is recomputed each refetch rather than
+ * cached against a file mtime.
+ */
+export const opencodeCostQuery = () =>
+  queryOptions({
+    queryKey: qk.opencodeCost(),
+    queryFn: ({ signal }): Promise<OpencodeCost | null> =>
+      runQuery(
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            io.sync("read OpenCode cost", () => readOpencodeCost(now)),
+          ),
+        ),
+        signal,
+      ),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

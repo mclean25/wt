@@ -29,7 +29,7 @@ import { Effect } from "effect";
 import { CLAUDE_NAMED_SEP, sessionName, type SessionKind } from "../tmux/naming.ts";
 
 import { readPrimaryHarness } from "./primary.ts";
-import { HARNESSES } from "./registry.ts";
+import { VISIBLE_HARNESSES } from "./registry.ts";
 import type { HarnessId } from "./types.ts";
 
 export type HarnessChoice = {
@@ -62,7 +62,7 @@ function liveHarnesses(
   knownSlugs: ReadonlySet<string>,
 ): HarnessId[] {
   const out: HarnessId[] = [];
-  for (const h of HARNESSES) {
+  for (const h of VISIBLE_HARNESSES) {
     const primaryName = sessionName(slug, h.id as SessionKind);
     // A name that IS another worktree's slug belongs to that worktree's
     // primary claude session, never to this slug's harness.

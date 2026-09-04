@@ -28,7 +28,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { BackendKind } from "./backend/types.ts";
-import type { HarnessId } from "./harness/types.ts";
+import { HARNESS_IDS, type HarnessId } from "./harness/types.ts";
 import {
   canonicalRepositoryConfig,
   isInsidePath,
@@ -388,8 +388,8 @@ export type NamingConfig = {
  * Pre-built action surfaced by the `!` modal. Two flavors:
  *
  *   - `claude`: prompt action; headless launches the selected primary
- *     harness's non-interactive CLI (`claude -p` or `codex exec`) with
- *     the configured prompt; the edit modal
+ *     harness's non-interactive CLI (`claude -p`, `codex exec`, or
+ *     `opencode run`) with the configured prompt; the edit modal
  *     exposes an extras textarea that gets appended.
  *   - `shell`: launches `$SHELL -lc <shell>` in the worktree path; the
  *     edit modal is skipped and Enter launches directly.
@@ -400,7 +400,7 @@ export type NamingConfig = {
  * vars pass through unchanged so typos surface in the rendered prompt.
  *
  * `{{skill_prefix}}` is the harness skill-invocation prefix (`/` for
- * Claude Code, `$` for Codex), chosen per launch from the
+ * Claude Code, `$` for OpenCode / Codex), chosen per launch from the
  * row's primary harness.
  * Use it for any prompt that invokes a named skill: `{{skill_prefix}}restack`.
  *
@@ -801,7 +801,11 @@ export type Config = {
   reviewBot: ReviewBotConfig;
   devServer: DevServerConfig | null;
   remote: RemoteConfig | null;
-  harness: { primary: HarnessId };
+  harness: {
+    primary: HarnessId;
+    /** Harnesses omitted from automatic routing and TUI surfaces. */
+    hidden: ReadonlySet<HarnessId>;
+  };
   naming: NamingConfig | null;
   diff: DiffConfig;
   editor: EditorConfig;
@@ -938,6 +942,7 @@ const GENERIC_DEFAULTS = {
   },
   harness: {
     primary: "claude" as const satisfies HarnessId,
+    hidden: [] as const satisfies readonly HarnessId[],
   },
   naming: {
     harness: "primary" as const,
@@ -1165,9 +1170,39 @@ function build(
     harnessRaw,
     "harness",
     "primary",
-    ["claude", "codex"] as const,
+    HARNESS_IDS,
     GENERIC_DEFAULTS.harness.primary,
   );
+  const hiddenHarnesses = new Set<HarnessId>();
+  const hiddenRaw = harnessRaw?.hidden;
+  let hiddenIds: readonly unknown[] = GENERIC_DEFAULTS.harness.hidden;
+  if (hiddenRaw !== undefined) {
+    if (Array.isArray(hiddenRaw)) {
+      hiddenIds = hiddenRaw;
+    } else {
+      errs.add("harness.hidden must be an array of strings");
+      hiddenIds = [];
+    }
+  }
+  for (const id of hiddenIds) {
+    if (typeof id !== "string") {
+      errs.add("harness.hidden entries must be strings");
+      continue;
+    }
+    if ((HARNESS_IDS as readonly string[]).includes(id)) {
+      hiddenHarnesses.add(id as HarnessId);
+    } else {
+      errs.add(
+        `harness.hidden: unknown harness "${id}" (expected one of ${HARNESS_IDS.join(", ")})`,
+      );
+    }
+  }
+  if (hiddenHarnesses.size === HARNESS_IDS.length) {
+    errs.add("harness.hidden cannot hide every harness");
+  }
+  if (hiddenHarnesses.has(primaryHarness)) {
+    errs.add(`harness.primary "${primaryHarness}" cannot also appear in harness.hidden`);
+  }
 
   const branchPrefix = errs.reqStr(branch, "branch", "prefix");
   const branchBase = errs.optStr(branch, "base", GENERIC_DEFAULTS.branch.base);
@@ -1392,6 +1427,7 @@ function build(
   const namingModelsRaw = namingRaw ? obj(namingRaw.models) : null;
   const namingClaudeModel = errs.optStrOrNull(namingModelsRaw, "claude");
   const namingCodexModel = errs.optStrOrNull(namingModelsRaw, "codex");
+  const namingOpencodeModel = errs.optStrOrNull(namingModelsRaw, "opencode");
   if (obj(raw.ai) !== null) {
     errs.add("[ai] is no longer supported; use [naming] with a coding-agent harness");
   }
@@ -1402,12 +1438,13 @@ function build(
         namingRaw,
         "naming",
         "harness",
-        ["primary", "claude", "codex"] as const,
+        ["primary", "claude", "codex", "opencode"] as const,
         GENERIC_DEFAULTS.naming.harness,
       ),
       models: {
         ...(namingClaudeModel ? { claude: namingClaudeModel } : {}),
         ...(namingCodexModel ? { codex: namingCodexModel } : {}),
+        ...(namingOpencodeModel ? { opencode: namingOpencodeModel } : {}),
       },
       reasoningEffort: errs.optEnum(
         namingRaw,
@@ -1550,7 +1587,7 @@ function build(
 
   return {
     instance: { role: instanceRole },
-    harness: { primary: primaryHarness },
+    harness: { primary: primaryHarness, hidden: hiddenHarnesses },
     repoId,
     repoPath,
     paths: {

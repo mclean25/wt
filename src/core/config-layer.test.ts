@@ -95,6 +95,7 @@ role = "worker"
 
 [harness]
 primary = "codex"
+hidden = ["opencode"]
 
 [naming]
 harness = "primary"
@@ -139,7 +140,10 @@ reviewers = false
         console.log(JSON.stringify({
           repoId: config.repoId,
           instance: config.instance,
-          harness: config.harness,
+          harness: {
+            primary: config.harness.primary,
+            hidden: [...config.harness.hidden],
+          },
           naming: config.naming,
           repoPath: config.repoPath,
           paths: config.paths,
@@ -171,7 +175,7 @@ reviewers = false
       expect(JSON.parse(result.stdout.toString())).toMatchObject({
         repoId,
         instance: { role: "worker" },
-        harness: { primary: "codex" },
+        harness: { primary: "codex", hidden: ["opencode"] },
         naming: {
           harness: "primary",
           models: { codex: "gpt-cheap" },
@@ -234,6 +238,43 @@ copy_globs = ["/tmp/**", "../secrets/**"]
       expect(result.stderr.toString()).toContain(
         "lifecycle.copy_globs entries must be relative paths without '..' segments",
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects invalid hidden harness configuration", () => {
+    const root = mkdtempSync(join(tmpdir(), "wt-config-hidden-harnesses-"));
+    try {
+      const userConfig = join(root, "config.toml");
+      writeFileSync(userConfig, `
+[paths]
+main_clone = "/repo"
+worktree_root = "/worktrees"
+
+[branch]
+prefix = "alex"
+
+[harness]
+hidden = ["opencode", 42, "unknown"]
+`);
+
+      const configModule = pathToFileURL(join(import.meta.dir, "config.ts")).href;
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        WT_CONFIG: userConfig,
+      };
+      delete env[REPOSITORY_CONFIG_ENV];
+      const result = Bun.spawnSync([process.execPath, "-e", `await import(${JSON.stringify(configModule)})`], {
+        cwd: root,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("harness.hidden entries must be strings");
+      expect(result.stderr.toString()).toContain('harness.hidden: unknown harness "unknown"');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

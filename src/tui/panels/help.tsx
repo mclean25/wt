@@ -144,7 +144,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "! g", label: "agent continues the work per current status (build / test / address review)" },
       { key: "! l", label: "open dev server logs (j/k scroll)" },
       { key: ";", label: "sessions picker (all harnesses for current row)" },
-      { key: "; c / x", label: "jump to + new claude / codex" },
+      { key: "; c / x / o", label: "jump to + new claude / codex / opencode" },
       { key: "; d", label: "close highlighted session gracefully (ctrl+d ×2)" },
       { key: "; x", label: "kill highlighted session" },
       { key: "⇧TAB", label: "cycle primary harness (top-right)" },

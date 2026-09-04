@@ -84,7 +84,7 @@ describe("tmux inner-process browser identity", () => {
   });
 
   test("interactive harnesses do not inherit no-color flags", async () => {
-    for (const kind of ["claude", "codex"] as const) {
+    for (const kind of ["claude", "codex", "opencode"] as const) {
       const proc = Bun.spawn(
         wrapInnerArgs({
           kind,

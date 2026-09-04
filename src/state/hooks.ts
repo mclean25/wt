@@ -709,8 +709,8 @@ export function useWtActions() {
     /**
      * Invalidate the harness-sessions discovery for a slug. Call after
      * spawning / killing a harness session so the picker entries pick
-     * up the new on-disk state. Hits both harnesses because Codex writes
-     * to a shared rollout store that can surface new entries.
+     * up the new on-disk state. Hits all harnesses since codex /
+     * opencode write to shared stores that could surface new entries.
      */
     refreshHarnessSessions(slug: string): Promise<void> {
       return Effect.runPromise(

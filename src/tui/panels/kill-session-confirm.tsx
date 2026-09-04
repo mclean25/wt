@@ -9,7 +9,7 @@ type Props = {
   sessionKind: Extract<SessionKind, "shell" | "diff">;
 };
 
-// Harness sessions (Claude/Codex) kill DIRECTLY from the
+// Harness sessions (claude/codex/opencode) kill DIRECTLY from the
 // sessions picker's `x` — no confirm — so only the Shift+F10/F11
 // shell/diff chords route through this modal.
 const COPY: Record<Props["sessionKind"], { title: string; body: string }> = {

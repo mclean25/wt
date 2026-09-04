@@ -145,8 +145,8 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
 
   /**
    * Attach to (or create) a harness session for `slug`. Used for all
-   * both harnesses. For Claude, `managedName` controls primary-vs-named;
-   * for Codex `managedName` is
+   * three harnesses (claude/codex/opencode). For Claude, `managedName`
+   * controls primary-vs-named; for Codex/OpenCode `managedName` is
    * ignored and `resumeSessionId` selects which session id to resume
    * (null = spawn fresh).
    */
@@ -157,8 +157,8 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
       managedName?: string | null;
       resumeSessionId?: string | null;
       /**
-       * Codex only: kill the existing tmux slot before attaching so a
-       * fresh Codex session actually spawns. See the
+       * Codex / OpenCode only: kill the existing tmux slot before
+       * attaching so a fresh codex/opencode actually spawns. See the
        * `freshSlot` doc on `enterHarnessSession` / `attachOrCreate`
        * for the rationale.
        */

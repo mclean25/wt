@@ -7,7 +7,7 @@ import {
 } from "../../core/harness/claude/names.ts";
 import {
   getHarness,
-  HARNESSES,
+  VISIBLE_HARNESSES,
   type HarnessId,
 } from "../../core/harness/index.ts";
 import { sessionOutputId } from "../../core/outputs.ts";
@@ -195,7 +195,7 @@ export function handleClaudeSessionsPickerKey(
     }
     return true;
   }
-  for (const h of HARNESSES) {
+  for (const h of VISIBLE_HARNESSES) {
     if (k.sequence === h.letter && !k.shift && !k.ctrl && !k.meta) {
       jumpToNew(h.id);
       return true;
@@ -279,7 +279,7 @@ export function handleHarnessSelectKey(
     doEnterHarnessSession,
   }: SimpleModalContext,
 ): boolean {
-  const idx = Math.min(Math.max(0, modal.index), HARNESSES.length - 1);
+  const idx = Math.min(Math.max(0, modal.index), VISIBLE_HARNESSES.length - 1);
   const slug = modal.slug;
   const commit = (chosen: HarnessId): void => {
     setModal(null);
@@ -289,7 +289,7 @@ export function handleHarnessSelectKey(
       doEnterHarnessSession(slug, chosen, {});
     }
   };
-  const letterMatch = HARNESSES.find(
+  const letterMatch = VISIBLE_HARNESSES.find(
     (h) => k.sequence === h.letter && !k.shift && !k.ctrl && !k.meta,
   );
   if (letterMatch) {
@@ -299,21 +299,21 @@ export function handleHarnessSelectKey(
   // F12 confirms too — the picker opens from Shift+F12, so the bare
   // spawn key doubles as "yes, this one".
   if (k.name === "f12" && !k.shift) {
-    commit(HARNESSES[idx]!.id);
+    commit(VISIBLE_HARNESSES[idx]!.id);
     return true;
   }
   // Shift+F12-again also confirms — the trigger-key re-press
   // convention (docs/architecture.md#modal-ux-rules), matched against
   // the same detection normal-keys.ts uses to open this picker.
   if (isBareShiftedKey(k, "f12")) {
-    commit(HARNESSES[idx]!.id);
+    commit(VISIBLE_HARNESSES[idx]!.id);
     return true;
   }
   return handleListPickerKey(k, {
-    count: HARNESSES.length,
+    count: VISIBLE_HARNESSES.length,
     index: idx,
     onMove: (next) => setModal({ ...modal, index: next }),
-    onCommit: (i) => commit(HARNESSES[i]!.id),
+    onCommit: (i) => commit(VISIBLE_HARNESSES[i]!.id),
     onCancel: () => setModal(null),
   });
 }

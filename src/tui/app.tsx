@@ -402,7 +402,7 @@ export function App({ onExit }: Props) {
   // secondary-harness event cannot flash a different glyph.
   // This is the single source of truth — the list glyph can't drift from
   // what F12 does or what the details pane shows. Fans session discovery
-  // across all worktrees (cached at the query layer); Codex gets
+  // across all worktrees (cached at the query layer); codex/opencode get
   // state tinting too, not just the brand color.
   const sessionWorktrees = useMemo(
     () => rows.map((r) => ({ slug: r.wt.slug, path: r.wt.path })),
@@ -460,7 +460,7 @@ export function App({ onExit }: Props) {
   const currentRun = useAction(currentActionKey);
   // Per-current-row harness session discovery: combines per-harness
   // discoverSessions queries with the live tmux name set. The hook
-  // fans out both queries unconditionally (so the call is stable
+  // fans out three queries unconditionally (so the call is stable
   // across cursor moves) but each is `enabled: false` when wtPath is
   // empty, so cursor-on-a-PR / cursor-on-empty costs nothing.
   const currentHarnessSessions = useHarnessSessions(
@@ -492,15 +492,17 @@ export function App({ onExit }: Props) {
   const activeDiffSessions = useActiveDiffSessions();
   // Same for shell sessions, gating Shift+F10.
   const activeShellSessions = useActiveShellSessions();
-  // Live Codex slots drive the harness-tail reconcile so the bottom pane
-  // tails their rollout trail like the Claude jsonl.
+  // Live codex/opencode slots — drive the harness-tail reconcile so the
+  // bottom pane tails their rollout/SQLite trail like the claude jsonl.
   const activeCodexSessions = useActiveHarnessSessions("codex");
+  const activeOpencodeSessions = useActiveHarnessSessions("opencode");
 
   useSessionTailReconcile({
     rows,
     claudeSessionsBySlug,
     activeShellSessions,
     activeCodexSessions,
+    activeOpencodeSessions,
     activeDiffSessions,
     refreshTmuxSessions,
   });

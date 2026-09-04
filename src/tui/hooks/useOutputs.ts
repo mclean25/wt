@@ -120,7 +120,7 @@ export function useOutputs(opts: {
     shellTailRegistry.getSnapshot,
     shellTailRegistry.getSnapshot,
   );
-  // Codex session trails — same role as the claude tail, keyed
+  // Codex/opencode session trails — same role as the claude tail, keyed
   // `${slug}:${harnessId}` (single slot per slug per harness).
   const harnessTails = useSyncExternalStore(
     harnessTailRegistry.subscribe,
@@ -194,8 +194,8 @@ export function useOutputs(opts: {
         const lastActivity = lastLineTs ?? startedAt;
         out.push(sessionOutput(slug, "shell", startedAt, lastActivity));
       }
-      // Codex has one live slot per slug.
-      const harnessKinds: TailHarnessId[] = ["codex"];
+      // Codex/opencode: one live slot per slug per harness.
+      const harnessKinds: TailHarnessId[] = ["codex", "opencode"];
       for (const kind of harnessKinds) {
         for (const slug of sessions.slugsByHarness[kind]) {
           const tail = harnessTails.get(harnessTailKey(slug, kind));

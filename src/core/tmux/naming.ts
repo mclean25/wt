@@ -73,7 +73,7 @@ export const RESERVED_SESSION_SLUGS: readonly string[] = [
 ];
 
 /**
- * Kinds of session this module manages. `claude` / `codex`
+ * Kinds of session this module manages. `claude` / `codex` / `opencode`
  * are AI harness sessions (each spawned for one worktree at a time);
  * `diff` is the F11 git-diff TUI; `shell` is the F10 plain login
  * shell; `action` is a wt-managed action runner (claude `-p` or shell
@@ -83,6 +83,7 @@ export const RESERVED_SESSION_SLUGS: readonly string[] = [
  *  - `<slug>` for claude primary (back-compat)
  *  - `<slug>~<name>` for additional named claude sessions
  *  - `<slug>-codex` for the slug's codex tmux session (one at a time)
+ *  - `<slug>-opencode` for the slug's opencode tmux session
  *  - `<slug>-diff` / `<slug>-shell` / `<slug>-action` for non-AI kinds
  *
  * Action sessions are not user-attachable and are not driven by the
@@ -95,6 +96,7 @@ export const RESERVED_SESSION_SLUGS: readonly string[] = [
 export type SessionKind =
   | "claude"
   | "codex"
+  | "opencode"
   | "diff"
   | "shell"
   | "action"
@@ -102,6 +104,7 @@ export type SessionKind =
 
 export const SUFFIX: Record<Exclude<SessionKind, "claude">, string> = {
   codex: "-codex",
+  opencode: "-opencode",
   diff: "-diff",
   shell: "-shell",
   action: "-action",
@@ -109,7 +112,7 @@ export const SUFFIX: Record<Exclude<SessionKind, "claude">, string> = {
 };
 
 export function harnessIdForKind(kind: SessionKind): HarnessId | null {
-  if (kind === "claude" || kind === "codex") return kind;
+  if (kind === "claude" || kind === "codex" || kind === "opencode") return kind;
   return null;
 }
 
@@ -128,8 +131,8 @@ export const CLAUDE_NAMED_SEP = "~";
  * Tmux session name for a (slug, kind, managedName). Claude has a
  * primary-vs-named distinction encoded in the name (`<slug>` vs
  * `<slug>~<name>`); every other kind uses a single fixed suffix
- * (`<slug>-<suffix>`). Codex is single-tmux-per-slug, so
- * `managedName` is ignored for it.
+ * (`<slug>-<suffix>`). Codex / OpenCode are single-tmux-per-slug for
+ * v1 — `managedName` is ignored for those.
  */
 export function sessionName(
   slug: string,
@@ -166,7 +169,7 @@ export function shQuote(s: string): string {
  *
  * A `~` in the name unambiguously marks a named claude session: the
  * slug is everything before the rightmost `~`. The kind suffix
- * (`-codex` / `-diff` / `-shell` / `-action`) is only
+ * (`-codex` / `-opencode` / `-diff` / `-shell` / `-action`) is only
  * a possibility for names that have NO `~`, since named claudes are
  * claude-only and never carry a kind suffix.
  *
@@ -174,7 +177,7 @@ export function shQuote(s: string): string {
  * (a description like "Add codex" or a branch like `eng-1234-codex`
  * slugifies into one) makes its primary claude session
  * indistinguishable from a same-namespace `<bare>-codex` session in
- * tmux. `-codex` and `-dev` make this materially riskier
+ * tmux. `-codex`, `-opencode`, and `-dev` make this materially riskier
  * than the old `-diff`/`-shell` collisions because those are
  * plausible branch-description words. The only proper fixes are
  * slug-level validation or moving kinds to a separator that can't
@@ -185,8 +188,10 @@ export function bareSlug(name: string): string {
   // future per-id-named harness session).
   const tildeIdx = name.lastIndexOf(CLAUDE_NAMED_SEP);
   const beforeTilde = tildeIdx >= 0 ? name.slice(0, tildeIdx) : name;
-  // Strip the kind suffix (`-codex`, `-diff`, `-shell`, `-action`) from
-  // what's left. Longest suffix goes first for future-safe matching.
+  // Strip the kind suffix (`-codex`, `-opencode`, `-diff`, `-shell`,
+  // `-action`) from what's left. Order matters: longest-suffix first
+  // so `-opencode` doesn't get partially-stripped by `-code` if a
+  // future entry were added.
   const suffixes = Object.values(SUFFIX).sort((a, b) => b.length - a.length);
   for (const suffix of suffixes) {
     if (beforeTilde.endsWith(suffix)) return beforeTilde.slice(0, -suffix.length);

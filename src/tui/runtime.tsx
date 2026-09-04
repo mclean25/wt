@@ -13,10 +13,11 @@ import { config } from "../core/config.ts";
 import { disposeDiffPool } from "../core/diff/pool.ts";
 import { lockStatus } from "../core/locks.ts";
 import { watchGithubEvents } from "../core/events/store.ts";
-import { HARNESSES } from "../core/harness/index.ts";
+import { closeOpencodeDb, HARNESSES } from "../core/harness/index.ts";
 import { startCodexEventPolling } from "../core/harness/codex/events.ts";
 import { disposeCodexDiscoveryWorker } from "../core/harness/codex/discovery.ts";
 import { harnessTailRegistry } from "../core/harness/tail.ts";
+import { startOpencodeEventPolling } from "../core/harness/opencode/events.ts";
 import { createLogger, flushLogger, setEventSink } from "../core/logger.ts";
 import { ensureManagerClaudeName, MANAGER_SLUG } from "../core/manager.ts";
 import { killHarnessSession, listAllSessionsRaw } from "../core/tmux.ts";
@@ -322,6 +323,7 @@ export const runTui = Effect.gen(function* () {
   });
   yield* Effect.addFinalizer(() => actionRegistry.shutdown());
   yield* Effect.addFinalizer(() => closeAutoMergeRetries);
+  yield* addRuntimeFinalizer(closeOpencodeDb);
   yield* addRuntimeFinalizer(disposeCodexDiscoveryWorker);
   yield* Effect.addFinalizer(() => disposeDiffPool());
 
@@ -579,7 +581,7 @@ export const runTui = Effect.gen(function* () {
     { concurrency: "unbounded" },
   );
 
-  // Start Codex activity-event polling. The
+  // Start Codex activity-event polling. Same pattern as opencode: the
   // getter reads from the query cache imperatively (no React) and is
   // safe to call from the interval callback outside the render tree.
   // `onActivity` invalidates `codexUsage` — a push trigger riding the
@@ -602,6 +604,32 @@ export const runTui = Effect.gen(function* () {
       ),
     (stop) => stop(),
   );
+
+  // Start OpenCode activity-event polling. The getter reads from the
+  // query cache imperatively (no React) so it's safe to call from the
+  // interval callback outside the render tree. `onActivity` invalidates
+  // `opencodeCost` for the same reason as codex above.
+  if (!config.harness.hidden.has("opencode")) {
+    yield* acquireSyncResource(
+      () =>
+        startOpencodeEventPolling(
+          () => {
+            const worktrees =
+              wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
+            const tmux = wtClient.client.getQueryData<TmuxSessionsData>(
+              qk.tmuxSessions(),
+            );
+            // Only scan slugs that have a live opencode tmux session.
+            const liveOpencode = new Set(tmux?.slugsByHarness.opencode ?? []);
+            return worktrees
+              .filter((wt) => liveOpencode.has(wt.slug))
+              .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
+          },
+          () => invalidations.key(qk.opencodeCost()),
+        ),
+      (stop) => stop(),
+    );
+  }
 
   // Wire the session tail's refresh triggers to the query cache. The
   // tailer is already reading every live Claude jsonl for the activity

@@ -14,8 +14,8 @@ import { dirname, join } from "node:path";
 import { config } from "../config.ts";
 import { createLogger } from "../logger.ts";
 
-import { HARNESSES } from "./registry.ts";
-import type { HarnessId } from "./types.ts";
+import { VISIBLE_HARNESSES } from "./registry.ts";
+import type { Harness, HarnessId } from "./types.ts";
 
 const STATE_FILE = join(config.paths.cacheRoot, "harness.json");
 const log = createLogger("[harness]");
@@ -25,9 +25,10 @@ type FileShape = { primary?: HarnessId };
 export function resolvePrimaryHarness(
   file: FileShape,
   fallback: HarnessId,
+  visible: readonly Pick<Harness, "id">[] = VISIBLE_HARNESSES,
 ): HarnessId {
   const selected = file.primary;
-  return selected && HARNESSES.some((h) => h.id === selected)
+  return selected && visible.some((h) => h.id === selected)
     ? selected
     : fallback;
 }
@@ -61,15 +62,15 @@ export function readPrimaryHarness(): HarnessId {
 
 /** Persist a new primary selection. Validated against the registry. */
 export function writePrimaryHarness(id: HarnessId): void {
-  if (!HARNESSES.some((h) => h.id === id)) return;
+  if (!VISIBLE_HARNESSES.some((h) => h.id === id)) return;
   writeFile({ primary: id });
 }
 
 /** Cycle to the next registered harness. Returns the new primary. */
 export function cyclePrimaryHarness(): HarnessId {
   const current = readPrimaryHarness();
-  const idx = HARNESSES.findIndex((h) => h.id === current);
-  const next = HARNESSES[(idx + 1) % HARNESSES.length]!;
+  const idx = VISIBLE_HARNESSES.findIndex((h) => h.id === current);
+  const next = VISIBLE_HARNESSES[(idx + 1) % VISIBLE_HARNESSES.length]!;
   writePrimaryHarness(next.id);
   return next.id;
 }
