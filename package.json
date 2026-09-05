@@ -2,7 +2,7 @@
   "name": "wt",
   "type": "module",
   "private": true,
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.4.1",
   "bin": {
     "wt": "./bin/wt"
   },
