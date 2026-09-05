@@ -16,6 +16,12 @@ describe("bundled skills registry", () => {
     });
   });
 
+  test("start resolves wt through PATH for custom worker launchers", () => {
+    const src = unitSource(findUnit("start")!)!;
+    expect(src).toContain('!`wt issue ');
+    expect(src).not.toContain("~/.wt/bin/wt");
+  });
+
   /**
    * The instructions block is spliced into the reader's own global
    * CLAUDE.md/AGENTS.md, so it is loaded on every turn of every agent on

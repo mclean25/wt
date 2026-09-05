@@ -312,6 +312,12 @@ Keep wt's bundled agent skills (`wt`, `restack`, `manager`, `start`, `handoff`, 
 - `diff <name>` — what a sync would change, as a unified diff.
 - `reset [--answers|--declines]` — forget remembered template answers and/or declined updates.
 
+`wt remote agent start <slug>` uses `skills sync --yes` as worker provisioning
+before forwarding the start. That installs missing/updates managed bundled
+skills plus instructions without overwriting modified copies; `agent start`
+then refuses to submit the harness-native command if the selected harness still
+cannot resolve `start`.
+
 ### `wt update [log] [--check] [--head]`
 
 Update wt itself. The install is a git clone (see the README), so updating is a fast-forward: `git fetch`, `git merge --ff-only`, and a `bun install` when the dependency manifest changed across the jump. Two safety layers ride along (semantics: [updates.md](updates.md)): the target is the newest incoming commit whose **CI is green** (red/still-running commits are held back; missing checks and API failures fail open), and the result is **boot-probed** in a child process — a version that fails the probe is reverted and skipped until origin moves again. Prints the incoming commits before applying and names any still-running wt instances afterwards; they keep the old code until restarted. Refuses to touch a clone with local changes or unpushed commits; update those by hand with git.

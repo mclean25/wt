@@ -20,7 +20,7 @@ Branch: !`git rev-parse --abbrev-ref HEAD`
 
 Issue links (primary tracker id + attached GitHub issue, from wt):
 
-!`~/.wt/bin/wt issue "$(basename "$PWD")" 2>/dev/null || echo "(not a wt worktree, or wt unavailable)"`
+!`wt issue "$(basename "$PWD")" 2>/dev/null || echo "(not a wt worktree, or wt unavailable)"`
 
 prompt.txt brief (untracked kickoff notes left by whoever prepared this
 worktree, e.g. `/triage`; "(none)" if absent):

@@ -1,5 +1,4 @@
-import { HARNESSES } from "../../core/harness/registry.ts";
-import type { HarnessId } from "../../core/harness/types.ts";
+import { HARNESS_IDS, type HarnessId } from "../../core/harness/types.ts";
 
 export type AgentArgs =
   | { kind: "help" }
@@ -33,15 +32,14 @@ function takeHarnessFlag(
       rest.push(a);
       continue;
     }
-    const match = HARNESSES.find((h) => h.id === value);
-    if (!match) {
+    if (!HARNESS_IDS.includes(value as HarnessId)) {
       return {
         rest,
         harness,
-        error: `unknown harness: ${value} (known: ${HARNESSES.map((h) => h.id).join(", ")})`,
+        error: `unknown harness: ${value} (known: ${HARNESS_IDS.join(", ")})`,
       };
     }
-    harness = match.id;
+    harness = value as HarnessId;
   }
   return { rest, harness };
 }

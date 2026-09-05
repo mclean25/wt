@@ -158,6 +158,23 @@ Naming a unit explicitly (`wt skills sync start`) overrides a remembered
 decline — asking for it by name IS the re-ask. `wt doctor` shows a one-line
 banner when updates are pending.
 
+## Remote worker provisioning
+
+`wt remote agent start <slug>` provisions the worker before it sends `/start`
+or `$start`: the controller first runs `wt skills sync --yes` on the worker,
+which installs missing/current bundled skills and the managed instructions
+block. The ordinary modified-copy rule still applies, so remote provisioning
+does not overwrite a personal skill. After provisioning, `wt agent start`
+checks the selected harness's actual skill lookup paths and fails without typing
+anything if `start` is still unavailable. This second guard also covers direct
+worker invocations and provisioning failures.
+
+The executable half is supplied at session creation rather than copied by the
+skills system: `wrapInnerArgs` prepends the directory of the `wt` launcher that
+received the remote command to every harness's `PATH`. A worker may therefore
+use a configured `wt_path` that is absent from its non-interactive SSH PATH,
+while the started agent can still run `wt status`.
+
 ## Keeping your own versions
 
 Prefer your own `start` skill? Decline the prompt once — wt remembers that

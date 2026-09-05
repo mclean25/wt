@@ -19,6 +19,8 @@
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, parse as parsePath } from "node:path";
+import { Effect } from "effect";
+import type { HarnessId } from "../harness/types.ts";
 
 /**
  * Tools this module distributes skills and instructions TO. It is
@@ -189,6 +191,63 @@ function codexHome(home: string, env: NodeJS.ProcessEnv): string {
   return env.CODEX_HOME ?? join(home, ".codex");
 }
 
+/** The preferred directory where wt installs skills for a harness. */
+export function harnessSkillsDir(
+  harness: HarnessId,
+  home: string = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  switch (harness) {
+    case "claude":
+    case "opencode":
+      // OpenCode reads Claude's skill directory as its standard fallback.
+      return join(home, ".claude", "skills");
+    case "codex":
+      // Codex prefers the shared-agents convention when it is present.
+      return existsSync(join(home, ".agents"))
+        ? join(home, ".agents", "skills")
+        : join(codexHome(home, env), "skills");
+  }
+}
+
+/** Every directory a harness scans, in installation-preference order. */
+export function harnessSkillDirs(
+  harness: HarnessId,
+  home: string = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const preferred = harnessSkillsDir(harness, home, env);
+  if (harness !== "codex") return [preferred];
+
+  const codex = join(codexHome(home, env), "skills");
+  return preferred === codex ? [preferred] : [preferred, codex];
+}
+
+/**
+ * Does the selected harness have a readable skill entrypoint at the path it
+ * resolves? This intentionally accepts personal/older copies: `agent start`
+ * needs to know the command exists, while `wt skills` owns freshness policy.
+ */
+export function harnessCanResolveSkill(
+  harness: HarnessId,
+  name: string,
+  home: string = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): Effect.Effect<boolean> {
+  return Effect.sync(() => {
+    for (const dir of harnessSkillDirs(harness, home, env)) {
+      try {
+        if (readFileSync(join(dir, name, "SKILL.md"), "utf8").trim().length > 0) {
+          return true;
+        }
+      } catch {
+        // Continue through fallback lookup paths.
+      }
+    }
+    return false;
+  });
+}
+
 /**
  * Detect the machine's skill + instructions targets. `home`/`env` are
  * injectable for tests; production callers use the defaults.
@@ -209,36 +268,19 @@ export function detectTargets(
   // --- skills dirs -------------------------------------------------------
   const skillDirCandidates: Array<{ harness: AgentToolId; dir: string }> = [];
   for (const h of present) {
-    switch (h) {
-      case "claude":
-        skillDirCandidates.push({ harness: h, dir: join(home, ".claude", "skills") });
-        break;
-      case "opencode":
-        // OpenCode reads ~/.claude/skills via its standard fallback.
-        skillDirCandidates.push({ harness: h, dir: join(home, ".claude", "skills") });
-        break;
-      case "codex": {
-        // Codex scans ~/.agents/skills when present (the shared-agents
-        // convention), else $CODEX_HOME/skills.
-        const agents = join(home, ".agents", "skills");
-        skillDirCandidates.push({
-          harness: h,
-          dir: existsSync(join(home, ".agents")) ? agents : join(codexHome(home, env), "skills"),
-        });
-        break;
-      }
-      case "pi":
-        // Pi scans the same shared ~/.agents/skills location Codex
-        // does — that is how one dotfiles `.agents -> .claude` symlink
-        // serves both without duplicating the tree. Its own config dir
-        // is the fallback on a machine with no `.agents`.
-        skillDirCandidates.push({
-          harness: h,
-          dir: existsSync(join(home, ".agents"))
-            ? join(home, ".agents", "skills")
-            : join(piDir!, "skills"),
-        });
-        break;
+    if (h === "pi") {
+      // Pi scans the same shared ~/.agents/skills location Codex
+      // does — that is how one dotfiles `.agents -> .claude` symlink
+      // serves both without duplicating the tree. Its own config dir
+      // is the fallback on a machine with no `.agents`.
+      skillDirCandidates.push({
+        harness: h,
+        dir: existsSync(join(home, ".agents"))
+          ? join(home, ".agents", "skills")
+          : join(piDir!, "skills"),
+      });
+    } else {
+      skillDirCandidates.push({ harness: h, dir: harnessSkillsDir(h, home, env) });
     }
   }
   const skills = dedupeTargets<SkillsTarget>(

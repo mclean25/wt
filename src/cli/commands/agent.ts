@@ -5,6 +5,7 @@ import {
   sendSessionMessage,
 } from "../../core/harness/session-messaging.ts";
 import { operationErrors } from "../../core/errors.ts";
+import { harnessCanResolveSkill } from "../../core/skills.ts";
 import { dirSlug } from "../../core/stage.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import { dim, green, red } from "../colors.ts";
@@ -90,6 +91,22 @@ export const run = Effect.fn("wt agent")(function* (argv: string[]) {
       ),
     );
     console.error(dim(`pass --harness <id> to address one explicitly`));
+  }
+  if (
+    parsed.kind === "start" &&
+    !(yield* harnessCanResolveSkill(harnessId, "start"))
+  ) {
+    console.error(
+      red(
+        `cannot start ${wt.slug}: ${harness.label} cannot resolve the bundled start skill`,
+      ),
+    );
+    console.error(
+      dim(
+        "run `wt skills sync start --yes` on this host, then retry `wt agent start`",
+      ),
+    );
+    return 1;
   }
   const text =
     parsed.kind === "start"

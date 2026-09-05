@@ -24,7 +24,12 @@ import type { SkillsMemory } from "./memory.ts";
 import { emptySkillsMemory } from "./memory.ts";
 import { unitKey, UNITS, type Unit } from "./registry.ts";
 import { buildReports, declineKey, reportIsActionable, type UnitReport } from "./report.ts";
-import { detectTargets } from "./targets.ts";
+import {
+  detectTargets,
+  harnessCanResolveSkill,
+  harnessSkillDirs,
+  harnessSkillsDir,
+} from "./targets.ts";
 import { contentHash, extractInstructionsBlock } from "./template.ts";
 
 let home: string;
@@ -39,6 +44,7 @@ afterEach(() => {
 });
 
 const WT_UNIT = UNITS.find((u) => u.name === "wt" && u.kind === "skill")!;
+const START_UNIT = UNITS.find((u) => u.name === "start" && u.kind === "skill")!;
 const INSTRUCTIONS_UNIT = UNITS.find((u) => u.kind === "instructions")!;
 
 function reportsFor(mem: SkillsMemory = emptySkillsMemory()): UnitReport[] {
@@ -77,6 +83,15 @@ describe("native claude-only machine", () => {
     const r = findReport(reportsFor(), WT_UNIT);
     expect(r.state).toBe("missing");
     expect(reportIsActionable(r)).toBe(true);
+  });
+
+  test("availability checks the path the selected harness actually resolves", () => {
+    expect(harnessSkillsDir("claude", home, {})).toBe(
+      join(home, ".claude", "skills"),
+    );
+    expect(Effect.runSync(harnessCanResolveSkill("claude", "start", home, {}))).toBe(false);
+    Effect.runSync(applyReport(findReport(reportsFor(), START_UNIT)));
+    expect(Effect.runSync(harnessCanResolveSkill("claude", "start", home, {}))).toBe(true);
   });
 
   test("apply → fresh; hand edit → modified; stamp intact → outdated", () => {
@@ -226,6 +241,25 @@ describe("stow-style rulesync machine (every tool one real tree)", () => {
 });
 
 describe("multi-target machines", () => {
+  test("Codex availability checks its preferred and fallback lookup paths", () => {
+    mkdirSync(join(home, ".codex", "skills", "start"), { recursive: true });
+    writeFileSync(join(home, ".codex", "skills", "start", "SKILL.md"), "codex start\n");
+    expect(harnessSkillsDir("codex", home, {})).toBe(
+      join(home, ".codex", "skills"),
+    );
+    expect(Effect.runSync(harnessCanResolveSkill("codex", "start", home, {}))).toBe(true);
+
+    mkdirSync(join(home, ".agents"), { recursive: true });
+    expect(harnessSkillsDir("codex", home, {})).toBe(
+      join(home, ".agents", "skills"),
+    );
+    expect(harnessSkillDirs("codex", home, {})).toEqual([
+      join(home, ".agents", "skills"),
+      join(home, ".codex", "skills"),
+    ]);
+    expect(Effect.runSync(harnessCanResolveSkill("codex", "start", home, {}))).toBe(true);
+  });
+
   test("a decline on one target never suppresses a missing install on another", () => {
     // Claude native with a personal copy; Codex native with nothing.
     mkdirSync(join(home, ".claude", "skills", "wt"), { recursive: true });

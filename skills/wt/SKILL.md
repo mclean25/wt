@@ -89,7 +89,10 @@ in each one.
 - `wt agent send <slug> <text…>` / `wt agent start <slug>` — message or
   cold-start the worktree's configured primary coding-agent harness. `start`
   invokes the bundled start skill with the receiving harness's native prefix,
-  so callers never need to special-case Claude, Codex, or OpenCode.
+  so callers never need to special-case Claude, Codex, or OpenCode. It refuses
+  before typing if that harness cannot resolve the skill. For a configured SSH
+  worker, `wt remote agent start <slug>` first provisions its bundled skills
+  and instructions non-interactively, preserving modified personal copies.
 - `wt dev <start|stop|status|logs> [slug]` — the worktree's dev server, when
   the project configures one. Use it instead of running the project's dev
   command yourself: wt pins the server to a port it allocates per worktree

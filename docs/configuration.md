@@ -227,7 +227,16 @@ wt_path = "~/.wt/bin/wt"       # optional
 
 The remote machine needs its own `~/.config/wt/config.toml`, including
 `[instance] role = "worker"`; do not point the local process at a mounted
-remote filesystem. `wt remote [args…]` remains a
+remote filesystem. `wt remote agent start <slug>` first runs a non-interactive
+remote `wt skills sync --yes`, provisioning missing/current bundled skills and
+the managed instructions block before any harness command is typed. Personal
+or modified copies keep the normal skills-sync protection and are not
+overwritten. The worker then fails closed if the selected harness still cannot
+resolve `start`. Every spawned harness also receives the configured remote
+`wt_path` launcher's directory at the front of `PATH`, so the skill can call
+`wt status` even when that directory is absent from the SSH login PATH.
+
+`wt remote [args…]` remains a
 diagnostic/admin escape hatch, but normal work happens from the unified local
 Inbox.
 
