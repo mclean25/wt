@@ -72,7 +72,7 @@ function pollSlug(
   stateBySlug: Map<string, SlugState>,
   events: CodexEventsWorkerEvent[],
 ): void {
-  const rollout = latestRolloutForCwd(wtPath);
+  const rollout = latestRolloutForCwd(wtPath, slug);
   if (!rollout) return;
 
   const state = stateBySlug.get(slug);

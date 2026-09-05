@@ -32,6 +32,7 @@ import {
 } from "./names.ts";
 import { trustCodexWorkspace } from "./trust.ts";
 import { discoverCodexSessionsInWorker } from "./discovery.ts";
+import { CODEX_MAIN_PROMPT, CODEX_MANAGER_PROMPT, codexRolloutBelongsToSlot } from "./slot.ts";
 
 import type { Harness, HarnessSession, HarnessSpawnArgs } from "../types.ts";
 
@@ -84,6 +85,8 @@ export const codexHarness: Harness = {
     if (args.resumeSessionId !== null) {
       return ["codex", "resume", args.resumeSessionId];
     }
+    if (args.slug === "manager") return ["codex", CODEX_MANAGER_PROMPT];
+    if (args.slug === "main") return ["codex", CODEX_MAIN_PROMPT];
     return ["codex"];
   },
 
@@ -110,8 +113,9 @@ export const codexHarness: Harness = {
 export function discoverCodexSessionsSync(
   slug: string,
   wtPath: string,
+  sessionsDir = CODEX_SESSIONS_DIR,
 ): HarnessSession[] {
-  const rollouts = scanRollouts(wtPath).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const rollouts = scanRollouts(wtPath, slug, sessionsDir).sort((a, b) => b.mtimeMs - a.mtimeMs);
   const friendlyNames = reconcileCodexNames(
     slug,
     rollouts.map((r) => r.sessionId),
@@ -164,18 +168,18 @@ type RolloutMeta = {
  * walking newest-first (significantly cheaper than full scanRollouts for
  * the polling hot path). Caps at SCAN_MAX_DAYS to bound the walk.
  */
-export function latestRolloutForCwd(cwd: string): { path: string; mtimeMs: number; size: number } | null {
-  if (!existsSync(CODEX_SESSIONS_DIR)) return null;
+export function latestRolloutForCwd(cwd: string, slug: string, sessionsDir = CODEX_SESSIONS_DIR): { path: string; mtimeMs: number; size: number } | null {
+  if (!existsSync(sessionsDir)) return null;
   let daysScanned = 0;
   let years: string[];
   try {
-    years = readdirSync(CODEX_SESSIONS_DIR).sort().reverse();
+    years = readdirSync(sessionsDir).sort().reverse();
   } catch {
     return null;
   }
   let best: { path: string; mtimeMs: number; size: number } | null = null;
   for (const y of years) {
-    const yPath = join(CODEX_SESSIONS_DIR, y);
+    const yPath = join(sessionsDir, y);
     let months: string[];
     try { months = readdirSync(yPath).sort().reverse(); } catch { continue; }
     for (const m of months) {
@@ -193,6 +197,7 @@ export function latestRolloutForCwd(cwd: string): { path: string; mtimeMs: numbe
           const filePath = join(dPath, f);
           const meta = readRolloutMeta(filePath);
           if (!meta || meta.cwd !== cwd) continue;
+          if (!codexRolloutBelongsToSlot(filePath, meta.size, slug)) continue;
           if (!best || meta.mtimeMs > best.mtimeMs) {
             best = { path: filePath, mtimeMs: meta.mtimeMs, size: meta.size };
           }
@@ -209,19 +214,19 @@ export function latestRolloutForCwd(cwd: string): { path: string; mtimeMs: numbe
  * cwd matches the given worktree path. Caps at `SCAN_MAX_DAYS` days to
  * keep the scan bounded; very old sessions are dropped from the picker.
  */
-function scanRollouts(wtPath: string): RolloutMeta[] {
-  if (!existsSync(CODEX_SESSIONS_DIR)) return [];
+function scanRollouts(wtPath: string, slug: string, sessionsDir: string): RolloutMeta[] {
+  if (!existsSync(sessionsDir)) return [];
   const out: RolloutMeta[] = [];
   let daysScanned = 0;
   let years: string[];
   try {
-    years = readdirSync(CODEX_SESSIONS_DIR).sort().reverse();
+    years = readdirSync(sessionsDir).sort().reverse();
   } catch (err) {
     log.warn("readdir failed", { err: String(err) });
     return [];
   }
   for (const y of years) {
-    const yPath = join(CODEX_SESSIONS_DIR, y);
+    const yPath = join(sessionsDir, y);
     let months: string[];
     try {
       months = readdirSync(yPath).sort().reverse();
@@ -252,6 +257,7 @@ function scanRollouts(wtPath: string): RolloutMeta[] {
           const meta = readRolloutMeta(filePath);
           if (!meta) continue;
           if (meta.cwd !== wtPath) continue;
+          if (!codexRolloutBelongsToSlot(filePath, meta.size, slug)) continue;
           out.push({ ...meta, path: filePath });
         }
       }

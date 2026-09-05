@@ -38,7 +38,7 @@ self.onmessage = (event: MessageEvent<CodexTailWorkerMessage>) => {
   for (const slot of message.slots) {
     let state = states.get(slot.key);
     if (!state || state.wtPath !== slot.wtPath) {
-      state = createCodexTailPumpState(slot.wtPath);
+      state = createCodexTailPumpState(slot.wtPath, slot.slug);
       states.set(slot.key, state);
     }
     try {

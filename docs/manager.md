@@ -6,6 +6,10 @@ Deliberately thin: wt ships no manager-specific engine. The manager is an ordina
 
 One identity subtlety: the manager shares the main clone's directory with the `.` slot, and Claude's primary-conversation UUID is derived from the directory — so the manager lives as a **named** claude session (`manager~manager` in tmux) with its own deterministic conversation. All the entry points below carry that name automatically; a leftover primary-form `manager` session from before this scheme is killed once at TUI startup (it was literally the same conversation as `.`).
 
+Codex separates these slots using a fixed opening user message saved in each new conversation. The manager's opening message initializes the manager skill and waits for a request; the main slot's message waits for coding work. Discovery, activity, and output readers recognize that opening message before assigning a `primary` name, so `m` and `.` cannot select each other's conversations. Resuming does not send the opening message again. Shell entry (`wt manager`) and detached cold starts resolve the same manager-owned primary thread.
+
+On upgrade from cwd-only Codex discovery, existing unmarked conversations remain available under `.`. The first `m` creates a new dedicated manager conversation; old conversation files are preserved. Restart the wt TUI to load the new discovery code. Existing live sessions are not stopped or reassigned.
+
 ## Entry points
 
 - **`m`** in the TUI attaches it (F12 detaches back), creating it on first use with the Shift+TAB-selected primary harness.

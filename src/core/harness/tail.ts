@@ -117,14 +117,16 @@ type Entry = {
 /** Minimal mutable state owned by the Codex tail worker for one live slot. */
 export type CodexTailPumpState = {
   wtPath: string;
+  slug: string;
   nextLineId: number;
   seeded: boolean;
   codex: CodexCursor;
 };
 
-export function createCodexTailPumpState(wtPath: string): CodexTailPumpState {
+export function createCodexTailPumpState(wtPath: string, slug: string): CodexTailPumpState {
   return {
     wtPath,
+    slug,
     nextLineId: 1,
     seeded: false,
     codex: { path: null, offset: 0, pending: "", seedDrop: false },
@@ -270,7 +272,7 @@ function extractCodexCmd(args: unknown): string {
  * offset always advances to EOF without ever re-reading or losing bytes.
  */
 export function pumpCodexTail(entry: CodexTailPumpState): ActionLine[] {
-  const rollout = latestRolloutForCwd(entry.wtPath);
+  const rollout = latestRolloutForCwd(entry.wtPath, entry.slug);
   if (!rollout) return [];
   const cur = entry.codex;
   const nextId = () => entry.nextLineId++;

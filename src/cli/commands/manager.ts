@@ -150,10 +150,25 @@ export const run = Effect.fn("wt manager")(function* (argv: string[]) {
   }
   yield* io.sync("attach", ensureManagerClaudeName);
   const modules = yield* loadManagerSessionModules;
+  const harnessId = modules.primary.readPrimaryHarness();
+  if (harnessId === "codex") {
+    // Resolve the manager-owned conversation on shell entry too. A bare
+    // attach with no resume id would create a new conversation after exit.
+    const started = yield* modules.tmux.startHarnessSessionDetached(
+      MANAGER_SLUG,
+      modules.config.paths.mainClone,
+      harnessId,
+      MANAGER_CLAUDE_NAME,
+    );
+    if (!started.ok) {
+      console.error(red(started.reason));
+      return 1;
+    }
+  }
   const result = yield* modules.tmux.attachOrCreate({
     slug: MANAGER_SLUG,
     cwd: modules.config.paths.mainClone,
-    kind: modules.primary.readPrimaryHarness(),
+    kind: harnessId,
     managedName: MANAGER_CLAUDE_NAME,
   });
   if (result.kind === "spawn-failed") {

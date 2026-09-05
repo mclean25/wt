@@ -14,7 +14,8 @@
  * here, never restate the strings.
  *
  * Codex / OpenCode ignore managed names for tmux naming (single slot
- * per slug), so passing it unconditionally is harmless there.
+ * per slug). Codex separately stamps the opening user message and filters
+ * discovery by slot ownership; see harness/codex/slot.ts.
  */
 import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
