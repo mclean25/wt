@@ -21,7 +21,7 @@ import { operationErrors, type OperationError } from "../../core/errors.ts";
 import { createLogger } from "../../core/logger.ts";
 import { runRemoteWt } from "../../core/remote.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
-import { setSlugGithubIssue, type RemovedWorktree } from "../../core/wtstate.ts";
+import { readWtState, GROUP_INBOX, setSlugGithubIssue, type RemovedWorktree } from "../../core/wtstate.ts";
 import { parseNewInput } from "../app-helpers.ts";
 import type { Modal } from "../modal-state.ts";
 import {
@@ -29,6 +29,8 @@ import {
   remoteEntryKey,
   type RemoteCreation,
 } from "../remote-creation.ts";
+import type { CreatedWorktreePlacement } from "../created-worktree.ts";
+import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 import { theme } from "../theme.ts";
 
 const newLog = createLogger("[new]");
@@ -41,7 +43,8 @@ export const REVIEW_SECTION = "Reviews";
 type WorktreeCreateFlowsCtx = {
   setModal: (m: Modal | null) => void;
   setSection: (slug: string, section: string | null) => Promise<void>;
-  setSel: (key: string | null) => void;
+  revealCreated: (placement: CreatedWorktreePlacement) => void;
+  setSectionFolded: (key: string, folded: boolean) => Promise<boolean>;
   setRemovedView: (v: boolean) => void;
   setRemoteCreation: (creation: RemoteCreation | null) => void;
   remoteWorktrees: readonly RemoteWorktreeSummary[];
@@ -54,7 +57,8 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
   const {
     setModal,
     setSection,
-    setSel,
+    revealCreated,
+    setSectionFolded,
     setRemovedView,
     setRemoteCreation,
     remoteWorktrees,
@@ -62,6 +66,17 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     refreshRemoteWorktrees,
     toast,
   } = ctx;
+
+  const revealLocal = Effect.fn("revealCreatedLocalWorktree")(function* (slug: string) {
+    const state = yield* io.sync("read created section", () => readWtState().slugs[slug]);
+    const section = state?.section ?? null;
+    yield* io.promise("append created worktree", () => setSection(slug, section));
+    yield* io.promise("expand created section", () =>
+      setSectionFolded(section ?? GROUP_INBOX, false),
+    );
+    const order = yield* io.sync("read created order", () => readWtState().slugs[slug]!.order);
+    revealCreated({ key: slug, ledgerKey: slug, section, workAt: state?.work?.at, order });
+  });
 
   /**
    * `createWorktree` fails typed with `LifecycleError`; every caller
@@ -87,7 +102,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
   const createNewWorktree = Effect.fn("createNewWorktree")(function* (
     raw: string,
     defaultBase?: string,
-  ): Effect.fn.Return<boolean> {
+  ): Effect.fn.Return<boolean, OperationError> {
     const parsed = parseNewInput(raw, defaultBase);
     if ("error" in parsed) {
       newLog.event.err(parsed.error);
@@ -146,7 +161,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     }
     newLog.event.ok(`ready at ${result.path}`);
     toast(`created ${result.slug}`, theme.ok, 2200);
-    setSel(result.slug);
+    yield* revealLocal(result.slug);
     void refreshAll();
     return true;
   });
@@ -212,19 +227,24 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
         return false;
       }
       remoteLog.event.ok(`ready on ${remote.label}`);
-      yield* io.promise("refresh remote worktrees", refreshRemoteWorktrees).pipe(
-        Effect.tap((refreshed) =>
-          Effect.sync(() => {
-            // The CLI input may be an issue id or title rather than the
-            // final slug, so select the newly discovered authoritative row by
-            // fleet identity, not input spelling.
-            const created = discoveredRemoteCreation(creation, refreshed);
-            setRemoteCreation(null);
-            if (created) setSel(`remote:${remoteEntryKey(created)}`);
-            toast(`ready on ${remote.label}`, theme.ok, 1800);
-          }),
-        ),
-      );
+      const refreshed = yield* io.promise("refresh remote worktrees", refreshRemoteWorktrees);
+      const created = discoveredRemoteCreation(creation, refreshed);
+      if (created) {
+        const ledgerKey = remoteWorktreeLedgerKey(created.hostKey, created.slug);
+        const section = yield* io.sync("read created remote section", () =>
+          readWtState().remoteLayouts[ledgerKey]?.section ?? null,
+        );
+        yield* io.promise("append created remote worktree", () => setSection(ledgerKey, section));
+        yield* io.promise("expand created section", () =>
+          setSectionFolded(section ?? GROUP_INBOX, false),
+        );
+        const order = yield* io.sync("read created remote order", () =>
+          readWtState().remoteLayouts[ledgerKey]!.order,
+        );
+        revealCreated({ key: `remote:${remoteEntryKey(created)}`, ledgerKey, section, workAt: created.work?.at, order });
+      }
+      setRemoteCreation(null);
+      toast(`ready on ${remote.label}`, theme.ok, 1800);
       return true;
     }).pipe(Effect.ensuring(Effect.sync(() => setRemoteCreation(null))));
   });
@@ -257,7 +277,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     yield* io.promise("set section", () => setSection(result.slug, REVIEW_SECTION));
     log.event.ok(`ready at ${result.path} → ${REVIEW_SECTION}`);
     toast(`created ${result.slug} in ${REVIEW_SECTION}`, theme.info, 2200);
-    setSel(result.slug);
+    yield* revealLocal(result.slug);
     void refreshAll();
   });
 
@@ -272,7 +292,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
   // entry itself, so success just needs to land the cursor on the new row.
   const restoreRemovedWorktree = Effect.fn("restoreRemovedWorktree")(function* (
     entry: RemovedWorktree,
-  ): Effect.fn.Return<void> {
+  ): Effect.fn.Return<void, OperationError> {
     const log = createLogger("[restore]");
     log.event.info(`restoring ${entry.slug} (${entry.branch})`);
     const result = yield* createWorktreeResult(entry.branch, {
@@ -288,7 +308,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     log.event.ok(`restored at ${result.path}`);
     toast(`restored ${result.slug}`, theme.ok, 2500);
     setRemovedView(false);
-    setSel(result.slug);
+    yield* revealLocal(result.slug);
     void refreshAll();
   });
 

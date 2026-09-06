@@ -51,6 +51,7 @@ import { useWtStateEvents } from "./hooks/useWtStateEvents.ts";
 import { useManagerReports } from "./hooks/useManagerSignals.ts";
 import { useWorktreeRows } from "./hooks/useWorktreeRows.ts";
 import { useStackSections } from "./hooks/useStackSections.ts";
+import type { CreatedWorktreePlacement } from "./created-worktree.ts";
 import { useVisualItems, visualKey } from "./hooks/useVisualItems.ts";
 import { useAutomations } from "./hooks/useAutomations.ts";
 import { findWorktreeModel } from "./worktree-model.ts";
@@ -158,6 +159,12 @@ export function App({ onExit }: Props) {
   // Cursor is tracked by a stable key (slug, folded section, or PR URL), not an
   // index. The visual list hook resolves that key against the current rows.
   const [sel, setSel] = useState<string | null>(null);
+  const [createdSelection, setCreatedSelection] = useState<string | null>(null);
+  const [createdPlacements, setCreatedPlacements] = useState<CreatedWorktreePlacement[]>([]);
+  const revealCreated = useCallback((placement: CreatedWorktreePlacement) => {
+    setCreatedPlacements((prev) => [...prev.filter((p) => p.key !== placement.key), placement]);
+    setCreatedSelection(placement.key);
+  }, []);
   // In-flight restack keys (a stack's id, or a standalone worktree's
   // branch) — guards the `R` replay action against re-entry on the SAME
   // chain while letting different chains restack concurrently (the
@@ -193,7 +200,7 @@ export function App({ onExit }: Props) {
     [],
   );
   // Remote checkouts are absent from this machine's `git worktree list`, so
-  // keep an explicit Inbox row visible while SSH creation/install is running.
+  // withhold newly discovered rows while SSH creation/install is running.
   const [remoteCreation, setRemoteCreation] = useState<RemoteCreation | null>(null);
   // All modal/overlay state collapsed into one discriminated union so
   // the "only one modal is open at a time" invariant is structural
@@ -335,6 +342,12 @@ export function App({ onExit }: Props) {
     currentRemoved,
   } = useRemovedView({ rows, wtState: wtStateForStacks.data });
 
+  const activeCreatedPlacements = useMemo(() => createdPlacements.filter((placement) => {
+    const state = wtStateForStacks.data;
+    const layout = state?.remoteLayouts[placement.ledgerKey] ?? state?.slugs[placement.ledgerKey];
+    return layout?.section === placement.section && layout.order === placement.order;
+  }), [createdPlacements, wtStateForStacks.data]);
+
   const {
     activeItems,
     archivedItems,
@@ -357,6 +370,7 @@ export function App({ onExit }: Props) {
     remoteWorktrees: remoteRows,
     archivedKeys,
     githubData,
+    createdPlacements: activeCreatedPlacements,
   });
 
   // Detached dev supervisors can fail after their start command exits. The
@@ -375,6 +389,16 @@ export function App({ onExit }: Props) {
     const key = visualKey(currentItem);
     if (key !== sel) setSel(key);
   }, [sel, currentItem]);
+
+  // Creation can finish before React observes the inventory refresh. Keep the
+  // request until its actual row is visible; never select a missing key that
+  // the external-removal fallback above would immediately replace.
+  useEffect(() => {
+    if (createdSelection === null) return;
+    if (!visualItems.some((item) => visualKey(item) === createdSelection)) return;
+    setSel(createdSelection);
+    setCreatedSelection(null);
+  }, [createdSelection, visualItems]);
 
   // Cursor re-aim for actions that take the selected row OUT of its slot
   // (destroy, clean sweep, archive, section move). No-op unless the
@@ -786,7 +810,8 @@ export function App({ onExit }: Props) {
   const { doNew, doRemoteNew, doCheckoutReview, doRestoreRemoved } = makeWorktreeCreateFlows({
     setModal,
     setSection,
-    setSel,
+    revealCreated,
+    setSectionFolded,
     setRemovedView,
     setRemoteCreation,
     remoteWorktrees: remoteRows,

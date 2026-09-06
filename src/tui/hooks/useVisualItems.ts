@@ -5,6 +5,7 @@ import { config } from "../../core/config.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import { reviewRequestsQuery } from "../../state/index.ts";
 import type { FleetWorktreeItem, ListActiveItem } from "../panels/list.tsx";
+import type { CreatedWorktreePlacement } from "../created-worktree.ts";
 import type { RemoteCreation } from "../remote-creation.ts";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import type { GithubData } from "../../state/queries/github.ts";
@@ -59,6 +60,7 @@ export function buildActiveItems({
   remoteWorktrees,
   archivedKeys,
   githubData,
+  createdPlacements = [],
 }: Omit<UseVisualItemsArgs, "selectedKey">): ListActiveItem[] {
   const models = buildWorktreeModels(rows, remoteWorktrees, archivedKeys, githubData);
   const byKey = new Map(models.map((model) => [model.key, model]));
@@ -89,6 +91,17 @@ export function buildActiveItems({
       model: byKey.get(remoteWorktreeLedgerKey(entry.hostKey, entry.slug))!,
       archived: false,
     });
+  }
+
+  // Initial placement overrides status/stack sorting, then expires as soon
+  // as the row reports new work or moves to another section.
+  for (const placement of createdPlacements) {
+    const members = buckets.get(placement.section ?? GROUP_INBOX);
+    if (!members) continue;
+    const index = members.findIndex((item) =>
+      visualKey(item) === placement.key && item.model?.work?.at === placement.workAt,
+    );
+    if (index >= 0) members.push(...members.splice(index, 1));
   }
 
   const out: ListActiveItem[] = [];
@@ -125,6 +138,7 @@ type UseVisualItemsArgs = {
   remoteWorktrees: readonly RemoteWorktreeSummary[];
   archivedKeys: ReadonlySet<string>;
   githubData?: GithubData;
+  createdPlacements?: readonly CreatedWorktreePlacement[];
 };
 
 export function useVisualItems({
@@ -135,6 +149,7 @@ export function useVisualItems({
   remoteWorktrees,
   archivedKeys,
   githubData,
+  createdPlacements = [],
 }: UseVisualItemsArgs) {
   const worktrees = useMemo(
     () => buildWorktreeModels(rows, remoteWorktrees, archivedKeys, githubData),
@@ -176,6 +191,7 @@ export function useVisualItems({
       remoteWorktrees,
       archivedKeys,
       githubData,
+      createdPlacements,
     });
   }, [
     rows,
@@ -184,6 +200,7 @@ export function useVisualItems({
     remoteWorktrees,
     archivedKeys,
     githubData,
+    createdPlacements,
   ]);
 
   const archivedItems = useMemo<ArchivedItem[]>(() => {

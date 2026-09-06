@@ -169,3 +169,39 @@ test("creation does not hide inventory from another host", () => {
   expect(items).toHaveLength(1);
   expect(items[0]).toMatchObject({ kind: "remote", entry: { hostKey: "other-host" } });
 });
+
+test("new local worktree appends after remote and local peers in its section", () => {
+  const fresh = local("fresh", "Batch");
+  const items = buildActiveItems({
+    rows: [fresh, local("older", "Batch"), local("elsewhere", null)],
+    remoteWorktrees: [remote("remote-peer", "Batch")],
+    remoteCreation: null, foldedSections: new Set(), archivedKeys: new Set(),
+    createdPlacements: [{ key: "fresh", ledgerKey: "fresh", section: "Batch", workAt: undefined, order: 5 }],
+  });
+  expect(items.map((item) => item.kind === "section" ? item.sectionKey : item.model?.slug))
+    .toEqual(["older", "remote-peer", "fresh", "elsewhere"]);
+});
+
+test("new remote worktrees append in creation order, independent of inventory order", () => {
+  const items = buildActiveItems({
+    rows: [local("older", null)],
+    remoteWorktrees: [remote("second", null), remote("first", null)],
+    remoteCreation: null, foldedSections: new Set(), archivedKeys: new Set(),
+    createdPlacements: ["first", "second"].map((slug) => ({
+      key: `remote:dellserver:${slug}`, ledgerKey: `@remote/dellserver/${slug}`,
+      section: null, workAt: undefined, order: 5,
+    })),
+  });
+  expect(items.map((item) => item.kind === "section" ? item.sectionKey : item.model?.slug))
+    .toEqual(["older", "first", "second"]);
+});
+
+test("a new status claim releases the initial bottom placement", () => {
+  const fresh = { ...local("fresh", null), work: { state: "working", at: "later" } } as WorktreeRow;
+  const items = buildActiveItems({
+    rows: [fresh, local("older", null)], remoteWorktrees: [], remoteCreation: null,
+    foldedSections: new Set(), archivedKeys: new Set(),
+    createdPlacements: [{ key: "fresh", ledgerKey: "fresh", section: null, workAt: undefined, order: 5 }],
+  });
+  expect(items[0]).toMatchObject({ kind: "wt", row: { wt: { slug: "fresh" } } });
+});

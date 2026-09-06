@@ -214,6 +214,14 @@ an effect in `app.tsx` adopts whatever now occupies it, so the selection
 is a live key again instead of a dead one that drifts on the next
 re-sort. See [tui.md](tui.md#navigation) for the user-facing statement.
 
+Creation uses a pending selection key instead of selecting a key before the
+inventory has rendered it. It appends the persisted section order, expands the
+destination section, and selects only once the real row is in `visualItems`.
+The initial bottom placement is a TUI-local, write-once snapshot of the row's
+work-status timestamp and manual layout. `buildActiveItems` appends matching
+rows after both local and remote peers; a changed status or layout releases
+the override back to normal sorting. It does not alter the inferred stack.
+
 Presentation/coordination state owned by this TUI (sections, ordering, folds,
 and the archive ledger) uses the location-aware key, so remote rows participate
 like local rows without ever making their paths look local. The worker's own

@@ -47,10 +47,14 @@ work on it.
 
 ### Worktree actions
 
+Creation selects the actual row once inventory has rendered it. Initial bottom
+placement overrides the current sort for that row until its work-status claim
+or manual layout changes; later status updates use the normal ordering.
+
 | key | action |
 |---|---|
-| `n` / `N` | new local worktree prompt (accepts an issue id + optional title words, a tracker URL, branch, or slug, plus `--attach`, `--gh <n>`, `--any`, `--base <ref>` — same resolution as [`wt new`](cli.md#wt-new-id-titleurlbranchslug)); `N` pre-fills `--base` with the selected row's branch. On success the cursor lands on the new row; on a resolution failure the prompt reopens with your input intact |
-| `Ctrl+N` | create on `[remote]`; keeps the current selection while creation runs, then selects the completed worktree. No temporary row is shown. The worktree appears in its normal section (or Inbox) with a small remote indicator, and F10/F11/F12 route that row's sessions over SSH |
+| `n` / `N` | new local worktree prompt (accepts an issue id + optional title words, a tracker URL, branch, or slug, plus `--attach`, `--gh <n>`, `--any`, `--base <ref>` — same resolution as [`wt new`](cli.md#wt-new-id-titleurlbranchslug)); `N` pre-fills `--base` with the selected row's branch. On success the section expands and the cursor lands on the new row at the bottom of its section; on a resolution failure the prompt reopens with your input intact |
+| `Ctrl+N` | create on `[remote]`; keeps the current selection while creation runs, then selects the completed worktree. No temporary row is shown. Its section expands and the new row starts at the bottom. The worktree appears in its normal section (or Inbox) with a small remote indicator, and F10/F11/F12 route that row's sessions over SSH |
 | `o` | open the worktree in your editor (`[editor] command`; default Zed) |
 | `d` | remove locally or on the row's remote host (confirm; escalates to a force-remove warning listing every hazard when dirty/unpushed) |
 | `c` | clean all merged/gone worktrees across the local and configured remote fleets (one combined confirmation). Never forces: a candidate holding uncommitted changes or unpushed commits — or a landed row still owing its [`verifyAfterMerge`](cli.md#wt-status-slug-state--m-note---risk-r) check — is shown as `kept` in the confirm list and survives the sweep; use `d` on it deliberately. Hazards render as a bare phrase, never with the field behind them: every reader of one is a scan line (a modal row, a `d` confirm that comma-joins reasons and appends *will be lost*, a toast), and `verifyAfterMerge` is the one field with no length budget, so inlining it buried the hazards next to it. Press `V` on the row to read the steps. Same for the `builtin:clean` automation, which has no human in the loop at all |
