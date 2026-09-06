@@ -91,7 +91,7 @@ import { forkReported } from "./effect-boundary.ts";
 import { theme } from "./theme.ts";
 import { showToast } from "./toast.ts";
 import {
-  discoveredRemoteCreation,
+  visibleRemoteWorktrees,
   type RemoteCreation,
 } from "./remote-creation.ts";
 import {
@@ -285,14 +285,14 @@ export function App({ onExit }: Props) {
   const { wtStateForStacks, foldedSections } = useStackSections();
   const remoteRows = useMemo(
     () =>
-      remoteInventory.map((row) => ({
+      visibleRemoteWorktrees(remoteCreation, remoteInventory).map((row) => ({
         ...row,
         section:
           wtStateForStacks.data?.remoteLayouts[
             remoteWorktreeLedgerKey(row.hostKey, row.slug)
           ]?.section ?? null,
       })),
-    [remoteInventory, wtStateForStacks.data?.remoteLayouts],
+    [remoteInventory, remoteCreation, wtStateForStacks.data?.remoteLayouts],
   );
 
   // Narrate work-status transitions (from any process) into the
@@ -1003,17 +1003,12 @@ export function App({ onExit }: Props) {
     handleNormalKey(k, normalCtx);
   });
 
-  const pendingRemoteCount =
-    remoteCreation && !discoveredRemoteCreation(remoteCreation, remoteRows)
-      ? 1
-      : 0;
   const remoteArchivedCount = remoteRows.filter((row) =>
     archivedKeys.has(remoteWorktreeLedgerKey(row.hostKey, row.slug)),
   ).length;
   const activeCount =
     rows.filter((r) => !r.archived).length +
-    (remoteRows.length - remoteArchivedCount) +
-    pendingRemoteCount;
+    (remoteRows.length - remoteArchivedCount);
   const archivedCount = rows.filter((r) => r.archived).length + remoteArchivedCount;
 
   const footerHint = useMemo(() => {

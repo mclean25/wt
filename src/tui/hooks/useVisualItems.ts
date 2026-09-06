@@ -15,7 +15,7 @@ import {
   type WorktreeTarget,
 } from "../../core/worktree-target.ts";
 import {
-  discoveredRemoteCreation,
+  visibleRemoteWorktrees,
   remoteEntryKey,
 } from "../remote-creation.ts";
 import {
@@ -80,25 +80,13 @@ export function buildActiveItems({
       model: byKey.get(row.wt.slug)!,
     });
   }
-  for (const entry of remoteWorktrees) {
+  for (const entry of visibleRemoteWorktrees(remoteCreation, remoteWorktrees)) {
     if (archivedKeys.has(remoteWorktreeLedgerKey(entry.hostKey, entry.slug))) continue;
     ensure(entrySection(entry)).push({
       kind: "remote",
       entry,
       target: remoteWorktreeTarget(entry),
       model: byKey.get(remoteWorktreeLedgerKey(entry.hostKey, entry.slug))!,
-      archived: false,
-    });
-  }
-  if (
-    remoteCreation &&
-    !discoveredRemoteCreation(remoteCreation, remoteWorktrees)
-  ) {
-    ensure(GROUP_INBOX).push({
-      kind: "remote",
-      entry: remoteCreation,
-      target: null,
-      model: null,
       archived: false,
     });
   }

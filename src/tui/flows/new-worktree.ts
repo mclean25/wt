@@ -158,16 +158,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
   /**
    * Effect body of `doRemoteNew` — create on the remote host, then
    * refresh its rows in this TUI. Returns whether it succeeded — same
-   * contract as `createNewWorktree`. Never fails.
-   *
-   * The eager remote-inventory poll is a scoped fiber: `Effect.scoped`
-   * + `Effect.forkScoped` tie its lifetime to this block, so it is
-   * interrupted (and joined, same as the original's
-   * `Fiber.interrupt`-then-await) the moment the scope closes — whether
-   * that's the remote create finishing or failing. The optimistic row
-   * is cleared only once that poll has stopped, so a detached refresh
-   * can't outlive the flow and write stale remote-creation state into
-   * the next render.
+   * contract as `createNewWorktree`. Releases the visibility hold on every exit.
    */
   const createRemoteWorktree = Effect.fn("createRemoteWorktree")(function* (
     raw: string,
@@ -199,67 +190,43 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
       status: "creating",
     };
     setRemoteCreation(creation);
-    setSel(`remote:${remoteEntryKey(creation)}`);
     remoteLog.event.info(`creating ${parsed.input}`);
+    toast(`creating ${parsed.input} on ${remote.label}`, theme.info, 2500);
 
-    const ok = yield* Effect.scoped(
-      Effect.gen(function* () {
-        // The normal remote inventory interval is 15s while no busy row
-        // is known. Probe eagerly during creation so the authoritative
-        // row replaces the placeholder as soon as the checkout exists;
-        // F10/F11/F12 can then enter it while the remaining init phases
-        // continue in the background.
-        yield* Effect.forever(
-          io.promise("refresh remote worktrees", refreshRemoteWorktrees).pipe(
-            Effect.catch((error) =>
-              Effect.sync(() => {
-                remoteLog.debug("remote inventory poll failed", { err: error.message });
-              }),
-            ),
-            Effect.andThen(Effect.sleep("1500 millis")),
-          ),
-        ).pipe(Effect.forkScoped);
-
-        const code = yield* runRemoteWt(remote, args, {
-          onLine: (line) => remoteLog.event.dim(line),
-        }).pipe(
-          Effect.catchTag("RemoteRunError", (error) =>
-            Effect.sync(() => {
-              remoteLog.event.err(error.message);
-              toast(`remote create failed: ${error.message}`, theme.err, 3500);
-              return null;
-            }),
-          ),
-        );
-        if (code === null) return false;
-        if (code !== 0) {
-          remoteLog.event.err(`create failed (exit ${code})`);
-          toast(`remote create failed (exit ${code})`, theme.err, 3000);
-          return false;
-        }
-        return true;
-      }),
-    );
-    if (!ok) {
-      setRemoteCreation(null);
-      return false;
-    }
-    remoteLog.event.ok(`ready on ${remote.label}`);
-    yield* io.promise("refresh remote worktrees", refreshRemoteWorktrees).pipe(
-      Effect.tap((refreshed) =>
-        Effect.sync(() => {
-          // The CLI input may be an issue id or title rather than the
-          // final slug, so transfer focus from the optimistic
-          // placeholder to the newly discovered authoritative row by
-          // fleet identity, not input spelling.
-          const created = discoveredRemoteCreation(creation, refreshed);
-          if (created) setSel(`remote:${remoteEntryKey(created)}`);
-          toast(`ready on ${remote.label}`, theme.ok, 1800);
-        }),
-      ),
-      Effect.ensuring(Effect.sync(() => setRemoteCreation(null))),
-    );
-    return true;
+    return yield* Effect.gen(function* () {
+      const code = yield* runRemoteWt(remote, args, {
+        onLine: (line) => remoteLog.event.dim(line),
+      }).pipe(
+        Effect.catchTag("RemoteRunError", (error) =>
+          Effect.sync(() => {
+            remoteLog.event.err(error.message);
+            toast(`remote create failed: ${error.message}`, theme.err, 3500);
+            return null;
+          }),
+        ),
+      );
+      if (code === null) return false;
+      if (code !== 0) {
+        remoteLog.event.err(`create failed (exit ${code})`);
+        toast(`remote create failed (exit ${code})`, theme.err, 3000);
+        return false;
+      }
+      remoteLog.event.ok(`ready on ${remote.label}`);
+      yield* io.promise("refresh remote worktrees", refreshRemoteWorktrees).pipe(
+        Effect.tap((refreshed) =>
+          Effect.sync(() => {
+            // The CLI input may be an issue id or title rather than the
+            // final slug, so select the newly discovered authoritative row by
+            // fleet identity, not input spelling.
+            const created = discoveredRemoteCreation(creation, refreshed);
+            setRemoteCreation(null);
+            if (created) setSel(`remote:${remoteEntryKey(created)}`);
+            toast(`ready on ${remote.label}`, theme.ok, 1800);
+          }),
+        ),
+      );
+      return true;
+    }).pipe(Effect.ensuring(Effect.sync(() => setRemoteCreation(null))));
   });
 
   function doRemoteNew(raw: string): Promise<boolean> {

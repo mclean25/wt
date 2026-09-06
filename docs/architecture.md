@@ -240,7 +240,12 @@ collector. Controller layout, archive state, GitHub data, and endpoint
 coordinates are joined locally and never enter the worker snapshot.
 
 `Ctrl+N` forwards `wt new` and refreshes the remote-row query when creation
-finishes. F10/F11/F12 on a remote row use the hidden `_session` entrypoint;
+finishes. Creation keeps the current selection and adds no placeholder.
+New inventory identities on the creating host are withheld while the command
+runs, including results from background polls; existing rows and other hosts
+stay visible. Completion refreshes inventory and selects the discovered row,
+and a finalizer releases the visibility hold on success or failure.
+F10/F11/F12 on a remote row use the hidden `_session` entrypoint;
 Cachy runs that one worktree's tmux session while `renderer-handoff.ts`
 suspends the Mac renderer. Detaching returns to the same Mac Inbox.
 `a` writes the location-aware key to the Mac's archive ledger; it is a view of

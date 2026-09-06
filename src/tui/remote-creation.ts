@@ -1,7 +1,7 @@
 import type { RemoteConfig } from "../core/config.ts";
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
 
-/** Transient row shown until remote `wt ls` discovers the real checkout. */
+/** In-flight create: hold new inventory rows back until the command completes. */
 export type RemoteCreation = {
   remote: RemoteConfig;
   hostKey: string;
@@ -33,8 +33,7 @@ export function remoteEntryLabel(entry: RemoteListEntry): string {
  *
  * The input is not an identity: an issue id can receive a generated suffix,
  * and a title is slugified remotely. Reconcile against the host's inventory
- * delta instead, so the usable row replaces the placeholder as soon as
- * `wt ls` can see it rather than when the whole install command exits.
+ * delta after the create command finishes.
  */
 export function discoveredRemoteCreation(
   creation: RemoteCreation,
@@ -45,5 +44,17 @@ export function discoveredRemoteCreation(
     (row) =>
       row.hostKey === creation.hostKey &&
       !previous.has(remoteEntryKey(row)),
+  );
+}
+
+/** Background inventory may see the checkout before installation finishes. */
+export function visibleRemoteWorktrees(
+  creation: RemoteCreation | null,
+  rows: readonly RemoteWorktreeSummary[],
+): readonly RemoteWorktreeSummary[] {
+  if (!creation) return rows;
+  const previous = new Set(creation.previousKeys);
+  return rows.filter((row) =>
+    row.hostKey !== creation.hostKey || previous.has(remoteEntryKey(row)),
   );
 }

@@ -80,7 +80,7 @@ describe("buildActiveItems", () => {
     expect(item.members.map((member) => member.kind)).toEqual(["wt", "remote"]);
   });
 
-  test("files transient remote creation into Inbox", () => {
+  test("does not add a placeholder or an empty section during creation", () => {
     const [item] = buildActiveItems({
       rows: [],
       foldedSections: new Set([GROUP_INBOX]),
@@ -96,10 +96,10 @@ describe("buildActiveItems", () => {
       archivedKeys: new Set(),
     });
 
-    expect(item).toMatchObject({ kind: "section", sectionKey: GROUP_INBOX });
+    expect(item).toBeUndefined();
   });
 
-  test("replaces a transient creation when a differently-slugged row appears", () => {
+  test("holds a differently-slugged inventory row until creation completes", () => {
     const items = buildActiveItems({
       rows: [],
       foldedSections: new Set(),
@@ -119,10 +119,10 @@ describe("buildActiveItems", () => {
       item.kind === "remote" && "slug" in item.entry
         ? item.entry.slug
         : "placeholder",
-    )).toEqual(["existing", "coz-123-calm-otter"]);
+    )).toEqual(["existing"]);
   });
 
-  test("keeps a transient creation while inventory contains only prior rows", () => {
+  test("keeps only existing rows while creation is pending", () => {
     const items = buildActiveItems({
       rows: [],
       foldedSections: new Set(),
@@ -138,10 +138,34 @@ describe("buildActiveItems", () => {
       archivedKeys: new Set(),
     });
 
-    expect(items).toHaveLength(2);
-    expect(items[1]).toMatchObject({
-      kind: "remote",
-      entry: { input: "COZ-123" },
-    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "remote", entry: { slug: "existing" } });
   });
+});
+
+test("completed creation exposes a real selectable session target", () => {
+  const [item] = buildActiveItems({
+    rows: [], foldedSections: new Set(), remoteCreation: null,
+    remoteWorktrees: [remote("coz-123-calm-otter", null)], archivedKeys: new Set(),
+  });
+  expect(item?.kind).toBe("remote");
+  if (item?.kind !== "remote") throw new Error("expected remote row");
+  expect(item.model?.source.kind).toBe("remote");
+  expect(item.model?.slug).toBe("coz-123-calm-otter");
+  expect(item.target).not.toBeNull();
+});
+
+test("creation does not hide inventory from another host", () => {
+  const other = { ...remote("elsewhere", null), hostKey: "other-host" };
+  const items = buildActiveItems({
+    rows: [], foldedSections: new Set(), archivedKeys: new Set(),
+    remoteCreation: {
+      remote: { host: "dellserver", label: "Dell server", wtPath: "wt" },
+      hostKey: "dellserver", hostLabel: "Dell server", input: "new-task",
+      previousKeys: [], status: "creating",
+    },
+    remoteWorktrees: [remote("new-task", null), other],
+  });
+  expect(items).toHaveLength(1);
+  expect(items[0]).toMatchObject({ kind: "remote", entry: { hostKey: "other-host" } });
 });
