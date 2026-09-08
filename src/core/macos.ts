@@ -5,7 +5,6 @@
 import { Data, Effect } from "effect";
 
 import { hideFrontmostTerminal } from "./zed.ts";
-import { config } from "./config.ts";
 import { causeMessage } from "./errors.ts";
 import { run } from "./proc.ts";
 
@@ -18,26 +17,8 @@ export class MacosCommandError extends Data.TaggedError("MacosCommandError")<{
   }
 }
 
-/**
- * Build the macOS launcher command for a URL. A configured Chrome profile
- * applies only to web URLs: custom schemes such as `linear://` still need
- * Launch Services to route them to their owning application.
- */
-export function openUrlCommand(
-  url: string,
-  chromeProfile = config.browser.chromeProfile,
-): string[] {
-  if (chromeProfile && /^https?:\/\//i.test(url)) {
-    return [
-      "open",
-      "-a",
-      "Google Chrome",
-      "--args",
-      `--profile-directory=${chromeProfile}`,
-      "--ignore-profile-directory-if-not-exists",
-      url,
-    ];
-  }
+/** Let macOS route links to the default browser or custom-scheme handler. */
+export function openUrlCommand(url: string): string[] {
   return ["open", url];
 }
 

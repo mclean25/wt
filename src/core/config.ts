@@ -285,8 +285,8 @@ export type PullRequestTarget = "github" | "linear";
 
 export type BrowserConfig = {
   /**
-   * Chrome's on-disk profile directory (for example `Default` or
-   * `Profile 3`). Null preserves the macOS default-browser behavior.
+   * Legacy setting, accepted for config compatibility but ignored.
+   * Links always use macOS's default browser and its active profile.
    */
   chromeProfile: string | null;
 };

@@ -498,21 +498,12 @@ codex = "gpt-5.6-luna"
 
 Summaries are content-addressed by a hash of the diff, so identical diffs (across rebases, amends, branch renames) reuse the cached result.
 
-## `[browser]` — optional Chrome profile routing
+## `[browser]` — legacy settings
 
-By default, wt opens links through macOS and lets the default browser choose
-the active profile. A repository can instead route every HTTP(S) link wt opens
-(PRs, issues, stages, and dev servers) to a specific Google Chrome profile:
-
-```toml
-[browser]
-chrome_profile = "Profile 3"
-```
-
-`chrome_profile` is Chrome's on-disk directory name, not the profile's display
-name. Find it at `chrome://version` under **Profile Path** (`Default`,
-`Profile 1`, and so on). Custom URL schemes such as `linear://` continue
-through macOS Launch Services.
+wt opens links directly through macOS (`open <url>`), letting the default
+browser choose its active profile. Custom schemes such as `linear://` use
+their registered application. `browser.chrome_profile` is still accepted for
+compatibility with existing configs, but is ignored and can be removed.
 
 ## `[github]`
 
