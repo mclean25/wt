@@ -139,11 +139,17 @@ export const run = Effect.fn("wt agent")(function* (argv: string[]) {
   }
 
   const action = parsed.kind === "start" ? "the start skill" : "the prompt";
+  const queued = result.queueState === "queued";
+  const accepted = result.queueState === "queued-or-started";
   console.log(
     green(
-      result.coldStarted
-        ? `✓ started ${wt.slug}'s ${harness.label} session and submitted ${action}`
-        : `✓ submitted ${action} to ${wt.slug}'s ${harness.label} session`,
+      queued
+        ? `✓ queued ${action} for ${wt.slug}'s ${harness.label} session`
+        : result.coldStarted
+          ? `✓ started ${wt.slug}'s ${harness.label} session and submitted ${action}`
+          : accepted
+            ? `✓ accepted ${action} for ${wt.slug}'s ${harness.label} session`
+            : `✓ submitted ${action} to ${wt.slug}'s ${harness.label} session`,
     ),
   );
   const why =
@@ -161,7 +167,13 @@ export const run = Effect.fn("wt agent")(function* (argv: string[]) {
     );
   } else {
     console.log(
-      dim(`delivery confirmed in ${wt.slug}'s ${harness.label} conversation`),
+      dim(
+        queued
+          ? `durably queued; ${harness.label} will run it after the current turn or prompt`
+          : accepted
+            ? `durably accepted; it was queued or started before status could be observed`
+            : `delivery confirmed in ${wt.slug}'s ${harness.label} conversation`,
+      ),
     );
   }
   if (

@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { Clock, Duration, Effect } from "effect";
+import { Clock, Duration, Effect, Result } from "effect";
 
 import { getHarness, type HarnessId } from "../harness/index.ts";
 import { withAsyncFileLock } from "../locks.ts";
@@ -195,6 +195,48 @@ export function injectClaudeFallback(opts: {
   return lockedInject({ ...opts, harnessId: "claude" });
 }
 
+/**
+ * Last-resort delivery for Codex versions that do not expose the durable
+ * queue API. The readiness probes run while holding the same lock as the
+ * paste, closing the wt-writer race between "idle" and terminal input.
+ * Codex itself can still change state after the final probe; this is why the
+ * native queue remains the normal transport and this path fails closed.
+ */
+export function injectCodexFallback(
+  opts: {
+    slug: string;
+    cwd: string;
+    managedName?: string | null;
+    text: string;
+  },
+  waitUntilReady: Effect.Effect<unknown, Error>,
+  probeReady: Effect.Effect<{ readonly ready: boolean; readonly reason?: string }, Error>,
+): Effect.Effect<InjectResult> {
+  const target = { ...opts, harnessId: "codex" as const };
+  const name = sessionName(opts.slug, "codex", opts.managedName ?? null);
+  return withAsyncFileLock(
+    `__inject__${name}`,
+    Effect.gen(function* () {
+      const waited = yield* Effect.result(waitUntilReady);
+      if (Result.isFailure(waited)) {
+        return {
+          ok: false as const,
+          reason: waited.failure.message,
+        };
+      }
+      return yield* injectIntoSessionUnlockedEffect({
+        ...target,
+        readyGate: probeReady,
+      });
+    }),
+  ).pipe(
+    Effect.catch((cause) => Effect.succeed({
+      ok: false as const,
+      reason: cause instanceof Error ? cause.message : String(cause),
+    })),
+  );
+}
+
 function lockedInject(opts: {
   slug: string;
   cwd: string;
@@ -228,6 +270,8 @@ const injectIntoSessionUnlockedEffect = Effect.fnUntraced(function* (opts: {
   harnessId: HarnessId;
   managedName?: string | null;
   text: string;
+  /** Final legacy safety check, run after pane settle and immediately before paste. */
+  readyGate?: Effect.Effect<{ readonly ready: boolean; readonly reason?: string }, Error>;
 }) {
     const { slug, cwd, text } = opts;
     const harnessId = opts.harnessId;
@@ -252,6 +296,18 @@ const injectIntoSessionUnlockedEffect = Effect.fnUntraced(function* (opts: {
       yield* waitForPaneReadyEffect(name);
     } else {
       yield* Effect.sleep(Duration.millis(WARM_SETTLE_MS));
+    }
+    if (opts.readyGate) {
+      const final = yield* Effect.result(opts.readyGate);
+      if (Result.isFailure(final)) {
+        return { ok: false as const, reason: final.failure.message };
+      }
+      if (!final.success.ready) {
+        return {
+          ok: false as const,
+          reason: `Codex is not safe for terminal input (${final.success.reason ?? "unknown"})`,
+        };
+      }
     }
     // Stamped before the paste: the transcript entry we're looking for
     // can't predate the keystrokes that produced it.

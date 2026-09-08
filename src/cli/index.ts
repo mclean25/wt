@@ -33,6 +33,7 @@ commands:
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
   agent       send to / start a worktree's configured primary coding agent
   claude      drive a worktree's Claude Code session (send / ls / stop)
+  codex       diagnose Codex's native message queue transport
   dev         start / stop / inspect a worktree's [dev_server]
 
 Run \`wt <command> --help\` for per-command options where available.`;
@@ -106,6 +107,7 @@ const RUNNERS: Record<string, Loader> = {
   issue: () => import("./commands/issue.ts"),
   agent: () => import("./commands/agent.ts"),
   claude: () => import("./commands/claude.ts"),
+  codex: () => import("./commands/codex.ts"),
   dev: () => import("./commands/dev.ts"),
   _destroy: () => import("./commands/_destroy.ts"),
   "_dev-giveup": () => import("./commands/_dev-giveup.ts"),

@@ -84,6 +84,82 @@ describe("computeHarnessSessions single-slot state normalization", () => {
     expect(result.f12Target?.displayName).toBe("primary-id");
   });
 
+  test("an unstamped live Codex slot stays on primary despite a newer secondary rollout", () => {
+    const result = computeHarnessSessions(
+      new Map([
+        [
+          "codex",
+          [
+            codexSession("secondary-id", "waiting", 3_000, "2"),
+            codexSession("primary-id", "working", 1_000, "primary"),
+          ],
+        ],
+      ]),
+      new Set(["demo-codex"]),
+      "demo",
+      "codex",
+      10_000,
+    );
+
+    expect(result.f12Target?.sessionId).toBe("primary-id");
+    expect(result.f12Target?.isLive).toBe(true);
+  });
+
+  test("a tmux UUID stamp identifies an explicitly resumed secondary Codex session", () => {
+    const result = computeHarnessSessions(
+      new Map([
+        [
+          "codex",
+          [
+            codexSession("secondary-id", "working", 1_000, "2"),
+            codexSession("primary-id", "waiting", 3_000, "primary"),
+          ],
+        ],
+      ]),
+      new Set(["demo-codex"]),
+      "demo",
+      "codex",
+      10_000,
+      undefined,
+      { "demo-codex": "secondary-id" },
+    );
+
+    expect(result.f12Target?.sessionId).toBe("secondary-id");
+    expect(result.f12Target?.isLive).toBe(true);
+  });
+
+  test("a stamped historical Codex thread remains the live picker target", () => {
+    const result = computeHarnessSessions(
+      new Map([["codex", [codexSession("recent-id", "waiting", 3_000, "primary")]]]),
+      new Set(["demo-codex"]),
+      "demo",
+      "codex",
+      10_000,
+      undefined,
+      { "demo-codex": "historical-id" },
+    );
+
+    expect(result.f12Target?.sessionId).toBe("historical-id");
+    expect(result.f12Target?.displayName).toBe("(active Codex)");
+    expect(result.f12Target?.isLive).toBe(true);
+    expect(result.sessions.filter((session) => session.isLive)).toHaveLength(1);
+  });
+
+  test("a stamped historical Codex thread does not also synthesize a fresh row", () => {
+    const result = computeHarnessSessions(
+      new Map([["codex", []]]),
+      new Set(["demo-codex"]),
+      "demo",
+      "codex",
+      10_000,
+      undefined,
+      { "demo-codex": "historical-id" },
+    );
+
+    expect(result.sessions.map((session) => session.sessionId)).toEqual(["historical-id"]);
+    expect(result.sessions[0]?.displayName).toBe("(active Codex)");
+  });
+
   test("live selected primary harness wins over a newer live secondary harness", () => {
     const claude = codexSession("claude-id", "waiting", 5_000);
     claude.tmuxSessionName = "demo";

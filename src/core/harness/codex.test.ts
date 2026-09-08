@@ -35,6 +35,9 @@ describe("readCodexTail", () => {
 
     expect(readCodexTail(rollout.path, rollout.mtimeMs, rollout.size)).toEqual({
       tailClosedCleanly: false,
+      lastTaskEventKind: "task_started",
+      pendingInteraction: null,
+      tailParseComplete: true,
       lastEventMs: Date.parse("2026-07-08T12:00:00.000Z"),
     });
   });
@@ -52,6 +55,9 @@ describe("readCodexTail", () => {
 
     expect(readCodexTail(rollout.path, rollout.mtimeMs, rollout.size)).toEqual({
       tailClosedCleanly: true,
+      lastTaskEventKind: "task_complete",
+      pendingInteraction: null,
+      tailParseComplete: true,
       lastEventMs: Date.parse("2026-07-08T12:00:02.000Z"),
     });
   });

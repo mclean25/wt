@@ -123,6 +123,7 @@ export function computeHarnessSessions(
   primary: HarnessId,
   nowMs: number,
   harnessIds?: readonly HarnessId[],
+  harnessSessionIds: Readonly<Record<string, string>> = {},
 ): UseHarnessSessionsResult {
   const all: HarnessSessionEntry[] = [];
   for (const h of VISIBLE_HARNESSES) {
@@ -134,8 +135,9 @@ export function computeHarnessSessions(
     // live tmux name is live" rule marked EVERY discovered session
     // live whenever the slot was alive, which is wrong and made
     // resume-vs-attach indistinguishable in the picker. Resolve it
-    // here: when the slot is alive, the most-recently-active
-    // discovered session represents the slot; all others are dead.
+    // here from the exact UUID stamped on the live tmux session. Old and
+    // brand-new slots have no stamp, so Codex falls back to its stable
+    // primary mapping while OpenCode retains its legacy recency fallback.
     // When the slot is alive but no discovered session points at it
     // yet (fresh codex/opencode before the first prompt — the only
     // moment when rollout/DB write hasn't happened), synthesize a
@@ -149,8 +151,18 @@ export function computeHarnessSessions(
       ? getHarness(h.id).tmuxSessionName(slug, null)
       : null;
     const slotAlive = slotTmuxName !== null && tmuxNames.has(slotTmuxName);
-    const liveDiscoveredId =
-      isSingleSlot && slotAlive ? mostRecentSessionId(raw) : null;
+    const stampedSessionId = slotTmuxName === null
+      ? null
+      : harnessSessionIds[slotTmuxName] ?? null;
+    const liveDiscoveredId = isSingleSlot && slotAlive
+      ? stampedSessionId !== null
+        ? raw.some((session) => session.sessionId === stampedSessionId)
+          ? stampedSessionId
+          : null
+        : h.id === "codex"
+            ? primarySingleSlotSession(raw)?.sessionId ?? null
+            : mostRecentSessionId(raw)
+      : null;
     let annotated: HarnessSessionEntry[] = raw.map((s) => {
       const isLive = isSingleSlot
         ? s.sessionId === liveDiscoveredId
@@ -189,7 +201,40 @@ export function computeHarnessSessions(
       }
       return { ...s, isLive, harnessId: h.id, extras };
     });
-    if (isSingleSlot && slotAlive && liveDiscoveredId === null) {
+    if (
+      isSingleSlot &&
+      slotAlive &&
+      stampedSessionId !== null &&
+      !raw.some((session) => session.sessionId === stampedSessionId)
+    ) {
+      // A resumed historical thread may sit outside the harness discovery
+      // window. The live tmux stamp is stronger evidence than rollout age;
+      // keep that exact conversation attachable instead of relabelling a
+      // recent inactive rollout as live.
+      annotated = [
+        {
+          displayName: `(active ${h.label})`,
+          sessionId: stampedSessionId,
+          tmuxSessionName: slotTmuxName!,
+          lastActiveMs: nowMs,
+          isLive: true,
+          harnessId: h.id,
+          extras: {
+            managedName: null,
+            derivedState: "unknown",
+            queued: 0,
+            tailEndedAt: null,
+          },
+        },
+        ...annotated,
+      ];
+    }
+    if (
+      isSingleSlot &&
+      slotAlive &&
+      stampedSessionId === null &&
+      liveDiscoveredId === null
+    ) {
       // Slot is alive but nothing on disk points at it yet — codex
       // and opencode don't persist a rollout/DB row until the first
       // user prompt, so a freshly spawned session is invisible to
@@ -279,8 +324,10 @@ export function useHarnessSessions(
         slug,
         primary,
         Date.now(),
+        undefined,
+        tmux.data?.harnessSessionIds ?? {},
       ),
-    [rawByHarness, tmux.data?.all, slug, primary],
+    [rawByHarness, tmux.data?.all, tmux.data?.harnessSessionIds, slug, primary],
   );
 }
 
@@ -391,6 +438,7 @@ export function useActiveSessionsBySlug(
         // may be alive (e.g. an idle `wt-codex` next to the claude `wt`
         // session) and pins f12Target to a synthetic placeholder.
         harnessIds,
+        tmux.data?.harnessSessionIds ?? {},
       );
       if (f12Target?.isLive) {
         map.set(w.slug, {

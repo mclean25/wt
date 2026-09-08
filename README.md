@@ -29,7 +29,7 @@ The design principle behind all of it: **the human does only the work only a hum
 - Issue tracker — no CLI or token; the issue id is parsed from branch slugs and linked via a URL template (`[issue_tracker]`, with a Linear preset), and PRs can open in Linear Reviews.
 - Dev server — one supervised `npm run dev`-style process per worktree (`[dev_server]`): wt-owned ports, crash restarts with give-up, tmux-backed so it survives wt restarts.
 - Review bot — the CodeRabbit badge/automation track, retargetable at any PR-review bot (`[review_bot]`), including checklist-style GitHub Actions reviewers.
-- Coding agents — live sessions are *detected* by reading each agent's local files, no CLI needed; *spawning* from the TUI needs that agent's CLI on PATH (`claude`, `codex`, `opencode`). Claude is the most complete integration; Codex and OpenCode are partial today.
+- Coding agents — live sessions are *detected* from each agent's local state; *spawning* from the TUI needs that agent's CLI on PATH (`claude`, `codex`, `opencode`). Claude and Codex support native queued inter-session delivery; OpenCode uses terminal delivery.
 - A coding-agent CLI (`claude`, `codex`, or `opencode`) — live sessions and, when `[naming]` is configured, generated worktree titles and descriptions.
 - [`rift`](https://github.com/anomalyco/rift) — an opt-in copy-on-write worktree backend (`[backend] kind = "rift"`): near-instant checkouts that bring `node_modules` across for free. See [docs/backends.md](docs/backends.md).
 

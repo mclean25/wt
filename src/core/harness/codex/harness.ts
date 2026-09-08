@@ -32,6 +32,8 @@ import {
 } from "./names.ts";
 import { trustCodexWorkspace } from "./trust.ts";
 import { discoverCodexSessionsInWorker } from "./discovery.ts";
+import { readCodexNativeSnapshots } from "./app-server.ts";
+import { enrichCodexSessionsWithNativeStatus } from "./native-status.ts";
 import { CODEX_MAIN_PROMPT, CODEX_MANAGER_PROMPT, codexRolloutBelongsToSlot } from "./slot.ts";
 
 import type { Harness, HarnessSession, HarnessSpawnArgs } from "../types.ts";
@@ -77,8 +79,24 @@ export const codexHarness: Harness = {
     return `${slug}${CODEX_TMUX_INFIX}`;
   },
 
-  discoverSessions({ slug, wtPath, signal }) {
-    return discoverCodexSessionsInWorker(slug, wtPath, signal);
+  async discoverSessions({ slug, wtPath, signal }) {
+    const sessions = await discoverCodexSessionsInWorker(slug, wtPath, signal);
+    if (sessions.length === 0) return sessions;
+    try {
+      const snapshots = await Effect.runPromise(
+        readCodexNativeSnapshots(sessions.map((session) => session.sessionId)),
+        signal ? { signal } : undefined,
+      );
+      return enrichCodexSessionsWithNativeStatus(sessions, snapshots);
+    } catch (cause) {
+      // TanStack cancellation must remain cancellation. Swallowing the abort
+      // as an optional-daemon failure lets superseded discovery populate the
+      // cache after its observer has moved on.
+      if (signal?.aborted) throw cause;
+      // The daemon is optional and user-managed. Rollout state remains the
+      // honest fallback when its local socket is absent or incompatible.
+      return sessions;
+    }
   },
 
   buildArgs(args: HarnessSpawnArgs) {
@@ -145,6 +163,11 @@ export function discoverCodexSessionsSync(
         // finalizes it against the live tmux set (dead cleanly → idle,
         // dead mid-turn → abandoned, live slot keeps working/waiting).
         derivedState: tail ? deriveCodexState(tail) : null,
+        waitingFor: tail?.pendingInteraction === "approval"
+          ? "approval prompt"
+          : tail?.pendingInteraction === "question"
+            ? "question prompt"
+            : null,
         queued: 0,
         // Stash last-event time for displays that care about message age.
         tailEndedAt: tail?.lastEventMs ?? null,
@@ -161,6 +184,57 @@ type RolloutMeta = {
   mtimeMs: number;
   size: number;
 };
+
+export type CodexRolloutFile = Pick<RolloutMeta, "path" | "mtimeMs" | "size">;
+
+/**
+ * Resolve one mapped Codex thread to its rollout. Unlike picker discovery,
+ * this deliberately walks every date partition: a resumed thread keeps
+ * appending to the rollout in its original creation-day directory.
+ *
+ * Identity comes from session_meta rather than the filename, and the normal
+ * main/manager ownership filter still applies before a rollout can be used.
+ */
+export function findCodexRolloutForSession(
+  cwd: string,
+  slug: string,
+  sessionId: string,
+  sessionsDir = CODEX_SESSIONS_DIR,
+): CodexRolloutFile | null {
+  if (!existsSync(sessionsDir)) return null;
+  let best: CodexRolloutFile | null = null;
+  let years: string[];
+  try { years = readdirSync(sessionsDir); } catch { return null; }
+  for (const year of years) {
+    const yearPath = join(sessionsDir, year);
+    let months: string[];
+    try { months = readdirSync(yearPath); } catch { continue; }
+    for (const month of months) {
+      const monthPath = join(yearPath, month);
+      let days: string[];
+      try { days = readdirSync(monthPath); } catch { continue; }
+      for (const day of days) {
+        const dayPath = join(monthPath, day);
+        let files: string[];
+        try { files = readdirSync(dayPath); } catch { continue; }
+        for (const file of files) {
+          if (!file.startsWith("rollout-") || !file.endsWith(".jsonl")) continue;
+          // UUID is part of Codex's rollout filename. Avoid opening every
+          // historical transcript on each legacy-readiness poll.
+          if (!file.includes(sessionId)) continue;
+          const path = join(dayPath, file);
+          const meta = readRolloutMeta(path);
+          if (!meta || meta.sessionId !== sessionId || meta.cwd !== cwd) continue;
+          if (!codexRolloutBelongsToSlot(path, meta.size, slug)) continue;
+          if (!best || meta.mtimeMs > best.mtimeMs) {
+            best = { path, mtimeMs: meta.mtimeMs, size: meta.size };
+          }
+        }
+      }
+    }
+  }
+  return best;
+}
 
 /**
  * Return the most-recently-modified rollout path for the given cwd, or
@@ -357,6 +431,13 @@ export type CodexTailResult = {
   /** True when the last turn in the tail ended cleanly (task_complete or
    *  turn_aborted). False means an unmatched task_started was found. */
   tailClosedCleanly: boolean;
+  /** The latest lifecycle marker, or null when no positive lifecycle
+   * evidence was readable. Terminal injection treats null as unsafe. */
+  lastTaskEventKind: ParsedCodexTaskEvent["kind"] | null;
+  /** A native interaction request observed in the active turn. */
+  pendingInteraction: "question" | "approval" | null;
+  /** False when the sampled tail contained an incomplete/malformed JSON line. */
+  tailParseComplete: boolean;
   /** Mtime of the file at read time, for freshness comparisons. */
   lastEventMs: number;
 };
@@ -391,25 +472,30 @@ export function readCodexTail(
     return cached.result;
   }
 
-  let latest: ParsedCodexTaskEvent | null = null;
+  let parsed: ParsedCodexTail = { latest: null, pendingInteraction: null, malformed: false };
   let windowBytes = Math.min(TAIL_BYTES, size);
   while (true) {
     try {
-      latest = latestTaskEventInWindow(path, size, windowBytes);
+      parsed = parseCodexTailWindow(path, size, windowBytes);
     } catch {
       return null;
     }
-    if (latest !== null || windowBytes >= size || windowBytes >= MAX_TAIL_SCAN_BYTES) {
+    if (parsed.latest !== null || windowBytes >= size || windowBytes >= MAX_TAIL_SCAN_BYTES) {
       break;
     }
     windowBytes = Math.min(size, windowBytes * 4, MAX_TAIL_SCAN_BYTES);
   }
 
   const tailClosedCleanly =
-    latest === null || latest.kind === "task_complete" || latest.kind === "turn_aborted";
+    parsed.latest === null ||
+    parsed.latest.kind === "task_complete" ||
+    parsed.latest.kind === "turn_aborted";
   const result: CodexTailResult = {
     tailClosedCleanly,
-    lastEventMs: latest?.ts ?? mtimeMs,
+    lastTaskEventKind: parsed.latest?.kind ?? null,
+    pendingInteraction: parsed.pendingInteraction,
+    tailParseComplete: !parsed.malformed,
+    lastEventMs: parsed.latest?.ts ?? mtimeMs,
   };
   setCached(path, mtimeMs, size, result);
   return result;
@@ -420,17 +506,25 @@ type ParsedCodexTaskEvent = {
   ts: number | null;
 };
 
-function latestTaskEventInWindow(
+type ParsedCodexTail = {
+  latest: ParsedCodexTaskEvent | null;
+  pendingInteraction: "question" | "approval" | null;
+  malformed: boolean;
+};
+
+function parseCodexTailWindow(
   path: string,
   size: number,
   windowBytes: number,
-): ParsedCodexTaskEvent | null {
+): ParsedCodexTail {
   const start = Math.max(0, size - windowBytes);
   const text = readFileSlice(path, start, size - start);
   // If we didn't start at byte 0, the first line is likely partial.
   const lines = text.split("\n");
   const startIdx = start > 0 ? 1 : 0;
   let latest: ParsedCodexTaskEvent | null = null;
+  let pendingInteraction: ParsedCodexTail["pendingInteraction"] = null;
+  let malformed = false;
   for (let i = startIdx; i < lines.length; i++) {
     const line = lines[i];
     if (!line) continue;
@@ -438,12 +532,30 @@ function latestTaskEventInWindow(
     try {
       obj = JSON.parse(line) as Record<string, unknown>;
     } catch {
+      malformed = true;
       continue;
     }
-    if (obj.type !== "event_msg") continue;
     const payload = obj.payload;
     if (typeof payload !== "object" || payload === null) continue;
     const p = payload as Record<string, unknown>;
+    if (
+      obj.type === "response_item" &&
+      p.type === "function_call" &&
+      p.name === "request_user_input"
+    ) {
+      pendingInteraction = "question";
+      continue;
+    }
+    if (
+      obj.type === "event_msg" &&
+      typeof p.type === "string" &&
+      p.type.includes("approval") &&
+      p.type.includes("request")
+    ) {
+      pendingInteraction = "approval";
+      continue;
+    }
+    if (obj.type !== "event_msg") continue;
     const ptype = p.type;
     if (
       ptype !== "task_started" &&
@@ -457,8 +569,11 @@ function latestTaskEventInWindow(
       kind: ptype,
       ts: typeof ts === "string" ? Date.parse(ts) : null,
     };
+    // A new or closed lifecycle marker supersedes interaction requests from
+    // the previous turn. Requests following task_started set this again.
+    pendingInteraction = null;
   }
-  return latest;
+  return { latest, pendingInteraction, malformed };
 }
 
 function setCached(
@@ -485,6 +600,7 @@ function setCached(
  * isLive-baked path produced).
  */
 export function deriveCodexState(tail: CodexTailResult): DerivedState {
+  if (tail.pendingInteraction !== null) return "asking";
   return tail.tailClosedCleanly ? "waiting" : "working";
 }
 

@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Effect, Result } from "effect";
 
 import { config } from "../../core/config.ts";
 import { operationErrors, type OperationError } from "../../core/errors.ts";
@@ -9,6 +9,7 @@ import { branchIsMerged, gitQuiet } from "../../core/git.ts";
 import { fetchPrs } from "../../core/github.ts";
 import { claudeTmuxName } from "../../core/harness/claude/harness.ts";
 import { claudeInjectSelftest, shimDir, staleShims } from "../../core/harness/claude/inject.ts";
+import { codexAppServerSocketPath, readCodexAppServerInfo } from "../../core/harness/codex/app-server.ts";
 import { humanAge, lockAge, lockLabel, lockStatus } from "../../core/locks.ts";
 import { run as runProcess, type ProcError } from "../../core/proc.ts";
 import { buildReports, detectTargets, readSkillsMemory, reportIsActionable } from "../../core/skills.ts";
@@ -463,6 +464,31 @@ const checkMessageTransport = Effect.fnUntraced(function* () {
   );
 });
 
+const checkCodexMessageTransport = Effect.fnUntraced(function* () {
+  const entries = (yield* listSessions()).codex;
+  if (entries.size === 0) return mkCheck("codex messaging", "ok", "no live codex sessions");
+  const socketPath = codexAppServerSocketPath();
+  if (existsSync(socketPath)) {
+    const native = yield* Effect.result(readCodexAppServerInfo());
+    if (Result.isSuccess(native)) {
+      return mkCheck("codex messaging", "ok", `native queue connected (${native.success.userAgent})`);
+    }
+  }
+  const queue = yield* Effect.result(runProcess(["codex", "queue", "--help"], { timeoutMs: 5_000 }));
+  if (Result.isSuccess(queue) && queue.success.exitCode === 0) {
+    return mkCheck(
+      "codex messaging",
+      "info",
+      "app-server daemon unavailable; durable `codex queue` fallback is active (`wt codex selftest`)",
+    );
+  }
+  return mkCheck(
+    "codex messaging",
+    "err",
+    "neither the native app-server queue nor `codex queue` is available; run `wt codex selftest`",
+  );
+});
+
 /**
  * Is `wt` reachable as a command, from a SCRIPT?
  *
@@ -583,11 +609,12 @@ function renderBanner(c: Check): void {
 }
 
 const reportOne = Effect.fnUntraced(function* (wt: Worktree, jsonOut: boolean) {
-  const [mainBanner, skillsBanner, pathBanner, msgBanner, checks] = yield* Effect.all([
+  const [mainBanner, skillsBanner, pathBanner, msgBanner, codexMsgBanner, checks] = yield* Effect.all([
     jsonOut ? Effect.succeed(null) : checkMainClone(),
     jsonOut ? Effect.succeed(null) : checkSkillsFreshness(),
     jsonOut ? Effect.succeed(null) : checkWtOnPath(),
     jsonOut ? Effect.succeed(null) : checkMessageTransport(),
+    jsonOut ? Effect.succeed(null) : checkCodexMessageTransport(),
     runAllChecks(wt, true),
   ], { concurrency: "unbounded" });
   if (jsonOut) {
@@ -598,6 +625,7 @@ const reportOne = Effect.fnUntraced(function* (wt: Worktree, jsonOut: boolean) {
   if (skillsBanner) renderBanner(skillsBanner);
   if (pathBanner) renderBanner(pathBanner);
   if (msgBanner) renderBanner(msgBanner);
+  if (codexMsgBanner) renderBanner(codexMsgBanner);
   console.log(`${bold("doctor")} · ${cyan(wt.slug)} ${dim(wt.branch)}`);
   for (const c of checks) {
     console.log(`  ${MARKERS[c.status]}  ${bold(c.name.padEnd(14))} ${c.message}`);
@@ -615,12 +643,13 @@ const reportOne = Effect.fnUntraced(function* (wt: Worktree, jsonOut: boolean) {
 
 const reportSummary = Effect.fnUntraced(function* (wts: Worktree[], jsonOut: boolean) {
   const skipPrs = jsonOut;
-  const [prs, mainCheck, skillsCheck, pathCheck, msgCheck, allChecks] = yield* Effect.all([
+  const [prs, mainCheck, skillsCheck, pathCheck, msgCheck, codexMsgCheck, allChecks] = yield* Effect.all([
     skipPrs ? Effect.succeed(new Map()) : fetchPrs(),
     jsonOut ? Effect.succeed(null) : checkMainClone(),
     jsonOut ? Effect.succeed(null) : checkSkillsFreshness(),
     jsonOut ? Effect.succeed(null) : checkWtOnPath(),
     jsonOut ? Effect.succeed(null) : checkMessageTransport(),
+    jsonOut ? Effect.succeed(null) : checkCodexMessageTransport(),
     Effect.all(wts.map((w) => runAllChecks(w, false)), { concurrency: "unbounded" }),
   ], { concurrency: "unbounded" });
   if (jsonOut) {
@@ -632,6 +661,7 @@ const reportSummary = Effect.fnUntraced(function* (wts: Worktree[], jsonOut: boo
   if (skillsCheck) renderBanner(skillsCheck);
   if (pathCheck) renderBanner(pathCheck);
   if (msgCheck) renderBanner(msgCheck);
+  if (codexMsgCheck) renderBanner(codexMsgCheck);
 
   type Row = { wt: Worktree; checks: Check[] };
   const rows: Row[] = wts.map((wt, i) => ({ wt, checks: allChecks[i]! }));

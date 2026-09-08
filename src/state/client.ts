@@ -120,7 +120,10 @@ export const CACHE_DB = config.paths.cacheDb;
 // v31: `TmuxSessionsData.slugsByHarness` gained the required `opencode`
 // member. A restored v30 entry lacks it, and consumers enumerating harnesses
 // can otherwise fail during the first render before the live poll replaces it.
-const CACHE_BUSTER = "v31";
+// v32: `TmuxSessionsData` gained `harnessSessionIds`, the exact resumed UUID
+// stamped on a live single-slot tmux session. Restoring v31 would briefly
+// revive the file-recency guess this field replaces.
+const CACHE_BUSTER = "v32";
 const STORAGE_PREFIX = "wt";
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

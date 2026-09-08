@@ -5,6 +5,7 @@ import {
   closeHarnessUsesPaneInput,
   orphanedSessions,
 } from "./admin.ts";
+import { parseSessionHarnessIds, tmuxServerDefinitelyAbsent } from "./process.ts";
 
 describe("closeHarnessUsesPaneInput", () => {
   test("hard-kills Claude without typing into its pane", () => {
@@ -55,4 +56,25 @@ describe("orphanedSessions", () => {
     );
     expect(orphans).toEqual(["eng-9999-gone", "eng-9999-gone-shell"]);
   });
+});
+
+test("tmux harness UUID metadata preserves unstamped sessions", () => {
+  const parsed = parseSessionHarnessIds([
+    "demo-codex\tthread-2",
+    "demo-shell\t",
+    "legacy-session",
+  ].join("\n"));
+
+  expect(parsed.all).toEqual(new Set(["demo-codex", "demo-shell", "legacy-session"]));
+  expect(parsed.harnessSessionIds).toEqual(new Map([["demo-codex", "thread-2"]]));
+});
+
+test("only a definitely absent tmux server is an honest empty inventory", () => {
+  expect(tmuxServerDefinitelyAbsent("no server running on /tmp/tmux/wt")).toBe(true);
+  expect(tmuxServerDefinitelyAbsent(
+    "error connecting to /tmp/tmux/wt (No such file or directory)",
+  )).toBe(true);
+  expect(tmuxServerDefinitelyAbsent(
+    "error connecting to /tmp/tmux/wt (Permission denied)",
+  )).toBe(false);
 });

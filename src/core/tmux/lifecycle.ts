@@ -11,7 +11,7 @@ import { buildInnerArgs, ensureHarnessTrusted, sessionsDir, tmuxClientCwd } from
 import { ensureConfig } from "./config.ts";
 import { prepareInspectorSocket, wrapInnerArgs } from "./inner-process.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
-import { listAllSessionsRaw } from "./process.ts";
+import { listAllSessionsRaw, runTmux } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
@@ -88,6 +88,15 @@ export const startHarnessSessionDetached = Effect.fn("startHarnessSessionDetache
     managedNameNorm: managedName,
     resumeSessionId,
   });
+  const stampResumeId = resumeSessionId === null
+    ? Effect.void
+    : runTmux([
+        "set-option",
+        "-t",
+        name,
+        "@wt-harness-session-id",
+        resumeSessionId,
+      ]).pipe(Effect.asVoid);
   // Before the spawn, so a leftover socket from a dead session of the
   // same name can't cost this one its inspector (see the helper).
   yield* prepareInspectorSocket(harnessId, name);
@@ -159,6 +168,7 @@ export const startHarnessSessionDetached = Effect.fn("startHarnessSessionDetache
   if (code !== 0) {
     const nowExists = (yield* listAllSessionsRaw()).has(name);
     if (nowExists) {
+      yield* stampResumeId;
       log.warn("detached harness start adopted an existing session", {
         slug,
         harnessId,
@@ -170,5 +180,6 @@ export const startHarnessSessionDetached = Effect.fn("startHarnessSessionDetache
     log.warn("detached harness start failed", { slug, harnessId, code, reason });
     return { ok: false, reason };
   }
+  yield* stampResumeId;
   return { ok: true };
 });

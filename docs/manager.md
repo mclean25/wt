@@ -79,11 +79,12 @@ Everything is ordinary CLI surface, so any harness can drive it:
 
 ### wt owns session addressing and delivery
 
-Callers address worktrees through `wt agent send` and Claude-only repo slots
-through `wt claude send`, never through a harness-private peer name, socket
-path, or tmux pane. wt maps the canonical cwd and managed name to a stable
-conversation identity, discovers a live process, and cold-starts it when
-absent. Tmux remains the process and interactive UI host.
+Callers address worktrees through `wt agent send`, the manager through
+`wt manager send`, and Claude-only compatibility slots through `wt claude
+send`, never through a harness-private peer name, socket path, or tmux pane.
+wt maps the canonical cwd and managed name to a stable conversation identity,
+discovers a live process, and cold-starts it when absent. Tmux remains the
+process and interactive UI host.
 
 **A cold start that finds a stuck session recycles it rather than failing.** A tmux session can exist with no live Claude process in it (a harness that never came up). tmux refuses a duplicate name, so the start adopts that session, creates nothing, and waits out the registration timeout — and so does every retry, which is why the failure used to be sticky and only `wt claude stop <slug>` cleared it. Now an *adopted* session that still hasn't registered after the full timeout is killed and recreated once, since by then no conversation can be at stake and the concurrent-creator race the adoption path exists for has already lost its whole window. A session this call genuinely created is not recycled: that is the harness failing to start, and recreating it reproduces the failure. Either way the error quotes the pane, which is where a refusing harness explains itself and the only place that says so — the wrapper's `.err` file is empty in every observed instance, and `wt logs` is about destroy logs.
 
@@ -91,7 +92,25 @@ Messages are also **signed**: a send from inside a wt harness session is prefixe
 
 ## How a message reaches a session
 
-wt submits the message **at the target session's own prompt**, in its own process. Every Claude session wt starts is launched under `BUN_INSPECT=ws+unix://<cacheRoot>/insp/<tmux name>.sock`, which exposes bun's inspector on a private 0700 socket; delivery connects there, walks the live Ink/React tree to the prompt component, and calls the same `onSubmit` a keypress would.
+wt uses each harness's native input boundary and keeps tmux as the visible,
+surviving UI host.
+
+For Codex, wt wakes the exact tmux slot and queues by the authoritative thread
+UUID. With the app-server daemon online it opens a short-lived local Unix
+WebSocket, adds the message to Codex's durable FIFO, explicitly starts it when
+idle, and disconnects. It never resumes or subscribes to the thread, so the TUI
+remains the only owner of questions and approvals. Busy and blocked turns keep
+the prompt queued. If the daemon is offline, `codex queue` writes the same
+host-local queue; a remote send runs on the remote host over SSH rather than
+forwarding a socket. An uncertain add is reconciled by its client id and is
+never blindly retried. `wt codex selftest` checks this surface without sending.
+
+For Claude, wt submits the message **at the target session's own prompt**, in
+its own process. Every Claude session wt starts is launched under
+`BUN_INSPECT=ws+unix://<cacheRoot>/insp/<tmux name>.sock`, which exposes bun's
+inspector on a private 0700 socket; delivery connects there, walks the live
+Ink/React tree to the prompt component, and calls the same `onSubmit` a
+keypress would.
 
 That gets four things at once:
 

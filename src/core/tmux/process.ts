@@ -7,6 +7,11 @@ import { TMUX_SOCKET } from "./naming.ts";
 
 const log = createLogger("[tmux]");
 
+export function tmuxServerDefinitelyAbsent(stderr: string): boolean {
+  return /no server running/i.test(stderr) ||
+    /error connecting.*(?:No such file or directory|ENOENT)/i.test(stderr);
+}
+
 export function killByName(name: string): Effect.Effect<void> {
   return run(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", `=${name}`]).pipe(
     Effect.orElseSucceed(() => ({ stdout: "", stderr: "", exitCode: 1, timedOut: false })),
@@ -38,6 +43,58 @@ export const listAllSessionsRaw = (): Effect.Effect<Set<string>> =>
   probeSessionNames().pipe(Effect.map((names) => names ?? new Set()));
 
 /**
+ * Live tmux sessions plus the exact opaque harness UUID stamped when wt
+ * resumed one. The stamp lives on the tmux session itself, so it disappears
+ * automatically with the process and cannot drift into a later slot owner.
+ */
+export function listSessionsWithHarnessIds(): Effect.Effect<{
+  readonly known: boolean;
+  readonly all: Set<string>;
+  readonly harnessSessionIds: Map<string, string>;
+}> {
+  return run([
+    "tmux",
+    "-L",
+    TMUX_SOCKET,
+    "list-sessions",
+    "-F",
+    "#{session_name}\t#{@wt-harness-session-id}",
+  ]).pipe(
+    Effect.orElseSucceed(() => ({ stdout: "", stderr: "", exitCode: 1, timedOut: false })),
+    Effect.map((result) => {
+      if (result.exitCode !== 0) {
+        const noServer = tmuxServerDefinitelyAbsent(result.stderr);
+        if (!noServer) {
+          log.warn("tmux metadata list failed; reporting no sessions", {
+            code: result.exitCode,
+            stderr: result.stderr.trim() || null,
+          });
+        }
+        return { ...parseSessionHarnessIds(""), known: noServer };
+      }
+      return { ...parseSessionHarnessIds(result.stdout), known: true };
+    }),
+  );
+}
+
+export function parseSessionHarnessIds(output: string): {
+  readonly all: Set<string>;
+  readonly harnessSessionIds: Map<string, string>;
+} {
+  const all = new Set<string>();
+  const harnessSessionIds = new Map<string, string>();
+  for (const line of output.split("\n")) {
+    const separator = line.indexOf("\t");
+    const name = (separator < 0 ? line : line.slice(0, separator)).trim();
+    if (!name) continue;
+    all.add(name);
+    const id = separator < 0 ? "" : line.slice(separator + 1).trim();
+    if (id) harnessSessionIds.set(name, id);
+  }
+  return { all, harnessSessionIds };
+}
+
+/**
  * The three-valued form of `listAllSessionsRaw`: `null` means the query
  * FAILED, as distinct from an empty set meaning no sessions exist.
  *
@@ -65,7 +122,7 @@ export function probeSessionNames(): Effect.Effect<Set<string> | null> {
     // legacy `listAllSessionsRaw` still collapses the two because its
     // ~8 callers only paint UI off it, and turning that into an
     // unhandled rejection fleet-wide would be worse.
-    if (!/no server running|error connecting/i.test(r.stderr)) {
+    if (!tmuxServerDefinitelyAbsent(r.stderr)) {
       log.warn("tmux list-sessions failed; reporting no sessions", {
         code: r.exitCode,
         stderr: r.stderr.trim() || null,

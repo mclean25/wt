@@ -116,7 +116,7 @@ Exit codes: `0` armed, `2` usage, `75` **temporary** — a required check has no
 
 ### `wt doctor [<slug>]`
 
-Health report: working tree, sync vs trunk, node_modules, locks, `gh-merge-base` branch config (must match the recorded fork base / trunk, or a bare `gh pr create` targets the repo default branch — see `wt new`), merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, pending agent-skill updates (`wt skills`), and **`wt` not being reachable on `PATH`** — a shell alias satisfies interactive use but doesn't exist inside a script file, so anything that scripts wt (an agent looping over worktrees) dies partway with `wt: command not found` and leaves the fleet half-updated. The check resolves `PATH` itself rather than shelling out, since this process's own shell may carry the alias and answer misleadingly; it also warns when a `wt` on `PATH` resolves to a *different* clone, which is worse than none.
+Health report: working tree, sync vs trunk, node_modules, locks, `gh-merge-base` branch config (must match the recorded fork base / trunk, or a bare `gh pr create` targets the repo default branch — see `wt new`), merged status, PR/CI. One worktree (or the one containing cwd), or all. Also banners machine-level issues: a main clone off its trunk branch, pending agent-skill updates (`wt skills`), Claude/Codex message-transport degradation, and **`wt` not being reachable on `PATH`** — a shell alias satisfies interactive use but doesn't exist inside a script file, so anything that scripts wt (an agent looping over worktrees) dies partway with `wt: command not found` and leaves the fleet half-updated. The check resolves `PATH` itself rather than shelling out, since this process's own shell may carry the alias and answer misleadingly; it also warns when a `wt` on `PATH` resolves to a *different* clone, which is worse than none.
 
 - `--all` / `-a` — force the full summary table.
 - `--json` — machine-readable.
@@ -377,8 +377,23 @@ quietly reading as "nothing is live".
 | `start <slug>` | ensure that session exists and invoke the bundled `start` skill using that harness's native prefix (`/start` for Claude, `$start` for Codex/OpenCode) |
 
 Both commands are fire-and-forget with respect to the receiving agent's work,
-but fail when delivery is known not to have reached the conversation. Use
+but fail when delivery is known not to have reached the conversation or its
+durable harness queue. Codex output distinguishes started, queued, and the
+race-safe queued-or-started receipt. Use
 `wt claude` below only for Claude-specific session inspection and control.
+
+For Codex, `send` wakes the tmux session first and addresses its exact UUID
+through Codex's durable queue. A busy session or one showing an approval or
+question keeps the message queued until it is ready. The direct Unix socket is
+local to the target host; remote sends run this same command over SSH. If the
+user-managed daemon is offline, wt uses `codex queue` against the same local
+store. It never retries an ambiguous queue write.
+
+### `wt codex selftest`
+
+Read-only diagnosis of Codex messaging. Checks the CLI version, the durable
+`codex queue` fallback, and the app-server control socket when it is online.
+The daemon is optional and user-managed; wt neither starts nor restarts it.
 
 ### `wt claude <sub>`
 

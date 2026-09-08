@@ -35,7 +35,8 @@
  *    typing the same text would double-submit. We confirm against the
  *    transcript instead.
  *
- * Other harnesses have only terminal input and always take path 2.
+ * Codex has its own durable app-server queue (with `codex queue` as the
+ * daemon-offline adapter); OpenCode still uses terminal input.
  */
 import { agentIdentity } from "../agent-identity.ts";
 import { Clock, Data, Effect, Schedule } from "effect";
@@ -58,9 +59,10 @@ import { claudeTmuxName } from "./claude/harness.ts";
 import { injectedPromptLanded } from "./claude/jsonl.ts";
 import { claudeSessions, type ClaudeSessionError } from "./claude/sessions.ts";
 import type { RegistryStatus } from "./claude/registry.ts";
+import { sendCodexMessage, type CodexMessageResult } from "./codex/messaging.ts";
 import type { HarnessId } from "./types.ts";
 
-export type MessageTransport = "inspector" | "terminal";
+export type MessageTransport = "inspector" | "codex-app-server" | "codex-queue" | "terminal";
 
 /**
  * Why a message went out over the terminal instead of the injector.
@@ -87,10 +89,17 @@ type SessionMessageOk = {
   delivered: boolean | null;
   /** A first attempt was swallowed and the prompt was sent again. */
   resent: boolean;
+  /** Durable Codex queue state, when that transport was used. */
+  queueState?: "started" | "queued" | "queued-or-started";
 };
 
 export type SessionMessageResult =
   | (SessionMessageOk & { ok: true; transport: "inspector"; fallback?: never })
+  | (SessionMessageOk & {
+      ok: true;
+      transport: "codex-app-server" | "codex-queue";
+      fallback?: never;
+    })
   | (SessionMessageOk & { ok: true; transport: "terminal"; fallback: FallbackCause })
   | { ok: false; reason: string };
 
@@ -183,6 +192,7 @@ type Dependencies = {
   deliver: typeof deliverClaudeMessage;
   terminal(target: SessionMessageTarget): Effect.Effect<InjectResult>;
   landed(cwd: string, managedName: string | null, text: string, sinceMs: number): boolean;
+  codex(target: SessionMessageTarget): Effect.Effect<CodexMessageResult>;
   warn(slug: string, message: string): void;
   /** `withAsyncFileLock` by default; tests substitute a spy that still runs `effect`. */
   lock<A, E>(key: string, effect: Effect.Effect<A, E>): Effect.Effect<A, E | AsyncLockError>;
@@ -198,6 +208,7 @@ const defaults: Dependencies = {
       ? injectClaudeFallback(target)
       : injectIntoSession({ ...target, harnessId: target.harnessId }),
   landed: injectedPromptLanded,
+  codex: sendCodexMessage,
   warn: (slug, message) => createLogger(slug).attention.warn(message),
   lock: (key, effect) => withAsyncFileLock(key, effect, { timeoutMs: SEND_LOCK_TIMEOUT_MS }),
 };
@@ -412,6 +423,21 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     // all where WT_AGENT was absent, which is nowhere that matters.
     if (!target.text.trim()) return { ok: false, reason: "message is empty" };
     const text = stampSender(target.text);
+    if (target.harnessId === "codex") {
+      const tmuxName = `${target.slug}-codex`;
+      const result = yield* deps.lock(`__codex_send__${tmuxName}`, deps.codex({ ...target, text })).pipe(
+        Effect.catchTag("AsyncLockError", (cause) =>
+          Effect.fail(new SessionMessagingError({ target: tmuxName, cause }))),
+      );
+      if (!result.ok) return result;
+      if (result.transport === "terminal") {
+        return {
+          ...result,
+          fallback: { kind: "unsupported", harnessId: "codex" },
+        };
+      }
+      return result;
+    }
     if (target.harnessId !== "claude") {
       const res = yield* deps.terminal({ ...target, text });
       return res.ok

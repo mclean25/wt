@@ -179,7 +179,9 @@ const send = Effect.fn("wt claude send")(function* (slugOrBranch: string, textAr
         ? res.delivered === null
           ? "submitted at the session's own prompt, where a slash command runs — a command leaves no prompt entry to confirm against; attach via the wt TUI (F12) to watch"
           : "submitted at the session's own prompt, as an ordinary turn — fire-and-forget from here; attach via the wt TUI (F12) to watch"
-        : `typed into the session's pane — ${fallbackAdvice(res.fallback)}; attach via the wt TUI (F12) to watch`,
+        : res.transport === "terminal"
+          ? `typed into the session's pane — ${fallbackAdvice(res.fallback)}; attach via the wt TUI (F12) to watch`
+          : "submitted through Codex's durable queue",
     ),
   );
   return 0;

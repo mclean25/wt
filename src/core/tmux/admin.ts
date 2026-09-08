@@ -11,7 +11,7 @@ import {
   SUFFIX,
   TMUX_SOCKET,
 } from "./naming.ts";
-import { killByName, listAllSessionsRaw } from "./process.ts";
+import { killByName, listAllSessionsRaw, listSessionsWithHarnessIds } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
@@ -230,10 +230,16 @@ export function listSessions(): Effect.Effect<
     /** Raw set of every live tmux session name. Used by harness impls
      *  to compute `isLive` without a second `list-sessions` call. */
     all: Set<string>;
+    /** Exact resumed harness UUID by live tmux session name, when stamped. */
+    harnessSessionIds: Map<string, string>;
   }
 > {
-  return listAllSessionsRaw().pipe(
-    Effect.map((all) => ({ ...classifySessions(all), all })),
+  return listSessionsWithHarnessIds().pipe(
+    Effect.map(({ all, harnessSessionIds }) => ({
+      ...classifySessions(all),
+      all,
+      harnessSessionIds,
+    })),
   );
 }
 

@@ -55,6 +55,8 @@ export type TmuxSessionsData = {
    * convert to a Set in the consumer hook if needed.
    */
   all: string[];
+  /** Exact resumed UUID by live single-slot tmux name, when wt stamped one. */
+  harnessSessionIds: Record<string, string>;
 };
 
 /**
@@ -83,6 +85,7 @@ export const tmuxSessionsQuery = () =>
             action,
             dev,
             all,
+            harnessSessionIds,
           } = yield* listSessions();
           return {
             claude,
@@ -96,6 +99,7 @@ export const tmuxSessionsQuery = () =>
             action: [...action],
             dev: [...dev],
             all: [...all],
+            harnessSessionIds: Object.fromEntries(harnessSessionIds),
           };
         }),
         signal,

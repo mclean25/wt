@@ -164,6 +164,14 @@ function fakes(opts: FakeOpts = {}) {
       return Effect.succeed({ ok: true as const, coldStarted: false, delivered: true, resent: false });
     },
     landed: () => opts.landed ?? true,
+    codex: () => Effect.succeed({
+      ok: true as const,
+      transport: "codex-app-server" as const,
+      coldStarted: false,
+      delivered: true as const,
+      resent: false as const,
+      queueState: "started" as const,
+    }),
     warn: (_slug: string, message: string) => {
       warnings.push(message);
     },
@@ -182,6 +190,22 @@ const target: SessionMessageTarget = {
   managedName: null,
   text: "carry on",
 };
+
+describe("the Codex transport", () => {
+  test("routes through the native messenger under a per-thread cross-process lock", async () => {
+    const fake = fakes();
+    const send = createSessionMessenger(fake.deps);
+
+    expect(await run(send({ ...target, harnessId: "codex" }))).toMatchObject({
+      ok: true,
+      transport: "codex-app-server",
+      delivered: true,
+      queueState: "started",
+    });
+    expect(fake.calls.terminal).toBe(0);
+    expect(fake.locks).toEqual(["__codex_send__eng-1-codex"]);
+  });
+});
 
 describe("the claude transport ladder", () => {
   afterEach(() => {
@@ -467,7 +491,7 @@ describe("the claude transport ladder", () => {
     const fake = fakes();
     const send = createSessionMessenger(fake.deps);
 
-    await run(send({ ...target, harnessId: "codex", text: "$start" }));
+    await run(send({ ...target, harnessId: "opencode", text: "$start" }));
 
     expect(fake.calls.terminal).toBe(1);
   });
@@ -481,15 +505,15 @@ describe("the claude transport ladder", () => {
     expect(fake.calls.terminal).toBe(0);
   });
 
-  test("other harnesses go straight to their pane", async () => {
+  test("OpenCode still goes straight to its pane", async () => {
     const fake = fakes();
     const send = createSessionMessenger(fake.deps);
 
-    expect(await run(send({ ...target, harnessId: "codex" }))).toMatchObject({
+    expect(await run(send({ ...target, harnessId: "opencode" }))).toMatchObject({
       ok: true,
       transport: "terminal",
-      // Not a fallback from a broken injector — codex never had one.
-      fallback: { kind: "unsupported", harnessId: "codex" },
+      // Not a fallback from a broken injector; OpenCode has no native transport.
+      fallback: { kind: "unsupported", harnessId: "opencode" },
     });
     expect(fake.calls.ensure).toBe(0);
   });

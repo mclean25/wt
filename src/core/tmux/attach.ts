@@ -471,6 +471,16 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
         name,
         "@wt-shortcut",
         shortcut,
+        ...(resumeSessionId === null || resumeSessionId === undefined
+          ? []
+          : [
+              ";",
+              "set-option",
+              "-t",
+              name,
+              "@wt-harness-session-id",
+              resumeSessionId,
+            ]),
       ];
   const code = yield* runAttachedClient(clientArgs, {
     cwd: tmuxClientCwd(),

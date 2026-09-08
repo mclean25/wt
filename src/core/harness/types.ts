@@ -31,17 +31,15 @@ export type HarnessExtras = {
   managedName: string | null;
   /**
    * Derived state for the per-session status dot. Claude derives this
-   * from jsonl tail + tmux liveness + the on-disk `~/.claude/sessions`
-   * registry. Others return null and the renderer falls back to a
-   * simple live/dead indicator.
+   * from jsonl tail + tmux liveness + its native registry; Codex combines
+   * rollout state with app-server status when available.
    */
   derivedState: DerivedState | null;
-  /** Pending-prompt count for the queued badge. Claude-only. */
+  /** Pending-prompt count for the queued badge, when the harness exposes it. */
   queued: number;
   /**
-   * What claude is blocked on when `derivedState === "asking"` (e.g.
-   * "permission prompt"), straight from the registry's `waitingFor`.
-   * Null in every other state and for non-Claude harnesses.
+   * What the harness is blocked on when `derivedState === "asking"` (e.g.
+   * "permission prompt"), from its native status source. Null otherwise.
    */
   waitingFor?: string | null;
   /**
@@ -160,7 +158,9 @@ export interface Harness {
    * one: it is the only transport for codex/opencode, and Claude's
    * fallback when its prompt can't be submitted into directly (see
    * `harness/session-messaging.ts`). Keys are sent in order with a
-   * small gap between each. Override per harness when a different
+   * small gap between each. Codex normally uses its durable native queue;
+   * these keys are only its fresh-thread / old-version fallback. Override
+   * per harness when a different
    * sequence (e.g. `C-d`, `C-j`) turns out to fit better.
    */
   readonly injectSubmitKeys: readonly string[];
