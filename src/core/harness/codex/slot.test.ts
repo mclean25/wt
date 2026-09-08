@@ -74,6 +74,28 @@ describe("Codex main/manager ownership", () => {
   });
 });
 
+test("wt-originated root sessions remain discoverable while child sessions stay hidden", () => {
+  const { root, cwd } = fixture();
+  const day = join(root, "2026", "09", "05");
+  const write = (id: string, threadSource: string) => {
+    writeFileSync(join(day, `rollout-${id}.jsonl`), `${JSON.stringify({
+      type: "session_meta",
+      payload: {
+        id,
+        cwd,
+        originator: "wt",
+        thread_source: threadSource,
+      },
+    })}\n${message("user", "Do the work.")}${message("assistant", "Ready.")}`);
+  };
+  write("root-id", "user");
+  write("guardian-id", "subagent");
+
+  expect(
+    discoverCodexSessionsSync("originator-compat", cwd, root).map((session) => session.sessionId),
+  ).toEqual(["root-id"]);
+});
+
 test("fresh main is identifiable before its response; worktrees need no stamp", () => {
   expect(codexSlotFromPrefix(message("user", CODEX_MAIN_PROMPT))).toBe("main");
   expect(codexRolloutBelongsToSlot("not-a-file", 0, "worktree")).toBe(true);

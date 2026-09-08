@@ -8,6 +8,7 @@ import { TestClock } from "effect/testing";
 
 import {
   CodexTerminalReadinessTimeout,
+  codexPaneIsIdle,
   probeCodexTerminalReadiness,
   waitForCodexTerminalReady,
 } from "./readiness.ts";
@@ -51,6 +52,20 @@ function opts(root: string, sessionId = "thread-a") {
 }
 
 describe("Codex terminal fallback readiness", () => {
+  test("recognizes only Codex's empty ordinary composer", () => {
+    expect(codexPaneIsIdle("output\n\n› Ask Codex to do anything\n\nmodel footer")).toBeTrue();
+    expect(codexPaneIsIdle(
+      "› Ask Codex to do anything\n? Pick a deployment\n› 1. staging\n  2. prod",
+    )).toBeFalse();
+    expect(codexPaneIsIdle(
+      "› Ask Codex to do anything\nAllow command?\n› 1. Yes, proceed\n  2. No",
+    )).toBeFalse();
+    expect(codexPaneIsIdle("› unfinished user draft")).toBeFalse();
+    expect(codexPaneIsIdle(
+      "• Working (esc to interrupt)\n› Ask Codex to do anything",
+    )).toBeFalse();
+  });
+
   test("permits only a positively closed turn", async () => {
     const root = mkdtempSync(join(tmpdir(), "wt-codex-ready-"));
     createRollout(root, "thread-a", [lifecycle("task_started"), lifecycle("task_complete")]);

@@ -101,7 +101,9 @@ WebSocket, adds the message to Codex's durable FIFO, explicitly starts it when
 idle, and disconnects. It never resumes or subscribes to the thread, so the TUI
 remains the only owner of questions and approvals. Busy and blocked turns keep
 the prompt queued. If the daemon is offline, `codex queue` writes the same
-host-local queue; a remote send runs on the remote host over SSH rather than
+host-local queue. If a live tmux slot has no recoverable UUID, wt waits for
+that exact slot's empty composer and types there instead of dropping the
+message. A remote send runs on the remote host over SSH rather than
 forwarding a socket. An uncertain add is reconciled by its client id and is
 never blindly retried. `wt codex selftest` checks this surface without sending.
 

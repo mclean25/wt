@@ -13,7 +13,9 @@ import { queueCodexMessage, type CodexAppServerError } from "./app-server.ts";
 import { discoverCodexSessions } from "./discovery.ts";
 import { codexHarness } from "./harness.ts";
 import {
+  probeCodexLivePaneReadiness,
   probeCodexTerminalReadiness,
+  waitForCodexLivePaneReady,
   waitForCodexTerminalReady,
 } from "./readiness.ts";
 
@@ -56,6 +58,7 @@ type Dependencies = {
   readonly terminal: (
     target: CodexMessageTarget & { readonly sessionId: string },
   ) => Effect.Effect<InjectResult>;
+  readonly liveTerminal: (target: CodexMessageTarget) => Effect.Effect<InjectResult>;
   readonly bootstrapTerminal: (target: CodexMessageTarget) => Effect.Effect<InjectResult>;
 };
 
@@ -97,6 +100,11 @@ const defaults: Dependencies = {
     target,
     waitForCodexTerminalReady(target),
     probeCodexTerminalReadiness(target),
+  ),
+  liveTerminal: (target) => injectCodexFallback(
+    target,
+    waitForCodexLivePaneReady(target),
+    probeCodexLivePaneReadiness(target),
   ),
   // The first prompt is what causes a brand-new Codex conversation to gain
   // a UUID/rollout. There is no exact thread to queue to before that write.
@@ -165,10 +173,27 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
     }
 
     if (sessionId === null) {
-      if (liveBefore || !coldStarted) {
+      if (liveBefore) {
+        // The live tmux session is still an exact delivery target even when
+        // Codex changed its rollout metadata and wt cannot recover the UUID.
+        // Keep native delivery preferred, but retain terminal input as the
+        // compatibility floor instead of dropping the message entirely.
+        const result = yield* deps.liveTerminal(target);
+        return result.ok
+          ? {
+              ok: true,
+              transport: "terminal",
+              coldStarted: result.coldStarted,
+              delivered: result.delivered,
+              resent: false,
+              fallbackReason: "the live Codex slot has no recoverable thread UUID",
+            }
+          : result;
+      }
+      if (!coldStarted) {
         return {
           ok: false,
-          reason: "Codex is live, but wt cannot prove which thread owns the slot; no message was typed",
+          reason: "Codex did not start and wt could not resolve a thread UUID",
         };
       }
       // No UUID exists yet. Only this bootstrap uses terminal input; every

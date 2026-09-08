@@ -388,6 +388,8 @@ question keeps the message queued until it is ready. The direct Unix socket is
 local to the target host; remote sends run this same command over SSH. If the
 user-managed daemon is offline, wt uses `codex queue` against the same local
 store. It never retries an ambiguous queue write.
+If a live Codex tmux slot has no recoverable UUID, `send` falls back to typing
+into that exact slot and reports that terminal transport was used.
 
 ### `wt codex selftest`
 

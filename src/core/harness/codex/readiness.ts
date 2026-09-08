@@ -1,5 +1,6 @@
 import { Clock, Data, Duration, Effect } from "effect";
 
+import { capturePane } from "../../tmux/process.ts";
 import {
   findCodexRolloutForSession,
   readCodexTail,
@@ -33,6 +34,71 @@ export class CodexTerminalReadinessTimeout extends Data.TaggedError(
   readonly sessionId: string;
   readonly lastProbe: CodexTerminalReadiness;
 }> {}
+
+export type CodexLivePaneReadiness =
+  | { readonly ready: true }
+  | { readonly ready: false; readonly reason: "pane-unavailable" | "not-idle" };
+
+export type CodexLivePaneReadinessOptions = {
+  readonly slug: string;
+  readonly timeoutMs?: number;
+  readonly pollIntervalMs?: number;
+};
+
+export class CodexLivePaneReadinessTimeout extends Data.TaggedError(
+  "CodexLivePaneReadinessTimeout",
+)<{
+  readonly message: string;
+  readonly lastProbe: CodexLivePaneReadiness;
+}> {}
+
+/**
+ * A UUID-less live slot has no transcript identity to inspect. Only the empty
+ * ordinary composer is safe for terminal input: question/approval UIs replace
+ * this placeholder, and a user draft replaces it too.
+ */
+export function codexPaneIsIdle(text: string): boolean {
+  if (/esc to interrupt/i.test(text)) return false;
+  const composers = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("› "));
+  return composers.at(-1) === "› Ask Codex to do anything";
+}
+
+export const probeCodexLivePaneReadiness = Effect.fn("probeCodexLivePaneReadiness")(
+  function* (opts: Pick<CodexLivePaneReadinessOptions, "slug">) {
+    const pane = yield* capturePane(`${opts.slug}-codex`);
+    if (pane === null) {
+      return { ready: false, reason: "pane-unavailable" } as const;
+    }
+    return codexPaneIsIdle(pane)
+      ? { ready: true } as const
+      : { ready: false, reason: "not-idle" } as const;
+  },
+);
+
+/** Wait for a live UUID-less slot to expose its empty ordinary composer. */
+export const waitForCodexLivePaneReady = Effect.fn("waitForCodexLivePaneReady")(
+  function* (opts: CodexLivePaneReadinessOptions) {
+    const timeoutMs = Math.max(0, opts.timeoutMs ?? 30_000);
+    const pollIntervalMs = Math.max(1, opts.pollIntervalMs ?? 200);
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
+    let lastProbe = yield* probeCodexLivePaneReadiness(opts);
+    while (!lastProbe.ready) {
+      const remainingMs = deadline - (yield* Clock.currentTimeMillis);
+      if (remainingMs <= 0) {
+        return yield* new CodexLivePaneReadinessTimeout({
+          message: `Codex slot ${opts.slug} did not become safe for terminal input within ${timeoutMs}ms (${lastProbe.reason})`,
+          lastProbe,
+        });
+      }
+      yield* Effect.sleep(Duration.millis(Math.min(pollIntervalMs, remainingMs)));
+      lastProbe = yield* probeCodexLivePaneReadiness(opts);
+    }
+    return lastProbe;
+  },
+);
 
 /**
  * One fail-closed readiness check for the exact mapped Codex thread.

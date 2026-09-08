@@ -400,10 +400,12 @@ function readRolloutMeta(path: string): RolloutMetaRaw | null {
     const cwd = obj.payload?.cwd;
     if (typeof id !== "string" || typeof cwd !== "string") return null;
     // Match `codex resume`'s default interactive-session scope. Codex
-    // writes guardian/subagent rollouts with originator `codex-tui`,
-    // so checking cwd or originator alone is insufficient.
+    // 0.153 started preserving wt's launch originator (`wt`) on the root
+    // conversation; older versions wrote `codex-tui`. Guardian/subagent
+    // rollouts can use either originator, so `thread_source: user` remains
+    // the discriminator that keeps them out of the picker.
     if (
-      obj.payload?.originator !== "codex-tui" ||
+      (obj.payload?.originator !== "codex-tui" && obj.payload?.originator !== "wt") ||
       obj.payload?.thread_source !== "user"
     ) {
       return null;

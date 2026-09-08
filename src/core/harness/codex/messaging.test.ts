@@ -71,6 +71,15 @@ function fakes(options: {
         resent: false,
       });
     },
+    liveTerminal: () => {
+      calls.push("live-terminal");
+      return Effect.succeed({
+        ok: true as const,
+        coldStarted: false,
+        delivered: null,
+        resent: false,
+      });
+    },
     bootstrapTerminal: () => {
       calls.push("bootstrap");
       return Effect.succeed({
@@ -163,14 +172,22 @@ describe("Codex message orchestration", () => {
     const result = await Effect.runPromise(fake.send(target));
     expect(result).toMatchObject({ ok: true, transport: "terminal", delivered: null });
     expect(fake.calls).toContain("bootstrap");
+    expect(fake.calls).not.toContain("live-terminal");
     expect(fake.calls.some((call) => call.startsWith("native:"))).toBe(false);
   });
 
-  test("never types into a live slot whose UUID cannot be proven", async () => {
+  test("falls back to the exact live tmux slot when no UUID can be recovered", async () => {
     const fake = fakes({ sessions: [], live: true });
     const result = await Effect.runPromise(fake.send(target));
-    expect(result).toMatchObject({ ok: false });
+    expect(result).toMatchObject({
+      ok: true,
+      transport: "terminal",
+      coldStarted: false,
+      fallbackReason: "the live Codex slot has no recoverable thread UUID",
+    });
+    expect(fake.calls).toContain("live-terminal");
     expect(fake.calls).not.toContain("bootstrap");
+    expect(fake.calls.some((call) => call.startsWith("native:"))).toBe(false);
   });
 
   test("fails closed when tmux liveness cannot be read", async () => {

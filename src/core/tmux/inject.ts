@@ -227,6 +227,7 @@ export function injectCodexFallback(
       return yield* injectIntoSessionUnlockedEffect({
         ...target,
         readyGate: probeReady,
+        requireExistingSession: true,
       });
     }),
   ).pipe(
@@ -272,6 +273,8 @@ const injectIntoSessionUnlockedEffect = Effect.fnUntraced(function* (opts: {
   text: string;
   /** Final legacy safety check, run after pane settle and immediately before paste. */
   readyGate?: Effect.Effect<{ readonly ready: boolean; readonly reason?: string }, Error>;
+  /** Refuse if the exact live slot disappeared instead of cold-starting a replacement. */
+  requireExistingSession?: boolean;
 }) {
     const { slug, cwd, text } = opts;
     const harnessId = opts.harnessId;
@@ -280,6 +283,12 @@ const injectIntoSessionUnlockedEffect = Effect.fnUntraced(function* (opts: {
     const running = (yield* listAllSessionsRaw()).has(name);
     let coldStarted = false;
     if (!running) {
+      if (opts.requireExistingSession) {
+        return {
+          ok: false as const,
+          reason: `${name} stopped before terminal delivery; no replacement session was started`,
+        };
+      }
       const started = yield* startHarnessSessionDetached(
         slug,
         cwd,
