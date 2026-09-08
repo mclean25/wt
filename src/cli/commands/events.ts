@@ -119,6 +119,7 @@ function plistContents(): string {
   };
   // Carry config overrides so the daemon loads the same config.toml the TUI does.
   if (process.env.WT_CONFIG) env.WT_CONFIG = process.env.WT_CONFIG;
+  if (process.env.WT_REPO_CONFIG) env.WT_REPO_CONFIG = process.env.WT_REPO_CONFIG;
   if (process.env.XDG_CONFIG_HOME) env.XDG_CONFIG_HOME = process.env.XDG_CONFIG_HOME;
 
   const argLines = argv.map((a) => `    <string>${xmlEscape(a)}</string>`).join("\n");

@@ -17,6 +17,10 @@ wt events restart     # reconcile and reload it on the current wt build
 wt events status      # liveness, last delivery, snapshot age
 ```
 
+The launch agent preserves the selected repository config (`WT_REPO_CONFIG`),
+so settings in the repository’s `.wt.toml` also load when macOS starts the daemon
+outside that repository.
+
 `install` prints exactly what to paste into the repo's **Settings → Webhooks**: the payload URL, content type `application/json`, the generated secret, and the event checklist (`pull_request`, `pull_request_review`, `pull_request_review_thread`, `issue_comment`, `check_suite`, `check_run`, `status`, `merge_group`, `push`). `issue_comment` feeds the details-pane conversation, the attention feed's "someone commented on your PR" lines ([tui.md](tui.md)), and, for a checklist-mode [`[review_bot]`](configuration.md#review_bot--the-bot-review-track), the summary comment + checkbox ticks that drive its badge.
 
 The daemon listens on `[github.events].host` (default loopback); map a public HTTPS URL to it however you route traffic into your network — a tunnel or reverse proxy on the same machine forwarding to localhost is the simple case. If a reverse proxy on a *different* host has to reach this machine, set `host` to a LAN IP or `0.0.0.0`; the HMAC secret is then the only auth boundary, so keep the listener on a trusted network.
