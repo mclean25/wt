@@ -206,6 +206,8 @@ export interface Harness {
   discoverSessions(opts: {
     slug: string;
     wtPath: string;
+    /** Exact UUID stamped on a live single-slot tmux host, when available. */
+    liveSessionId?: string | null;
     /** Cancel superseded UI discovery before it can build queued work. */
     signal?: AbortSignal;
   }): Promise<HarnessSession[]>;

@@ -22,7 +22,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 15;
+export const WT_STATE_VERSION = 16;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -169,6 +169,17 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
     // Inbox until arranged there.
     to: 15,
     up: (raw) => ("remoteLayouts" in raw ? raw : { ...raw, remoteLayouts: {} }),
+  },
+  {
+    // v16: recent snapshot-keyed dismissals for the pinned review-request
+    // section. Nothing to backfill: every existing review request should
+    // remain visible until the user explicitly dismisses it.
+    to: 16,
+    up: (raw) => (
+      "reviewRequestDismissals" in raw
+        ? raw
+        : { ...raw, reviewRequestDismissals: [] }
+    ),
   },
 ];
 

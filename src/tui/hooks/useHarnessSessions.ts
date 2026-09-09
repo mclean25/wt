@@ -305,6 +305,9 @@ export function useHarnessSessions(
         slug,
         wtPath,
         (tmux.data?.slugsByHarness[h.id] ?? []).includes(slug),
+        tmux.data?.harnessSessionIds[
+          getHarness(h.id).tmuxSessionName(slug, null)
+        ] ?? null,
       ),
       notifyOnChangeProps: SESSION_DATA_PROPS,
     })),
@@ -409,6 +412,9 @@ export function useActiveSessionsBySlug(
           w.slug,
           w.path,
           (slugsByHarness?.[id] ?? []).includes(w.slug),
+          tmux.data?.harnessSessionIds[
+            getHarness(id).tmuxSessionName(w.slug, null)
+          ] ?? null,
         ),
         notifyOnChangeProps: SESSION_DATA_PROPS,
       })),

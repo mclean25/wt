@@ -137,6 +137,7 @@ export function App({ onExit }: Props) {
     refreshAiSummary,
     refreshClaudeSummaries,
     toggleArchived,
+    dismissReviewRequest,
     archive,
     setSection,
     setBase,
@@ -371,6 +372,7 @@ export function App({ onExit }: Props) {
     archivedKeys,
     githubData,
     createdPlacements: activeCreatedPlacements,
+    reviewRequestDismissals: wtStateForStacks.data?.reviewRequestDismissals,
   });
 
   // Detached dev supervisors can fail after their start command exits. The
@@ -1017,6 +1019,7 @@ export function App({ onExit }: Props) {
       toggleAutomationsPaused,
       toggleStackAutomationsPaused,
       toggleArchived,
+      dismissReviewRequest,
       setWorktreeSection,
       toggleSectionFold,
       setSectionFolded,

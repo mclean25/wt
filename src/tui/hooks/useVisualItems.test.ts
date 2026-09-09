@@ -3,7 +3,8 @@ import { describe, expect, test } from "bun:test";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
 import { GROUP_INBOX } from "./useWorktreeRows.ts";
-import { buildActiveItems } from "./useVisualItems.ts";
+import { buildActiveItems, visibleReviewRequests } from "./useVisualItems.ts";
+import type { ReviewRequestPr } from "../../core/github.ts";
 import { DEV_SERVER_STOPPED } from "../../core/dev-server.ts";
 
 function local(slug: string, section: string | null): WorktreeRow {
@@ -140,6 +141,26 @@ describe("buildActiveItems", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "remote", entry: { slug: "existing" } });
+  });
+});
+
+describe("visibleReviewRequests", () => {
+  test("hides only the dismissed PR snapshot", () => {
+    const request = {
+      url: "https://github.com/example/repo/pull/12",
+      updatedAt: "2026-09-09T10:00:00Z",
+    } as ReviewRequestPr;
+    const dismissals = [{
+      url: request.url,
+      updatedAt: request.updatedAt,
+      dismissedAt: "2026-09-09T10:01:00Z",
+    }];
+
+    expect(visibleReviewRequests([request], dismissals)).toEqual([]);
+    expect(visibleReviewRequests(
+      [{ ...request, updatedAt: "2026-09-09T11:00:00Z" }],
+      dismissals,
+    )).toHaveLength(1);
   });
 });
 

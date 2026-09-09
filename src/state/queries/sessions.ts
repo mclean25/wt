@@ -126,6 +126,7 @@ export const harnessSessionsQuery = (
   slug: string,
   wtPath: string,
   isLive: boolean,
+  liveSessionId?: string | null,
 ) =>
   queryOptions({
     queryKey: qk.harnessSessions(harnessId, slug),
@@ -133,7 +134,7 @@ export const harnessSessionsQuery = (
       const harness = getHarness(harnessId);
       return runQuery(
         io.promise("discover harness sessions", () =>
-          harness.discoverSessions({ slug, wtPath, signal }),
+          harness.discoverSessions({ slug, wtPath, signal, liveSessionId }),
         ),
         signal,
       );

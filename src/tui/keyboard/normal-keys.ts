@@ -153,6 +153,7 @@ export type NormalKeysCtx = {
   toggleStackAutomationsPaused: (stackId: string, memberSlugs: readonly string[]) => Promise<boolean>;
   // Actions on the row
   toggleArchived: (key: string) => Promise<{ archived: boolean }>;
+  dismissReviewRequest: (url: string, updatedAt: string) => Promise<void>;
   setWorktreeSection: (
     target: WorktreeModel["target"],
     section: string | null,
@@ -214,6 +215,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     toggleAutomationsPaused,
     toggleStackAutomationsPaused,
     toggleArchived,
+    dismissReviewRequest,
     setWorktreeSection,
     toggleSectionFold,
     setSectionFolded,
@@ -987,6 +989,14 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // a PR selection) and silently no-ops.
     if (selectedPr) {
       const prLog = createLogger("[review]");
+      if (isPlainLetter(k, "d")) {
+        if (currentItem) advanceCursorPast([visualKey(currentItem)]);
+        runAction("dismiss review request", async () => {
+          await dismissReviewRequest(selectedPr.url, selectedPr.updatedAt);
+          toast("review request dismissed", theme.fgDim, 1500);
+        });
+        return;
+      }
       if (isPlainLetter(k, "p") || k.name === "return") {
         openPrUrl(selectedPr.url, selectedPr.number, null, "[review]");
         return;

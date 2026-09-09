@@ -79,8 +79,13 @@ export const codexHarness: Harness = {
     return `${slug}${CODEX_TMUX_INFIX}`;
   },
 
-  async discoverSessions({ slug, wtPath, signal }) {
-    const sessions = await discoverCodexSessionsInWorker(slug, wtPath, signal);
+  async discoverSessions({ slug, wtPath, signal, liveSessionId }) {
+    const sessions = await discoverCodexSessionsInWorker(
+      slug,
+      wtPath,
+      signal,
+      liveSessionId,
+    );
     if (sessions.length === 0) return sessions;
     try {
       const snapshots = await Effect.runPromise(
@@ -132,8 +137,21 @@ export function discoverCodexSessionsSync(
   slug: string,
   wtPath: string,
   sessionsDir = CODEX_SESSIONS_DIR,
+  liveSessionId: string | null = null,
 ): HarnessSession[] {
-  const rollouts = scanRollouts(wtPath, slug, sessionsDir).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const rollouts = scanRollouts(wtPath, slug, sessionsDir);
+  if (liveSessionId && !rollouts.some((rollout) => rollout.sessionId === liveSessionId)) {
+    const exact = findCodexRolloutForSession(
+      wtPath,
+      slug,
+      liveSessionId,
+      sessionsDir,
+    );
+    if (exact) {
+      rollouts.push({ sessionId: liveSessionId, cwd: wtPath, ...exact });
+    }
+  }
+  rollouts.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const friendlyNames = reconcileCodexNames(
     slug,
     rollouts.map((r) => r.sessionId),
@@ -202,6 +220,19 @@ export function findCodexRolloutForSession(
   sessionsDir = CODEX_SESSIONS_DIR,
 ): CodexRolloutFile | null {
   if (!existsSync(sessionsDir)) return null;
+  const cacheKey = `${cwd}\0${slug}\0${sessionId}\0${sessionsDir}`;
+  const cachedPath = exactRolloutPathCache.get(cacheKey);
+  if (cachedPath) {
+    const meta = readRolloutMeta(cachedPath);
+    if (
+      meta?.sessionId === sessionId &&
+      meta.cwd === cwd &&
+      codexRolloutBelongsToSlot(cachedPath, meta.size, slug)
+    ) {
+      return { path: cachedPath, mtimeMs: meta.mtimeMs, size: meta.size };
+    }
+    exactRolloutPathCache.delete(cacheKey);
+  }
   let best: CodexRolloutFile | null = null;
   let years: string[];
   try { years = readdirSync(sessionsDir); } catch { return null; }
@@ -233,8 +264,15 @@ export function findCodexRolloutForSession(
       }
     }
   }
+  if (best) {
+    if (exactRolloutPathCache.size >= 512) exactRolloutPathCache.clear();
+    exactRolloutPathCache.set(cacheKey, best.path);
+  }
   return best;
 }
+
+/** Exact live UUID lookups cross every date partition once, then stat this path. */
+const exactRolloutPathCache = new Map<string, string>();
 
 /**
  * Return the most-recently-modified rollout path for the given cwd, or
@@ -542,10 +580,19 @@ function parseCodexTailWindow(
     const p = payload as Record<string, unknown>;
     if (
       obj.type === "response_item" &&
-      p.type === "function_call" &&
+      (p.type === "function_call" || p.type === "custom_tool_call") &&
       p.name === "request_user_input"
     ) {
       pendingInteraction = "question";
+      continue;
+    }
+    if (
+      obj.type === "response_item" &&
+      pendingInteraction !== null &&
+      (p.type === "function_call_output" || p.type === "custom_tool_call_output")
+    ) {
+      // The answer/approval was delivered and the active turn can continue.
+      pendingInteraction = null;
       continue;
     }
     if (
@@ -555,6 +602,15 @@ function parseCodexTailWindow(
       p.type.includes("request")
     ) {
       pendingInteraction = "approval";
+      continue;
+    }
+    if (
+      obj.type === "event_msg" &&
+      typeof p.type === "string" &&
+      p.type.includes("approval") &&
+      (p.type.includes("response") || p.type.includes("resolved"))
+    ) {
+      pendingInteraction = null;
       continue;
     }
     if (obj.type !== "event_msg") continue;

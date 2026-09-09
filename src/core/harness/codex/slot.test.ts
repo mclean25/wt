@@ -100,3 +100,34 @@ test("fresh main is identifiable before its response; worktrees need no stamp", 
   expect(codexSlotFromPrefix(message("user", CODEX_MAIN_PROMPT))).toBe("main");
   expect(codexRolloutBelongsToSlot("not-a-file", 0, "worktree")).toBe(true);
 });
+
+test("an exact live UUID restores a special session outside the picker window", () => {
+  const root = mkdtempSync(join(tmpdir(), "wt-codex-old-live-"));
+  dirs.push(root);
+  const cwd = join(root, "repo");
+  for (let day = 1; day <= 31; day++) {
+    mkdirSync(join(root, "2026", "09", String(day).padStart(2, "0")), {
+      recursive: true,
+    });
+  }
+  const oldDay = join(root, "2025", "01", "01");
+  mkdirSync(oldDay, { recursive: true });
+  writeFileSync(
+    join(oldDay, "rollout-old-manager.jsonl"),
+    `${JSON.stringify({
+      type: "session_meta",
+      payload: {
+        id: "old-manager",
+        cwd,
+        originator: "codex-tui",
+        thread_source: "user",
+      },
+    })}\n${message("user", CODEX_MANAGER_PROMPT)}${message("assistant", "Ready.")}`,
+  );
+
+  expect(discoverCodexSessionsSync("manager", cwd, root)).toEqual([]);
+  expect(
+    discoverCodexSessionsSync("manager", cwd, root, "old-manager")
+      .map((session) => session.sessionId),
+  ).toEqual(["old-manager"]);
+});

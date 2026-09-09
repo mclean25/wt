@@ -15,6 +15,7 @@ export {
 } from "./wtstate/types.ts";
 export type {
   RemovedWorktree,
+  ReviewRequestDismissal,
   WorktreeLayout,
   WtSlugState,
   WtState,
@@ -66,6 +67,11 @@ export {
 } from "./wtstate/automations-pause.ts";
 
 export { setAttentionSeen } from "./wtstate/attention.ts";
+
+export {
+  addReviewRequestDismissal,
+  dismissReviewRequest,
+} from "./wtstate/review-requests.ts";
 
 export {
   pruneMergeEdges,

@@ -29,12 +29,15 @@ function post(worker: CodexEventsWorker, msg: CodexEventsWorkerMessage): void {
   worker.postMessage(msg);
 }
 
-function emit(result: CodexEventsWorkerResult, onActivity?: () => void): void {
+function emit(
+  result: CodexEventsWorkerResult,
+  onChange?: (slugs: readonly string[]) => void,
+): void {
   if (result.type === "warn") {
     log.warn("worker poll failed", { err: result.message });
     return;
   }
-  if (result.events.length > 0) onActivity?.();
+  if (result.changedSlugs.length > 0) onChange?.(result.changedSlugs);
   for (const event of result.events) {
     log.event[event.level](event.text);
   }
@@ -46,17 +49,15 @@ function emit(result: CodexEventsWorkerResult, onActivity?: () => void): void {
  * @param getActiveSlugs - Called on every tick; must return the current
  *   list of active codex tmux slots (slug + worktree path). The caller
  *   should keep this cheap (a Map lookup, not a scan).
- * @param onActivity - Called once per tick that actually observed a
- *   real event (not on an empty/no-change poll). The TUI runtime uses
- *   this to invalidate `codexUsage` — token usage changes exactly when
- *   codex activity happens, so this is a cheap push trigger instead of
- *   leaving that query on poll-only.
+ * @param onChange - Called with every slot whose rollout changed, even when
+ *   the new lines have no activity-pane representation. Status transitions,
+ *   questions, approvals, and token counts all need the same freshness edge.
  * @returns A cleanup function that stops the interval and terminates
  *   the worker. Call it during TUI shutdown.
  */
 export function codexEventPolling(
   getActiveSlugs: () => ReadonlyArray<ActiveCodexSlug>,
-  onActivity?: () => void,
+  onChange?: (slugs: readonly string[]) => void,
   options: {
     workerFactory?: () => CodexEventsWorker;
     intervalMs?: number;
@@ -78,7 +79,7 @@ export function codexEventPolling(
     worker.addEventListener("message", (event: MessageEvent) => {
       inFlight = false;
       if (disposed) return;
-      emit(event.data as CodexEventsWorkerResult, onActivity);
+      emit(event.data as CodexEventsWorkerResult, onChange);
     });
     worker.addEventListener("error", (event) => {
       inFlight = false;
@@ -122,8 +123,8 @@ export function codexEventPolling(
 /** TUI lifecycle adapter. */
 export function startCodexEventPolling(
   getActiveSlugs: () => ReadonlyArray<ActiveCodexSlug>,
-  onActivity?: () => void,
+  onChange?: (slugs: readonly string[]) => void,
 ): () => Promise<void> {
-  const fiber = Effect.runFork(codexEventPolling(getActiveSlugs, onActivity));
+  const fiber = Effect.runFork(codexEventPolling(getActiveSlugs, onChange));
   return () => Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.asVoid));
 }

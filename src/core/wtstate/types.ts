@@ -247,6 +247,20 @@ export type RemovedWorktree = {
 };
 
 /**
+ * A review-request row the user dismissed with `d` in the TUI.
+ *
+ * The PR's `updatedAt` makes the dismissal self-expiring: wt hides only the
+ * exact request snapshot the user handled. Any later PR activity changes the
+ * fingerprint and lets the row surface again instead of turning this into a
+ * permanent, silently stale ignore list.
+ */
+export type ReviewRequestDismissal = {
+  url: string;
+  updatedAt: string;
+  dismissedAt: string;
+};
+
+/**
  * Persisted state for the worktree list:
  *  - `slugs`: per-worktree manual section + within-section order, plus
  *    the fork-base record (`baseBranch`/`baseSha`) stacks are inferred
@@ -309,6 +323,8 @@ export type WtState = {
    * again is display-filtered by the TUI and cleared by `createWorktree`.
    */
   removed: RemovedWorktree[];
+  /** Recent, snapshot-keyed review requests dismissed from the pinned list. */
+  reviewRequestDismissals: ReviewRequestDismissal[];
   /**
    * Last tip wt observed for each branch a `branch.advanced` automation
    * watches. Advanced only when a fire is DISPATCHED, never on mere

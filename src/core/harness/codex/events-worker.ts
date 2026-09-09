@@ -5,7 +5,10 @@
  */
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 
-import { latestRolloutForCwd } from "./harness.ts";
+import {
+  findCodexRolloutForSession,
+  latestRolloutForCwd,
+} from "./harness.ts";
 import type {
   ActiveCodexSlug,
   CodexEventsWorkerEvent,
@@ -42,38 +45,49 @@ self.onmessage = (event: MessageEvent<CodexEventsWorkerMessage>) => {
     return;
   }
   try {
-    const events = poll(msg.active);
-    if (events.length > 0) post({ type: "events", events });
+    const result = poll(msg.active);
+    // Always reply. The main-thread client holds one request in flight; an
+    // empty first/baseline poll must release that lane for the next tick.
+    post({ type: "events", ...result });
   } catch (err) {
     post({ type: "warn", message: err instanceof Error ? err.message : String(err) });
   }
 };
 
-function poll(active: readonly ActiveCodexSlug[]): CodexEventsWorkerEvent[] {
+function poll(active: readonly ActiveCodexSlug[]): {
+  events: CodexEventsWorkerEvent[];
+  changedSlugs: string[];
+} {
   const activeSet = new Set(active.map((a) => a.slug));
   for (const slug of slugState.keys()) {
     if (!activeSet.has(slug)) slugState.delete(slug);
   }
   const events: CodexEventsWorkerEvent[] = [];
-  for (const { slug, wtPath } of active) {
+  const changedSlugs: string[] = [];
+  for (const { slug, wtPath, sessionId } of active) {
     try {
-      pollSlug(slug, wtPath, slugState, events);
+      if (pollSlug(slug, wtPath, sessionId, slugState, events)) {
+        changedSlugs.push(slug);
+      }
     } catch {
       // Per-slug poll failures are expected during rollout rotation or
       // concurrent writes. Drop this tick and let the next poll recover.
     }
   }
-  return events;
+  return { events, changedSlugs };
 }
 
 function pollSlug(
   slug: string,
   wtPath: string,
+  sessionId: string | null | undefined,
   stateBySlug: Map<string, SlugState>,
   events: CodexEventsWorkerEvent[],
-): void {
-  const rollout = latestRolloutForCwd(wtPath, slug);
-  if (!rollout) return;
+): boolean {
+  const rollout = sessionId
+    ? findCodexRolloutForSession(wtPath, slug, sessionId)
+    : latestRolloutForCwd(wtPath, slug);
+  if (!rollout) return false;
 
   const state = stateBySlug.get(slug);
 
@@ -85,25 +99,25 @@ function pollSlug(
       offset: rollout.size,
       mtimeMs: rollout.mtimeMs,
     });
-    return;
+    return true;
   }
 
   // Nothing changed since last poll.
-  if (rollout.mtimeMs === state.mtimeMs) return;
+  if (rollout.mtimeMs === state.mtimeMs) return false;
 
   // Stat the file for its current size.
   let currentSize: number;
   try {
     currentSize = statSync(rollout.path).size;
   } catch {
-    return;
+    return false;
   }
 
   if (currentSize <= state.offset) {
     // File truncated (shouldn't happen with codex, but guard it).
     state.offset = currentSize;
     state.mtimeMs = rollout.mtimeMs;
-    return;
+    return true;
   }
 
   // Read new bytes since last offset.
@@ -119,7 +133,7 @@ function pollSlug(
       closeSync(fd);
     }
   } catch {
-    return;
+    return false;
   }
 
   // Advance only by complete lines: if the chunk ends mid-line
@@ -130,7 +144,7 @@ function pollSlug(
   if (lastNewlineIdx === -1) {
     // No complete line in this chunk yet — wait for more.
     state.mtimeMs = rollout.mtimeMs;
-    return;
+    return true;
   }
   const consumedBytes = Buffer.byteLength(
     chunk.slice(0, lastNewlineIdx + 1),
@@ -151,6 +165,7 @@ function pollSlug(
     }
     emitEvent(obj, slug, events);
   }
+  return true;
 }
 
 function push(

@@ -100,6 +100,24 @@ describe("Codex terminal fallback readiness", () => {
         payload: { type: "exec_approval_request" },
       }),
     ]);
+    createRollout(root, "custom-question", [
+      lifecycle("task_started"),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "custom_tool_call", name: "request_user_input" },
+      }),
+    ]);
+    createRollout(root, "answered-question", [
+      lifecycle("task_started"),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "custom_tool_call", name: "request_user_input" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "custom_tool_call_output" },
+      }),
+    ]);
 
     expect(await Effect.runPromise(probeCodexTerminalReadiness(opts(root, "question")))).toMatchObject({
       ready: false,
@@ -108,6 +126,14 @@ describe("Codex terminal fallback readiness", () => {
     expect(await Effect.runPromise(probeCodexTerminalReadiness(opts(root, "approval")))).toMatchObject({
       ready: false,
       reason: "approval",
+    });
+    expect(await Effect.runPromise(probeCodexTerminalReadiness(opts(root, "custom-question")))).toMatchObject({
+      ready: false,
+      reason: "question",
+    });
+    expect(await Effect.runPromise(probeCodexTerminalReadiness(opts(root, "answered-question")))).toMatchObject({
+      ready: false,
+      reason: "working",
     });
   });
 

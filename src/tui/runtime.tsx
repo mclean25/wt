@@ -13,7 +13,7 @@ import { config } from "../core/config.ts";
 import { disposeDiffPool } from "../core/diff/pool.ts";
 import { lockStatus } from "../core/locks.ts";
 import { watchGithubEvents } from "../core/events/store.ts";
-import { closeOpencodeDb, HARNESSES } from "../core/harness/index.ts";
+import { closeOpencodeDb, getHarness, HARNESSES } from "../core/harness/index.ts";
 import { startCodexEventPolling } from "../core/harness/codex/events.ts";
 import { disposeCodexDiscoveryWorker } from "../core/harness/codex/discovery.ts";
 import { harnessTailRegistry } from "../core/harness/tail.ts";
@@ -61,7 +61,7 @@ import { backfillActivityLog } from "./activity-backfill.ts";
 import { events } from "./activity-log.ts";
 import { closeAutoMergeRetries } from "./flows/auto-merge-retry.ts";
 import { attachFetchLogs } from "./fetch-log.ts";
-import { SLOT_SLUGS } from "./sessions/slots.ts";
+import { SESSION_SLOTS, SLOT_SLUGS } from "./sessions/slots.ts";
 import { attachLoggerToasts } from "./toast.ts";
 
 const startupLog = createLogger("[startup]");
@@ -584,8 +584,9 @@ export const runTui = Effect.gen(function* () {
   // Start Codex activity-event polling. Same pattern as opencode: the
   // getter reads from the query cache imperatively (no React) and is
   // safe to call from the interval callback outside the render tree.
-  // `onActivity` invalidates `codexUsage` — a push trigger riding the
-  // same worker-tick sensor instead of leaving that query poll-only.
+  // Rollout changes invalidate both usage and the affected session states.
+  // Include special slots explicitly: they are live tmux slugs but are not
+  // members of the worktree inventory.
   yield* acquireSyncResource(
     () =>
       startCodexEventPolling(
@@ -596,11 +597,27 @@ export const runTui = Effect.gen(function* () {
             qk.tmuxSessions(),
           );
           const liveCodex = new Set(tmux?.slugsByHarness.codex ?? []);
-          return worktrees
-            .filter((wt) => liveCodex.has(wt.slug))
-            .map((wt) => ({ slug: wt.slug, wtPath: wt.path }));
+          const paths = new Map(
+            SESSION_SLOTS.map((slot) => [slot.slug, slot.path]),
+          );
+          for (const wt of worktrees) paths.set(wt.slug, wt.path);
+          return [...liveCodex]
+            .flatMap((slug) => {
+              const wtPath = paths.get(slug);
+              const tmuxName = getHarness("codex").tmuxSessionName(slug, null);
+              return wtPath ? [{
+                slug,
+                wtPath,
+                sessionId: tmux?.harnessSessionIds[tmuxName] ?? null,
+              }] : [];
+            });
         },
-        () => invalidations.key(qk.codexUsage()),
+        (slugs) => {
+          invalidations.key(qk.codexUsage());
+          for (const slug of slugs) {
+            invalidations.key(qk.harnessSessions("codex", slug));
+          }
+        },
       ),
     (stop) => stop(),
   );
