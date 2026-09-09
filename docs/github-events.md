@@ -108,12 +108,23 @@ never reaches daemon readiness is reported as a failure.
 A delivery does not map to a fetch. Two constraints compose in `scheduleFetch`:
 
 - **`FETCH_DEBOUNCE_MS` (1.5s)** collapses deliveries that arrive together. One CI step storm is a dozen `check_run` events at the same instant, and they are worth exactly one refetch.
-- **`MIN_FETCH_INTERVAL_MS` (30s)** floors the sustained rate, measured from the previous fetch's *start* so a slow query eats into the floor rather than adding to it.
+- **`MIN_FETCH_INTERVAL_MS` (10s)** floors the sustained rate, measured from the previous fetch's *start* so a slow query eats into the floor rather than adding to it.
 
 The floor exists because the debounce alone does not bound anything under a *stream*. Measured on an 18-branch fleet with a merge queue running CI: 130 accepted deliveries in 180s produced 13 full refetches at ~30 GraphQL points each, a pace of 7,760 points/hour against a 5,000/hour limit. Nothing was failing, but the budget was on track to run out before its reset window, and a rate-limited fetch is the one failure `fetchGithub` deliberately never retries (see [architecture.md](architecture.md#state--data-flow)).
 
-**The floor is not a responsiveness tradeoff, because of which fetch it delays.** It only ever defers the *Nth* fetch of a burst. The first delivery after a quiet spell still lands in 1.5s, and that is the case that governs how fast a badge flips after you push. It is also a third of the 90s `SNAPSHOT_FRESH_MS`, so a deferred fetch is still comfortably inside the window the TUI already treats as current.
+The 10-second floor favors faster check updates during sustained activity. The first delivery after a quiet spell still schedules a fetch in 1.5s; subsequent deliveries wait for the floor. This allows up to three times the fetch rate of the previous 30-second floor, so sustained activity can consume the GitHub API budget faster. Rate-limit errors remain non-retryable.
 
 Cadence is auditable from the daily app log: each `refetched after webhook` line carries `sinceLastMs`.
 
 **Trap for anything that adds another fetch path here.** The trailing re-run after a burst that lands mid-fetch must go through `scheduleFetch`, never straight back into `runFetch`. Running it immediately is unbounded, and it also *masks* a starvation bug in the debounce: deliveries arriving closer together than the debounce window re-arm the timer indefinitely (simulated at this fleet's measured ~43/min, the naive rule defers past 151s and climbing). `nextFetchAt` is the single scheduling rule for exactly that reason — it refuses to push out an already-pending timer, and `daemon.test.ts` pins both halves.
+
+## Remote worktree branches
+
+Both relevance filtering and snapshot fetches use the union of local worktree
+branches and the configured SSH worker's inventory, deduplicated by branch.
+Remote-only check runs and pushes therefore trigger the same marker updates
+as local ones. Branch membership is cached for up to 10 seconds between fetches.
+If remote inventory fails, the daemon retains its last known remote branches,
+continues refreshing local branches, and treats event scope as unknown rather
+than discarding potentially relevant deliveries. The next successful inventory
+read replaces the retained remote set, including removing departed branches.

@@ -6,11 +6,13 @@ import type { GithubEventsConfig } from "../config.ts";
 import {
   type DaemonDependencies,
   makeDaemonCore,
+  makeEventBranchReader,
+  DaemonOperationError,
   nextFetchAt,
 } from "./daemon.ts";
 
 const DEBOUNCE = 1_500;
-const FLOOR = 30_000;
+const FLOOR = 10_000;
 
 describe("nextFetchAt", () => {
   test("first delivery after a quiet spell fires on the debounce, not the floor", () => {
@@ -116,7 +118,7 @@ function testDependencies(options: {
 }): DaemonDependencies {
   return {
     ensureEventsDir: () => {},
-    currentBranches: () => Effect.succeed(["feature"]),
+    currentBranches: () => Effect.succeed({ branches: ["feature"], complete: true }),
     fetchOrigin: Effect.void,
     fetchGithub: options.fetchGithub ?? (() => Effect.gen(function* () {
       options.fetchStarts.push(yield* Clock.currentTimeMillis);
@@ -229,7 +231,7 @@ describe("Effect daemon lifecycle", () => {
       }
       yield* Effect.yieldNow;
       expect(fetchStarts.length).toBeGreaterThanOrEqual(2);
-      expect(fetchStarts[1]).toBe(1_030_000);
+      expect(fetchStarts[1]).toBe(1_010_000);
     }));
   });
 
@@ -244,11 +246,72 @@ describe("Effect daemon lifecycle", () => {
       yield* TestClock.adjust(2_000);
       yield* core.accept("pull_request", "{}");
       yield* Effect.yieldNow;
-      yield* TestClock.adjust(27_999);
+      yield* TestClock.adjust(7_999);
       expect(fetchStarts).toEqual([1_000_000]);
       yield* TestClock.adjust(1);
       yield* Effect.yieldNow;
-      expect(fetchStarts).toEqual([1_000_000, 1_030_000]);
+      expect(fetchStarts).toEqual([1_000_000, 1_010_000]);
     }));
   });
+});
+
+test("remote check events refresh a snapshot covering the combined fleet", async () => {
+  const fetched: Array<readonly string[]> = [];
+  const snapshots: Array<readonly string[]> = [];
+  const dependencies = { ...testDependencies({ fetchStarts: [], snapshotWrites: [], markerWrites: [] }) };
+  dependencies.currentBranches = makeEventBranchReader(
+    Effect.succeed(["local", "shared"]),
+    Effect.succeed(["remote", "shared"]),
+  );
+  dependencies.fetchGithub = (branches) => Effect.sync(() => {
+    fetched.push(branches);
+    return { prs: new Map(), mergeQueue: new Map() };
+  });
+  dependencies.writeSnapshot = (snapshot) => { snapshots.push(snapshot.branches); };
+
+  await runTest(Effect.gen(function* () {
+    yield* TestClock.setTime(1_000_000);
+    const core = yield* makeDaemonCore(events, dependencies);
+    yield* Effect.yieldNow;
+    yield* core.accept("check_run", JSON.stringify({
+      check_run: { check_suite: { head_branch: "remote" }, conclusion: "failure" },
+    }));
+    yield* Effect.yieldNow;
+    yield* TestClock.adjust(10_000);
+    expect((yield* core.state).eventCount).toBe(1);
+    expect(fetched).toEqual([["local", "remote", "shared"], ["local", "remote", "shared"]]);
+    expect(snapshots).toEqual(fetched);
+  }));
+});
+
+test("remote outage preserves known branches and accepts unknown events until recovery", async () => {
+  let offline = false;
+  let remoteBranches = ["remote"];
+  const reader = makeEventBranchReader(
+    Effect.succeed(["local"]),
+    Effect.suspend(() => offline
+      ? Effect.fail(new DaemonOperationError({ operation: "remote inventory", cause: "offline" }))
+      : Effect.succeed(remoteBranches)),
+  );
+  const dependencies = { ...testDependencies({ fetchStarts: [], snapshotWrites: [], markerWrites: [] }), currentBranches: reader };
+
+  await runTest(Effect.gen(function* () {
+    expect(yield* reader()).toEqual({ branches: ["local", "remote"], complete: true });
+    offline = true;
+    expect(yield* reader()).toEqual({ branches: ["local", "remote"], complete: false });
+    yield* TestClock.setTime(1_000_000);
+    const core = yield* makeDaemonCore(events, dependencies);
+    yield* Effect.yieldNow;
+    yield* core.accept("check_suite", JSON.stringify({ check_suite: { head_branch: "new-remote" } }));
+    yield* Effect.yieldNow;
+    yield* Effect.yieldNow;
+    expect((yield* core.state).eventCount).toBe(1);
+    yield* core.accept("issue_comment", JSON.stringify({ issue: {} }));
+    yield* Effect.yieldNow;
+    yield* Effect.yieldNow;
+    expect((yield* core.state).eventCount).toBe(1);
+    offline = false;
+    remoteBranches = ["new-remote"];
+    expect(yield* reader()).toEqual({ branches: ["local", "new-remote"], complete: true });
+  }));
 });
