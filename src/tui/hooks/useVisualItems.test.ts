@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { RemoteWorktreeSummary } from "../../core/remote-worktrees.ts";
 import type { WorktreeRow } from "./useWorktreeRows.ts";
 import { GROUP_INBOX } from "./useWorktreeRows.ts";
-import { buildActiveItems } from "./useVisualItems.ts";
+import { buildActiveItems, visualKey } from "./useVisualItems.ts";
 import { DEV_SERVER_STOPPED } from "../../core/dev-server.ts";
 
 function local(slug: string, section: string | null): WorktreeRow {
@@ -80,7 +80,7 @@ describe("buildActiveItems", () => {
     expect(item.members.map((member) => member.kind)).toEqual(["wt", "remote"]);
   });
 
-  test("does not add a placeholder or an empty section during creation", () => {
+  test("immediately reveals a selectable placeholder even when Inbox is folded", () => {
     const [item] = buildActiveItems({
       rows: [],
       foldedSections: new Set([GROUP_INBOX]),
@@ -96,7 +96,11 @@ describe("buildActiveItems", () => {
       archivedKeys: new Set(),
     });
 
-    expect(item).toBeUndefined();
+    expect(item).toMatchObject({
+      kind: "remote", entry: { input: "new-task", status: "creating" },
+      target: null, model: null,
+    });
+    expect(visualKey(item!)).toBe("remote:creating:dellserver:new-task");
   });
 
   test("holds a differently-slugged inventory row until creation completes", () => {
@@ -119,10 +123,10 @@ describe("buildActiveItems", () => {
       item.kind === "remote" && "slug" in item.entry
         ? item.entry.slug
         : "placeholder",
-    )).toEqual(["existing"]);
+    )).toEqual(["existing", "placeholder"]);
   });
 
-  test("keeps only existing rows while creation is pending", () => {
+  test("appends the pending row after existing inbox members", () => {
     const items = buildActiveItems({
       rows: [],
       foldedSections: new Set(),
@@ -138,7 +142,7 @@ describe("buildActiveItems", () => {
       archivedKeys: new Set(),
     });
 
-    expect(items).toHaveLength(1);
+    expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({ kind: "remote", entry: { slug: "existing" } });
   });
 });
@@ -166,7 +170,7 @@ test("creation does not hide inventory from another host", () => {
     },
     remoteWorktrees: [remote("new-task", null), other],
   });
-  expect(items).toHaveLength(1);
+  expect(items).toHaveLength(2);
   expect(items[0]).toMatchObject({ kind: "remote", entry: { hostKey: "other-host" } });
 });
 
@@ -204,4 +208,18 @@ test("a new status claim releases the initial bottom placement", () => {
     createdPlacements: [{ key: "fresh", ledgerKey: "fresh", section: null, workAt: undefined, order: 5 }],
   });
   expect(items[0]).toMatchObject({ kind: "wt", row: { wt: { slug: "fresh" } } });
+});
+
+test("pending identity cannot collide with an existing same-name worktree", () => {
+  const existing = remote("new-task", null);
+  const items = buildActiveItems({
+    rows: [], foldedSections: new Set(), archivedKeys: new Set(),
+    remoteCreation: {
+      remote: existing.remote, hostKey: existing.hostKey, hostLabel: existing.hostLabel,
+      input: "new-task", previousKeys: ["dellserver:new-task"], status: "creating",
+    },
+    remoteWorktrees: [existing],
+  });
+  expect(new Set(items.map(visualKey)).size).toBe(2);
+  expect(items[1]).toMatchObject({ entry: { input: "new-task" }, target: null });
 });

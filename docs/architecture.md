@@ -250,7 +250,10 @@ collector. Controller layout, archive state, GitHub data, and endpoint
 coordinates are joined locally and never enter the worker snapshot.
 
 `Ctrl+N` forwards `wt new` and refreshes the remote-row query when creation
-finishes. Creation keeps the current selection and adds no placeholder.
+finishes. Submitting the name immediately appends a selectable "creating" row
+to the expanded Inbox. Selection waits until that placeholder is visible,
+using the same pending-selection mechanism as completed creations. The pending
+row has no worktree target, so session and worktree actions remain unavailable.
 New inventory identities on the creating host are withheld while the command
 runs, including results from background polls; existing rows and other hosts
 stay visible. Completion refreshes inventory and selects the discovered row,
