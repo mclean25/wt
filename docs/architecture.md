@@ -102,6 +102,10 @@ The GitHub events daemon stamps its loaded wt build into `events/state.json`.
 restarts an installed stopped, stale, or pre-stamp daemon out of process. The
 check belongs to the fresh startup rather than the old updater process, so the
 first upgrade from a version without the hook repairs itself too.
+The daemon writes its new state before its warm-up GitHub fetch replaces the
+old snapshot. A foreign snapshot is therefore always refused, but it only
+produces an attention warning when the live daemon state is foreign too; the
+ordinary post-restart handoff silently uses a live fetch.
 
 Codex and OpenCode session UUIDs are harness-owned resume handles, while wt owns a persistent per-worktree `primary` / `2` / `3` name mapping. That mapping is identity, not presentation: the picker shows it, F12 resumes the mapped `primary` when no session is live, and detached cold starts used by `wt agent send/start` resolve the same UUID before spawning. A resumed single-slot session stamps its exact UUID onto the live tmux session as `@wt-harness-session-id`; the stamp self-expires with tmux and lets the picker identify a deliberately selected secondary without guessing from rollout mtime. Old and brand-new unstamped Codex slots fall back to the stable primary mapping. When several harnesses are live on one worktree, the Shift+Tab-selected primary harness wins the F12 target and list glyph. Explicit `+ new` picker rows are the only path that intentionally starts a fresh single-slot conversation.
 

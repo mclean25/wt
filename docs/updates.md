@@ -66,7 +66,9 @@ This happens after the update process re-execs, rather than only in the process
 that applied the update: that old process may itself predate the restart hook,
 and the source clone may also have moved outside the startup updater. Failure
 is visible but does not strand the user before the TUI; `wt events restart` is
-the manual retry.
+the manual retry. Restart readiness is established by the new process state;
+its warm-up GitHub fetch can finish a moment later, so the TUI refuses the
+leftover old snapshot without reporting the already-current daemon as stale.
 
 **What the gate does not do is tell anyone it is holding.** A red `main`
 stops shipping silently: users stay on their last green version, which is

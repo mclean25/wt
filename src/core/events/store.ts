@@ -142,6 +142,20 @@ function warnForeignSnapshotOnce(writerSha: string | null | undefined): void {
 }
 
 /**
+ * Whether the live daemon itself is on a foreign build. A restarted daemon
+ * writes state before its warm-up GitHub fetch replaces `github.json`, so the
+ * snapshot can briefly be foreign while the process serving it is already
+ * current. That is a normal handoff, not a daemon that still needs attention.
+ */
+export function runningDaemonHasForeignBuild(
+  state: EventsState | null,
+  alive: (pid: number) => boolean = isProcessAlive,
+  same: (writerSha: string | null | undefined) => boolean = sameBuild,
+): boolean {
+  return state !== null && alive(state.pid) && !same(state.writerSha);
+}
+
+/**
  * Serve the github query from the daemon's snapshot when it's fresh and
  * covers every requested branch; otherwise return null so the caller does
  * a live `gh` fetch. Coverage is exact-subset: a branch absent from the
@@ -158,10 +172,13 @@ export function snapshotForBranches(
   if (Date.now() - snap.updatedAt > SNAPSHOT_FRESH_MS) return null;
   if (!sameBuild(snap.writerSha)) {
     // A different build wrote this. Fall back to a live fetch rather
-    // than render its parse: the daemon restarts itself on the next
-    // cycle (see `daemon.ts`), so this is a short window, and a wrong
-    // badge during it would be indistinguishable from a real one.
-    warnForeignSnapshotOnce(snap.writerSha);
+    // than render its parse. Only narrate when the RUNNING daemon is
+    // foreign too: after a restart its current state lands before its
+    // warm-up fetch replaces the previous build's snapshot.
+    const state = readState();
+    if (runningDaemonHasForeignBuild(state)) {
+      warnForeignSnapshotOnce(state?.writerSha);
+    }
     return null;
   }
   const covered = new Set(snap.branches);
