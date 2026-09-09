@@ -110,6 +110,7 @@ Sessions live in a dedicated tmux server; "enter" takes over the terminal, and t
 
 Inside these four special sessions, `F10`/`F11`/`F12` all return to wt — slots aren't worktrees, so there's no shell or diff sibling to switch to.
 | `O` | open the main clone in your editor (the wt repo's editor open lives in its palette: `< z`) |
+| click link | open an OSC 8 hyperlink in a wt-managed tmux session; tmux handles the link itself so mouse-enabled Codex does not swallow the terminal's normal click action |
 | mouse drag | select text in a wt-managed tmux session and copy it automatically to the macOS clipboard on release |
 
 ### Organize
