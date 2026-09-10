@@ -50,7 +50,7 @@ List all non-main worktrees (slug, stage when `[deploy.sst]` is configured, PR, 
 - Worker exception: `[instance] role = "worker"` always reports `section: null`.
   Fleet layout belongs to the controller, which stores remote placement under
   a host-qualified key and ignores any legacy section value from the worker.
-- Push fields: `unpushed` counts commits `origin/<branch>` doesn't have — true unpushed work, not divergence from the base (wt sets the branch upstream to its BASE, so an upstream-relative count would misread as "never pushed"). `pushed` says whether `origin/<branch>` exists at all; when it's `false`, `unpushed` falls back to the ahead-of-base count. `ahead_of_base` is commits ahead of the upstream/base — the restack-pressure signal. All three are `null` when git couldn't answer; never read `null` as 0. The base side of `ahead_of_base` is resolved in the MAIN CLONE when the checkout holds that commit — under `rift` a worktree's own `origin/<trunk>` is frozen at clone time, and counting against it charged the branch for every trunk commit that landed since (see [backends.md](backends.md#stale-remote-tracking-refs)).
+- Push fields: `unpushed` counts commits `origin/<branch>` doesn't have — true unpushed work, not divergence from the base. `pushed` says whether `origin/<branch>` exists at all; when it's `false`, `unpushed` falls back to the ahead-of-base count. `ahead_of_base` is commits ahead of wt's effective merge base (the recorded stack parent or configured trunk), regardless of which git upstream the branch tracks. All three are `null` when git couldn't answer; never read `null` as 0. The trunk side of `ahead_of_base` is resolved in the MAIN CLONE when the checkout holds that commit — under `rift` a worktree's own `origin/<trunk>` is frozen at clone time, and counting against it charged the branch for every trunk commit that landed since (see [backends.md](backends.md#stale-remote-tracking-refs)).
 
 ### `wt new <id [title…]|url|branch|slug>`
 
@@ -80,7 +80,7 @@ Creation also sets `branch.<name>.gh-merge-base` to the branch's real merge targ
 
 Remove a worktree (with dirty/unpushed guards, optional SST stage destroy, optional branch delete). No slug ⇒ interactive picker.
 
-"Unpushed" is measured against `origin/<branch>`, the same `unpushed` field [`wt ls --json`](#wt-ls) reports — never against `@{u}`, which wt points at the BASE and which therefore counts every commit of a fully pushed branch. The guard is suppressed entirely for a merged/gone branch: a squash-merged worktree keeps its pre-squash commits locally but the work is landed, so it removes without a spurious `--force`. The TUI's `d` and `c` apply the same rule through `destroyHazard`.
+"Unpushed" is measured against `origin/<branch>`, the same `unpushed` field [`wt ls --json`](#wt-ls) reports — never against `@{u}`, whose meaning depends on the branch's local tracking configuration. The guard is suppressed entirely for a merged/gone branch: a squash-merged worktree keeps its pre-squash commits locally but the work is landed, so it removes without a spurious `--force`. The TUI's `d` and `c` apply the same rule through `destroyHazard`.
 
 - `--yes` / `-y` — skip confirmations.
 - `--force` — remove despite uncommitted / unpushed work, or an outstanding post-merge verification.

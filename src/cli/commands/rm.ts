@@ -205,11 +205,14 @@ export const run = Effect.fn("wt rm")(function* (argv: string[]) {
             path: target.path,
           })) || (yield* branchIsGone(target.branch, target.path))
         : false;
-    // `pushCounts`, not `unpushedCommits`: wt points a worktree branch's
-    // upstream at its BASE, so the @{u}-based count measures ahead-of-base
-    // and a fully pushed branch with an open PR refused to be removed as
-    // "3 unpushed commits". `unpushed` counts against `origin/<branch>`.
-    const unpushed = dirty || landed ? 0 : (yield* pushCounts(target.path)).unpushed;
+    // `pushCounts`, not the ahead-of-base count: `unpushed` compares against
+    // `origin/<branch>`, so a fully pushed branch with an open PR remains
+    // removable even though it is correctly ahead of its merge base.
+    const effectiveBase = (yield* io.sync("read wt state", readWtState))
+      .slugs[target.slug]?.baseBranch;
+    const unpushed = dirty || landed
+      ? 0
+      : (yield* pushCounts(target.path, effectiveBase)).unpushed;
     // null = git couldn't answer; a data-loss guard fails cautious, so
     // treat unknown like unpushed work rather than like a clean tree.
     if (dirty || unpushed === null || unpushed > 0) {

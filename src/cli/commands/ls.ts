@@ -117,8 +117,8 @@ export const run = Effect.fn("wt ls")(function* (argv: string[]) {
       // surfaced as-is so JSON consumers can distinguish it from 0.
       unpushed: snapshot.unpushed,
       pushed: snapshot.pushed,
-      // Commits ahead of the branch's upstream/base — restack
-      // pressure, the old meaning of `unpushed`.
+      // Commits ahead of wt's effective merge base — restack pressure,
+      // independent of the branch's configured git upstream.
       ahead_of_base: snapshot.aheadOfBase,
       // Resolved, not slug-parsed: a consumer filtering on
       // `issue_id` is asking which ticket this worktree is, and

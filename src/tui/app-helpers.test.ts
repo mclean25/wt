@@ -141,10 +141,8 @@ describe("destroyHazard", () => {
   });
 
   test("a pushed branch ahead of its base only is NOT unpushed", () => {
-    // The regression this pins: wt points a worktree branch's upstream at
-    // its BASE, so the old @{u}-derived count called every open PR's
-    // commits unpushed and `d`/`c` refused to remove a landed, fully
-    // pushed worktree.
+    // The regression this pins: ahead-of-base is not local-only work. Feeding
+    // it to the destroy guard made `d`/`c` refuse a fully pushed PR branch.
     expect(destroyHazard(makeRow({ ahead: 0, aheadOfBase: 3 }))).toBeNull();
   });
 
