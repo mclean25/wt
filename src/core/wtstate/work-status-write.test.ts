@@ -37,6 +37,7 @@ function inSandbox(script: string): string {
 main_clone = ${JSON.stringify(join(root, "main"))}
 worktree_root = ${JSON.stringify(join(root, "wts"))}
 cache_db = ${JSON.stringify(join(root, "cache", "cache.sqlite"))}
+state_db = ${JSON.stringify(join(root, "state", "wt.sqlite"))}
 
 [branch]
 prefix = "t"

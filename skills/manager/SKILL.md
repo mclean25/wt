@@ -28,8 +28,9 @@ job is to reduce how many of them need human attention.
   yourself. Always nudge one through `wt agent send <slug> "<message>"`.
   wt owns discovery, cold starts, stale recovery, and delivery;
   do not address sessions through harness-private peer names. That is not a
-  house preference: `wt agent send` cold-starts a stopped primary session,
-  carries harness commands, and reaches harnesses that have no peer messaging.
+  house preference: `wt agent send` selects the target's active harness,
+  cold-starts the primary only when none is active, carries harness commands,
+  and reaches harnesses that have no peer messaging.
   Harness-native messaging does none of it, and it fails silently in exactly
   the case you most need — a session that has stopped is the one worth a
   nudge. Repo-level operations from the main clone (gh queries, git log)
@@ -117,7 +118,7 @@ When the active wt config sets `[manager] wt_feedback = true` (check the
 TOML at `$WT_CONFIG`, else `~/.config/wt/config.toml`), you carry a
 standing brief: proactively send workflow papercuts, misleading outputs,
 and missing-sense observations from your fleet work to the session
-working on the wt source repo through `wt claude send wt "..."`, as
+working on the wt source repo through `wt agent send wt "..."`, as
 they come up — you see whole workflows across worktrees; that session
 can change the tool. Send concrete evidence: what you ran, what misled
 you, what you expected. It reviews and applies what's warranted. When
@@ -163,10 +164,9 @@ the human asks.
   removed history doing its job, not a prune wt failed to run. A landed row
   keeps its `pr`, which is exactly what makes "everything landed" readable,
   and exactly what makes it look actionable if you forgot to filter.
-- `wt claude ls [--json]` — live agent sessions (worktrees + the repo-level
-  wt/main/dotfiles/manager slots). `--json` adds per-session `busy` and
-  `last_activity` from Claude's process registry (null when the tmux session
-  has no registered claude process).
+- `wt agent ls [--json]` — every addressable worktree and repo-level
+  wt/main/dotfiles/manager slot, with its active harnesses, selected harness,
+  and selection reason. An inspection failure is not an empty fleet.
 - `gh pr list` / `gh pr view` / `gh pr checks` — PR and CI truth.
 - `wt logs <slug>` and `~/.cache/wt/logs/app/wt-YYYY-MM-DD.log` (grep
   `' ATTN '`) — recent history when context is missing.

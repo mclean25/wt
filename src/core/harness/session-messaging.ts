@@ -59,7 +59,11 @@ import { claudeTmuxName } from "./claude/harness.ts";
 import { injectedPromptLanded } from "./claude/jsonl.ts";
 import { claudeSessions, type ClaudeSessionError } from "./claude/sessions.ts";
 import type { RegistryStatus } from "./claude/registry.ts";
-import { sendCodexMessage, type CodexMessageResult } from "./codex/messaging.ts";
+import {
+  isCodexSlashCommand,
+  sendCodexMessage,
+  type CodexMessageResult,
+} from "./codex/messaging.ts";
 import type { HarnessId } from "./types.ts";
 
 export type MessageTransport = "inspector" | "codex-app-server" | "codex-queue" | "terminal";
@@ -75,6 +79,7 @@ export type MessageTransport = "inspector" | "codex-app-server" | "codex-queue" 
  */
 export type FallbackCause =
   | { kind: "disabled" }
+  | { kind: "command"; harnessId: HarnessId }
   | { kind: "unsupported"; harnessId: HarnessId }
   | { kind: InjectFailureKind; reason: string };
 
@@ -155,7 +160,7 @@ export function senderTag(): string | null {
  * the lowercase rule and `/tmp/foo` fails the token boundary — while also
  * recognizing Codex/OpenCode's `$start` form.
  */
-function isHarnessCommand(text: string): boolean {
+export function isHarnessCommand(text: string): boolean {
   return /^[/$][a-z][a-z0-9_-]*(\s|$)/.test(text.trimStart());
 }
 
@@ -233,6 +238,8 @@ export function fallbackAdvice(cause: FallbackCause): string {
   switch (cause.kind) {
     case "disabled":
       return "direct delivery is switched off here (WT_INSPECT=off)";
+    case "command":
+      return `${cause.harnessId} slash commands are submitted through its terminal prompt`;
     case "unsupported":
       return `${cause.harnessId} has no prompt injector, so typing is its only transport`;
     case "absent": {
@@ -425,7 +432,11 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
     const text = stampSender(target.text);
     if (target.harnessId === "codex") {
       const tmuxName = `${target.slug}-codex`;
-      const result = yield* deps.lock(`__codex_send__${tmuxName}`, deps.codex({ ...target, text })).pipe(
+      const command = isCodexSlashCommand(text);
+      const result = yield* deps.lock(
+        `__codex_send__${tmuxName}`,
+        deps.codex({ ...target, text }),
+      ).pipe(
         Effect.catchTag("AsyncLockError", (cause) =>
           Effect.fail(new SessionMessagingError({ target: tmuxName, cause }))),
       );
@@ -433,7 +444,9 @@ export function createSessionMessenger(overrides: Partial<Dependencies> = {}) {
       if (result.transport === "terminal") {
         return {
           ...result,
-          fallback: { kind: "unsupported", harnessId: "codex" },
+          fallback: command
+            ? { kind: "command", harnessId: "codex" }
+            : { kind: "unsupported", harnessId: "codex" },
         };
       }
       return result;

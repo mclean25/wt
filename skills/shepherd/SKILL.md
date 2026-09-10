@@ -283,7 +283,7 @@ A serviceable default, adjust with the human:
 ## What you never do
 
 - **Merge.** Always the human's.
-- **Change code.** Every fix goes to the owning worktree via `wt claude send`.
+- **Change code.** Every fix goes to the owning worktree via `wt agent send`.
   Operate the repository only from the main clone, read-only.
 - **Push to make a check pass.** Nudging a rebase produces one push by the
   owner; that is the limit. Never re-run a job to chase a flake. Treat CI as a

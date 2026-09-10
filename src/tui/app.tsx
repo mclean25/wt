@@ -685,7 +685,6 @@ export function App({ onExit }: Props) {
         run,
       }),
     restackBusyRef,
-    primaryHarness,
   });
 
   // Automated actions — evaluates `[[automations]]` triggers against
@@ -729,7 +728,6 @@ export function App({ onExit }: Props) {
   // latest sample rather than whichever one was current at mount.
   const { doPerfInvestigate } = makePerfFlows({
     snapshot: perf.data,
-    primaryHarness,
     setModal,
     doEnterSlotSession,
     toast,
@@ -738,7 +736,6 @@ export function App({ onExit }: Props) {
   // `i` inside the error overlay — same shape as perf's investigate
   // flow, sending the newest captured error instead of a snapshot.
   const { doErrorInvestigate } = makeErrorFlows({
-    primaryHarness,
     setModal,
     doEnterSlotSession,
     toast,

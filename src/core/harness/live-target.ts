@@ -33,14 +33,16 @@ import { VISIBLE_HARNESSES } from "./registry.ts";
 import type { HarnessId } from "./types.ts";
 
 export type HarnessChoice = {
-  harnessId: HarnessId;
+  harnessId: HarnessId | null;
   /**
    * How it was chosen. Callers print this: "delivered to the Codex
    * session" is falsifiable from the caller side where "delivered to
    * the configured primary agent" is not, and that unfalsifiability is
    * what let three misrouted sends look identical to three good ones.
    */
-  source: "live" | "primary" | "primary-unknown";
+  source: "live" | "primary" | "unavailable";
+  /** Every live visible harness, in deterministic registry order. */
+  liveHarnesses: readonly HarnessId[] | null;
 };
 
 
@@ -56,7 +58,7 @@ export type HarnessChoice = {
  * on `<slug>~`, which is safe unguarded because `~` cannot occur in a
  * slug.
  */
-function liveHarnesses(
+export function liveHarnesses(
   slug: string,
   names: ReadonlySet<string>,
   knownSlugs: ReadonlySet<string>,
@@ -111,9 +113,15 @@ export function chooseHarness(
   knownSlugs: ReadonlySet<string>,
   primary: HarnessId,
 ): HarnessChoice {
-  if (names === null) return { harnessId: primary, source: "primary-unknown" };
+  if (names === null) {
+    return { harnessId: null, source: "unavailable", liveHarnesses: null };
+  }
   const live = liveHarnesses(slug, names, knownSlugs);
-  if (live.length === 0) return { harnessId: primary, source: "primary" };
-  if (live.includes(primary)) return { harnessId: primary, source: "live" };
-  return { harnessId: live[0]!, source: "live" };
+  if (live.length === 0) {
+    return { harnessId: primary, source: "primary", liveHarnesses: live };
+  }
+  if (live.includes(primary)) {
+    return { harnessId: primary, source: "live", liveHarnesses: live };
+  }
+  return { harnessId: live[0]!, source: "live", liveHarnesses: live };
 }

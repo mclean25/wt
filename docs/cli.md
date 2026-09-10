@@ -269,7 +269,7 @@ worker's checkout/state is untouched.
 
 ### `wt fleet`
 
-The [manager session](manager.md)'s single audit surface: one row per live worktree joining the **asserted** work status (state, note, risk, `at`, staleness vs HEAD) with observable **reality** — the primary Claude session's liveness (`alive`/`busy`/`last_activity`, the same activity signals as `wt claude ls --json`) and the PR (number, title, draft, merge state, mergeability, CI rollup), all from the same single batched GraphQL round trip the TUI uses (never per-row `gh` calls). Each row also carries the human's manual TUI **section** — a second channel of asserted intent alongside the work status (a name like "Merge after Release" is a merge-ordering hint the manager should weigh; `null`/`—` = inbox, and inferred stack groupings never appear — those are derivable from base records and PRs). Rows sort ready-first, then needs-human (the TUI's urgency ranking), and the recently-removed rows ride along like on every fleet surface.
+The [manager session](manager.md)'s single audit surface: one row per live worktree joining the **asserted** work status (state, note, risk, `at`, staleness vs HEAD) with observable **reality** — the active harness session's liveness (`alive`/`busy`/`last_activity`, using the same discovery behind `wt agent ls --json`) and the PR (number, title, draft, merge state, mergeability, CI rollup), all from the same single batched GraphQL round trip the TUI uses (never per-row `gh` calls). Each row also carries the human's manual TUI **section** — a second channel of asserted intent alongside the work status (a name like "Merge after Release" is a merge-ordering hint the manager should weigh; `null`/`—` = inbox, and inferred stack groupings never appear — those are derivable from base records and PRs). Rows sort ready-first, then needs-human (the TUI's urgency ranking), and the recently-removed rows ride along like on every fleet surface.
 
 - `--json` — the contract. Live rows carry `section` plus nested `work`, `session`, and `pr` objects. **The `work` block is nested here and flat in `wt status --all --json`** (this surface joins three domains and has to namespace them; that one is status-only). So the asserter is `.work.by` here and `.by` there, and getting it backwards returns `null` rather than an error — indistinguishable from the `null` that legitimately means "unattributed", which reads as "the field isn't populated" instead of "I asked for the wrong path". Review state is **three separate numbers**, because collapsing them made the field lie: `unresolved_threads` is every open review thread (what GitHub's PR page shows), `unresolved_human_threads` excludes bot-opened ones, and `review_bot` is the bot's own rollup — in `checklist` mode the unticked-box count from its summary comment, which thread resolution does **not** affect. `review_bot.stale` is the half that decides what `state` is worth: it means the bot has not reviewed the CURRENT head, so `clean` there says "found nothing in an older commit", not "passed". The TUI already refuses to paint that green, and this surface used to omit the flag entirely, handing every JSON reader exactly the reading the badge withholds. It matters most to whoever acts on it rather than displays it: an agent working through a bot's follow-up reviews (`/babysit`) stops at the first stale clean, believing the commit it just pushed came back empty. Checklist mode only; `false` otherwise, which is what every reader already inferred from the absent field. On a repo where all review is done by a bot, the human count is permanently 0, so reporting only it reads as "nothing to chase" while the bot sits on unaddressed findings; when GitHub is unreachable (no `gh`, not authenticated, fetch failure) rows still emit with `pr: null` plus a `pr_note` saying why — so "no PR" (`pr` and `pr_note` both null) stays distinguishable from "couldn't ask". Removed rows are the same `kind: "merged"|"removed"` entries as `wt ls --json`, and live rows are `kind: "live"` — branch on the value before reading `work`, which only live rows have. **The stack and its ordering ride the row too**: `base` is the effective merge target (the recorded fork base, else `[branch] base`; never null, same derivation and value as `wt ls --json`) and `edges` are the merge edges touching that slug, the same objects `wt edge --json` prints plus `stale`. An edge rides **both** of its endpoint rows, so dedupe on `from`/`to`, and ignore stale ones for ordering as every other consumer does. Neither field existed here until 2026-08-31, which cost exactly what a missing field on a primary sense costs: a real four-deep stack carrying three `blocks` edges read as four independent branches with no constraints, and the manager reported to the human that no ordering existed — twice. `wt edge --help` had promised this surface read edges the whole time, and the omission was undetectable from the output, because absence of an edge is *defined* to mean "no known constraint".
 
@@ -353,12 +353,13 @@ The optional GitHub webhook daemon — see [github-events.md](github-events.md).
 
 ### `wt agent <sub>`
 
-Drive a worktree's coding-agent harness from scripts or another session.
+Message wt-owned coding-agent targets from scripts or another session.
 
-**Both commands address the harness with a LIVE session in that worktree**, and
-fall back to the `Shift+Tab` primary only when nothing is running there.
-`--harness <claude|codex|opencode>` addresses one explicitly; an unknown value
-is an error rather than a silent default.
+`send` addresses worktree slugs, branch names, and the special `wt`, `main`,
+`dotfiles`, and `manager` sessions. It selects a LIVE harness at that target and
+falls back to the `Shift+Tab` primary only when nothing is running there. If
+several are live, the primary wins. Messaging has no harness override; stale
+`--harness` callers fail instead of forcing the wrong session.
 
 That routing rule is the whole point of the command. The primary is one
 repository-level setting (`<cacheRoot>/harness.json` — "what F12 would spawn
@@ -373,8 +374,9 @@ quietly reading as "nothing is live".
 
 | sub | what it does |
 |---|---|
-| `send <slug> [text...]` | ensure the worktree's live harness session exists, then submit text at its prompt; reads stdin when no text args |
+| `send <target> [text...]` | ensure the target's selected harness session exists, then submit text; reads stdin when no text args |
 | `start <slug>` | ensure that session exists and invoke the bundled `start` skill using that harness's native prefix (`/start` for Claude, `$start` for Codex/OpenCode) |
+| `ls [--json]` | list the complete address book with target kind, cwd, live harnesses, selected harness, and whether selection was live or the primary fallback |
 
 Both commands are fire-and-forget with respect to the receiving agent's work,
 but fail when delivery is known not to have reached the conversation or its
@@ -389,7 +391,10 @@ local to the target host; remote sends run this same command over SSH. If the
 user-managed daemon is offline, wt uses `codex queue` against the same local
 store. It never retries an ambiguous queue write.
 If a live Codex tmux slot has no recoverable UUID, `send` falls back to typing
-into that exact slot and reports that terminal transport was used.
+into that exact slot and reports that terminal transport was used. Codex slash
+commands such as `/compact` also use guarded terminal input because its socket
+queue treats them as ordinary text; `$skill` prompts continue through the
+durable queue.
 
 ### `wt codex selftest`
 
@@ -399,14 +404,13 @@ The daemon is optional and user-managed; wt neither starts nor restarts it.
 
 ### `wt claude <sub>`
 
-Drive a worktree's Claude Code tmux session from scripts or other sessions.
-Messages are delivered by submitting them at the target session's own prompt —
-see [manager.md](manager.md#how-a-message-reaches-a-session) for the mechanism
-and its fallback.
+Inspect and control Claude Code sessions. New callers use `wt agent` for
+messaging; the old `send` spelling is a compatibility alias and cannot force
+Claude.
 
 | sub | what it does |
 |---|---|
-| `send <slug> [text...]` | ensure the target Claude session exists, then submit the text at its prompt; reads stdin when no text args. Accepts a branch name plus `wt` / `main` / `dotfiles` / `manager`. Sent from inside a wt harness session, the message is stamped `[<sender slug>]` automatically. If Claude is asking the human a question or showing a permission dialog, the send waits in the serialized per-session queue until the dialog closes. Delivery is confirmed against the target transcript before success is reported |
+| `send <target> [text...]` | deprecated alias for `wt agent send`; resolves the target's active harness and does not force Claude |
 | `ls [--json]` | list slugs with a live Claude tmux session. `--json` adds `session_id`, `pid`, `cwd`, `socket_path`, `transport`, `tmux_session`, `status`, `waiting_for`, `busy`, and `last_activity` |
 | `selftest [<slug>]` | check that prompt injection still works against live sessions (one line each; nonzero if any fails). This is what tells you a Claude Code update moved the injector's structural anchors — `wt doctor` runs it too |
 | `stop <slug>` | stop the target Claude session without typing into its pane (`kill` remains an alias) |

@@ -26,8 +26,8 @@ import {
 import { recordRun as recordHistoryRun } from "../../core/actions.ts";
 import { config } from "../../core/config.ts";
 import { operationErrors } from "../../core/errors.ts";
-import { getHarness, type HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
+import type { HarnessId } from "../../core/harness/index.ts";
+import { sendAgentMessage } from "../../core/harness/agent-routing.ts";
 import { createLogger } from "../../core/logger.ts";
 import { sendWorktreeMessage } from "../../core/worktree-executor.ts";
 import { forkReported } from "../effect-boundary.ts";
@@ -37,7 +37,6 @@ import {
   localWorktreeTarget,
   type WorktreeTarget,
 } from "../../core/worktree-target.ts";
-import { ensureManagerClaudeName, MANAGER_SLUG } from "../../core/manager.ts";
 import { MANAGER_SLOT, SESSION_SLOTS } from "../sessions/slots.ts";
 
 import {
@@ -355,7 +354,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
         remoteTarget ? `[remote:${remoteTarget.location.endpoint.label}]` : slug,
       );
       if (def.target === "session") {
-        const label = `${getHarness(primaryHarness).label} session`;
+        const label = "active agent session";
         const location = remoteTarget
           ? ` on ${remoteTarget.location.endpoint.label}`
           : "";
@@ -365,7 +364,6 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
         ack(`sending ${def.name} to ${label}${location}…`, theme.info, 2000);
         Effect.runFork(sendWorktreeMessage(
           subject.target,
-          primaryHarness,
           body,
           (line) => sessionLog.event.info(line),
         ).pipe(Effect.match({
@@ -394,21 +392,12 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
 
       const deliveryTarget = {
         slug: MANAGER_SLOT.slug,
-        cwd: MANAGER_SLOT.path,
-        managedName: MANAGER_SLOT.claudeName,
         label: "manager",
         text: `[re: ${slug}] ${body}`,
       };
-      ensureManagerClaudeName();
       sessionLog.event.info(`${def.name} → ${deliveryTarget.label}`);
       ack(`sending ${def.name} to ${deliveryTarget.label}…`, theme.info, 2000);
-      Effect.runFork(sendSessionMessage({
-        slug: deliveryTarget.slug,
-        cwd: deliveryTarget.cwd,
-        harnessId: primaryHarness,
-        managedName: deliveryTarget.managedName,
-        text: deliveryTarget.text,
-      }).pipe(Effect.match({
+      Effect.runFork(sendAgentMessage(deliveryTarget.slug, deliveryTarget.text).pipe(Effect.match({
         onFailure: (err) => {
           sessionLog.event.err(`send failed: ${err.message}`, { toast: true });
         },
@@ -491,7 +480,7 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
     def: ActionDef | null,
     extras: string,
   ): Promise<LaunchOutcome> {
-    const { primaryHarness, toast } = opts;
+    const { toast } = opts;
     const slot = SESSION_SLOTS.find((s) => s.slug === slotSlug);
     if (!slot) {
       toast(`unknown slot ${slotSlug}`, theme.warn, 2000);
@@ -508,18 +497,11 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
       toast("prompt is empty", theme.warn, 1500);
       return { launched: false, reason: "prompt is empty" };
     }
-    if (slot.slug === MANAGER_SLUG) ensureManagerClaudeName();
     const label = def?.name ?? "custom message";
     const slotLog = createLogger(slot.slug);
     slotLog.event.info(`${label} → ${slot.label}`);
     toast(`sending ${label} to ${slot.label}…`, theme.info, 2000);
-    Effect.runFork(sendSessionMessage({
-      slug: slot.slug,
-      cwd: slot.path,
-      harnessId: primaryHarness,
-      managedName: slot.claudeName,
-      text: body,
-    }).pipe(Effect.match({
+    Effect.runFork(sendAgentMessage(slot.slug, body).pipe(Effect.match({
       onFailure: (err) => {
         slotLog.event.err(`send failed: ${err.message}`, { toast: true });
       },

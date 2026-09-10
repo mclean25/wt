@@ -25,8 +25,12 @@ import {
   type WorktreeTarget,
 } from "../../core/worktree-target.ts";
 import type { PullRequest } from "../../core/types.ts";
-import { getHarness, type HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
+import { getHarness } from "../../core/harness/index.ts";
+import {
+  resolveAgentRoute,
+  sendAgentMessageToRoute,
+  type RoutedAgentMessageResult,
+} from "../../core/harness/agent-routing.ts";
 import { spawnBackgroundRemove, type LifecycleError } from "../../core/lifecycle.ts";
 import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
@@ -56,6 +60,11 @@ import { remoteWorktreeLedgerKey } from "../../core/worktree-ref.ts";
 const appLog = createLogger("[app]");
 
 const io = operationErrors("destroy flows");
+
+type ConflictHandoffResult = RoutedAgentMessageResult & {
+  skill: string;
+  harnessLabel: string;
+};
 
 /** A remote `wt rm` exiting non-zero — kept tagged (rather than a bare
  *  `Error`) so it doesn't merge into an untyped failure channel. */
@@ -136,10 +145,6 @@ export type DestroyFlowsCtx = {
    * the real locks; this just avoids spamming them from the UI).
    */
   restackBusyRef: { current: Set<string> };
-  /** Shift+TAB-selected primary harness — the conflict handoff injects
-   *  the restack skill into this harness's session, same as a
-   *  session-target action would. */
-  primaryHarness: HarnessId;
 };
 
 export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
@@ -157,7 +162,6 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
     refreshGithub,
     optimisticRemoveRemoteWorktree,
     restackBusyRef,
-    primaryHarness,
   } = ctx;
 
   /**
@@ -602,20 +606,40 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
       );
       return false;
     }
-    const harness = getHarness(primaryHarness);
-    const skill = `${harness.skillPrefix}restack`;
     const backup = backupBranch
       ? ` The pre-rebase tip is backed up at ${backupBranch}.`
       : "";
-    const text = `${skill}\n\nwt's restack engine just bailed on this worktree: ${detail}.${backup} Resolve the conflict and finish the restack.`;
-    log.event.info(`conflict — sending ${skill} to ${harness.label} session`);
     // `res.ok`/`res.reason` are data on the SUCCESS value (the target's
     // own verdict); a genuine Effect failure here means the send never
     // even attempted delivery (e.g. the per-target lock blew up) — the
     // old `.then` with no `.catch` left that case an unhandled
     // rejection, which `forkReported` now reports instead.
     forkReported(
-      sendSessionMessage({ slug, cwd: row.wt.path, harnessId: primaryHarness, text }).pipe(
+      resolveAgentRoute(slug).pipe(
+        Effect.flatMap((route) => {
+          if (!route || route.choice.harnessId === null) {
+            return Effect.succeed<ConflictHandoffResult>({
+              ok: false as const,
+              reason: route
+                ? "could not inspect wt's tmux session registry"
+                : `unknown agent target: ${slug}`,
+              route,
+              skill: "$restack",
+              harnessLabel: "agent",
+            });
+          }
+          const harness = getHarness(route.choice.harnessId);
+          const skill = `${harness.skillPrefix}restack`;
+          const text = `${skill}\n\nwt's restack engine just bailed on this worktree: ${detail}.${backup} Resolve the conflict and finish the restack.`;
+          log.event.info(`conflict — sending ${skill} to ${harness.label} session`);
+          return sendAgentMessageToRoute(route, text).pipe(
+            Effect.map((res): ConflictHandoffResult => ({
+              ...res,
+              skill,
+              harnessLabel: harness.label,
+            })),
+          );
+        }),
         Effect.tap((res) =>
           Effect.sync(() => {
             if (res.ok && res.delivered === false) {
@@ -624,7 +648,7 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
               // verification must say so, because the conflict is still
               // sitting there.
               log.attention.warn(
-                `${skill} handoff never reached the ${harness.label} session — run it by hand`,
+                `${res.skill} handoff never reached the ${res.harnessLabel} session — run it by hand`,
               );
             } else if (res.ok) {
               // Toast: the handoff lands well after the restack's own
@@ -636,21 +660,21 @@ export function makeDestroyFlows(ctx: DestroyFlowsCtx) {
               log.event.ok(
                 `${
                   res.coldStarted
-                    ? `started ${harness.label} session and sent ${skill}`
-                    : `sent ${skill} to ${harness.label} session`
+                    ? `started ${res.harnessLabel} session and sent ${res.skill}`
+                    : `sent ${res.skill} to ${res.harnessLabel} session`
                 }${res.delivered === null ? " (a command's arrival can't be confirmed)" : ""}`,
                 { toast: true },
               );
             } else {
-              log.event.err(`${skill} handoff failed: ${res.reason} — run it by hand`);
-              toast(`${skill} handoff failed: ${res.reason}`, theme.err, 5000);
+              log.event.err(`${res.skill} handoff failed: ${res.reason} — run it by hand`);
+              toast(`${res.skill} handoff failed: ${res.reason}`, theme.err, 5000);
             }
           }),
         ),
       ),
       (error) => {
-        log.event.err(`${skill} handoff failed: ${error.message} — run it by hand`);
-        toast(`${skill} handoff failed: ${error.message}`, theme.err, 5000);
+        log.event.err(`restack handoff failed: ${error.message} — run it by hand`);
+        toast(`restack handoff failed: ${error.message}`, theme.err, 5000);
       },
     );
     return true;

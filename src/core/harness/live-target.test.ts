@@ -18,7 +18,7 @@ describe("chooseHarness", () => {
         "brand-membership-rls-diff",
         "brand-membership-rls-shell",
       ), slugs("brand-membership-rls"), "claude"),
-    ).toEqual({ harnessId: "codex", source: "live" });
+    ).toEqual({ harnessId: "codex", source: "live", liveHarnesses: ["codex"] });
   });
 
   test("falls back to the primary when nothing is live there", () => {
@@ -27,6 +27,7 @@ describe("chooseHarness", () => {
     expect(chooseHarness("foo", live(), slugs("foo"), "codex")).toEqual({
       harnessId: "codex",
       source: "primary",
+      liveHarnesses: [],
     });
   });
 
@@ -34,6 +35,7 @@ describe("chooseHarness", () => {
     expect(chooseHarness("foo", live("foo"), slugs("foo"), "codex")).toEqual({
       harnessId: "claude",
       source: "live",
+      liveHarnesses: ["claude"],
     });
   });
 
@@ -41,6 +43,7 @@ describe("chooseHarness", () => {
     expect(chooseHarness("foo", live("foo~review"), slugs("foo"), "codex")).toEqual({
       harnessId: "claude",
       source: "live",
+      liveHarnesses: ["claude"],
     });
   });
 
@@ -48,10 +51,18 @@ describe("chooseHarness", () => {
     // That is where the human's own F12 would land.
     expect(
       chooseHarness("foo", live("foo", "foo-codex"), slugs("foo"), "codex"),
-    ).toEqual({ harnessId: "codex", source: "live" });
+    ).toEqual({
+      harnessId: "codex",
+      source: "live",
+      liveHarnesses: ["claude", "codex"],
+    });
     expect(
       chooseHarness("foo", live("foo", "foo-codex"), slugs("foo"), "claude"),
-    ).toEqual({ harnessId: "claude", source: "live" });
+    ).toEqual({
+      harnessId: "claude",
+      source: "live",
+      liveHarnesses: ["claude", "codex"],
+    });
   });
 
   test("a NEIGHBOUR worktree's claude session is not read as this slug's codex", () => {
@@ -60,21 +71,23 @@ describe("chooseHarness", () => {
     // them; without it this is the strict-prefix trap again.
     expect(
       chooseHarness("foo", live("foo-codex"), slugs("foo", "foo-codex"), "claude"),
-    ).toEqual({ harnessId: "claude", source: "primary" });
+    ).toEqual({ harnessId: "claude", source: "primary", liveHarnesses: [] });
     // With no such worktree, the same name IS foo's codex session.
     expect(chooseHarness("foo", live("foo-codex"), slugs("foo"), "claude")).toEqual({
       harnessId: "codex",
       source: "live",
+      liveHarnesses: ["codex"],
     });
   });
 
-  test("an unanswerable tmux probe is distinguished from nothing running", () => {
+  test("an unanswerable tmux probe refuses to choose a cold start", () => {
     // Collapsing these is what routes a message to a fresh session
     // while the real one sits there — so `null` gets its own source
     // and the CLI says out loud that it could not check.
     expect(chooseHarness("foo", null, slugs("foo"), "claude")).toEqual({
-      harnessId: "claude",
-      source: "primary-unknown",
+      harnessId: null,
+      source: "unavailable",
+      liveHarnesses: null,
     });
   });
 });

@@ -1,17 +1,13 @@
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
 import { Effect } from "effect";
 
-import { config } from "../../core/config.ts";
 import { operationErrors } from "../../core/errors.ts";
 import { claudeTmuxName } from "../../core/harness/claude/harness.ts";
 import { claudeInjectSelftest, inspectorSocketExists, inspectorSocketPath } from "../../core/harness/claude/inject.ts";
 import { wtSessionUuid } from "../../core/harness/claude/jsonl.ts";
 import { claudeSessions } from "../../core/harness/claude/sessions.ts";
-import { fallbackAdvice, sendSessionMessage } from "../../core/harness/session-messaging.ts";
-import { ensureManagerClaudeName, MANAGER_CLAUDE_NAME, MANAGER_SLUG } from "../../core/manager.ts";
+import { SESSION_SLOTS } from "../../core/session-slots.ts";
 import { dirSlug } from "../../core/stage.ts";
-import { listSessions, WT_SOURCE_SLUG } from "../../core/tmux.ts";
+import { listSessions } from "../../core/tmux.ts";
 import { listWorktrees } from "../../core/worktree.ts";
 import { verifyStepsHeadline, workAge } from "../../core/work-status.ts";
 import { isMergedRemoval, readWtState, verificationOwedAtRemoval } from "../../core/wtstate.ts";
@@ -19,30 +15,21 @@ import type { Worktree } from "../../core/types.ts";
 import { hasHelpFlag } from "../args.ts";
 import { dim, green, red, yellow } from "../colors.ts";
 
-const USAGE = `usage: wt claude send <slug> [text...]   send a prompt to the worktree's claude session
+const USAGE = `usage: wt claude send <target> [text...] deprecated alias for wt agent send
        wt claude ls [--json]             list live claude sessions
        wt claude selftest [<slug>]       check that prompt injection still works
        wt claude stop <slug>             stop the worktree's primary claude session
 
-\`send\` upserts the worktree's PRIMARY Claude Code session: starts it
-detached in the wt tmux server when absent (waiting for claude to
-finish booting), then submits the prompt at that session's own prompt,
-in-process. It lands as an ordinary user turn in the live conversation
-with its existing context — not a headless \`claude -p\` run, and not
-peer-framed text the receiver has to decide whether to act on. A slash
-command runs. A draft in the session's input box is preserved. A busy
-session queues it. If Claude is showing a question or permission
-dialog, wt waits and submits only after that dialog closes. There is no
-completion signal;
-attach via the TUI (F12) to watch.
+\`send\` is a compatibility alias for \`wt agent send\`. It does not force
+Claude: wt routes to the target's active harness, or its Shift+Tab primary
+when none is active. Use \`wt agent send\` in new scripts and instructions.
 
 Messages are stamped with the sending agent (\`[<slug>] …\`) when sent
 from inside a wt harness session. Nothing to pass; nothing to remember.
 
-Besides worktree slugs, \`send\` accepts the repo-level session slugs
-that \`wt claude ls\` lists: wt (the wt source repo), main (the main
-clone), dotfiles, and manager (the fleet coordinator — same session
-as \`wt manager send\`).
+The neutral \`wt agent ls [--json]\` inventory lists every addressable
+worktree and special session. This command's \`ls\`, \`selftest\`, and
+\`stop\` subcommands remain Claude-specific diagnostics and control.
 
 \`ls --json\` adds the stable session id, pid, cwd, tmux identity,
 status, what it is blocked on, last activity, and \`transport\` —
@@ -53,28 +40,19 @@ With no [text...], stdin is read instead (heredoc-friendly for
 multiline prompts). <slug> also accepts a branch name
 (michael/eng-NNNN-...).`;
 
-/**
- * Repo-level session targets, addressable by `send` alongside worktree
- * slugs. Slugs + cwds mirror `tui/sessions/slots.ts` (the TUI slot
- * definitions, which the CLI layer doesn't import) — keep the two in
- * sync. The manager is a NAMED claude session sharing the main clone's
- * cwd; see `core/manager.ts` for why.
- */
-const SLOT_TARGETS: Record<string, { cwd: string; managedName: string | null }> = {
-  [WT_SOURCE_SLUG]: {
-    // <repo>/src/cli/commands → three levels up is the wt source root.
-    cwd: resolve(import.meta.dir, "..", "..", ".."),
-    managedName: null,
-  },
-  main: { cwd: config.paths.mainClone, managedName: null },
-  dotfiles: { cwd: join(homedir(), ".dotfiles"), managedName: null },
-  [MANAGER_SLUG]: {
-    cwd: config.paths.mainClone,
-    managedName: MANAGER_CLAUDE_NAME,
-  },
-};
+/** Claude-only diagnostics/control use the same authoritative slot paths as the TUI. */
+const SLOT_TARGETS = Object.fromEntries(
+  SESSION_SLOTS.map((slot) => [
+    slot.slug,
+    { cwd: slot.path, managedName: slot.claudeName },
+  ]),
+) as Record<string, { cwd: string; managedName: string | null }>;
 
 const io = operationErrors("wt claude");
+
+export function neutralSendArgs(slugOrBranch: string, textArgs: string[]): string[] {
+  return ["send", slugOrBranch, ...textArgs];
+}
 
 /** Resolve a slug-or-branch argument to a live (non-main) worktree. */
 function findWorktree(slugOrBranch: string) {
@@ -89,7 +67,7 @@ function findWorktree(slugOrBranch: string) {
  * removed history gets the real answer ("archived on merge (#N, 2h
  * ago)") instead of a bare "no worktree" — the asker is usually the
  * manager wondering where a row went. Otherwise name the addressable
- * set so the listing (`wt claude ls`) and the sender agree.
+ * set used by the Claude-specific diagnostic/control commands.
  */
 function explainMissingTarget(slugOrBranch: string): void {
   const slug = slugOrBranch.includes("/") ? dirSlug(slugOrBranch) : slugOrBranch;
@@ -117,74 +95,13 @@ function explainMissingTarget(slugOrBranch: string): void {
   console.error(dim(`addressable: worktree slugs (see wt ls) plus ${Object.keys(SLOT_TARGETS).join(", ")}`));
 }
 
-const send = Effect.fn("wt claude send")(function* (slugOrBranch: string, textArgs: string[]) {
-  const slot = SLOT_TARGETS[slugOrBranch] ?? null;
-  const wt = slot ? null : yield* findWorktree(slugOrBranch);
-  if (!slot && !wt) {
-    explainMissingTarget(slugOrBranch);
-    return 1;
-  }
-  // `wt claude send <slug> /dev/stdin <<'MSG'` reads as "take the body
-  // from stdin" and is not: stdin is only read when there are NO text
-  // args, so the whole message became the literal string "/dev/stdin"
-  // and wt reported a successful send of it. Delivering a body that is
-  // visibly a handle to the input being ignored is never what anyone
-  // meant, and the receiving agent is the one who pays. Refusing costs
-  // a retype; guessing cost two worktrees a wasted round each.
-  const STDIN_SENTINELS = new Set(["-", "/dev/stdin", "/dev/fd/0"]);
-  const joined = textArgs.join(" ").trim();
-  if (textArgs.length === 1 && STDIN_SENTINELS.has(joined)) {
-    console.error(red(`"${joined}" is not a message body — wt reads stdin only when no text is given.`));
-    console.error(dim(`  drop the argument to pipe: wt claude send ${slugOrBranch} <<'MSG' ...`));
-    return 2;
-  }
-  const text = (textArgs.length > 0 ? joined : yield* io.promise("stdin", () => Bun.stdin.text())).trim();
-  if (!text) {
-    console.error(red("nothing to send — pass text args or pipe stdin"));
-    return 2;
-  }
-  const slug = slot ? slugOrBranch : wt!.slug;
-  // The manager lives as a named Claude session; discovery needs the
-  // name persisted before sending (same setup as `wt manager send`).
-  if (slug === MANAGER_SLUG) ensureManagerClaudeName();
-  // Through the shared choke point, which owns the transport ladder and
-  // stamps the sending agent. Agents reach for `wt claude send` exactly
-  // as often as the TUI does; neither picks a transport.
-  const res = yield* sendSessionMessage({
-    slug,
-    cwd: slot ? slot.cwd : wt!.path,
-    harnessId: "claude",
-    managedName: slot?.managedName ?? null,
-    text,
-  });
-  if (!res.ok) {
-    console.error(red(`send failed: ${res.reason}`));
-    return 1;
-  }
-  if (res.delivered === false) {
-    console.error(red(`✗ ${slug}'s claude session did not receive the message`));
-    console.error(dim("attach via the wt TUI (F12) and check the session"));
-    return 1;
-  }
-  console.log(
-    green(
-      res.coldStarted
-        ? `✓ started ${slug}'s claude session and sent the prompt`
-        : `✓ sent the prompt to ${slug}'s claude session`,
-    ),
-  );
-  console.log(
-    dim(
-      res.transport === "inspector"
-        ? res.delivered === null
-          ? "submitted at the session's own prompt, where a slash command runs — a command leaves no prompt entry to confirm against; attach via the wt TUI (F12) to watch"
-          : "submitted at the session's own prompt, as an ordinary turn — fire-and-forget from here; attach via the wt TUI (F12) to watch"
-        : res.transport === "terminal"
-          ? `typed into the session's pane — ${fallbackAdvice(res.fallback)}; attach via the wt TUI (F12) to watch`
-          : "submitted through Codex's durable queue",
-    ),
-  );
-  return 0;
+const send = Effect.fn("wt claude send compatibility")(function* (
+  slugOrBranch: string,
+  textArgs: string[],
+) {
+  console.error(dim("`wt claude send` is deprecated; routing through `wt agent send`"));
+  const agent = yield* io.promise("load neutral agent command", () => import("./agent.ts"));
+  return yield* agent.run(neutralSendArgs(slugOrBranch, textArgs));
 });
 
 /**

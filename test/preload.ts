@@ -15,3 +15,6 @@
 import { join } from "node:path";
 
 process.env.WT_CONFIG ??= join(import.meta.dir, "config.toml");
+// A wt-hosted test session inherits the repository selected by its parent
+// TUI. Letting that layer survive defeats the explicit fixture above.
+delete process.env.WT_REPO_CONFIG;

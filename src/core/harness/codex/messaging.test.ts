@@ -27,6 +27,8 @@ function fakes(options: {
   stampedId?: string;
   nativeFailure?: CodexAppServerError;
   cli?: { ok: boolean; reason?: string; unsupported?: boolean };
+  terminalFails?: boolean;
+  unstamped?: boolean;
 } = {}) {
   const calls: string[] = [];
   const deps = {
@@ -40,7 +42,9 @@ function fakes(options: {
         known: options.liveKnown !== false,
         all: new Set(options.live === false ? [] : ["task-codex"]),
         harnessSessionIds: new Map(
-          options.stampedId ? [["task-codex", options.stampedId]] : [],
+          options.live !== false && !options.unstamped
+            ? [["task-codex", options.stampedId ?? "primary-id"]]
+            : [],
         ),
       });
     },
@@ -64,6 +68,9 @@ function fakes(options: {
     },
     terminal: ({ sessionId }: { sessionId: string }) => {
       calls.push(`terminal:${sessionId}`);
+      if (options.terminalFails) {
+        return Effect.succeed({ ok: false as const, reason: "Codex is not safe for terminal input (question)" });
+      }
       return Effect.succeed({
         ok: true as const,
         coldStarted: false,
@@ -116,6 +123,7 @@ describe("Codex message orchestration", () => {
 
   test("addresses the mapped primary when a newer secondary rollout exists", async () => {
     const fake = fakes({
+      stampedId: "primary-id",
       sessions: [session("primary-id", "primary", 1), session("second-id", "2", 2)],
     });
     await Effect.runPromise(fake.send(target));
@@ -157,6 +165,45 @@ describe("Codex message orchestration", () => {
     expect(fake.calls).toContain("terminal:primary-id");
   });
 
+  test("slash commands execute through the guarded exact-thread terminal path", async () => {
+    const fake = fakes();
+    const result = await Effect.runPromise(fake.send({ ...target, text: "/compact focus" }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      transport: "terminal",
+      delivered: null,
+    });
+    expect(fake.calls).toContain("terminal:primary-id");
+    expect(fake.calls.some((call) => call.startsWith("native:") || call.startsWith("cli:"))).toBe(false);
+  });
+
+  test("an unsafe slash command is refused instead of entering a queue", async () => {
+    const fake = fakes({ terminalFails: true });
+    const result = await Effect.runPromise(fake.send({ ...target, text: "/compact" }));
+
+    expect(result).toEqual({ ok: false, reason: "Codex is not safe for terminal input (question)" });
+    expect(fake.calls).toContain("terminal:primary-id");
+    expect(fake.calls.some((call) => call.startsWith("native:") || call.startsWith("cli:"))).toBe(false);
+  });
+
+  test("a UUID-less slash command uses the guarded live-pane path", async () => {
+    const fake = fakes({ sessions: [], live: true, unstamped: true });
+    const result = await Effect.runPromise(fake.send({ ...target, text: "/compact" }));
+
+    expect(result).toMatchObject({ ok: true, transport: "terminal", delivered: null });
+    expect(fake.calls).toContain("live-terminal");
+    expect(fake.calls).not.toContain("bootstrap");
+  });
+
+  test("a cold UUID-less slash command starts once then waits on the live pane", async () => {
+    const fake = fakes({ sessions: [], live: false });
+    const result = await Effect.runPromise(fake.send({ ...target, text: "/compact" }));
+
+    expect(result).toMatchObject({ ok: true, transport: "terminal", coldStarted: true, delivered: null });
+    expect(fake.calls).toEqual(["live", "discover", "start", "discover", "live-terminal"]);
+  });
+
   test("a failed CLI queue is treated as ambiguous and is never typed", async () => {
     const fake = fakes({
       nativeFailure: appError("absent"),
@@ -177,7 +224,7 @@ describe("Codex message orchestration", () => {
   });
 
   test("falls back to the exact live tmux slot when no UUID can be recovered", async () => {
-    const fake = fakes({ sessions: [], live: true });
+    const fake = fakes({ sessions: [], live: true, unstamped: true });
     const result = await Effect.runPromise(fake.send(target));
     expect(result).toMatchObject({
       ok: true,
@@ -188,6 +235,23 @@ describe("Codex message orchestration", () => {
     expect(fake.calls).toContain("live-terminal");
     expect(fake.calls).not.toContain("bootstrap");
     expect(fake.calls.some((call) => call.startsWith("native:"))).toBe(false);
+  });
+
+  test("a live unstamped slot never infers ownership from the primary name map", async () => {
+    const fake = fakes({
+      live: true,
+      unstamped: true,
+      sessions: [session("primary-id", "primary", 1)],
+    });
+    const result = await Effect.runPromise(fake.send(target));
+
+    expect(result).toMatchObject({
+      ok: true,
+      transport: "terminal",
+      fallbackReason: "the live Codex slot has no recoverable thread UUID",
+    });
+    expect(fake.calls).toContain("live-terminal");
+    expect(fake.calls).not.toContain("native:primary-id");
   });
 
   test("fails closed when tmux liveness cannot be read", async () => {

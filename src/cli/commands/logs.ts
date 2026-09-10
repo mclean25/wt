@@ -143,7 +143,7 @@ export const runWithDeps = Effect.fn("wt logs")(function* (
       dim(slug ? `No destroy logs for ${slug}.` : "No destroy logs found."),
     );
     console.log(
-      dim("(destroy logs only — a session's own output is `wt claude ls`"),
+      dim("(destroy logs only — session routing is shown by `wt agent ls`"),
     );
     console.log(
       dim(

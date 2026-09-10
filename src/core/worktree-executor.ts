@@ -9,8 +9,7 @@ import {
   type RunOptions,
   type RunResult,
 } from "./proc.ts";
-import { sendSessionMessage } from "./harness/session-messaging.ts";
-import type { HarnessId } from "./harness/index.ts";
+import { sendAgentMessage } from "./harness/agent-routing.ts";
 import { devServerLogs, readDevCrashLog } from "./dev-server.ts";
 import {
   interactiveRemoteSshArgv,
@@ -126,18 +125,11 @@ export type WorktreeMessageResult =
 /** Deliver to the target's primary worktree session at either location. */
 export function sendWorktreeMessage(
   target: WorktreeTarget,
-  harnessId: HarnessId,
   text: string,
   onLine?: (line: string) => void,
 ): Effect.Effect<WorktreeMessageResult, WorktreeExecutorError> {
   if (target.location.kind === "local") {
-    return sendSessionMessage({
-      slug: target.slug,
-      cwd: target.path,
-      harnessId,
-      managedName: null,
-      text,
-    }).pipe(
+    return sendAgentMessage(target.slug, text).pipe(
       Effect.mapError((cause) => new WorktreeExecutorError({ operation: "message", cause })),
       Effect.map((result) => result.ok
       ? {
@@ -150,7 +142,7 @@ export function sendWorktreeMessage(
   }
   return runWorktreeWt(
     target,
-    ["agent", "send", target.slug, "--harness", harnessId, text],
+    ["agent", "send", target.slug, text],
     { onLine },
   ).pipe(
     Effect.map((code): WorktreeMessageResult => code === 0

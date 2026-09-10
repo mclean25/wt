@@ -12,8 +12,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import { Effect, Option } from "effect";
 
-import type { HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
+import { sendAgentMessage } from "../../core/harness/agent-routing.ts";
 import { createLogger } from "../../core/logger.ts";
 import {
   buildErrorInvestigationPrompt,
@@ -50,7 +49,6 @@ export function cancelErrorInvestigate(): void {
 }
 
 export type ErrorFlowCtx = {
-  primaryHarness: HarnessId;
   setModal: Dispatch<SetStateAction<Modal | null>>;
   doEnterSlotSession: (slot: SessionSlot) => void;
   toast: (message: string, color?: string, ms?: number) => void;
@@ -59,7 +57,7 @@ export type ErrorFlowCtx = {
 export function makeErrorFlows(ctx: ErrorFlowCtx): {
   doErrorInvestigate: () => void;
 } {
-  const { primaryHarness, setModal, doEnterSlotSession, toast } = ctx;
+  const { setModal, doEnterSlotSession, toast } = ctx;
 
   /** Patch inject state only while the error overlay is still up. */
   function patchInject(inject: Extract<Modal, { kind: "errors" }>["inject"]): void {
@@ -81,12 +79,7 @@ export function makeErrorFlows(ctx: ErrorFlowCtx): {
     Effect.runFork(
       // Same tmux session `,` attaches to. The prompt lands in the
       // conversation the user is about to enter.
-      sendSessionMessage({
-        slug: WT_SOURCE_SLOT.slug,
-        cwd: WT_SOURCE_SLOT.path,
-        harnessId: primaryHarness,
-        text: buildErrorInvestigationPrompt(captured),
-      }).pipe(
+      sendAgentMessage(WT_SOURCE_SLOT.slug, buildErrorInvestigationPrompt(captured)).pipe(
         Effect.timeoutOption(SEND_TIMEOUT),
         Effect.match({
           onFailure: (error) => {

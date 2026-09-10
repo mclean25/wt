@@ -45,6 +45,11 @@ export type CodexMessageTarget = {
   readonly text: string;
 };
 
+/** Codex slash commands are TUI actions, not app-server user messages. */
+export function isCodexSlashCommand(text: string): boolean {
+  return /^\/[a-z][a-z0-9_-]*(\s|$)/.test(text.trimStart());
+}
+
 type Dependencies = {
   readonly discover: typeof discoverCodexSessions;
   readonly liveInventory: typeof listSessionsWithHarnessIds;
@@ -127,6 +132,7 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
   return Effect.fn("sendCodexMessage")(function* (
     target: CodexMessageTarget,
   ): Effect.fn.Return<CodexMessageResult> {
+    const command = isCodexSlashCommand(target.text);
     const tmuxName = codexHarness.tmuxSessionName(target.slug, null);
     const liveInventory = yield* deps.liveInventory();
     if (!liveInventory.known) {
@@ -145,11 +151,12 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
       };
     }
     let sessions = discovered.success;
-    // A live tmux stamp is the exact conversation currently acting as this
-    // worktree's agent, including a deliberately selected secondary. Old
-    // unstamped slots and cold starts use wt's stable primary mapping. Never
-    // infer either identity from rollout recency.
-    let sessionId = liveBefore && stampedLiveId !== null
+    // A live tmux stamp is the only proof of which conversation currently
+    // owns that pane, including a deliberately selected secondary. A stable
+    // "primary" name map is useful for a cold start, but cannot establish
+    // ownership of an already-live unstamped slot. That case stays UUID-less
+    // and takes the guarded exact-pane fallback below.
+    let sessionId = liveBefore
       ? stampedLiveId
       : primarySingleSlotSession(sessions)?.sessionId ?? null;
     let coldStarted = false;
@@ -170,6 +177,26 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
         sessions = afterStart.success;
         sessionId = primarySingleSlotSession(sessions)?.sessionId ?? null;
       }
+    }
+
+    if (command) {
+      // The app-server queue deliberately treats its payload as user text;
+      // slash-command expansion belongs to the interactive TUI. Keep the
+      // same exact-thread readiness gate as the legacy terminal fallback,
+      // and use the UUID-less live-pane gate for a freshly bootstrapped slot.
+      const terminal = sessionId === null
+        ? yield* deps.liveTerminal(target)
+        : yield* deps.terminal({ ...target, sessionId });
+      return terminal.ok
+        ? {
+            ok: true,
+            transport: "terminal",
+            coldStarted: terminal.coldStarted || coldStarted,
+            delivered: null,
+            resent: false,
+            fallbackReason: "Codex slash commands execute through the interactive terminal",
+          }
+        : terminal;
     }
 
     if (sessionId === null) {

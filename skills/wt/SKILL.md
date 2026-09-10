@@ -86,13 +86,13 @@ in each one.
   or attach/detach its secondary GitHub issue. The primary id stays parsed
   from the slug; the attached GH issue becomes the `i`-key / `y i` target
   (most specific wins), while `I` / `y I` always hit the primary.
-- `wt agent send <slug> <text…>` / `wt agent start <slug>` — message or
-  cold-start the worktree's configured primary coding-agent harness. `start`
-  invokes the bundled start skill with the receiving harness's native prefix,
-  so callers never need to special-case Claude, Codex, or OpenCode. It refuses
-  before typing if that harness cannot resolve the skill. For a configured SSH
-  worker, `wt remote agent start <slug>` first provisions its bundled skills
-  and instructions non-interactively, preserving modified personal copies.
+- `wt agent send <target> <text…>` / `wt agent ls [--json]` — message or list
+  every addressable worktree and the `wt`, `main`, `dotfiles`, and `manager`
+  special sessions. wt selects the target's active harness, or the configured
+  primary when none is active; callers never choose a harness. `wt agent start
+  <slug>` is worktree-only and invokes the bundled start skill with the selected
+  harness's native prefix. For a configured SSH worker, `wt remote agent start
+  <slug>` first provisions its bundled skills and instructions.
 - `wt dev <start|stop|status|logs> [slug]` — the worktree's dev server, when
   the project configures one. Use it instead of running the project's dev
   command yourself: wt pins the server to a port it allocates per worktree

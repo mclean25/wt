@@ -468,7 +468,7 @@ hidden = ["opencode"]
 | key | required | default | meaning |
 |---|---|---|---|
 | `primary` | no | `"claude"` | `"claude"`, `"codex"`, or `"opencode"`. Used when this repository has no persisted override. |
-| `hidden` | no | `[]` | Harnesses omitted from Tab cycling, automatic live-session routing, TUI session discovery, picker entries, and activity polling. Explicit CLI addressing such as `wt agent send --harness opencode …` remains available. The configured `primary` cannot be hidden, and at least one harness must remain visible. |
+| `hidden` | no | `[]` | Harnesses omitted from Tab cycling, automatic live-session routing, TUI session discovery, picker entries, and activity polling. Messaging has no harness override, so a hidden harness is not selected for a new send. The configured `primary` cannot be hidden, and at least one harness must remain visible. |
 
 ## `[naming]` — optional generated worktree names
 

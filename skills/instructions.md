@@ -87,7 +87,11 @@ Clear a satisfied gate with `wt status --unblock`.
 Use `--verify-after-merge` when a specific check can only run after deployment.
 This does not block merging; it preserves the worktree and returns it as
 `needs-testing` after merge. Set it as soon as the obligation is known; later
-status updates preserve it. Record it as:
+status updates preserve it. Classify against the current unmerged change: a
+carried obligation is dormant while its follow-up fix is still unmerged, so
+keep that change `ready --verify-after-merge`; use `needs-testing` only when the
+relevant landed version is runnable now. Never treat carrying an obligation as
+evidence that an earlier check passed. Record it as:
 
     <one line: what only the deployed environment can prove>
     <why a local run cannot, when that is not obvious>

@@ -58,6 +58,7 @@ worktree_root = ${JSON.stringify(worktrees)}
 log_dir = ${JSON.stringify(join(root, "logs"))}
 lock_dir = ${JSON.stringify(join(root, "locks"))}
 cache_db = ${JSON.stringify(join(root, "cache.sqlite"))}
+state_db = ${JSON.stringify(join(root, "state.sqlite"))}
 
 [branch]
 prefix = "test"

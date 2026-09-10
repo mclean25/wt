@@ -107,7 +107,7 @@ type SessionInfo = {
 
 /**
  * Per-worktree primary-session liveness, from the same two signals
- * `wt claude ls --json` joins: tmux (alive) and Claude's process
+ * Harness session discovery joins tmux liveness with each harness's process
  * registry (busy / last_activity, matched by cwd + name; see
  * commands/claude.ts for the name-leg rationale). Worktree primaries
  * register under the slug; "primary" and null are the pre-slug-naming

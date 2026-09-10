@@ -40,13 +40,12 @@ import { dim, green, red } from "../colors.ts";
 const io = operationErrors("wt manager");
 
 const loadManagerSessionModules = io.promise("load manager session modules", async () => {
-  const [configModule, messaging, primary, tmux] = await Promise.all([
+  const [configModule, primary, tmux] = await Promise.all([
     import("../../core/config.ts"),
-    import("../../core/harness/session-messaging.ts"),
     import("../../core/harness/primary.ts"),
     import("../../core/tmux.ts"),
   ]);
-  return { config: configModule.config, messaging, primary, tmux };
+  return { config: configModule.config, primary, tmux };
 });
 
 export const run = Effect.fn("wt manager")(function* (argv: string[]) {
@@ -104,39 +103,8 @@ export const run = Effect.fn("wt manager")(function* (argv: string[]) {
       console.error(red("wt manager send requires a message"));
       return 2;
     }
-    yield* io.sync("send", ensureManagerClaudeName);
-    const modules = yield* loadManagerSessionModules;
-    const res = yield* modules.messaging.sendSessionMessage({
-      slug: MANAGER_SLUG,
-      cwd: modules.config.paths.mainClone,
-      harnessId: modules.primary.readPrimaryHarness(),
-      managedName: MANAGER_CLAUDE_NAME,
-      text,
-    });
-    if (!res.ok) {
-      console.error(red(`send failed: ${res.reason}`));
-      return 1;
-    }
-    // A papercut report that never arrived is worse than one that failed
-    // loudly. Both transports confirm against the manager's own
-    // transcript before this reports success.
-    if (res.delivered === false) {
-      console.error(red("✗ the manager session did not receive the message"));
-      console.error(
-        dim(
-          res.resent
-            ? "retried once and still nothing in its transcript — press m in wt and check the session"
-            : "the session did not accept the message — press m in wt to check it",
-        ),
-      );
-      return 1;
-    }
-    console.log(green(res.coldStarted ? "✓ manager started, message sent" : "✓ sent to manager"));
-    if (res.resent) {
-      console.log(dim("» the first delivery attempt failed on startup; retried once"));
-    }
-    console.log(dim("» the manager picks it up as its next turn; press m in wt to watch"));
-    return 0;
+    const agent = yield* io.promise("load neutral agent command", () => import("./agent.ts"));
+    return yield* agent.run(["send", MANAGER_SLUG, text]);
   }
 
   if (sub !== undefined) {
