@@ -4,7 +4,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { inspectorSocketPath } from "../harness/claude/inject.ts";
+import { codexPaneOptionArgs } from "./attach.ts";
 import { wrapInnerArgs } from "./inner-process.ts";
+
+describe("per-harness pane options", () => {
+  test("makes only the Codex cursor non-blinking", () => {
+    expect(codexPaneOptionArgs("codex", "task-codex")).toEqual([
+      "set-option",
+      "-p",
+      "-t",
+      "task-codex",
+      "cursor-style",
+      "block",
+    ]);
+    expect(codexPaneOptionArgs("claude", "task")).toEqual([]);
+    expect(codexPaneOptionArgs("opencode", "task-opencode")).toEqual([]);
+    expect(codexPaneOptionArgs("shell", "task-shell")).toEqual([]);
+  });
+});
 
 const tempDirs: string[] = [];
 

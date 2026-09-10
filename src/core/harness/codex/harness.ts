@@ -43,16 +43,12 @@ const log = createLogger("[codex]");
 const CODEX_GLYPH = "\u{F4AC}"; // nf-oct-cloud
 const CODEX_COLOR = "#4d56d6";
 const CODEX_TMUX_INFIX = "-codex";
-// Codex's animated shimmer uses rapidly changing Braille cells across the
-// composer rows. Through tmux those cells can survive a redraw and make the
-// hardware cursor appear to jump even though tmux's cursor coordinate is
-// correct. wt sessions trade that decoration for a stable full-screen TUI;
-// Codex launched directly by the user keeps their normal config.
+// Keep Codex in a real full-screen buffer under tmux. Cursor stabilization is
+// a pane concern (`codexPaneOptionArgs` in tmux/attach.ts), not a reason to
+// disable Codex's animations and degrade the TUI.
 const CODEX_TMUX_TUI_ARGS = [
   "-c",
   'tui.alternate_screen="always"',
-  "-c",
-  "tui.animations=false",
 ] as const;
 
 const CODEX_SESSIONS_DIR = join(homedir(), ".codex", "sessions");

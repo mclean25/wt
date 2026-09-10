@@ -70,8 +70,6 @@ describe("Codex main/manager ownership", () => {
     const tuiArgs = [
       "-c",
       'tui.alternate_screen="always"',
-      "-c",
-      "tui.animations=false",
     ];
     expect(codexHarness.buildArgs({ ...args, slug: "manager" })).toEqual([
       "codex",
