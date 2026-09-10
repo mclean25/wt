@@ -115,6 +115,9 @@ The private tmux server advertises and retains OSC 8 hyperlinks. Because its
 mouse mode would otherwise capture the outer terminal's link gesture, the root
 `MouseDown1Pane` binding opens `#{mouse_hyperlink}` directly and preserves the
 standard select-and-forward behavior for every non-link click.
+It also leaves tmux's `alternate-screen` support enabled: full-screen harness
+TUIs such as Codex depend on `smcup`/`rmcup` for a stable full-height viewport
+and cursor redraws.
 
 **The CLI dispatcher imports lazily.** `cli/index.ts` maps each subcommand to a `() => import("./commands/<name>.ts")` thunk, so `wt <cmd>` loads that command's module graph and nothing else (35 modules for `wt status`, against 153 for all commands at once). This is containment, not speed: users update hot from main, so any push can put a broken module in front of every agent on the machine, and a static barrel turns one bad export into a total outage — which is exactly what happened, taking `wt status` down with the transport it doesn't use. Commands whose branches differ in what they need split further: `wt manager report` imports no session machinery at all, so the fleet keeps its ability to report that delivery is broken. `scripts/broken-module-check.sh` asserts the property by breaking a module in a throwaway copy of `src/` and printing which commands survive. `main.ts` still routes `update`/`rollback`/`version` around the dispatcher entirely, because those must work when the dispatcher itself is what failed to parse ([updates.md](updates.md)).
 

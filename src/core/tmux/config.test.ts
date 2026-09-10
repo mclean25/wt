@@ -4,6 +4,12 @@ import { buildConfig } from "./config.ts";
 import { sessionSwitchTarget } from "./naming.ts";
 
 describe("worktree session shortcut routing", () => {
+  test("allows full-screen harness TUIs to use the alternate screen", () => {
+    const config = buildConfig();
+    expect(config).toContain("set -g alternate-screen on");
+    expect(config).not.toContain("set -g alternate-screen off");
+  });
+
   test("the owning F-key detaches and cross-session keys request a switch", () => {
     const config = buildConfig();
     expect(config).toContain(

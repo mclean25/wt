@@ -15,9 +15,10 @@ export function configDir(): string {
  * Terminal-capability preamble for the wt server's generated config.
  * Notable choices:
  *  - `status off` + `set-titles off`: no tmux chrome anywhere.
- *  - `alternate-screen off`: tmux fakes alt-screen for inner programs
- *    instead of switching the outer terminal's buffer, which removes
- *    the flash on enter/exit between opentui's alt-screen and tmux's.
+ *  - `alternate-screen on`: full-screen inner TUIs must be allowed to use
+ *    smcup/rmcup. Disabling it leaves Codex in the normal scrollback buffer,
+ *    so its initial viewport only grows as output arrives and composer
+ *    redraws can leave the cursor visibly jumping around the screen.
  *  - `escape-time 0`: kills the 500ms ESC delay that breaks claude's
  *    keybindings.
  *  - `mouse on` + `focus-events on`: silences claude's "add this to
@@ -45,7 +46,7 @@ export function configDir(): string {
  *  - `unbind C-b`: freed up for each config's own bindings below.
  */
 export const TERMINAL_PREAMBLE = `set -g status off
-set -g alternate-screen off
+set -g alternate-screen on
 set -g set-titles off
 set -sg escape-time 0
 set -g mouse on
