@@ -105,6 +105,16 @@ type GqlReviewRequestResponse = {
   data?: { search?: { nodes?: Array<GqlReviewRequestNode | null> } };
 };
 
+/** Exact, case-insensitive match against GitHub's canonical `owner/repo` name. */
+export function reviewRepositoryIsIgnored(
+  repository: string | null | undefined,
+  ignored: readonly string[] = config.github.ignoredReviewRepositories,
+): boolean {
+  if (!repository) return false;
+  const target = repository.trim().toLowerCase();
+  return ignored.some((name) => name.trim().toLowerCase() === target);
+}
+
 export const fetchReviewRequests = Effect.fn("fetchReviewRequests")(function* (
   signal?: AbortSignal,
 ): Effect.fn.Return<ReviewRequestPr[], ReviewRequestsError> {
@@ -167,6 +177,8 @@ export const fetchReviewRequests = Effect.fn("fetchReviewRequests")(function* (
     // is `[Issue | PullRequest | ...]`).
     if (!n) continue;
     if (typeof n.number !== "number" || !n.url || !n.title) continue;
+    const repoNameWithOwner = n.repository?.nameWithOwner ?? "";
+    if (reviewRepositoryIsIgnored(repoNameWithOwner)) continue;
     const contexts =
       n.commits?.nodes[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? null;
     const decision =
@@ -179,7 +191,7 @@ export const fetchReviewRequests = Effect.fn("fetchReviewRequests")(function* (
       number: n.number,
       url: n.url,
       title: n.title,
-      repoNameWithOwner: n.repository?.nameWithOwner ?? "",
+      repoNameWithOwner,
       headRefName: n.headRefName ?? null,
       author: n.author?.login ?? null,
       isDraft: n.isDraft ?? false,
