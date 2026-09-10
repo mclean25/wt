@@ -43,6 +43,17 @@ const log = createLogger("[codex]");
 const CODEX_GLYPH = "\u{F4AC}"; // nf-oct-cloud
 const CODEX_COLOR = "#4d56d6";
 const CODEX_TMUX_INFIX = "-codex";
+// Codex's animated shimmer uses rapidly changing Braille cells across the
+// composer rows. Through tmux those cells can survive a redraw and make the
+// hardware cursor appear to jump even though tmux's cursor coordinate is
+// correct. wt sessions trade that decoration for a stable full-screen TUI;
+// Codex launched directly by the user keeps their normal config.
+const CODEX_TMUX_TUI_ARGS = [
+  "-c",
+  'tui.alternate_screen="always"',
+  "-c",
+  "tui.animations=false",
+] as const;
 
 const CODEX_SESSIONS_DIR = join(homedir(), ".codex", "sessions");
 /** Initial backwards window for state derivation. Expanded when a large
@@ -106,11 +117,11 @@ export const codexHarness: Harness = {
 
   buildArgs(args: HarnessSpawnArgs) {
     if (args.resumeSessionId !== null) {
-      return ["codex", "resume", args.resumeSessionId];
+      return ["codex", ...CODEX_TMUX_TUI_ARGS, "resume", args.resumeSessionId];
     }
-    if (args.slug === "manager") return ["codex", CODEX_MANAGER_PROMPT];
-    if (args.slug === "main") return ["codex", CODEX_MAIN_PROMPT];
-    return ["codex"];
+    if (args.slug === "manager") return ["codex", ...CODEX_TMUX_TUI_ARGS, CODEX_MANAGER_PROMPT];
+    if (args.slug === "main") return ["codex", ...CODEX_TMUX_TUI_ARGS, CODEX_MAIN_PROMPT];
+    return ["codex", ...CODEX_TMUX_TUI_ARGS];
   },
 
   ensureTrusted(wtPath) {

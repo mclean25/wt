@@ -58,7 +58,7 @@ test("a pause set while live survives into the removed history", () => {
     const m = await import(${WTSTATE_MOD});
     m.toggleSlugAutomationsPaused("s");
     m.recordRemovedWorktrees([
-      { slug: "s", branch: "t/s", removedAt: "2026-08-27T12:00:00.000Z" },
+      { slug: "s", branch: "t/s", removedAt: new Date().toISOString() },
     ]);
     const entry = m.readWtState().removed.find((e) => e.slug === "s");
     console.log(JSON.stringify({ paused: entry.automationsPaused === true }));
@@ -70,7 +70,7 @@ test("an unpaused worktree records no flag — absence means not paused", () => 
   const out = inSandbox(`
     const m = await import(${WTSTATE_MOD});
     m.recordRemovedWorktrees([
-      { slug: "s", branch: "t/s", removedAt: "2026-08-27T12:00:00.000Z" },
+      { slug: "s", branch: "t/s", removedAt: new Date().toISOString() },
     ]);
     const entry = m.readWtState().removed.find((e) => e.slug === "s");
     console.log(JSON.stringify({ flag: entry.automationsPaused ?? null }));
@@ -82,7 +82,7 @@ test("toggling on the archived row persists, and toggles back off", () => {
   const out = inSandbox(`
     const m = await import(${WTSTATE_MOD});
     m.recordRemovedWorktrees([
-      { slug: "s", branch: "t/s", removedAt: "2026-08-27T12:00:00.000Z" },
+      { slug: "s", branch: "t/s", removedAt: new Date().toISOString() },
     ]);
     const on = m.toggleRemovedAutomationsPaused("s");
     const afterOn = m.readWtState().removed.find((e) => e.slug === "s").automationsPaused;
@@ -104,12 +104,13 @@ test("a later minimal confirm does not blank a pause toggled on the archived row
   // ordering hazard `work` has.
   const out = inSandbox(`
     const m = await import(${WTSTATE_MOD});
+    const removedAt = Date.now();
     m.recordRemovedWorktrees([
-      { slug: "s", branch: "t/s", removedAt: "2026-08-27T12:00:00.000Z" },
+      { slug: "s", branch: "t/s", removedAt: new Date(removedAt).toISOString() },
     ]);
     m.toggleRemovedAutomationsPaused("s");
     m.recordRemovedWorktrees([
-      { slug: "s", branch: "t/s", removedAt: "2026-08-27T12:00:05.000Z" },
+      { slug: "s", branch: "t/s", removedAt: new Date(removedAt + 5_000).toISOString() },
     ]);
     const entry = m.readWtState().removed.find((e) => e.slug === "s");
     console.log(JSON.stringify({ paused: entry.automationsPaused === true }));
