@@ -71,17 +71,17 @@ Everything is ordinary CLI surface, so any harness can drive it:
 - `wt status <slug> <state> …` — assert on a worktree's behalf after acting on it (`--note-only` sharpens a note without touching state or timestamp).
 - `wt edge <from> <before|conflicts|enables> <to> [--blocks|--prefer] [-m why]` — record merge sequencing as structured state instead of prose ([cli.md](cli.md#wt-edge-from-kind-to)); `wt edge --json` reads it back with staleness computed, and each endpoint's `wt fleet --json` row carries the same objects inline. Edges self-expire when either branch moves — re-assert what still matters, never audit the list. Worktrees assert their own first-hand dependencies; cross-branch edges are yours to assert.
 - `wt dev queue` / `wt dev queue <slug> --first` — the dev-slot wait queue, and the one lever for saying a worktree goes first. Promotion edits that waiter's own entry, so it takes effect on the waiter's next poll with no message and no cooperation; asking an agent to stand aside instead loses to a slot that frees instantly (it did, once, with three agents all cooperating correctly). Only a queued worktree can be moved (`wt dev start --wait` first), the tier lasts exactly as long as that wait, and worktrees cannot promote themselves — this is the fleet call they are told to bring here.
-- `wt agent send <slug> "<text>"` — ensure and nudge a worktree's configured primary harness. `wt agent start <slug>` invokes its bundled start skill with the correct harness-native prefix and refuses before typing when that harness cannot resolve the skill. For a worker, use `wt remote agent start <slug>`; it provisions the remote bundled skills and instructions first.
-- `wt claude send <slug> "<text>"` — Claude-specific compatibility path, and the path for the `wt`/`main`/`dotfiles`/`manager` repo-level slots (an archived slug answers with why it is gone). Delivery is confirmed against the target transcript; a non-zero exit means the message is not in that conversation. A payload that IS a slash command (`/compact`, a bare `/context`) runs, because submitting at the prompt is exactly what running one requires — but a command leaves no prompt entry behind, so its delivery is reported as unknown rather than confirmed.
-- `wt claude ls --json` — live sessions with stable session, process, tmux and activity fields, plus `transport` (`inspector` = wt can submit into it directly; `terminal` = it has to be typed at) and `waiting_for` (what it is blocked on, when it is).
+- `wt agent send <target> "<text>"` — nudge a worktree, branch alias, or the `wt`/`main`/`dotfiles`/`manager` special sessions. wt chooses that target's active harness, or the configured primary when none is active, and cold-starts it. `wt agent start <slug>` invokes a worktree's bundled start skill with the selected harness's native prefix. For a remote worker, use `wt remote agent start <slug>`.
+- `wt agent ls --json` — the matching harness-neutral address book, including special sessions, active harnesses, selected harness, and selection source. An inaccessible tmux registry fails closed rather than appearing empty.
+- `wt claude ls --json` / `wt claude selftest` — Claude-only diagnostics. The deprecated `wt claude send` spelling delegates to `wt agent send` and cannot force Claude.
 - `wt manager report [--ok|--warn|--err] "<text>"` — surface a terse result on the TUI's attention feed (the palette's report-back channel).
 - `gh` — PR state, merges (only when the human asked), CI.
 
 ### wt owns session addressing and delivery
 
-Callers address worktrees through `wt agent send`, the manager through
-`wt manager send`, and Claude-only compatibility slots through `wt claude
-send`, never through a harness-private peer name, socket path, or tmux pane.
+Callers address every worktree and special slot through `wt agent send`; `wt
+manager send` is the convenient manager alias. They never select a harness or
+use a harness-private peer name, socket path, or tmux pane.
 wt maps the canonical cwd and managed name to a stable conversation identity,
 discovers a live process, and cold-starts it when absent. Tmux remains the
 process and interactive UI host.
@@ -95,15 +95,20 @@ Messages are also **signed**: a send from inside a wt harness session is prefixe
 wt uses each harness's native input boundary and keeps tmux as the visible,
 surviving UI host.
 
-For Codex, wt wakes the exact tmux slot and queues by the authoritative thread
+For Codex, wt wakes the exact tmux slot and queues ordinary messages and
+`$skill` prompts by the authoritative thread
 UUID. With the app-server daemon online it opens a short-lived local Unix
 WebSocket, adds the message to Codex's durable FIFO, explicitly starts it when
 idle, and disconnects. It never resumes or subscribes to the thread, so the TUI
 remains the only owner of questions and approvals. Busy and blocked turns keep
 the prompt queued. If the daemon is offline, `codex queue` writes the same
-host-local queue; a remote send runs on the remote host over SSH rather than
+host-local queue. If a live tmux slot has no recoverable UUID, wt waits for
+that exact slot's empty composer and types there instead of dropping the
+message. A remote send runs on the remote host over SSH rather than
 forwarding a socket. An uncertain add is reconciled by its client id and is
-never blindly retried. `wt codex selftest` checks this surface without sending.
+never blindly retried. A `/command` uses guarded tmux input instead: the app
+server queue accepts it as user text rather than executing Codex's TUI command.
+`wt codex selftest` checks the native queue surface without sending.
 
 For Claude, wt submits the message **at the target session's own prompt**, in
 its own process. Every Claude session wt starts is launched under

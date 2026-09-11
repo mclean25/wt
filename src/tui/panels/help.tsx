@@ -227,6 +227,7 @@ const KEY_BLOCKS: Block[] = [
           { key: "g p", label: "open PR in GitHub" },
           { key: "l p", label: "open PR in Linear" },
           { key: "w", label: "check out branch as worktree → Reviews" },
+          { key: "d", label: "dismiss this request until the PR changes" },
         ],
       }]
     : []),

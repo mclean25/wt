@@ -295,6 +295,12 @@ export type GithubConfig = {
   /** Whether this repository uses GitHub's human-reviewer workflow. */
   reviewers: boolean;
   /**
+   * Exact GitHub `owner/repository` names whose incoming review requests
+   * should not appear in the pinned review-request section. Matching is
+   * case-insensitive because GitHub repository names are case-insensitive.
+   */
+  ignoredReviewRepositories: readonly string[];
+  /**
    * Glob patterns matched against check context names (CheckRun.name /
    * StatusContext.context). Matching contexts are dropped from the PR
    * checks rollup, so non-CI bots like CodeRabbit don't flip the badge.
@@ -1563,6 +1569,7 @@ function build(
   }
   const github: GithubConfig = {
     reviewers: githubReviewersRaw !== false,
+    ignoredReviewRepositories: strArr(githubRaw?.ignored_review_repositories, []),
     ignoredChecks: strArr(githubRaw?.ignored_checks, []),
     defaultReviewer: errs.optStrOrNull(githubRaw, "default_reviewer"),
     prTarget: errs.optEnum(

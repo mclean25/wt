@@ -138,6 +138,7 @@ export function App({ onExit }: Props) {
     refreshAiSummary,
     refreshClaudeSummaries,
     toggleArchived,
+    dismissReviewRequest,
     archive,
     setSection,
     setBase,
@@ -372,6 +373,7 @@ export function App({ onExit }: Props) {
     archivedKeys,
     githubData,
     createdPlacements: activeCreatedPlacements,
+    reviewRequestDismissals: wtStateForStacks.data?.reviewRequestDismissals,
   });
 
   // Detached dev supervisors can fail after their start command exits. The
@@ -684,7 +686,6 @@ export function App({ onExit }: Props) {
         run,
       }),
     restackBusyRef,
-    primaryHarness,
   });
 
   // Automated actions — evaluates `[[automations]]` triggers against
@@ -728,7 +729,6 @@ export function App({ onExit }: Props) {
   // latest sample rather than whichever one was current at mount.
   const { doPerfInvestigate } = makePerfFlows({
     snapshot: perf.data,
-    primaryHarness,
     setModal,
     doEnterSlotSession,
     toast,
@@ -737,7 +737,6 @@ export function App({ onExit }: Props) {
   // `i` inside the error overlay — same shape as perf's investigate
   // flow, sending the newest captured error instead of a snapshot.
   const { doErrorInvestigate } = makeErrorFlows({
-    primaryHarness,
     setModal,
     doEnterSlotSession,
     toast,
@@ -1021,6 +1020,7 @@ export function App({ onExit }: Props) {
       toggleAutomationsPaused,
       toggleStackAutomationsPaused,
       toggleArchived,
+      dismissReviewRequest,
       setWorktreeSection,
       toggleSectionFold,
       setSectionFolded,

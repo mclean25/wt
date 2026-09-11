@@ -9,8 +9,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import { Effect, Option } from "effect";
 
-import type { HarnessId } from "../../core/harness/index.ts";
-import { sendSessionMessage } from "../../core/harness/session-messaging.ts";
+import { sendAgentMessage } from "../../core/harness/agent-routing.ts";
 import { createLogger } from "../../core/logger.ts";
 import { buildPerfInvestigationPrompt, type PerfSnapshot } from "../../core/perf.ts";
 import type { Modal } from "../modal-state.ts";
@@ -61,7 +60,6 @@ export function cancelPerfInvestigate(): void {
 
 export type PerfFlowCtx = {
   snapshot: PerfSnapshot | undefined;
-  primaryHarness: HarnessId;
   setModal: Dispatch<SetStateAction<Modal | null>>;
   doEnterSlotSession: (slot: SessionSlot) => void;
   toast: (message: string, color?: string, ms?: number) => void;
@@ -70,7 +68,7 @@ export type PerfFlowCtx = {
 export function makePerfFlows(ctx: PerfFlowCtx): {
   doPerfInvestigate: () => void;
 } {
-  const { snapshot, primaryHarness, setModal, doEnterSlotSession, toast } = ctx;
+  const { snapshot, setModal, doEnterSlotSession, toast } = ctx;
 
   /**
    * Patch the perf modal's send state, but only if it's still the
@@ -91,12 +89,7 @@ export function makePerfFlows(ctx: PerfFlowCtx): {
     cancelled = false;
     patchInject({ kind: "sending" });
     Effect.runFork(
-      sendSessionMessage({
-        slug: WT_SOURCE_SLOT.slug,
-        cwd: WT_SOURCE_SLOT.path,
-        harnessId: primaryHarness,
-        text: buildPerfInvestigationPrompt(snapshot),
-      }).pipe(
+      sendAgentMessage(WT_SOURCE_SLOT.slug, buildPerfInvestigationPrompt(snapshot)).pipe(
         Effect.timeoutOption(SEND_TIMEOUT),
         Effect.match({
           onFailure: (error) => {

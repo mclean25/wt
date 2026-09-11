@@ -22,6 +22,7 @@ role = "${role}"
 main_clone = "/tmp/wt-role-main"
 worktree_root = "/tmp/wt-role-worktrees"
 cache_db = "${root}/cache.sqlite"
+state_db = "${root}/state.sqlite"
 
 [branch]
 prefix = "test"

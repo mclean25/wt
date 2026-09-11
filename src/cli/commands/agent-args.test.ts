@@ -3,66 +3,36 @@ import { describe, expect, test } from "bun:test";
 import { parseAgentArgs, skillPrompt } from "./agent-args.ts";
 
 describe("parseAgentArgs", () => {
-  test("parses send text without interpreting it", () => {
-    expect(parseAgentArgs(["send", "eng-1-fix", "continue", "carefully"])).toEqual({
+  test("parses send and preserves free text", () => {
+    expect(parseAgentArgs(["send", "wt", "continue", "carefully"])).toEqual({
       kind: "send",
-      target: "eng-1-fix",
+      target: "wt",
       textArgs: ["continue", "carefully"],
-      harness: null,
+    });
+    expect(parseAgentArgs(["send", "main"])).toEqual({
+      kind: "send",
+      target: "main",
+      textArgs: [],
     });
   });
 
-  test("allows send with no text so stdin can supply it", () => {
-    expect(parseAgentArgs(["send", "eng-1-fix"])).toEqual({
-      kind: "send",
-      target: "eng-1-fix",
-      textArgs: [],
-      harness: null,
-    });
+  test("parses neutral inventory", () => {
+    expect(parseAgentArgs(["ls"])).toEqual({ kind: "list", json: false });
+    expect(parseAgentArgs(["ls", "--json"])).toEqual({ kind: "list", json: true });
+    expect(parseAgentArgs(["ls", "extra"])).toMatchObject({ kind: "error" });
   });
 
   test("start is one worktree and no extra arguments", () => {
-    expect(parseAgentArgs(["start", "eng-1-fix"])).toEqual({
-      kind: "start",
-      target: "eng-1-fix",
-      harness: null,
-    });
+    expect(parseAgentArgs(["start", "eng-1-fix"])).toEqual({ kind: "start", target: "eng-1-fix" });
     expect(parseAgentArgs(["start", "eng-1-fix", "extra"])).toMatchObject({ kind: "error" });
   });
 
-  test("rejects missing and unknown subcommands", () => {
-    expect(parseAgentArgs([])).toMatchObject({ kind: "error" });
-    expect(parseAgentArgs(["launch", "eng-1-fix"])).toMatchObject({ kind: "error" });
-  });
-
-  test("--harness addresses one explicitly and leaves the text alone", () => {
-    // The gap this closes: a caller who could SEE the right session in
-    // `tmux list-sessions` had no supported way to reach it.
-    expect(parseAgentArgs(["send", "eng-1-fix", "--harness", "codex", "go", "now"])).toEqual({
-      kind: "send",
-      target: "eng-1-fix",
-      textArgs: ["go", "now"],
-      harness: "codex",
-    });
-    expect(parseAgentArgs(["--harness=codex", "start", "eng-1-fix"])).toEqual({
-      kind: "start",
-      target: "eng-1-fix",
-      harness: "codex",
-    });
-  });
-
-  test("a bad or missing --harness value is an error, never a silent default", () => {
-    // Falling back here would reintroduce the exact failure: a message
-    // delivered confidently to the wrong harness.
-    expect(parseAgentArgs(["send", "eng-1-fix", "--harness", "gemini"])).toMatchObject({
+  test("rejects explicit harness selection instead of forcing a stale choice", () => {
+    expect(parseAgentArgs(["send", "wt", "--harness", "claude", "go"])).toEqual({
       kind: "error",
+      message: "--harness was removed; wt routes to the target's active harness automatically",
     });
-    expect(parseAgentArgs(["send", "eng-1-fix", "--harness"])).toMatchObject({ kind: "error" });
-  });
-
-  test("text that looks like the flag's value is still text", () => {
-    const parsed = parseAgentArgs(["send", "eng-1-fix", "use", "codex", "for", "this"]);
-    expect(parsed).toMatchObject({ harness: null, textArgs: ["use", "codex", "for", "this"] });
+    expect(parseAgentArgs(["--harness=codex", "start", "eng-1-fix"])).toMatchObject({ kind: "error" });
   });
 });
 

@@ -1,60 +1,113 @@
-import { getHarness } from "../../core/harness/index.ts";
-import { resolveWorktreeHarness } from "../../core/harness/live-target.ts";
-import {
-  fallbackAdvice,
-  sendSessionMessage,
-} from "../../core/harness/session-messaging.ts";
-import { operationErrors } from "../../core/errors.ts";
-import { harnessCanResolveSkill } from "../../core/skills.ts";
-import { dirSlug } from "../../core/stage.ts";
-import { listWorktrees } from "../../core/worktree.ts";
-import { dim, green, red } from "../colors.ts";
 import { Effect } from "effect";
+
+import { operationErrors } from "../../core/errors.ts";
+import {
+  inspectAgentTargets,
+  resolveAgentRoute,
+  sendAgentMessageToRoute,
+  type AgentRoute,
+} from "../../core/harness/agent-routing.ts";
+import { getHarness } from "../../core/harness/index.ts";
+import { fallbackAdvice } from "../../core/harness/session-messaging.ts";
+import { harnessCanResolveSkill } from "../../core/skills.ts";
+import { verifyStepsHeadline, workAge } from "../../core/work-status.ts";
+import { isMergedRemoval, readWtState, verificationOwedAtRemoval } from "../../core/wtstate.ts";
+import { dim, green, red, yellow } from "../colors.ts";
 
 import { parseAgentArgs, skillPrompt } from "./agent-args.ts";
 
-const USAGE = `usage: wt agent send <worktree> [text...]   send to the worktree's live agent
-       wt agent start <worktree>            start that agent on its prompt.txt brief
-       --harness <claude|codex|opencode>    address one explicitly
+const USAGE = `usage: wt agent send <target> [text...]   send to the target's active agent
+       wt agent start <worktree>          start that agent on its prompt.txt brief
+       wt agent ls [--json]               list every addressable target and its routing
 
-Both pick the harness with a LIVE session in that worktree, and fall
-back to the Shift+Tab primary only when nothing is running there. The
-primary is one global setting ("what F12 would spawn next"), not a
-per-worktree one, so routing by it alone sent messages to a harness
-that was not the one working on the branch.
+Targets are worktree slugs or branch names, plus wt, main, dotfiles,
+and manager. Routing chooses the target's active harness. If several
+are active, the Shift+Tab primary wins; if none is active, that primary
+is cold-started. Callers never select Claude, Codex, or OpenCode.
 
-\`send\` cold-starts the chosen harness when needed and submits the text
-at its prompt. With no text arguments, stdin is read.
-
-\`start\` invokes the bundled start skill with the syntax native to the
-selected harness (for example /start for Claude, $start for Codex).`;
+\`send\` submits text at the chosen session's prompt and reads stdin when
+no text arguments are supplied. \`start\` is worktree-only and invokes
+the bundled start skill using the selected harness's native syntax.`;
 
 const io = operationErrors("wt agent");
-
-function resolveWorktree(slugOrBranch: string) {
-  const slug = slugOrBranch.includes("/")
-    ? dirSlug(slugOrBranch)
-    : slugOrBranch;
-  return listWorktrees().pipe(
-    Effect.map((all) => ({
-      wt:
-        all.find(
-          (w) => !w.isMain && (w.slug === slug || w.branch === slugOrBranch),
-        ) ?? null,
-      // Every slug on the board, so the harness resolver can tell this
-      // worktree's `<slug>-codex` session from a NEIGHBOUR worktree whose
-      // slug happens to be `<slug>-codex`.
-      slugs: new Set(all.map((w) => w.slug)),
-    })),
-  );
-}
+const STDIN_SENTINELS = new Set(["-", "/dev/stdin", "/dev/fd/0"]);
 
 function messageText(textArgs: string[]) {
-  if (textArgs.length > 0) return Effect.succeed(textArgs.join(" ").trim());
+  const joined = textArgs.join(" ").trim();
+  if (textArgs.length > 0) return Effect.succeed(joined);
   return io.promise("read stdin", () => Bun.stdin.text()).pipe(
     Effect.map((text) => text.trim()),
   );
 }
+
+function explainMissingTarget(requested: string): void {
+  const removed = readWtState().removed.find(
+    (entry) => entry.slug === requested || entry.branch === requested,
+  );
+  if (removed) {
+    const age = workAge(removed.removedAt);
+    const detail = isMergedRemoval(removed)
+      ? `archived on merge (${removed.prNumber === undefined ? "PR merged" : `#${removed.prNumber}`}${age ? `, ${age} ago` : ""})`
+      : `worktree removed${age ? ` ${age} ago` : ""}`;
+    console.error(red(`no live target: ${requested} — ${detail}`));
+    if (verificationOwedAtRemoval(removed)) {
+      console.error(
+        yellow(
+          `  UNVERIFIED — still owed: ${verifyStepsHeadline(removed.work!.verifyAfterMerge!)}`,
+        ),
+      );
+    }
+    return;
+  }
+  console.error(red(`unknown agent target: ${requested}`));
+  console.error(
+    dim("addressable special sessions: wt, main, dotfiles, manager; run `wt agent ls` for worktrees"),
+  );
+}
+
+function selectionReason(route: AgentRoute): string {
+  const { choice } = route;
+  if (choice.source === "primary") {
+    return "nothing is active there, so this is the Shift+Tab primary";
+  }
+  if (choice.source === "unavailable") {
+    return "wt could not inspect its tmux session registry";
+  }
+  const active = choice.liveHarnesses ?? [];
+  if (active.length === 1) return "it is the only active harness for that target";
+  return `${active.length} harnesses are active there, so the Shift+Tab primary wins`;
+}
+
+function inspectFailed(): number {
+  console.error(red("could not inspect wt's tmux session registry"));
+  console.error(dim("no harness was selected or cold-started; retry after the tmux socket is accessible"));
+  return 1;
+}
+
+const list = Effect.fn("wt agent ls")(function* (json: boolean) {
+  const routes = yield* inspectAgentTargets();
+  if (routes.some((route) => route.choice.source === "unavailable")) {
+    return inspectFailed();
+  }
+  if (json) {
+    console.log(JSON.stringify(routes.map(({ target, choice }) => ({
+      target: target.slug,
+      kind: target.kind,
+      branch: target.branch,
+      cwd: target.cwd,
+      active_harnesses: choice.liveHarnesses,
+      selected_harness: choice.harnessId,
+      selection: choice.source,
+    })), null, 2));
+    return 0;
+  }
+  for (const route of routes) {
+    const harness = getHarness(route.choice.harnessId!);
+    const special = route.target.kind === "special" ? " [special]" : "";
+    console.log(`${route.target.slug}${special}  ${harness.label}  ${dim(selectionReason(route))}`);
+  }
+  return 0;
+});
 
 export const run = Effect.fn("wt agent")(function* (argv: string[]) {
   const parsed = parseAgentArgs(argv);
@@ -67,119 +120,84 @@ export const run = Effect.fn("wt agent")(function* (argv: string[]) {
     console.error(dim(USAGE));
     return 2;
   }
+  if (parsed.kind === "list") return yield* list(parsed.json);
 
-  const { wt, slugs } = yield* resolveWorktree(parsed.target);
-  if (!wt) {
-    console.error(red(`no worktree: ${parsed.target}`));
-    console.error(dim("addressable worktrees are listed by `wt ls`"));
+  const route = yield* resolveAgentRoute(parsed.target);
+  if (!route) {
+    explainMissingTarget(parsed.target);
     return 1;
   }
-
-  const choice = parsed.harness
-    ? ({ harnessId: parsed.harness, source: "explicit" } as const)
-    : yield* resolveWorktreeHarness(wt.slug, slugs);
-  const harnessId = choice.harnessId;
-  const harness = getHarness(harnessId);
-  // Say which harness and WHY, always. "delivery confirmed in the
-  // receiving harness's conversation" is unfalsifiable from here, and
-  // three misrouted sends read exactly like three good ones because
-  // of it.
-  if (choice.source === "primary-unknown") {
-    console.error(
-      red(
-        `could not ask tmux which sessions are live — falling back to the ${harness.label} primary`,
-      ),
-    );
-    console.error(dim(`pass --harness <id> to address one explicitly`));
+  if (route.choice.source === "unavailable" || route.choice.harnessId === null) {
+    return inspectFailed();
+  }
+  if (parsed.kind === "start" && route.target.kind !== "worktree") {
+    console.error(red(`wt agent start is worktree-only: ${route.target.slug} is a special session`));
+    console.error(dim(`use wt agent send ${route.target.slug} "<message>" to cold-start and message it`));
+    return 2;
   }
   if (
-    parsed.kind === "start" &&
-    !(yield* harnessCanResolveSkill(harnessId, "start"))
+    parsed.kind === "send" &&
+    parsed.textArgs.length === 1 &&
+    STDIN_SENTINELS.has(parsed.textArgs[0]!)
   ) {
     console.error(
       red(
-        `cannot start ${wt.slug}: ${harness.label} cannot resolve the bundled start skill`,
+        `"${parsed.textArgs[0]}" is not a message body; drop it to pipe stdin into wt agent send ${route.target.slug}`,
       ),
     );
-    console.error(
-      dim(
-        "run `wt skills sync start --yes` on this host, then retry `wt agent start`",
-      ),
-    );
-    return 1;
-  }
-  const text =
-    parsed.kind === "start"
-      ? skillPrompt(harness.skillPrefix, "start")
-      : yield* messageText(parsed.textArgs);
-  if (!text) {
-    console.error(red("nothing to send — pass text args or pipe stdin"));
     return 2;
   }
 
-  const result = yield* sendSessionMessage({
-    slug: wt.slug,
-    cwd: wt.path,
-    harnessId,
-    managedName: null,
-    text,
-  });
+  const harnessId = route.choice.harnessId;
+  const harness = getHarness(harnessId);
+  if (parsed.kind === "start" && !(yield* harnessCanResolveSkill(harnessId, "start"))) {
+    console.error(red(`cannot start ${route.target.slug}: ${harness.label} cannot resolve the bundled start skill`));
+    console.error(dim("run `wt skills sync start --yes` on this host, then retry `wt agent start`"));
+    return 1;
+  }
+  const text = parsed.kind === "start"
+    ? skillPrompt(harness.skillPrefix, "start")
+    : yield* messageText(parsed.textArgs);
+  if (!text) {
+    if (parsed.kind === "send" && parsed.textArgs.length !== 1) {
+      console.error(red("nothing to send — pass text args or pipe stdin"));
+    }
+    return 2;
+  }
+
+  const result = yield* sendAgentMessageToRoute(route, text);
   if (!result.ok) {
     console.error(red(`send failed: ${result.reason}`));
     return 1;
   }
   if (result.delivered === false) {
-    console.error(
-      red(
-        `✗ ${wt.slug}'s ${harness.label} session did not receive the prompt`,
-      ),
-    );
-    console.error(dim("attach via the wt TUI (F12) and check the session"));
+    console.error(red(`✗ ${route.target.slug}'s ${harness.label} session did not receive the prompt`));
     return 1;
   }
 
   const action = parsed.kind === "start" ? "the start skill" : "the prompt";
   const queued = result.queueState === "queued";
   const accepted = result.queueState === "queued-or-started";
-  console.log(
-    green(
-      queued
-        ? `✓ queued ${action} for ${wt.slug}'s ${harness.label} session`
-        : result.coldStarted
-          ? `✓ started ${wt.slug}'s ${harness.label} session and submitted ${action}`
-          : accepted
-            ? `✓ accepted ${action} for ${wt.slug}'s ${harness.label} session`
-            : `✓ submitted ${action} to ${wt.slug}'s ${harness.label} session`,
-    ),
-  );
-  const why =
-    choice.source === "explicit"
-      ? "you named it with --harness"
-      : choice.source === "live"
-        ? "it is the harness live in that worktree"
-        : "nothing was live there, so this is the Shift+Tab primary";
-  console.log(dim(`${harness.label} chosen because ${why}`));
+  console.log(green(
+    queued
+      ? `✓ queued ${action} for ${route.target.slug}'s ${harness.label} session`
+      : result.coldStarted
+        ? `✓ started ${route.target.slug}'s ${harness.label} session and submitted ${action}`
+        : accepted
+          ? `✓ accepted ${action} for ${route.target.slug}'s ${harness.label} session`
+          : `✓ submitted ${action} to ${route.target.slug}'s ${harness.label} session`,
+  ));
+  console.log(dim(`${harness.label} chosen because ${selectionReason(route)}`));
   if (result.delivered === null) {
-    console.log(
-      dim(
-        "submitted at the session prompt; this input leaves no durable delivery receipt",
-      ),
-    );
+    console.log(dim("submission has no durable delivery receipt; delivery is unknown"));
+  } else if (queued) {
+    console.log(dim(`durably queued; ${harness.label} will run it after the current turn or prompt`));
+  } else if (accepted) {
+    console.log(dim("durably accepted; it was queued or started before status could be observed"));
   } else {
-    console.log(
-      dim(
-        queued
-          ? `durably queued; ${harness.label} will run it after the current turn or prompt`
-          : accepted
-            ? `durably accepted; it was queued or started before status could be observed`
-            : `delivery confirmed in ${wt.slug}'s ${harness.label} conversation`,
-      ),
-    );
+    console.log(dim(`delivery confirmed in ${route.target.slug}'s ${harness.label} conversation`));
   }
-  if (
-    result.transport === "terminal" &&
-    result.fallback.kind !== "unsupported"
-  ) {
+  if (result.transport === "terminal" && result.fallback.kind !== "unsupported") {
     console.log(dim(fallbackAdvice(result.fallback)));
   }
   return 0;

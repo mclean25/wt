@@ -31,8 +31,8 @@ commands:
   section     list / move / rename / drop the fleet's sections (the human's batching)
   manager     attach the fleet-coordinator session / send it a message / report a result
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
-  agent       send to / start a worktree's configured primary coding agent
-  claude      drive a worktree's Claude Code session (send / ls / stop)
+  agent       send to / list wt-owned agent targets; start worktree agents
+  claude      inspect or control Claude Code sessions (legacy send / ls / stop)
   codex       diagnose Codex's native message queue transport
   dev         start / stop / inspect a worktree's [dev_server]
 

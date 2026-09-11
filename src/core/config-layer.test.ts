@@ -110,6 +110,9 @@ base = "main"
 
 [ui]
 rows = ["branch", "git"]
+
+[github]
+ignored_review_repositories = ["Example/noisy-repo"]
 `);
       writeFileSync(join(repo, ".wt.toml"), `
 [paths]
@@ -194,7 +197,10 @@ reviewers = false
         branch: { prefix: "alex", base: "develop" },
         lifecycle: { copyGlobs: [".agents/**"] },
         browser: { chromeProfile: "Profile 3" },
-        github: { reviewers: false },
+        github: {
+          reviewers: false,
+          ignoredReviewRepositories: ["Example/noisy-repo"],
+        },
         rows: ["branch", "git"],
         reviewerBadgeHidden: true,
         githubEnabled: true,

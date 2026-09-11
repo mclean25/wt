@@ -8,7 +8,12 @@ import { readRepositoryStateJson, writeRepositoryStateJson } from "../state-db.t
 import { parseWorkStatus, sanitizeWorkNote } from "../work-status.ts";
 import { migrateRawWtState, rawWtStateVersion, WT_STATE_VERSION } from "./migrations.ts";
 import { GROUP_INBOX, STACK_SECTION_PREFIX } from "./types.ts";
-import type { RemovedWorktree, WtSlugState, WtState } from "./types.ts";
+import type {
+  RemovedWorktree,
+  ReviewRequestDismissal,
+  WtSlugState,
+  WtState,
+} from "./types.ts";
 
 /**
  * Directory holding the shared durable SQLite database. Exported so the
@@ -274,6 +279,23 @@ export function parseWtState(raw: unknown): WtState {
       });
     }
   }
+  const reviewRequestDismissals: ReviewRequestDismissal[] = [];
+  if (Array.isArray(data?.reviewRequestDismissals)) {
+    for (const value of data.reviewRequestDismissals) {
+      if (!value || typeof value !== "object") continue;
+      const rec = value as Partial<ReviewRequestDismissal>;
+      if (
+        typeof rec.url !== "string" || rec.url.trim() === "" ||
+        typeof rec.updatedAt !== "string" || rec.updatedAt.trim() === "" ||
+        typeof rec.dismissedAt !== "string" || rec.dismissedAt.trim() === ""
+      ) continue;
+      reviewRequestDismissals.push({
+        url: rec.url.trim(),
+        updatedAt: rec.updatedAt,
+        dismissedAt: rec.dismissedAt,
+      });
+    }
+  }
   // Branch → last observed tip. String values only; a malformed entry
   // drops to "not seen yet", which costs one skipped range rather than
   // a fire against a sha nothing can resolve.
@@ -306,6 +328,7 @@ export function parseWtState(raw: unknown): WtState {
         ? data.attentionSeenTs
         : 0,
     removed,
+    reviewRequestDismissals,
     edges,
     branchTips,
   };
@@ -322,6 +345,7 @@ export function emptyWtState(): WtState {
     automationsPaused: false,
     attentionSeenTs: 0,
     removed: [],
+    reviewRequestDismissals: [],
     edges: [],
     branchTips: {},
   };

@@ -13,7 +13,9 @@ import { queueCodexMessage, type CodexAppServerError } from "./app-server.ts";
 import { discoverCodexSessions } from "./discovery.ts";
 import { codexHarness } from "./harness.ts";
 import {
+  probeCodexLivePaneReadiness,
   probeCodexTerminalReadiness,
+  waitForCodexLivePaneReady,
   waitForCodexTerminalReady,
 } from "./readiness.ts";
 
@@ -43,6 +45,11 @@ export type CodexMessageTarget = {
   readonly text: string;
 };
 
+/** Codex slash commands are TUI actions, not app-server user messages. */
+export function isCodexSlashCommand(text: string): boolean {
+  return /^\/[a-z][a-z0-9_-]*(\s|$)/.test(text.trimStart());
+}
+
 type Dependencies = {
   readonly discover: typeof discoverCodexSessions;
   readonly liveInventory: typeof listSessionsWithHarnessIds;
@@ -56,6 +63,7 @@ type Dependencies = {
   readonly terminal: (
     target: CodexMessageTarget & { readonly sessionId: string },
   ) => Effect.Effect<InjectResult>;
+  readonly liveTerminal: (target: CodexMessageTarget) => Effect.Effect<InjectResult>;
   readonly bootstrapTerminal: (target: CodexMessageTarget) => Effect.Effect<InjectResult>;
 };
 
@@ -98,6 +106,11 @@ const defaults: Dependencies = {
     waitForCodexTerminalReady(target),
     probeCodexTerminalReadiness(target),
   ),
+  liveTerminal: (target) => injectCodexFallback(
+    target,
+    waitForCodexLivePaneReady(target),
+    probeCodexLivePaneReadiness(target),
+  ),
   // The first prompt is what causes a brand-new Codex conversation to gain
   // a UUID/rollout. There is no exact thread to queue to before that write.
   bootstrapTerminal: (target) => injectIntoSession({ ...target, harnessId: "codex" }),
@@ -119,6 +132,7 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
   return Effect.fn("sendCodexMessage")(function* (
     target: CodexMessageTarget,
   ): Effect.fn.Return<CodexMessageResult> {
+    const command = isCodexSlashCommand(target.text);
     const tmuxName = codexHarness.tmuxSessionName(target.slug, null);
     const liveInventory = yield* deps.liveInventory();
     if (!liveInventory.known) {
@@ -137,11 +151,12 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
       };
     }
     let sessions = discovered.success;
-    // A live tmux stamp is the exact conversation currently acting as this
-    // worktree's agent, including a deliberately selected secondary. Old
-    // unstamped slots and cold starts use wt's stable primary mapping. Never
-    // infer either identity from rollout recency.
-    let sessionId = liveBefore && stampedLiveId !== null
+    // A live tmux stamp is the only proof of which conversation currently
+    // owns that pane, including a deliberately selected secondary. A stable
+    // "primary" name map is useful for a cold start, but cannot establish
+    // ownership of an already-live unstamped slot. That case stays UUID-less
+    // and takes the guarded exact-pane fallback below.
+    let sessionId = liveBefore
       ? stampedLiveId
       : primarySingleSlotSession(sessions)?.sessionId ?? null;
     let coldStarted = false;
@@ -164,11 +179,48 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
       }
     }
 
+    if (command) {
+      // The app-server queue deliberately treats its payload as user text;
+      // slash-command expansion belongs to the interactive TUI. Keep the
+      // same exact-thread readiness gate as the legacy terminal fallback,
+      // and use the UUID-less live-pane gate for a freshly bootstrapped slot.
+      const terminal = sessionId === null
+        ? yield* deps.liveTerminal(target)
+        : yield* deps.terminal({ ...target, sessionId });
+      return terminal.ok
+        ? {
+            ok: true,
+            transport: "terminal",
+            coldStarted: terminal.coldStarted || coldStarted,
+            delivered: null,
+            resent: false,
+            fallbackReason: "Codex slash commands execute through the interactive terminal",
+          }
+        : terminal;
+    }
+
     if (sessionId === null) {
-      if (liveBefore || !coldStarted) {
+      if (liveBefore) {
+        // The live tmux session is still an exact delivery target even when
+        // Codex changed its rollout metadata and wt cannot recover the UUID.
+        // Keep native delivery preferred, but retain terminal input as the
+        // compatibility floor instead of dropping the message entirely.
+        const result = yield* deps.liveTerminal(target);
+        return result.ok
+          ? {
+              ok: true,
+              transport: "terminal",
+              coldStarted: result.coldStarted,
+              delivered: result.delivered,
+              resent: false,
+              fallbackReason: "the live Codex slot has no recoverable thread UUID",
+            }
+          : result;
+      }
+      if (!coldStarted) {
         return {
           ok: false,
-          reason: "Codex is live, but wt cannot prove which thread owns the slot; no message was typed",
+          reason: "Codex did not start and wt could not resolve a thread UUID",
         };
       }
       // No UUID exists yet. Only this bootstrap uses terminal input; every

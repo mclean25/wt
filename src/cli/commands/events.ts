@@ -16,7 +16,14 @@ import { Data, Duration, Effect, Schedule } from "effect";
 import { buildSha, sameBuild } from "../../core/build-id.ts";
 import { config } from "../../core/config.ts";
 import { resolveWebhookSecret, runDaemonForeground } from "../../core/events/daemon.ts";
-import { EVENTS_DIR, ensureEventsDir, isProcessAlive, readSnapshot, readState } from "../../core/events/store.ts";
+import {
+  EVENTS_DIR,
+  ensureEventsDir,
+  isProcessAlive,
+  readSnapshot,
+  readState,
+  runningDaemonHasForeignBuild,
+} from "../../core/events/store.ts";
 import { operationErrors, type OperationError } from "../../core/errors.ts";
 import { run as sh } from "../../core/proc.ts";
 import { hasHelpFlag } from "../args.ts";
@@ -344,13 +351,15 @@ function cmdStatus(): number {
   // looks perfectly healthy while feeding the TUI its own build's
   // parsing rules, which is how a red checks badge and a stale
   // review-bot badge both survived on a TUI that had already fixed them.
-  if (snap && !sameBuild(snap.writerSha)) {
+  if (snap && !sameBuild(snap.writerSha) && runningDaemonHasForeignBuild(state, () => alive)) {
     const wrote = snap.writerSha ? snap.writerSha.slice(0, 7) : "unstamped";
     console.log(`  build         ${yellow(`stale (wrote ${wrote}, this build ${(buildSha() ?? "?").slice(0, 7)})`)}`);
     console.log(
       dim("                the TUI is ignoring its snapshot and fetching live; it restarts itself on its next fetch"),
     );
     console.log(dim("                — `wt events restart` does it now"));
+  } else if (snap && !sameBuild(snap.writerSha) && state && alive && sameBuild(state.writerSha)) {
+    console.log(`  build         ${green("current")} ${dim("(warming; previous snapshot ignored)")}`);
   }
   const program = plistProgram();
   if (program && !existsSync(program)) {

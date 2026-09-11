@@ -15,9 +15,10 @@ export function configDir(): string {
  * Terminal-capability preamble for the wt server's generated config.
  * Notable choices:
  *  - `status off` + `set-titles off`: no tmux chrome anywhere.
- *  - `alternate-screen off`: tmux fakes alt-screen for inner programs
- *    instead of switching the outer terminal's buffer, which removes
- *    the flash on enter/exit between opentui's alt-screen and tmux's.
+ *  - `alternate-screen on`: full-screen inner TUIs must be allowed to use
+ *    smcup/rmcup. Disabling it leaves Codex in the normal scrollback buffer,
+ *    so its initial viewport only grows as output arrives and composer
+ *    redraws can leave the cursor visibly jumping around the screen.
  *  - `escape-time 0`: kills the 500ms ESC delay that breaks claude's
  *    keybindings.
  *  - `mouse on` + `focus-events on`: silences claude's "add this to
@@ -31,6 +32,11 @@ export function configDir(): string {
  *  - `:hyperlinks` preserves OSC 8 link boundaries through direct
  *    xterm-family clients, so the outer terminal does not have to
  *    guess where a URL ends.
+ *  - `MouseDown1Pane` opens a stored OSC 8 destination directly. With
+ *    tmux mouse mode on, terminals otherwise send the click to tmux instead
+ *    of running their hyperlink action (Alacritty requires an extra Shift
+ *    modifier in that state). Non-link clicks retain tmux's default
+ *    select-pane + application-forwarding behavior.
  *  - Clipboard: `MouseDragEnd1Pane` pipes a completed selection to
  *    `pbcopy`, making drag-and-release match native macOS terminal copy
  *    behavior without enabling application-originated clipboard writes.
@@ -40,7 +46,7 @@ export function configDir(): string {
  *  - `unbind C-b`: freed up for each config's own bindings below.
  */
 export const TERMINAL_PREAMBLE = `set -g status off
-set -g alternate-screen off
+set -g alternate-screen on
 set -g set-titles off
 set -sg escape-time 0
 set -g mouse on
@@ -54,6 +60,7 @@ set -s extended-keys always
 set -s extended-keys-format csi-u
 set -as terminal-features ",xterm*:extkeys,tmux-256color:extkeys"
 set -as terminal-features ",xterm*:hyperlinks,tmux-256color:hyperlinks"
+bind-key -n MouseDown1Pane if-shell -F '#{!=:#{mouse_hyperlink},}' 'run-shell -b "/usr/bin/open #{q:mouse_hyperlink}"' 'select-pane -t = \\; send-keys -M'
 bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel pbcopy
 bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel pbcopy
 unbind C-b`;
@@ -105,7 +112,7 @@ export function writeConfig(): { path: string; changed: boolean } {
  * Ensure a tmux config exists on disk WITHOUT the change-detection
  * kill-server dance, returning its path. For non-interactive codepaths
  * (`startHarnessSessionDetached`, and via it session messaging / the
- * `wt claude send` CLI) that may run from an arbitrary environment —
+ * `wt agent send` CLI) that may run from an arbitrary environment —
  * including from a claude session INSIDE the wt tmux server itself,
  * where TERM is `tmux-256color` rather than the user's outer terminal.
  * There `buildConfig()` renders differently than what the user's wt

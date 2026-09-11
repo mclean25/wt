@@ -7,14 +7,7 @@ describe("remoteProvisioningCommands", () => {
     expect(remoteProvisioningCommands(["agent", "start", "eng-1-fix"])).toEqual([
       ["skills", "sync", "--yes"],
     ]);
-    expect(
-      remoteProvisioningCommands([
-        "agent",
-        "--harness=codex",
-        "start",
-        "eng-1-fix",
-      ]),
-    ).toEqual([["skills", "sync", "--yes"]]);
+    expect(remoteProvisioningCommands(["agent", "ls", "--json"])).toEqual([]);
   });
 
   test("does not provision for ordinary remote commands or prompt sends", () => {

@@ -58,6 +58,7 @@ worktree_root = ${JSON.stringify(join(root, "wts"))}
 log_dir = ${JSON.stringify(join(root, "logs"))}
 lock_dir = ${JSON.stringify(join(root, "locks"))}
 cache_db = ${JSON.stringify(join(root, "cache.sqlite"))}
+state_db = ${JSON.stringify(join(root, "state.sqlite"))}
 
 [branch]
 prefix = "test"
@@ -157,6 +158,34 @@ test("keep_fresh refuses to touch a local head that has DIVERGED", async () => {
   // thing it must never do is decide which copy of a diverged branch wins.
   expect(git(main, ["rev-parse", "main"])).toBe(localOnly);
   expect(git(main, ["rev-parse", "main"])).not.toBe(git(main, ["rev-parse", "origin/main"]));
+});
+
+test("pushCounts measures ahead_of_base independently of the branch upstream", async () => {
+  const { origin } = buildOrigin();
+  const root = tmp("wt-fo-root-own-upstream-");
+  const main = tmp("wt-fo-main-own-upstream-");
+  git(main, ["clone", "-q", "-b", "staging", origin, "."]);
+
+  const wt = tmp("wt-fo-wt-own-upstream-");
+  git(wt, ["clone", "-q", "-b", "staging", origin, "."]);
+  git(wt, ["checkout", "-q", "-b", "feature"]);
+  git(wt, ["commit", "-q", "--allow-empty", "-m", "feature work"]);
+  git(wt, ["push", "-q", "-u", "origin", "feature"]);
+  expect(git(wt, ["rev-parse", "--abbrev-ref", "@{u}"])).toBe("origin/feature");
+
+  const cfg = writeConfig(root, main, "");
+  const out = runWithConfig(
+    root,
+    cfg,
+    `const m = await import(${WORKTREE_MOD});
+     const { Effect } = await import(${EFFECT_MOD});
+     console.log(JSON.stringify(await Effect.runPromise(m.pushCounts(${JSON.stringify(wt)}, "staging"))));`,
+  );
+  expect(JSON.parse(out.trim())).toEqual({
+    unpushed: 0,
+    aheadOfBase: 1,
+    pushed: true,
+  });
 });
 
 test("a branch with no commits of its own counts 0 ahead through a stale clone ref", async () => {

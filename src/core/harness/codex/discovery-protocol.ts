@@ -6,6 +6,7 @@ export type CodexDiscoveryRequest = {
   id: number;
   slug: string;
   wtPath: string;
+  liveSessionId?: string | null;
 };
 
 export type CodexDiscoveryResult =

@@ -468,7 +468,7 @@ hidden = ["opencode"]
 | key | required | default | meaning |
 |---|---|---|---|
 | `primary` | no | `"claude"` | `"claude"`, `"codex"`, or `"opencode"`. Used when this repository has no persisted override. |
-| `hidden` | no | `[]` | Harnesses omitted from Tab cycling, automatic live-session routing, TUI session discovery, picker entries, and activity polling. Explicit CLI addressing such as `wt agent send --harness opencode …` remains available. The configured `primary` cannot be hidden, and at least one harness must remain visible. |
+| `hidden` | no | `[]` | Harnesses omitted from Tab cycling, automatic live-session routing, TUI session discovery, picker entries, and activity polling. Messaging has no harness override, so a hidden harness is not selected for a new send. The configured `primary` cannot be hidden, and at least one harness must remain visible. |
 
 ## `[naming]` — optional generated worktree names
 
@@ -510,6 +510,7 @@ compatibility with existing configs, but is ignored and can be removed.
 | key | required | default | meaning |
 |---|---|---|---|
 | `reviewers` | no | `true` | Human-reviewer workflow. Set `false` in a repository `.wt.toml` when the repo does not use human code review: hides the human-review badge and PR metadata, removes the review-requests section, disables the `v` reviewer picker and the reviewer leg of `E`, and suppresses `review.changes_requested` automations. The separate `[review_bot]` track is unaffected. |
+| `ignored_review_repositories` | no | `[]` | Exact GitHub `"owner/repository"` names to omit from the pinned review-request section. Matching is case-insensitive and applies to every open PR in the named repositories. |
 | `ignored_checks` | no | `[]` | Glob patterns (case-insensitive, `*` wildcard only) matched against check names; matching contexts are dropped from the PR checks rollup so non-CI checks don't flip the badge. The configured `[review_bot]`'s `check_contexts` are always excluded automatically — no need to repeat them here. |
 | `default_reviewer` | no | *(unset)* | GitHub login requested by the `E` ("ship it") chord (mark ready + request reviewer + arm auto-merge). Unset disables the reviewer leg. |
 | `pr_target` | no | `"github"` | Where `p` opens PRs: `"github"` keeps GitHub URLs, `"linear"` rewrites them to Linear Reviews deep-links. `g p` / `l p` always open GitHub / Linear explicitly. |

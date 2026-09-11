@@ -57,6 +57,27 @@ describe("parseWtState", () => {
     expect(state.sectionsOrder).toContain("Remote batch");
   });
 
+  test("round-trips valid review-request dismissals and drops malformed entries", () => {
+    const state = parseWtState({
+      reviewRequestDismissals: [
+        {
+          url: "https://github.com/example/repo/pull/12",
+          updatedAt: "2026-09-09T10:00:00Z",
+          dismissedAt: "2026-09-09T10:01:00Z",
+        },
+        { url: "https://github.com/example/repo/pull/13" },
+        "bad",
+      ],
+    });
+    expect(state.reviewRequestDismissals).toEqual([
+      {
+        url: "https://github.com/example/repo/pull/12",
+        updatedAt: "2026-09-09T10:00:00Z",
+        dismissedAt: "2026-09-09T10:01:00Z",
+      },
+    ]);
+  });
+
   test("drops a malformed work record without dropping the slug", () => {
     const state = parseWtState({
       slugs: {
@@ -103,6 +124,7 @@ describe("parseWtState", () => {
       const state = parseWtState(raw);
       expect(state.slugs).toEqual({});
       expect(state.remoteLayouts).toEqual({});
+      expect(state.reviewRequestDismissals).toEqual([]);
       expect(Array.isArray(state.sectionsOrder)).toBe(true);
     }
   });

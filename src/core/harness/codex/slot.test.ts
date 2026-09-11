@@ -67,14 +67,86 @@ describe("Codex main/manager ownership", () => {
 
   test("fresh shared-cwd slots get a stamp; resumes use the exact id", () => {
     const args = { wtPath: "/repo", managedName: null, resumeSessionId: null };
-    expect(codexHarness.buildArgs({ ...args, slug: "manager" })).toEqual(["codex", CODEX_MANAGER_PROMPT]);
-    expect(codexHarness.buildArgs({ ...args, slug: "main" })).toEqual(["codex", CODEX_MAIN_PROMPT]);
-    expect(codexHarness.buildArgs({ ...args, slug: "worktree" })).toEqual(["codex"]);
-    expect(codexHarness.buildArgs({ ...args, slug: "manager", resumeSessionId: "manager-id" })).toEqual(["codex", "resume", "manager-id"]);
+    const tuiArgs = [
+      "-c",
+      'tui.alternate_screen="always"',
+    ];
+    expect(codexHarness.buildArgs({ ...args, slug: "manager" })).toEqual([
+      "codex",
+      ...tuiArgs,
+      CODEX_MANAGER_PROMPT,
+    ]);
+    expect(codexHarness.buildArgs({ ...args, slug: "main" })).toEqual([
+      "codex",
+      ...tuiArgs,
+      CODEX_MAIN_PROMPT,
+    ]);
+    expect(codexHarness.buildArgs({ ...args, slug: "worktree" })).toEqual([
+      "codex",
+      ...tuiArgs,
+    ]);
+    expect(codexHarness.buildArgs({
+      ...args,
+      slug: "manager",
+      resumeSessionId: "manager-id",
+    })).toEqual(["codex", ...tuiArgs, "resume", "manager-id"]);
   });
+});
+
+test("wt-originated root sessions remain discoverable while child sessions stay hidden", () => {
+  const { root, cwd } = fixture();
+  const day = join(root, "2026", "09", "05");
+  const write = (id: string, threadSource: string) => {
+    writeFileSync(join(day, `rollout-${id}.jsonl`), `${JSON.stringify({
+      type: "session_meta",
+      payload: {
+        id,
+        cwd,
+        originator: "wt",
+        thread_source: threadSource,
+      },
+    })}\n${message("user", "Do the work.")}${message("assistant", "Ready.")}`);
+  };
+  write("root-id", "user");
+  write("guardian-id", "subagent");
+
+  expect(
+    discoverCodexSessionsSync("originator-compat", cwd, root).map((session) => session.sessionId),
+  ).toEqual(["root-id"]);
 });
 
 test("fresh main is identifiable before its response; worktrees need no stamp", () => {
   expect(codexSlotFromPrefix(message("user", CODEX_MAIN_PROMPT))).toBe("main");
   expect(codexRolloutBelongsToSlot("not-a-file", 0, "worktree")).toBe(true);
+});
+
+test("an exact live UUID restores a special session outside the picker window", () => {
+  const root = mkdtempSync(join(tmpdir(), "wt-codex-old-live-"));
+  dirs.push(root);
+  const cwd = join(root, "repo");
+  for (let day = 1; day <= 31; day++) {
+    mkdirSync(join(root, "2026", "09", String(day).padStart(2, "0")), {
+      recursive: true,
+    });
+  }
+  const oldDay = join(root, "2025", "01", "01");
+  mkdirSync(oldDay, { recursive: true });
+  writeFileSync(
+    join(oldDay, "rollout-old-manager.jsonl"),
+    `${JSON.stringify({
+      type: "session_meta",
+      payload: {
+        id: "old-manager",
+        cwd,
+        originator: "codex-tui",
+        thread_source: "user",
+      },
+    })}\n${message("user", CODEX_MANAGER_PROMPT)}${message("assistant", "Ready.")}`,
+  );
+
+  expect(discoverCodexSessionsSync("manager", cwd, root)).toEqual([]);
+  expect(
+    discoverCodexSessionsSync("manager", cwd, root, "old-manager")
+      .map((session) => session.sessionId),
+  ).toEqual(["old-manager"]);
 });

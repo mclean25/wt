@@ -275,36 +275,25 @@ export const worktreeHasTrackedChanges = (wtPath: string) =>
   );
 
 /**
- * Count of commits on HEAD that aren't on the branch's upstream (or on
- * origin/main if there's no upstream). Used by remove flows to warn
- * about work that would be lost if the worktree is destroyed. Returns
- * `null` when git couldn't answer — this feeds a data-loss guard, so
- * "couldn't determine" must never masquerade as "nothing to lose";
- * callers treat null as unpushed-work-unknown and stay cautious.
+ * Count commits on HEAD that are not in wt's effective merge base.
+ *
+ * The branch's git upstream is deliberately irrelevant. A branch normally
+ * tracks `origin/<branch>` after its first push, while wt's base remains the
+ * configured trunk or recorded stack parent. Conflating those made a fully
+ * pushed one-commit PR report `ahead_of_base: 0`.
  */
-export const unpushedCommits = Effect.fn("unpushedCommits")(function* (wtPath: string): Effect.fn.Return<number, ProcError> {
-  // `@{u}` is resolved to its ref NAME rather than used directly, so
-  // the trunk case is recognizable to `freshBaseRev` — wt points a
-  // worktree's upstream at its base, so for an unstacked worktree
-  // `@{u}` IS `origin/<trunk>`, and that is exactly the ref a rift
-  // clone holds a stale copy of.
-  const hasUpstream = yield* runQuiet(
-    ["git", "rev-parse", "--abbrev-ref", "@{u}"],
-    { cwd: wtPath },
-  );
-  const upstream = hasUpstream
-    ? (yield* runOk(["git", "rev-parse", "--abbrev-ref", "@{u}"], { cwd: wtPath })).trim()
-    : "";
-  const base = yield* freshBaseRev(
-    wtPath,
-    upstream || `origin/${config.branch.base}`,
-  );
+export const aheadOfBaseCommits = Effect.fn("aheadOfBaseCommits")(function* (
+  wtPath: string,
+  effectiveBase?: string | null,
+): Effect.fn.Return<number, ProcError> {
+  const resolved = yield* effectiveBaseOrTrunk(wtPath, effectiveBase);
+  const base = yield* freshBaseRev(wtPath, resolved);
   const ahead = yield* runOk(
     ["git", "rev-list", "--count", `${base}..HEAD`],
     { cwd: wtPath },
   );
   return parseInt(ahead, 10) || 0;
-}, (effect, wtPath) => effect.pipe(Effect.catch((err) => Effect.sync(() => {
+}, (effect, wtPath, _effectiveBase) => effect.pipe(Effect.catch((err) => Effect.sync(() => {
   log.error(err instanceof Error ? err : String(err), { wtPath });
   return null;
 }))));
@@ -317,8 +306,8 @@ export type PushCounts = {
    */
   unpushed: number | null;
   /**
-   * Commits ahead of the branch's upstream/base — the restack-pressure
-   * signal. This is what `unpushedCommits` measures.
+   * Commits ahead of wt's effective merge base — the restack-pressure
+   * signal. Independent of the branch's configured git upstream.
    */
   aheadOfBase: number | null;
   /** Whether `origin/<branch>` exists at all. */
@@ -329,15 +318,15 @@ export type PushCounts = {
  * Push/divergence counts for `wt ls --json`. Null = couldn't determine;
  * consumers must not read it as 0.
  *
- * wt sets a worktree branch's upstream to its BASE (e.g.
- * `origin/staging`), so the @{u}-based `unpushedCommits` count really
- * measures "ahead of base" — the fleet manager misread that as "worker
- * never pushed". This keeps both numbers apart: `unpushed` counts
- * against `origin/<branch>` when that ref exists (true unpushed), and
- * `aheadOfBase` carries the old measurement.
+ * This keeps two independent numbers apart: `unpushed` counts against
+ * `origin/<branch>` when that ref exists (true unpushed), while
+ * `aheadOfBase` counts against wt's configured or recorded merge base.
  */
-export const pushCounts = Effect.fn("pushCounts")(function* (wtPath: string) {
-  const aheadOfBase = yield* unpushedCommits(wtPath);
+export const pushCounts = Effect.fn("pushCounts")(function* (
+  wtPath: string,
+  effectiveBase?: string | null,
+) {
+  const aheadOfBase = yield* aheadOfBaseCommits(wtPath, effectiveBase);
   return yield* Effect.gen(function* () {
     const branch = (
       yield* runOk(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: wtPath })

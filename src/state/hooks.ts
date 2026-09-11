@@ -113,6 +113,7 @@ import {
   setSlugBase as setSlugBaseOnDisk,
   setWorktreeSection as setWorktreeSectionOnDisk,
   setSlugIssueId as setSlugIssueIdOnDisk,
+  dismissReviewRequest as dismissReviewRequestOnDisk,
   setSlugWorkStatus as setSlugWorkStatusOnDisk,
   swapOrders as swapOrdersOnDisk,
   toggleSectionFolded as toggleSectionFoldedOnDisk,
@@ -695,6 +696,10 @@ export function useWtActions() {
           { concurrency: "unbounded", discard: true },
         ),
       );
+    },
+    /** Hide the exact current snapshot of a pinned review request. */
+    dismissReviewRequest(url: string, updatedAt: string): Promise<void> {
+      return writeWtState(() => dismissReviewRequestOnDisk(url, updatedAt));
     },
     /**
      * Invalidate the tmux-sessions query. Call after entering or

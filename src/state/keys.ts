@@ -144,7 +144,7 @@ export const qk = {
       merged: (branch: string) => ["wt", slug, "merged", branch] as const,
       gone: (branch: string) => ["wt", slug, "gone", branch] as const,
       /**
-       * Sync counts vs (a) `@{u}` and (b) effective base. Keyed by
+       * Sync counts vs (a) `origin/<branch>` and (b) effective base. Keyed by
        * the resolved base so a stack-parent flip cache-misses into a
        * refetch — same pattern as `diffContext` and for the same
        * reason: the answer depends on which base we're comparing to.

@@ -53,7 +53,10 @@ Two halves, in `core/build-id.ts`:
 
 - **The snapshot is stamped** with `writerSha`, the source clone's HEAD.
   `snapshotForBranches` refuses a snapshot from a different build and falls back
-  to a live fetch, narrating once on `log.attention.*`. A **missing** stamp is
+  to a live fetch. It narrates once on `log.attention.*` only when the live
+  daemon's state is also on a different build: a restarted daemon writes its
+  current state before its warm-up fetch replaces the previous snapshot, and
+  that normal handoff must stay quiet. A **missing** stamp is
   refused too — only a build predating the field writes one, so absence is the
   diagnosis rather than a missing input. It fails *open* only when the reader
   cannot identify itself at all (wt is not a git checkout), where there is no

@@ -107,7 +107,7 @@ type FakeOpts = {
 };
 
 function fakes(opts: FakeOpts = {}) {
-  const calls = { deliver: 0, terminal: 0, ensure: 0, statusOf: 0 };
+  const calls = { deliver: 0, terminal: 0, ensure: 0, statusOf: 0, codexModes: [] as string[] };
   const warnings: string[] = [];
   const locks: string[] = [];
   let readyBudget: number | null = null;
@@ -164,14 +164,27 @@ function fakes(opts: FakeOpts = {}) {
       return Effect.succeed({ ok: true as const, coldStarted: false, delivered: true, resent: false });
     },
     landed: () => opts.landed ?? true,
-    codex: () => Effect.succeed({
-      ok: true as const,
-      transport: "codex-app-server" as const,
-      coldStarted: false,
-      delivered: true as const,
-      resent: false as const,
-      queueState: "started" as const,
-    }),
+    codex: (codexTarget: SessionMessageTarget) => {
+      const command = /^\//.test(codexTarget.text.trimStart());
+      calls.codexModes.push(command ? "command" : "message");
+      if (command) {
+        return Effect.succeed({
+          ok: true as const,
+          transport: "terminal" as const,
+          coldStarted: false,
+          delivered: null,
+          resent: false as const,
+        });
+      }
+      return Effect.succeed({
+        ok: true as const,
+        transport: "codex-app-server" as const,
+        coldStarted: false,
+        delivered: true as const,
+        resent: false as const,
+        queueState: "started" as const,
+      });
+    },
     warn: (_slug: string, message: string) => {
       warnings.push(message);
     },
@@ -204,6 +217,33 @@ describe("the Codex transport", () => {
     });
     expect(fake.calls.terminal).toBe(0);
     expect(fake.locks).toEqual(["__codex_send__eng-1-codex"]);
+  });
+
+  test("types slash commands so Codex executes them instead of queueing them as text", async () => {
+    const fake = fakes();
+    const send = createSessionMessenger(fake.deps);
+
+    expect(await run(send({ ...target, harnessId: "codex", text: "/compact focus" }))).toMatchObject({
+      ok: true,
+      transport: "terminal",
+      delivered: null,
+      fallback: { kind: "command", harnessId: "codex" },
+    });
+    expect(fake.calls.terminal).toBe(0);
+    expect(fake.calls.codexModes).toEqual(["command"]);
+    expect(fake.locks).toEqual(["__codex_send__eng-1-codex"]);
+  });
+
+  test("keeps Codex skills on the durable native queue", async () => {
+    const fake = fakes();
+    const send = createSessionMessenger(fake.deps);
+
+    expect(await run(send({ ...target, harnessId: "codex", text: "$start" }))).toMatchObject({
+      ok: true,
+      transport: "codex-app-server",
+    });
+    expect(fake.calls.terminal).toBe(0);
+    expect(fake.calls.codexModes).toEqual(["message"]);
   });
 });
 

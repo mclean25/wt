@@ -5,6 +5,7 @@ import { buildSha } from "../build-id.ts";
 import {
   EVENTS_DIR,
   SNAPSHOT_PATH,
+  runningDaemonHasForeignBuild,
   snapshotForBranches,
   writeSnapshot,
   type GithubSnapshot,
@@ -60,5 +61,39 @@ describe("snapshotForBranches build gate", () => {
   test("an uncovered branch still falls back, matching build or not", () => {
     writeSnapshot(base(buildSha()));
     expect(snapshotForBranches(["feat/a", "feat/b"])).toBeNull();
+  });
+});
+
+describe("runningDaemonHasForeignBuild", () => {
+  const state = {
+    pid: 42,
+    port: 8765,
+    writerSha: "current",
+    startedAt: 1,
+    lastEventAt: null,
+    lastFetchAt: null,
+    eventCount: 0,
+    lastError: null,
+  };
+
+  test("does not blame a current daemon for its predecessor's leftover snapshot", () => {
+    expect(runningDaemonHasForeignBuild(state, () => true, (sha) => sha === "current")).toBe(false);
+  });
+
+  test("detects a live daemon that really is on another build", () => {
+    expect(runningDaemonHasForeignBuild(
+      { ...state, writerSha: "old" },
+      () => true,
+      (sha) => sha === "current",
+    )).toBe(true);
+  });
+
+  test("does not describe a stopped or missing daemon as running", () => {
+    expect(runningDaemonHasForeignBuild(
+      { ...state, writerSha: "old" },
+      () => false,
+      (sha) => sha === "current",
+    )).toBe(false);
+    expect(runningDaemonHasForeignBuild(null, () => true, () => false)).toBe(false);
   });
 });

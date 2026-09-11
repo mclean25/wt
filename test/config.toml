@@ -23,6 +23,8 @@ worktree_root = "/tmp/wt-ci-fake-worktrees"
 # snapshot -- a test that damages the thing it is testing on a machine that
 # is using it.
 cache_db = "/tmp/wt-test-cache/cache.sqlite"
+state_db = "/tmp/wt-test-state/wt.sqlite"
 
 [branch]
 prefix = "ci"
+base = "main"

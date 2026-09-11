@@ -8,6 +8,7 @@ import { TestClock } from "effect/testing";
 
 import {
   CodexTerminalReadinessTimeout,
+  codexPaneIsIdle,
   probeCodexTerminalReadiness,
   waitForCodexTerminalReady,
 } from "./readiness.ts";
@@ -51,6 +52,20 @@ function opts(root: string, sessionId = "thread-a") {
 }
 
 describe("Codex terminal fallback readiness", () => {
+  test("recognizes only Codex's empty ordinary composer", () => {
+    expect(codexPaneIsIdle("output\n\n› Ask Codex to do anything\n\nmodel footer")).toBeTrue();
+    expect(codexPaneIsIdle(
+      "› Ask Codex to do anything\n? Pick a deployment\n› 1. staging\n  2. prod",
+    )).toBeFalse();
+    expect(codexPaneIsIdle(
+      "› Ask Codex to do anything\nAllow command?\n› 1. Yes, proceed\n  2. No",
+    )).toBeFalse();
+    expect(codexPaneIsIdle("› unfinished user draft")).toBeFalse();
+    expect(codexPaneIsIdle(
+      "• Working (esc to interrupt)\n› Ask Codex to do anything",
+    )).toBeFalse();
+  });
+
   test("permits only a positively closed turn", async () => {
     const root = mkdtempSync(join(tmpdir(), "wt-codex-ready-"));
     createRollout(root, "thread-a", [lifecycle("task_started"), lifecycle("task_complete")]);
@@ -85,6 +100,24 @@ describe("Codex terminal fallback readiness", () => {
         payload: { type: "exec_approval_request" },
       }),
     ]);
+    createRollout(root, "custom-question", [
+      lifecycle("task_started"),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "custom_tool_call", name: "request_user_input" },
+      }),
+    ]);
+    createRollout(root, "answered-question", [
+      lifecycle("task_started"),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "custom_tool_call", name: "request_user_input" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "custom_tool_call_output" },
+      }),
+    ]);
 
     expect(await Effect.runPromise(probeCodexTerminalReadiness(opts(root, "question")))).toMatchObject({
       ready: false,
@@ -93,6 +126,14 @@ describe("Codex terminal fallback readiness", () => {
     expect(await Effect.runPromise(probeCodexTerminalReadiness(opts(root, "approval")))).toMatchObject({
       ready: false,
       reason: "approval",
+    });
+    expect(await Effect.runPromise(probeCodexTerminalReadiness(opts(root, "custom-question")))).toMatchObject({
+      ready: false,
+      reason: "question",
+    });
+    expect(await Effect.runPromise(probeCodexTerminalReadiness(opts(root, "answered-question")))).toMatchObject({
+      ready: false,
+      reason: "working",
     });
   });
 

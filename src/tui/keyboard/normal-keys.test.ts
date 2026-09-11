@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { KeyEvent } from "@opentui/core";
 
 import type { PullRequest } from "../../core/types.ts";
+import type { ReviewRequestPr } from "../../core/github.ts";
 import type { WorktreeModel } from "../worktree-model.ts";
 import { handleNormalKey, type NormalKeysCtx } from "./normal-keys.ts";
 
@@ -95,6 +96,44 @@ test("l starts the Linear PR-target chord for a remote worktree", () => {
   handleNormalKey(plainKey("l"), ctx);
 
   expect(targets).toEqual(["linear"]);
+});
+
+test("d dismisses a review request and advances the cursor first", async () => {
+  const calls: string[] = [];
+  const request = {
+    url: "https://github.com/example/repo/pull/1515",
+    number: 1515,
+    updatedAt: "2026-09-09T10:00:00Z",
+  } as ReviewRequestPr;
+  const item = { kind: "pr" as const, pr: request };
+  const ctx = {
+    focusedOutputId: null,
+    consumePrTargetChord: () => false,
+    handleGlobalKey: () => false,
+    current: undefined,
+    currentItem: item,
+    selectedPr: request,
+    selectedRemote: undefined,
+    selectedWorktree: undefined,
+    selectedSection: undefined,
+    advanceCursorPast: (keys: readonly string[]) => calls.push(`advance:${keys[0]}`),
+    dismissReviewRequest: async (url: string, updatedAt: string) => {
+      calls.push(`dismiss:${url}:${updatedAt}`);
+    },
+    toast: (message: string) => calls.push(`toast:${message}`),
+    reportActionError: (label: string, error: unknown) => {
+      throw new Error(`${label}: ${String(error)}`);
+    },
+  } as unknown as NormalKeysCtx;
+
+  handleNormalKey(plainKey("d"), ctx);
+  await Bun.sleep(0);
+
+  expect(calls).toEqual([
+    `advance:pr:${request.url}`,
+    `dismiss:${request.url}:${request.updatedAt}`,
+    "toast:review request dismissed",
+  ]);
 });
 
 test("a folds Archived after archiving a remote worktree", async () => {

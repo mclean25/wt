@@ -20,6 +20,7 @@ type Job = {
   id: number;
   slug: string;
   wtPath: string;
+  liveSessionId: string | null;
   resolve: (sessions: HarnessSession[]) => void;
   reject: (err: Error) => void;
   cleanup: () => void;
@@ -73,6 +74,7 @@ export class CodexDiscoveryClient {
     slug: string,
     wtPath: string,
     signal?: AbortSignal,
+    liveSessionId: string | null = null,
   ): Promise<HarnessSession[]> {
     if (this.disposed) {
       return Promise.reject(abortError("codex discovery disposed"));
@@ -83,6 +85,7 @@ export class CodexDiscoveryClient {
         id: this.nextId++,
         slug,
         wtPath,
+        liveSessionId,
         resolve,
         reject,
         cleanup: () => {},
@@ -189,6 +192,7 @@ export class CodexDiscoveryClient {
           id: job.id,
           slug: job.slug,
           wtPath: job.wtPath,
+          liveSessionId: job.liveSessionId,
         });
       } catch (err) {
         this.active = null;
@@ -208,8 +212,9 @@ export function discoverCodexSessionsInWorker(
   slug: string,
   wtPath: string,
   signal?: AbortSignal,
+  liveSessionId: string | null = null,
 ): Promise<HarnessSession[]> {
-  return discoveryClient.discover(slug, wtPath, signal);
+  return discoveryClient.discover(slug, wtPath, signal, liveSessionId);
 }
 
 export function discoverCodexSessions(slug: string, wtPath: string) {

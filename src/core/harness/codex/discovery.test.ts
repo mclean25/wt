@@ -66,11 +66,12 @@ describe("CodexDiscoveryClient", () => {
     const worker = new FakeWorker();
     const client = clientWith(worker);
 
-    const first = client.discover("one", "/one");
+    const first = client.discover("one", "/one", undefined, "live-one");
     const second = client.discover("two", "/two");
 
     expect(worker.unrefed).toBe(true);
     expect(worker.posted.map((message) => message.slug)).toEqual(["one"]);
+    expect(worker.posted[0]?.liveSessionId).toBe("live-one");
 
     worker.reply({ type: "result", id: worker.posted[0]!.id, sessions: [] });
     await expect(first).resolves.toEqual([]);

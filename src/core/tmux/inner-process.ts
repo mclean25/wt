@@ -125,7 +125,7 @@ export const prepareInspectorSocket = Effect.fn("prepareInspectorSocket")(functi
  * - `BROWSER_CONTROL_SESSION` so any browser tabs an agent opens are
  *   already attributed to this worktree and get closed with it (see
  *   `core/browser.ts`).
- * - `WT_AGENT` — the slug whose AGENT this session is. `wt claude send`
+ * - `WT_AGENT` — the slug whose AGENT this session is. `wt agent send`
  *   / `wt manager send` read it to stamp the sender on outgoing
  *   messages, which is why agents no longer hand-prefix them (a
  *   convention every agent had to remember, and some didn't). Harness

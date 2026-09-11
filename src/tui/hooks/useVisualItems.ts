@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { config } from "../../core/config.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
+import type { ReviewRequestDismissal } from "../../core/wtstate.ts";
 import { reviewRequestsQuery } from "../../state/index.ts";
 import type { FleetWorktreeItem, ListActiveItem } from "../panels/list.tsx";
 import type { CreatedWorktreePlacement } from "../created-worktree.ts";
@@ -151,7 +152,18 @@ type UseVisualItemsArgs = {
   archivedKeys: ReadonlySet<string>;
   githubData?: GithubData;
   createdPlacements?: readonly CreatedWorktreePlacement[];
+  reviewRequestDismissals?: readonly ReviewRequestDismissal[];
 };
+
+export function visibleReviewRequests(
+  requests: readonly ReviewRequestPr[],
+  dismissals: readonly ReviewRequestDismissal[],
+): ReviewRequestPr[] {
+  const hidden = new Set(
+    dismissals.map((entry) => `${entry.url}\0${entry.updatedAt}`),
+  );
+  return requests.filter((pr) => !hidden.has(`${pr.url}\0${pr.updatedAt}`));
+}
 
 export function useVisualItems({
   rows,
@@ -162,6 +174,7 @@ export function useVisualItems({
   archivedKeys,
   githubData,
   createdPlacements = [],
+  reviewRequestDismissals = [],
 }: UseVisualItemsArgs) {
   const worktrees = useMemo(
     () => buildWorktreeModels(rows, remoteWorktrees, archivedKeys, githubData),
@@ -180,8 +193,10 @@ export function useVisualItems({
     // A disabled query can still expose a persisted cache entry. The
     // repository switch is authoritative, so suppress that stale section
     // explicitly instead of relying on `enabled: false` alone.
-    () => config.github.reviewers ? (reviewRequests.data ?? []) : [],
-    [reviewRequests.data],
+    () => config.github.reviewers
+      ? visibleReviewRequests(reviewRequests.data ?? [], reviewRequestDismissals)
+      : [],
+    [reviewRequests.data, reviewRequestDismissals],
   );
 
   const archivedRows = useMemo(() => rows.filter((r) => r.archived), [rows]);

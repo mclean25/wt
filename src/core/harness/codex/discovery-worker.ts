@@ -16,12 +16,12 @@ function reply(message: CodexDiscoveryResult): void {
 }
 
 self.onmessage = (event: MessageEvent<CodexDiscoveryRequest>) => {
-  const { id, slug, wtPath } = event.data;
+  const { id, slug, wtPath, liveSessionId } = event.data;
   try {
     reply({
       type: "result",
       id,
-      sessions: discoverCodexSessionsSync(slug, wtPath),
+      sessions: discoverCodexSessionsSync(slug, wtPath, undefined, liveSessionId),
     });
   } catch (err) {
     reply({

@@ -45,3 +45,39 @@ test("polling interruption stops and joins the worker", async () => {
     expect(terminated).toBe(1);
   }).pipe(Effect.provide(TestClock.layer())));
 });
+
+test("an empty worker result releases the lane and reports changed slots", async () => {
+  const posted: CodexEventsWorkerMessage[] = [];
+  const changes: string[][] = [];
+  let onMessage: ((event: MessageEvent) => void) | null = null;
+  const worker = {
+    postMessage(message: CodexEventsWorkerMessage) {
+      posted.push(message);
+    },
+    addEventListener(type: string, listener: (event: MessageEvent) => void) {
+      if (type === "message") onMessage = listener;
+    },
+    terminate() {},
+  } as unknown as CodexEventsWorker;
+
+  await Effect.runPromise(Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(codexEventPolling(
+      () => [{ slug: "manager", wtPath: "/repo" }],
+      (slugs) => changes.push([...slugs]),
+      { workerFactory: () => worker, intervalMs: 100 },
+    ));
+    yield* Effect.yieldNow;
+
+    yield* TestClock.adjust(100);
+    expect(posted.filter((message) => message.type === "poll")).toHaveLength(1);
+    if (!onMessage) throw new Error("message listener was not installed");
+    onMessage({
+      data: { type: "events", events: [], changedSlugs: ["manager"] },
+    } as MessageEvent);
+    expect(changes).toEqual([["manager"]]);
+
+    yield* TestClock.adjust(100);
+    expect(posted.filter((message) => message.type === "poll")).toHaveLength(2);
+    yield* Fiber.interrupt(fiber);
+  }).pipe(Effect.provide(TestClock.layer())));
+});

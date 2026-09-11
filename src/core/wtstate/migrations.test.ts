@@ -41,6 +41,11 @@ describe("migrateRawWtState (constant-bound wrapper)", () => {
     expect(kept.value.attentionSeenTs).toBe(123);
   });
 
+  test("v16 seeds an empty review-request dismissal ledger", () => {
+    const { value } = migrateRawWtState({ version: 15, slugs: {} });
+    expect(value.reviewRequestDismissals).toEqual([]);
+  });
+
   test("invalid version values are treated as 0 and migrated", () => {
     const raw = { version: "not-a-number", slugs: { a: 1 } };
     const { value, from } = migrateRawWtState(raw);

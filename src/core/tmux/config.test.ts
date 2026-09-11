@@ -4,6 +4,12 @@ import { buildConfig } from "./config.ts";
 import { sessionSwitchTarget } from "./naming.ts";
 
 describe("worktree session shortcut routing", () => {
+  test("allows full-screen harness TUIs to use the alternate screen", () => {
+    const config = buildConfig();
+    expect(config).toContain("set -g alternate-screen on");
+    expect(config).not.toContain("set -g alternate-screen off");
+  });
+
   test("the owning F-key detaches and cross-session keys request a switch", () => {
     const config = buildConfig();
     expect(config).toContain(
@@ -25,9 +31,17 @@ describe("worktree session shortcut routing", () => {
   });
 
   test("OSC 8 hyperlink boundaries are forwarded to the outer terminal", () => {
-    expect(buildConfig()).toContain(
+    const config = buildConfig();
+    expect(config).toContain(
       "xterm*:hyperlinks,tmux-256color:hyperlinks",
     );
+    expect(config).toContain(
+      "MouseDown1Pane if-shell -F '#{!=:#{mouse_hyperlink},}'",
+    );
+    expect(config).toContain(
+      `'run-shell -b "/usr/bin/open #{q:mouse_hyperlink}"'`,
+    );
+    expect(config).toContain("'select-pane -t = \\; send-keys -M'");
   });
 
   test("mouse selections copy to the macOS clipboard on release", () => {

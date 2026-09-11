@@ -218,6 +218,24 @@ export function buildInnerArgs(params: {
 }
 
 /**
+ * Keep Codex's hardware cursor visible without letting the terminal blink it
+ * over the second composer row. This is deliberately a pane-local tmux option:
+ * shell, diff, Claude, and OpenCode sessions retain the user's cursor style,
+ * while Codex keeps its native shimmer/spinner animations.
+ *
+ * Returning no arguments for every other harness keeps attached and
+ * detached creation paths on one policy.
+ */
+export function codexPaneOptionArgs(
+  kind: Exclude<SessionKind, "action" | "dev">,
+  name: string,
+): string[] {
+  return kind === "codex"
+    ? ["set-option", "-p", "-t", name, "cursor-style", "block"]
+    : [];
+}
+
+/**
  * Attach to (or create) the worktree's session and run the configured
  * inner program (claude for `kind: "claude"`, the user's diff TUI for
  * `kind: "diff"`). Stdio is inherited so tmux owns the user's
@@ -447,6 +465,7 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
   // `new-session -A` may be about to attach to a live one, whose socket
   // is in use. See `prepareInspectorSocket`.
   yield* prepareInspectorSocket(kind, name);
+  const paneOptionArgs = codexPaneOptionArgs(kind, name);
   const clientArgs = [
         "tmux",
         "-L",
@@ -471,6 +490,7 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
         name,
         "@wt-shortcut",
         shortcut,
+        ...(paneOptionArgs.length > 0 ? [";", ...paneOptionArgs] : []),
         ...(resumeSessionId === null || resumeSessionId === undefined
           ? []
           : [

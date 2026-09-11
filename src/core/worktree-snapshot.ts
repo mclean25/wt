@@ -69,7 +69,7 @@ export const collectWorktreeSnapshots = Effect.fn("collectWorktreeSnapshots")(fu
     rows.map((worktree) => Effect.gen(function* () {
       const [status, push, dev] = yield* Effect.all([
         worktreeStatus(worktree),
-        pushCounts(worktree.path),
+        pushCounts(worktree.path, states[worktree.slug]?.baseBranch),
         devServerStatus(worktree.slug, { path: worktree.path }).pipe(
           Effect.mapError((cause) => new WorktreeSnapshotError({ slug: worktree.slug, operation: "dev", cause })),
         ),
