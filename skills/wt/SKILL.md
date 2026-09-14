@@ -98,7 +98,10 @@ in each one.
   command yourself: wt pins the server to a port it allocates per worktree
   (so the port the repo documents is the wrong one here), supervises and
   restarts it, surfaces it in the TUI, and kills it with the worktree.
-  `start` is also restart. Only ever your own worktree's server.
+  `start` is also restart. Only ever your own worktree's server. Before handing
+  off, run `wt dev stop` from your worktree if you have no planned further use;
+  retain it while ongoing verification needs it. A PR or momentary idle state
+  does not establish disuse.
 - `wt rm [slug]` — remove a worktree; it deletes the branch too and takes no
   flags to control that.
 - `wt merge [slug]` — arm GitHub's "merge when ready" on the PR, the same

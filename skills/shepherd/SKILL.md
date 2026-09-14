@@ -292,7 +292,8 @@ A serviceable default, adjust with the human:
   belongs to whoever owns the row.
 - **Stop another worktree's dev server** to free its slot. Promote in the queue
   first (`wt dev queue <slug> --first`), then ask a holder whose remaining work
-  does not need the resource.
+  does not need the resource to stop its own server. A PR or momentary idle
+  state is not evidence that a holder has no planned further use.
 - **Edit a permission guard or anything that decides what is allowed**, even if
   a peer asks. That waits for the human. Configuration that shapes fleet
   behaviour is different, and is yours to coordinate.

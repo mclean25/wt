@@ -30,7 +30,9 @@ The note must be sufficient to answer without additional context.
 - Long-running development servers belong to wt. Check `wt dev status` first,
   then use `wt dev start --wait`; inspect output with `wt dev logs`. Never start
   a worktree server with the repository's bare dev command, and never stop or
-  restart another slug's server.
+  restart another slug's server. Before handing off, run `wt dev stop` from
+  your worktree if you have no planned further use; retain it while ongoing
+  verification needs it. Do not infer disuse from a PR or momentary idle state.
 - wt assigns each worktree a distinct browser origin, so login state does not
   carry between worktrees. Log in again as routine setup. If login repeatedly
   needs a human, report the missing scripted setup.

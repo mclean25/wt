@@ -35,6 +35,12 @@ repo's table. The managed block is per-machine, always on, and therefore the
 one surface that wins that argument — which is why the dev-server rule lives
 there and not in the `wt` skill alone.
 
+Before handoff, agents stop their own dev server with `wt dev stop` when they
+have no planned further use, retaining it for ongoing verification that needs
+it. The start and completion playbooks repeat this ownership rule. A PR or an
+idle session does not establish disuse, and no automatic shutdown is tied to
+either signal.
+
 ### What belongs in the block
 
 Because it lands in the reader's own always-loaded file, the block is edited
