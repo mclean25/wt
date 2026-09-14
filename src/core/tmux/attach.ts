@@ -218,20 +218,17 @@ export function buildInnerArgs(params: {
 }
 
 /**
- * Keep Codex's hardware cursor visible without letting the terminal blink it
- * over the second composer row. This is deliberately a pane-local tmux option:
- * shell, diff, Claude, and OpenCode sessions retain the user's cursor style,
- * while Codex keeps its native shimmer/spinner animations.
- *
- * Returning no arguments for every other harness keeps attached and
- * detached creation paths on one policy.
+ * Remove the block-cursor override installed by older wt versions. Cursor
+ * shape cannot fix intermediate redraw positions; synchronized client output
+ * belongs in the terminal capabilities. Unsetting on attach upgrades live
+ * Codex panes without restarting their conversations.
  */
 export function codexPaneOptionArgs(
   kind: Exclude<SessionKind, "action" | "dev">,
   name: string,
 ): string[] {
   return kind === "codex"
-    ? ["set-option", "-p", "-t", name, "cursor-style", "block"]
+    ? ["set-option", "-pu", "-t", name, "cursor-style"]
     : [];
 }
 

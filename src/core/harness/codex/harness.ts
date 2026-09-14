@@ -43,9 +43,8 @@ const log = createLogger("[codex]");
 const CODEX_GLYPH = "\u{F4AC}"; // nf-oct-cloud
 const CODEX_COLOR = "#4d56d6";
 const CODEX_TMUX_INFIX = "-codex";
-// Keep Codex in a real full-screen buffer under tmux. Cursor stabilization is
-// a pane concern (`codexPaneOptionArgs` in tmux/attach.ts), not a reason to
-// disable Codex's animations and degrade the TUI.
+// Keep Codex in a real full-screen buffer under tmux. Synchronized terminal
+// output is configured in tmux/config.ts; native animations stay enabled.
 const CODEX_TMUX_TUI_ARGS = [
   "-c",
   'tui.alternate_screen="always"',

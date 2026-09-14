@@ -26,6 +26,11 @@ export function configDir(): string {
  *  - Truecolor declared two ways (modern `terminal-features :RGB` +
  *    legacy `terminal-overrides :Tc`) — different tools check
  *    different paths.
+ *  - `:sync` brackets physical client redraws in synchronized updates.
+ *    Without it, a generic xterm-256color client such as Alacritty exposes
+ *    intermediate cursor positions during Codex streaming and animations.
+ *    This describes the outer terminal, separately from tmux accepting
+ *    synchronized frames from the application inside its pane.
  *  - `extended-keys always` + `extended-keys-format csi-u` + `:extkeys`
  *    feature: lets tmux distinguish Shift+Enter from plain Enter so
  *    multiline shortcuts work through nested tmux/Codex/Claude sessions.
@@ -53,6 +58,7 @@ set -g mouse on
 set -g focus-events on
 set -g default-terminal "tmux-256color"
 set -as terminal-features ",xterm*:RGB,tmux-256color:RGB"
+set -as terminal-features ",xterm*:sync,tmux-256color:sync,alacritty*:sync"
 set -ag terminal-overrides ",xterm-256color:Tc,tmux-256color:Tc"
 set -ag update-environment "COLORTERM"
 set -g allow-passthrough on

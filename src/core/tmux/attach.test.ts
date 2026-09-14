@@ -8,14 +8,13 @@ import { codexPaneOptionArgs } from "./attach.ts";
 import { wrapInnerArgs } from "./inner-process.ts";
 
 describe("per-harness pane options", () => {
-  test("makes only the Codex cursor non-blinking", () => {
+  test("clears the legacy Codex cursor override on attach", () => {
     expect(codexPaneOptionArgs("codex", "task-codex")).toEqual([
       "set-option",
-      "-p",
+      "-pu",
       "-t",
       "task-codex",
       "cursor-style",
-      "block",
     ]);
     expect(codexPaneOptionArgs("claude", "task")).toEqual([]);
     expect(codexPaneOptionArgs("opencode", "task-opencode")).toEqual([]);
