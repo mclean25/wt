@@ -129,6 +129,18 @@ Terminal capability changes require detaching and reattaching the client,
 not restarting Codex or killing the tmux server. Verify the attached client's
 `client_termfeatures` includes `sync` and `tmux info` has a `Sync` sequence.
 
+**Synchronization capability alone does not prove cursor isolation.** tmux
+3.7c can expose the pane's intermediate cursor while an application frame is
+still open, even with a sync-capable client. This reproduces with a synthetic
+frame split across writes, independently of Codex or the outer terminal.
+Upstream [57a13664cc2c](https://github.com/tmux/tmux/commit/57a13664cc2cf0db1c6b4f575c4934bf4ec1c4ee)
+preserves cursor state during synchronization. Test a build containing that
+fix before changing terminals or suppressing harness animations. Installing a
+new tmux binary does not upgrade a live server: `tmux -V` identifies the client,
+whereas `tmux -L <socket> display-message -p '#{version}'` identifies the server.
+Replacing the server ends its pane processes, so coordinate that interruption;
+reattaching a client is insufficient for a binary fix.
+
 **The CLI dispatcher imports lazily.** `cli/index.ts` maps each subcommand to a `() => import("./commands/<name>.ts")` thunk, so `wt <cmd>` loads that command's module graph and nothing else (35 modules for `wt status`, against 153 for all commands at once). This is containment, not speed: users update hot from main, so any push can put a broken module in front of every agent on the machine, and a static barrel turns one bad export into a total outage — which is exactly what happened, taking `wt status` down with the transport it doesn't use. Commands whose branches differ in what they need split further: `wt manager report` imports no session machinery at all, so the fleet keeps its ability to report that delivery is broken. `scripts/broken-module-check.sh` asserts the property by breaking a module in a throwaway copy of `src/` and printing which commands survive. `main.ts` still routes `update`/`rollback`/`version` around the dispatcher entirely, because those must work when the dispatcher itself is what failed to parse ([updates.md](updates.md)).
 
 Claude session lifecycle lives in `core/harness/claude/sessions.ts`. A target is the canonical cwd plus its deterministic wt conversation UUID and optional managed name. `ensure` serializes cold starts under a per-session lock and reuses the normal detached tmux host. Discovery is Claude's own per-process state directory (`core/harness/claude/registry.ts`), which already drops entries whose pid is gone — so there is exactly one liveness authority and nothing of wt's own to keep in sync. Claude stop hard-kills the hosted session rather than sending control keys.
