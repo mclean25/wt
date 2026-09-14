@@ -34,6 +34,8 @@ export function configDir(): string {
  *  - `extended-keys always` + `extended-keys-format csi-u` + `:extkeys`
  *    feature: lets tmux distinguish Shift+Enter from plain Enter so
  *    multiline shortcuts work through nested tmux/Codex/Claude sessions.
+ *    The format option uses `-q`: tmux 3.4 lacks it and retains its native
+ *    extended-key format instead of opening a configuration-error screen.
  *  - `:hyperlinks` preserves OSC 8 link boundaries through direct
  *    xterm-family clients, so the outer terminal does not have to
  *    guess where a URL ends.
@@ -63,7 +65,7 @@ set -ag terminal-overrides ",xterm-256color:Tc,tmux-256color:Tc"
 set -ag update-environment "COLORTERM"
 set -g allow-passthrough on
 set -s extended-keys always
-set -s extended-keys-format csi-u
+set -sq extended-keys-format csi-u
 set -as terminal-features ",xterm*:extkeys,tmux-256color:extkeys"
 set -as terminal-features ",xterm*:hyperlinks,tmux-256color:hyperlinks"
 bind-key -n MouseDown1Pane if-shell -F '#{!=:#{mouse_hyperlink},}' 'run-shell -b "/usr/bin/open #{q:mouse_hyperlink}"' 'select-pane -t = \\; send-keys -M'

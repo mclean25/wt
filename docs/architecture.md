@@ -128,6 +128,9 @@ block-cursor override; changing cursor shape did not fix redraw positions.
 Terminal capability changes require detaching and reattaching the client,
 not restarting Codex or killing the tmux server. Verify the attached client's
 `client_termfeatures` includes `sync` and `tmux info` has a `Sync` sequence.
+The optional `extended-keys-format` setting is applied quietly: tmux 3.4 lacks
+it and keeps its native extended-key format, rather than showing a config
+error screen on startup. Newer tmux versions select CSI-u.
 
 **Synchronization capability alone does not prove cursor isolation.** tmux
 3.7c can expose the pane's intermediate cursor while an application frame is
