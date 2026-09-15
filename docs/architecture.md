@@ -158,6 +158,15 @@ Interactive harness wrappers unset both `NO_COLOR` and `NO_COLOUR`. A caller's p
 
 Worktree **backends** follow the same shape: `core/backend.ts` → `core/backend/` behind the narrow `WorktreeBackend` interface (`create` / `remove` — the only two filesystem mutation points, extracted from `lifecycle.ts`). Two built-ins: `git-worktree` (linked worktrees, one shared object db) and `rift` (copy-on-write clones). Everything else wt does to a worktree (fork-base record, env/configured-glob copy, stage pin, upstream, status) stays backend-agnostic in `lifecycle.ts` / `worktree.ts`. `getBackend(kind)` picks the create backend from config; `getBackendForPath(path)` derives the owning backend from disk (a `.rift` marker) so removal is correct after a config flip. This is the LOCAL-materialization axis, orthogonal to any remote (SSH-host) axis. See [backends.md](backends.md).
 
+Palette compaction is coordinated in `core/harness/compact.ts`. Claude keeps
+its inline focus instructions. Codex receives preparation through ordinary
+messaging, then bare `/compact` only after a new user-message receipt in the
+exact slot-owned rollout. Its UUID is carried into the terminal injection's
+locked readiness gate, which rejects a changed owner immediately before paste.
+Queue acknowledgement is not receipt, and terminal submission is not proof
+that native compaction finished. Missing identity or a receipt timeout leaves
+the command unsent rather than dropping the preparation or overtaking it.
+
 ## Freshness model
 
 Freshness is **push-based**; the `r` keybind is a backstop, not the mechanism. Every external state source has an event trigger that invalidates the matching query:

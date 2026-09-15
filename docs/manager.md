@@ -47,8 +47,22 @@ They also never fire on the manager's *own* status writes. Triage ends by sharpe
 | `a` | Audit work statuses | cross-check every assertion against PR/CI/session reality, fix drifted records |
 | `s` | Start next todo | pick the highest-value `todo` row(s) and kick their agents off |
 | `r` | Ask about selected row | free text about the list-pane selection, delivered `[re: <slug>]` |
-| `m` | Compact manager context | raw `/compact`, sent directly (no extras screen) |
+| `m` | Compact manager context | native `/compact` (no extras screen); Codex preparation is sent separately |
 | `c` | Custom message… | free text to the manager, fleet-scoped |
+
+Codex does not accept inline `/compact` arguments. For manager and special-slot
+palettes, wt first sends the date/preservation instructions as an ordinary
+message, verifies receipt in that slot's exact rollout, then submits bare
+`/compact` through the guarded terminal path. Manager preparation asks it to
+reload `$manager` after compaction. Claude retains its single bundled command;
+OpenCode is unchanged. A queued preparation is not receipt. Missing thread
+identity or a receipt timeout prevents command submission; the preparation may
+remain queued. The final injection check rejects a changed thread owner.
+Command submission does not prove native compaction completed.
+
+`bun scripts/codex-compact-recognition.ts` checks the installed Codex parser
+using isolated homes and a fake provider, without touching live sessions or
+claiming model-backed compaction succeeded.
 
 Fleet-scoped commands (`d`/`t`/`o`/`n`/`a`/`s` and custom text) send with no row context and no `[re:]` prefix. The row-scoped entries (`r`, plus any of your `[[actions]]` with `target = "manager"`, which also appear in the palette) launch against the row selected when the palette opened — grayed out when there isn't one.
 
