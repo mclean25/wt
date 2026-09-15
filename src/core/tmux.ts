@@ -32,6 +32,7 @@ export { TMUX_SOCKET, WT_SOURCE_SLUG, claudeSessionName, sessionName } from "./t
 export type { SessionKind, SessionShortcut } from "./tmux/naming.ts";
 
 export { buildConfig, writeConfig } from "./tmux/config.ts";
+export { applyTerminalPalette, saveTerminalPalette } from "./tmux/palette.ts";
 
 export {
   closeHarnessSessionGracefully,

@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { config } from "../config.ts";
 import { SESSION_SWITCH_EXIT_CODE } from "./naming.ts";
+import { readTerminalPaletteConfig } from "./palette.ts";
 
 /** Path to the directory holding the generated `tmux.conf`. */
 export function configDir(): string {
@@ -81,8 +82,9 @@ unbind C-b`;
  * that asks the renderer-side navigator to attach the corresponding
  * session immediately.
  */
-export function buildConfig(): string {
+export function buildConfig(paletteConfig = ""): string {
   return `${TERMINAL_PREAMBLE}
+${paletteConfig}
 bind-key -n F10 if-shell -F '#{==:#{@wt-shortcut},shell}' 'detach-client' 'detach-client -E "exit ${SESSION_SWITCH_EXIT_CODE.shell}"'
 bind-key -n F11 if-shell -F '#{==:#{@wt-shortcut},diff}' 'detach-client' 'detach-client -E "exit ${SESSION_SWITCH_EXIT_CODE.diff}"'
 bind-key -n F12 if-shell -F '#{==:#{@wt-shortcut},harness}' 'detach-client' 'detach-client -E "exit ${SESSION_SWITCH_EXIT_CODE.harness}"'
@@ -113,7 +115,7 @@ export function writeIfChanged(path: string, content: string): { path: string; c
  */
 export function writeConfig(): { path: string; changed: boolean } {
   const path = join(configDir(), "tmux.conf");
-  return writeIfChanged(path, buildConfig());
+  return writeIfChanged(path, buildConfig(readTerminalPaletteConfig(config.paths.cacheRoot)));
 }
 
 /**
@@ -135,7 +137,7 @@ export function ensureConfig(): string {
   try {
     readFileSync(path, "utf8");
   } catch {
-    writeFileSync(path, buildConfig(), "utf8");
+    writeFileSync(path, buildConfig(readTerminalPaletteConfig(config.paths.cacheRoot)), "utf8");
   }
   return path;
 }

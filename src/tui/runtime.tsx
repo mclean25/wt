@@ -63,6 +63,7 @@ import { closeAutoMergeRetries } from "./flows/auto-merge-retry.ts";
 import { attachFetchLogs } from "./fetch-log.ts";
 import { SESSION_SLOTS, SLOT_SLUGS } from "./sessions/slots.ts";
 import { attachLoggerToasts } from "./toast.ts";
+import { syncTerminalPalette } from "./terminal-palette.ts";
 
 const startupLog = createLogger("[startup]");
 
@@ -827,6 +828,7 @@ export const runTui = Effect.gen(function* () {
     }),
     (activeRenderer) => activeRenderer.destroy(),
   );
+  yield* syncTerminalPalette(renderer);
   // Frame-side half of the WT_PERF input-latency probe (the keypress
   // side is `markKeypress()` in App's keyboard dispatch). No-op pair
   // when the env var is unset.

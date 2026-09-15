@@ -132,6 +132,20 @@ The optional `extended-keys-format` setting is applied quietly: tmux 3.4 lacks
 it and keeps its native extended-key format, rather than showing a config
 error screen on startup. Newer tmux versions select CSI-u.
 
+The TUI observes the outer terminal's default foreground/background through
+OpenTUI at startup before exposing session launch actions.
+`core/tmux/palette.ts` retains only validated RGB observations in the
+repository cache's `terminal-palette.json` and supplies global tmux window
+style defaults, both to the live server and its generated startup config.
+Explicit pane/window styles still win. Missing or failed observations retain
+the previous palette; a first run without a terminal supplies no guessed theme.
+This lets detached harnesses receive OSC 10/11 colour replies without an
+attached client. Codex caches an unavailable startup palette, so attaching
+later does not repair an already-unstyled composer: that Codex process must
+exit and resume its existing thread. No session is restarted automatically.
+Restarting the wt TUI refreshes the observation after changing terminal themes;
+session handoffs never start additional palette queries.
+
 **Synchronization capability alone does not prove cursor isolation.** tmux
 3.7c can expose the pane's intermediate cursor while an application frame is
 still open, even with a sync-capable client. This reproduces with a synthetic
