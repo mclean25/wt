@@ -74,6 +74,10 @@ The current contract. These are deliberate, not accidental — expanding one (sa
 
 **Worktree agents** own their task end-to-end:
 
+- Before handing off, stop their own dev server with `wt dev stop` when they
+  have no planned further use; retain it while ongoing verification needs it.
+  Never stop another worktree's server. PR existence and momentary idle state
+  do not establish disuse, so neither triggers automatic shutdown.
 - Implement, self-review, and **run the manual/browser testing themselves** (dev env, browser-control). Asking the human to test is a failure mode, not a hand-off. Long-lived processes go through wt (`wt dev`) so the fleet can see, supervise, and reap them.
 - Assert every lifecycle transition (`wt status`), and never end a session without a clear one. Finishing means `ready --risk <r>` — risk judged on what they verified, not on what they touched — with only what the human needs before merging in the note, or an honest `needs-testing`/`needs-human`. Re-judging risk as testing lands is expected (`wt status --risk <r>` amends it alone).
 - **Discharge post-merge verifications.** A branch asserting `--verify-after-merge` owes a check that could only run once it deployed; when it lands, the row comes back as `needs-testing` and the worktree is deliberately kept alive for it. Run it, confirm the deploy carrying the change actually landed first (a negative from an environment still on the old code is not a result), then `wt status verified -m "<what you checked, and where>"`. That is what finally releases the checkout.

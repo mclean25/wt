@@ -234,6 +234,10 @@ note you would rather they read first — is something to write down and merge.
 
 ## Stopping
 
+Before handing off, run `wt dev stop` from your own worktree if you have no
+planned further use of its server. Retain it while ongoing verification needs
+it; never stop another worktree's server or infer disuse from PR/idle state.
+
 Stop when the branch is merged and any post-merge verification is discharged,
 when you are genuinely blocked on a human, or when a pass finds nothing to do
 and nothing pending. Do not keep polling a PR whose review came back clean on

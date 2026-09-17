@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { config } from "../config.ts";
 import { SESSION_SWITCH_EXIT_CODE } from "./naming.ts";
+import { readTerminalPaletteConfig } from "./palette.ts";
 
 /** Path to the directory holding the generated `tmux.conf`. */
 export function configDir(): string {
@@ -26,9 +27,16 @@ export function configDir(): string {
  *  - Truecolor declared two ways (modern `terminal-features :RGB` +
  *    legacy `terminal-overrides :Tc`) — different tools check
  *    different paths.
+ *  - `:sync` brackets physical client redraws in synchronized updates.
+ *    Without it, a generic xterm-256color client such as Alacritty exposes
+ *    intermediate cursor positions during Codex streaming and animations.
+ *    This describes the outer terminal, separately from tmux accepting
+ *    synchronized frames from the application inside its pane.
  *  - `extended-keys always` + `extended-keys-format csi-u` + `:extkeys`
  *    feature: lets tmux distinguish Shift+Enter from plain Enter so
  *    multiline shortcuts work through nested tmux/Codex/Claude sessions.
+ *    The format option uses `-q`: tmux 3.4 lacks it and retains its native
+ *    extended-key format instead of opening a configuration-error screen.
  *  - `:hyperlinks` preserves OSC 8 link boundaries through direct
  *    xterm-family clients, so the outer terminal does not have to
  *    guess where a URL ends.
@@ -53,11 +61,12 @@ set -g mouse on
 set -g focus-events on
 set -g default-terminal "tmux-256color"
 set -as terminal-features ",xterm*:RGB,tmux-256color:RGB"
+set -as terminal-features ",xterm*:sync,tmux-256color:sync,alacritty*:sync"
 set -ag terminal-overrides ",xterm-256color:Tc,tmux-256color:Tc"
 set -ag update-environment "COLORTERM"
 set -g allow-passthrough on
 set -s extended-keys always
-set -s extended-keys-format csi-u
+set -sq extended-keys-format csi-u
 set -as terminal-features ",xterm*:extkeys,tmux-256color:extkeys"
 set -as terminal-features ",xterm*:hyperlinks,tmux-256color:hyperlinks"
 bind-key -n MouseDown1Pane if-shell -F '#{!=:#{mouse_hyperlink},}' 'run-shell -b "/usr/bin/open #{q:mouse_hyperlink}"' 'select-pane -t = \\; send-keys -M'
@@ -73,8 +82,9 @@ unbind C-b`;
  * that asks the renderer-side navigator to attach the corresponding
  * session immediately.
  */
-export function buildConfig(): string {
+export function buildConfig(paletteConfig = ""): string {
   return `${TERMINAL_PREAMBLE}
+${paletteConfig}
 bind-key -n F10 if-shell -F '#{==:#{@wt-shortcut},shell}' 'detach-client' 'detach-client -E "exit ${SESSION_SWITCH_EXIT_CODE.shell}"'
 bind-key -n F11 if-shell -F '#{==:#{@wt-shortcut},diff}' 'detach-client' 'detach-client -E "exit ${SESSION_SWITCH_EXIT_CODE.diff}"'
 bind-key -n F12 if-shell -F '#{==:#{@wt-shortcut},harness}' 'detach-client' 'detach-client -E "exit ${SESSION_SWITCH_EXIT_CODE.harness}"'
@@ -105,7 +115,7 @@ export function writeIfChanged(path: string, content: string): { path: string; c
  */
 export function writeConfig(): { path: string; changed: boolean } {
   const path = join(configDir(), "tmux.conf");
-  return writeIfChanged(path, buildConfig());
+  return writeIfChanged(path, buildConfig(readTerminalPaletteConfig(config.paths.cacheRoot)));
 }
 
 /**
@@ -127,7 +137,7 @@ export function ensureConfig(): string {
   try {
     readFileSync(path, "utf8");
   } catch {
-    writeFileSync(path, buildConfig(), "utf8");
+    writeFileSync(path, buildConfig(readTerminalPaletteConfig(config.paths.cacheRoot)), "utf8");
   }
   return path;
 }

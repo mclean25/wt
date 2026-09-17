@@ -138,7 +138,10 @@ You own verification. After review:
    Make sure the PR body reflects the final state. The human merges — never
    merge it yourself.
 
-Never end the session without one of those statuses asserted.
+Before handing off, run `wt dev stop` from your own worktree if you have no
+planned further use of its server. Retain it while ongoing verification needs
+it; a PR or momentary idle state alone is not a reason to stop it. Never stop
+another worktree's server. Never end without one of those statuses asserted.
 
 ## User Instructions
 

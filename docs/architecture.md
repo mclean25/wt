@@ -119,11 +119,44 @@ It also leaves tmux's `alternate-screen` support enabled: full-screen harness
 TUIs such as Codex depend on `smcup`/`rmcup` for a stable full-height viewport
 and cursor redraws.
 wt-launched Codex sessions additionally force `tui.alternate_screen="always"`.
-Codex's native animations remain enabled; disabling them makes the interface
-materially worse. Instead, wt sets tmux's pane-local `cursor-style block` only
-on Codex panes. This keeps the hardware cursor visible but non-blinking over the
-composer's spare row, while shell, diff, Claude, and OpenCode panes retain the
-user's cursor style.
+Codex's native animations remain enabled. The private server declares `sync`
+for xterm-family, Alacritty, and nested tmux clients so physical redraws are
+buffered by supporting terminals. tmux accepting synchronized application
+frames does not itself establish this outer-terminal capability. Unsupported
+terminals ignore the mode sequences. Codex attach clears the old pane-local
+block-cursor override; changing cursor shape did not fix redraw positions.
+Terminal capability changes require detaching and reattaching the client,
+not restarting Codex or killing the tmux server. Verify the attached client's
+`client_termfeatures` includes `sync` and `tmux info` has a `Sync` sequence.
+The optional `extended-keys-format` setting is applied quietly: tmux 3.4 lacks
+it and keeps its native extended-key format, rather than showing a config
+error screen on startup. Newer tmux versions select CSI-u.
+
+The TUI observes the outer terminal's default foreground/background through
+OpenTUI at startup before exposing session launch actions.
+`core/tmux/palette.ts` retains only validated RGB observations in the
+repository cache's `terminal-palette.json` and supplies global tmux window
+style defaults, both to the live server and its generated startup config.
+Explicit pane/window styles still win. Missing or failed observations retain
+the previous palette; a first run without a terminal supplies no guessed theme.
+This lets detached harnesses receive OSC 10/11 colour replies without an
+attached client. Codex caches an unavailable startup palette, so attaching
+later does not repair an already-unstyled composer: that Codex process must
+exit and resume its existing thread. No session is restarted automatically.
+Restarting the wt TUI refreshes the observation after changing terminal themes;
+session handoffs never start additional palette queries.
+
+**Synchronization capability alone does not prove cursor isolation.** tmux
+3.7c can expose the pane's intermediate cursor while an application frame is
+still open, even with a sync-capable client. This reproduces with a synthetic
+frame split across writes, independently of Codex or the outer terminal.
+Upstream [57a13664cc2c](https://github.com/tmux/tmux/commit/57a13664cc2cf0db1c6b4f575c4934bf4ec1c4ee)
+preserves cursor state during synchronization. Test a build containing that
+fix before changing terminals or suppressing harness animations. Installing a
+new tmux binary does not upgrade a live server: `tmux -V` identifies the client,
+whereas `tmux -L <socket> display-message -p '#{version}'` identifies the server.
+Replacing the server ends its pane processes, so coordinate that interruption;
+reattaching a client is insufficient for a binary fix.
 
 **The CLI dispatcher imports lazily.** `cli/index.ts` maps each subcommand to a `() => import("./commands/<name>.ts")` thunk, so `wt <cmd>` loads that command's module graph and nothing else (35 modules for `wt status`, against 153 for all commands at once). This is containment, not speed: users update hot from main, so any push can put a broken module in front of every agent on the machine, and a static barrel turns one bad export into a total outage — which is exactly what happened, taking `wt status` down with the transport it doesn't use. Commands whose branches differ in what they need split further: `wt manager report` imports no session machinery at all, so the fleet keeps its ability to report that delivery is broken. `scripts/broken-module-check.sh` asserts the property by breaking a module in a throwaway copy of `src/` and printing which commands survive. `main.ts` still routes `update`/`rollback`/`version` around the dispatcher entirely, because those must work when the dispatcher itself is what failed to parse ([updates.md](updates.md)).
 
@@ -138,6 +171,15 @@ Claude's inspector socket is opened by `BUN_INSPECT` in the pane env (`core/tmux
 Interactive harness wrappers unset both `NO_COLOR` and `NO_COLOUR`. A caller's plain-output preference must not disable styling in a newly launched Claude, Codex, or OpenCode TUI.
 
 Worktree **backends** follow the same shape: `core/backend.ts` → `core/backend/` behind the narrow `WorktreeBackend` interface (`create` / `remove` — the only two filesystem mutation points, extracted from `lifecycle.ts`). Two built-ins: `git-worktree` (linked worktrees, one shared object db) and `rift` (copy-on-write clones). Everything else wt does to a worktree (fork-base record, env/configured-glob copy, stage pin, upstream, status) stays backend-agnostic in `lifecycle.ts` / `worktree.ts`. `getBackend(kind)` picks the create backend from config; `getBackendForPath(path)` derives the owning backend from disk (a `.rift` marker) so removal is correct after a config flip. This is the LOCAL-materialization axis, orthogonal to any remote (SSH-host) axis. See [backends.md](backends.md).
+
+Palette compaction is coordinated in `core/harness/compact.ts`. Claude keeps
+its inline focus instructions. Codex receives preparation through ordinary
+messaging, then bare `/compact` only after a new user-message receipt in the
+exact slot-owned rollout. Its UUID is carried into the terminal injection's
+locked readiness gate, which rejects a changed owner immediately before paste.
+Queue acknowledgement is not receipt, and terminal submission is not proof
+that native compaction finished. Missing identity or a receipt timeout leaves
+the command unsent rather than dropping the preparation or overtaking it.
 
 ## Freshness model
 

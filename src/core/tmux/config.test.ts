@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { buildConfig } from "./config.ts";
+import { codexPaneOptionArgs } from "./attach.ts";
 import { sessionSwitchTarget } from "./naming.ts";
 
 describe("worktree session shortcut routing", () => {
@@ -26,7 +30,7 @@ describe("worktree session shortcut routing", () => {
   test("modified keys are forwarded in CSI-u format", () => {
     const config = buildConfig();
     expect(config).toContain("set -s extended-keys always");
-    expect(config).toContain("set -s extended-keys-format csi-u");
+    expect(config).toContain("set -sq extended-keys-format csi-u");
     expect(config).toContain(":extkeys");
   });
 
@@ -62,3 +66,59 @@ describe("worktree session shortcut routing", () => {
     expect(sessionSwitchTarget(null)).toBeNull();
   });
 });
+
+test.skipIf(!Bun.which("tmux"))("real xterm client receives synchronized redraws and native cursor defaults", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wt-sync-redraw-"));
+  const socket = join(dir, "socket");
+  const configPath = join(dir, "tmux.conf");
+  writeFileSync(configPath, buildConfig());
+  let output = "";
+  const { promise: ready, resolve: markReady } = Promise.withResolvers<void>();
+  const client = Bun.spawn([
+    "tmux", "-S", socket, "-f", configPath, "new-session", "-s", "probe",
+    "bash", "-c", "printf WT_SYNC_READY; read -r ignored",
+  ], {
+    env: { ...process.env, TERM: "xterm-256color", TMUX: "" },
+    terminal: {
+      cols: 80, rows: 24,
+      data(_terminal, data) {
+        output += Buffer.from(data).toString();
+        if (output.includes("WT_SYNC_READY") && output.includes("\x1b[?2026h") && output.includes("\x1b[?2026l")) markReady();
+      },
+    },
+  });
+  const timer = setTimeout(markReady, 3000);
+  const command = async (...args: string[]) => {
+    const proc = Bun.spawn(["tmux", "-S", socket, ...args], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+    ]);
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    return stdout;
+  };
+  try {
+    await ready;
+    expect(output).toContain("WT_SYNC_READY");
+    expect(await command("list-clients", "-F", "#{client_termfeatures}")).toMatch(/\bsync\b/);
+    expect(output).toContain("\x1b[?2026h");
+    expect(output).toContain("\x1b[?2026l");
+    await command("set-option", "-p", "-t", "probe", "cursor-style", "block");
+    await command(...codexPaneOptionArgs("codex", "probe"));
+    expect((await command("show-options", "-p", "-v", "-t", "probe", "cursor-style")).trim()).toBe("");
+  } finally {
+    clearTimeout(timer);
+    try {
+      // Startup failure can mean there is no server to kill. Cleanup must
+      // not mask the assertion or skip closing the PTY in that case.
+      await Bun.spawn(["tmux", "-S", socket, "kill-server"], {
+        stdout: "ignore", stderr: "ignore",
+      }).exited;
+    } finally {
+      client.kill();
+      client.terminal?.close();
+      await client.exited;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}, 10000);
