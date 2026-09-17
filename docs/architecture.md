@@ -79,6 +79,9 @@ and [code style](https://effect.website/docs/v4/code-style/guidelines).
 
 ## Composition root
 
+The row action picker applies `ui.action_groups_last` after grouping and assigning
+shortcuts, so personal group ordering never changes quick-pick key ownership.
+
 `src/tui/app.tsx` wires everything: state declarations, hook wiring, per-render flow factories, the ctx objects key handlers destructure, and the layout JSX. The pieces:
 
 - **Keyboard** — `src/tui/keyboard/` (`global-keys.ts`, `footer-input-keys.ts`, `removed-view-keys.ts`, `normal-keys.ts`) plus `src/tui/modal-keys/` (one file per modal family; `index.ts` is the dispatcher). The `useKeyboard` callback in app.tsx only routes, in load-bearing order: modal → footer input → removed view → `h` toggle → normal mode. Handler-check order *inside* `normal-keys.ts` is also load-bearing (see its header comment).

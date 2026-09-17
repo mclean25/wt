@@ -607,9 +607,27 @@ Which editor `wt open`, the TUI's `o` / `O`, the slot palettes' `z` row, and `wt
 command = "cursor {{path}}"      # or: "code -n", "idea", "zed -n {{path}}", "open -a Emacs {{path}}"
 ```
 
-Leaving the section out keeps the behavior wt had before it existed: **Zed**, with focus-if-already-open (tracked through yabai, so an open window is raised rather than a second one spawned) and the frontmost terminal hidden. Setting `command` replaces that whole path — wt then holds no window handle, and focus-if-open becomes the editor's own business, which every mainstream editor gets right for a directory it already has open. The terminal is hidden either way; that's about the terminal wt runs in, not about the editor.
+Leaving the section out selects **Zed**, with focus-if-already-open tracked through yabai. Setting `command` replaces that path; focus-if-open becomes the editor's responsibility. Both paths leave the terminal visible unless opted in through `ui.hide_terminal_apps`.
 
 ## `[ui]`
+
+Terminal hiding is opt-in on macOS. For example:
+
+```toml
+[ui]
+hide_terminal_apps = ["ghostty"]
+```
+
+`hide_terminal_apps` defaults to `[]` (disabled). Entries are macOS application
+process names, matched case-insensitively, such as `ghostty`, `alacritty`, or
+`wezterm-gui`. Only a matching frontmost app is hidden, before opening a browser
+link or editor. No background terminal is hidden. This uses System Events
+Automation permission and is best-effort if permission is unavailable.
+
+`action_groups_last` defaults to `[]`. Set it to `["dev server"]` to move that
+group below the other groups in the `!` action menu. Listed groups retain their
+item order and shortcut keys; unknown names are ignored. The custom-prompt
+entry remains last.
 
 | key | required | default | meaning |
 |---|---|---|---|

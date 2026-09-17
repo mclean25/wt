@@ -345,7 +345,7 @@ ${uiSection}
       const configModule = pathToFileURL(join(import.meta.dir, "config.ts")).href;
       const script = `
         const { config } = await import(${JSON.stringify(configModule)});
-        console.log(JSON.stringify({ activityPane: config.ui.activityPane }));
+        console.log(JSON.stringify({ activityPane: config.ui.activityPane, hideTerminalApps: config.ui.hideTerminalApps, actionGroupsLast: config.ui.actionGroupsLast }));
       `;
       const env: Record<string, string | undefined> = {
         ...process.env,
@@ -367,6 +367,20 @@ ${uiSection}
     const result = load("");
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout.toString()).activityPane).toBe("column");
+    expect(JSON.parse(result.stdout.toString()).hideTerminalApps).toEqual([]);
+    expect(JSON.parse(result.stdout.toString()).actionGroupsLast).toEqual([]);
+  });
+
+  test("terminal hiding opts in arbitrary process names", () => {
+    const result = load('\n[ui]\nhide_terminal_apps = ["Ghostty", "custom terminal"]\n');
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.toString()).hideTerminalApps).toEqual(["Ghostty", "custom terminal"]);
+  });
+
+  test("action groups can be placed last", () => {
+    const result = load('\n[ui]\naction_groups_last = ["dev server"]\n');
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.toString()).actionGroupsLast).toEqual(["dev server"]);
   });
 
   test("accepts full_width", () => {

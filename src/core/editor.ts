@@ -5,15 +5,13 @@
  * Two paths, selected by `[editor] command`:
  *
  *   - **unset (default)** — the built-in Zed integration in `zed.ts`:
- *     focus-if-already-open via yabai, else `zed -n`, plus hiding the
- *     frontmost terminal. This is what wt did unconditionally before
- *     the section existed, so an existing config is unchanged.
+ *     focus-if-already-open via yabai, else `zed -n`.
  *   - **set** — `$SHELL -lc <command>` with `{{path}}` substituted. Any
  *     editor works; wt holds no window handle, so focus-if-open falls
  *     to the editor (every mainstream one raises a directory it already
  *     has open, which is why there's nothing to reimplement here).
  *
- * The terminal hide happens on both paths: it's about the terminal wt
+ * The opt-in terminal hide applies to both paths: it's about the terminal wt
  * is running in, not about which editor is being launched.
  */
 import { spawn } from "node:child_process";
