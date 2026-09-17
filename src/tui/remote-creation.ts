@@ -1,7 +1,7 @@
 import type { RemoteConfig } from "../core/config.ts";
 import type { RemoteWorktreeSummary } from "../core/remote-worktrees.ts";
 
-/** In-flight create: hold new inventory rows back until the command completes. */
+/** In-flight placeholder: hold new inventory rows back until the command completes. */
 export type RemoteCreation = {
   remote: RemoteConfig;
   hostKey: string;
@@ -21,7 +21,9 @@ export function isRemoteSummary(
 }
 
 export function remoteEntryKey(entry: RemoteListEntry): string {
-  return `${entry.hostKey}:${isRemoteSummary(entry) ? entry.slug : entry.input}`;
+  return isRemoteSummary(entry)
+    ? `${entry.hostKey}:${entry.slug}`
+    : `creating:${entry.hostKey}:${entry.input}`;
 }
 
 export function remoteEntryLabel(entry: RemoteListEntry): string {

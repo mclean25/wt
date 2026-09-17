@@ -93,6 +93,7 @@ import { theme } from "./theme.ts";
 import { showToast } from "./toast.ts";
 import {
   visibleRemoteWorktrees,
+  remoteEntryKey,
   type RemoteCreation,
 } from "./remote-creation.ts";
 import {
@@ -812,7 +813,10 @@ export function App({ onExit }: Props) {
     revealCreated,
     setSectionFolded,
     setRemovedView,
-    setRemoteCreation,
+    setRemoteCreation: (creation) => {
+      setRemoteCreation(creation);
+      if (creation) setCreatedSelection(`remote:${remoteEntryKey(creation)}`);
+    },
     remoteWorktrees: remoteRows,
     refreshAll,
     refreshRemoteWorktrees: async () => {

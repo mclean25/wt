@@ -105,9 +105,21 @@ export function buildActiveItems({
     if (index >= 0) members.push(...members.splice(index, 1));
   }
 
+  // The input may resolve to a different slug. Keep one pending row until
+  // the authoritative inventory can replace it, without offering actions.
+  if (remoteCreation) {
+    ensure(GROUP_INBOX).push({
+      kind: "remote",
+      entry: remoteCreation,
+      target: null,
+      model: null,
+      archived: false,
+    });
+  }
+
   const out: ListActiveItem[] = [];
   for (const [sectionKey, members] of buckets) {
-    if (foldedSections.has(sectionKey)) {
+    if (foldedSections.has(sectionKey) && !(remoteCreation && sectionKey === GROUP_INBOX)) {
       out.push({
         kind: "section" as const,
         sectionKey,

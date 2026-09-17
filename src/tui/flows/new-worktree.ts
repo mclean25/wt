@@ -209,6 +209,9 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     toast(`creating ${parsed.input} on ${remote.label}`, theme.info, 2500);
 
     return yield* Effect.gen(function* () {
+      yield* io.promise("expand inbox for remote creation", () =>
+        setSectionFolded(GROUP_INBOX, false),
+      );
       const code = yield* runRemoteWt(remote, args, {
         onLine: (line) => remoteLog.event.dim(line),
       }).pipe(

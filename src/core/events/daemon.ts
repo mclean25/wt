@@ -22,6 +22,7 @@ import { config, type GithubEventsConfig } from "../config.ts";
 import { causeMessage } from "../errors.ts";
 import { fetchGithub, type GithubData } from "../github.ts";
 import { createLogger, flushLogger } from "../logger.ts";
+import { fetchRemoteWorktrees } from "../remote-worktrees.ts";
 import { fetchOrigin, listWorktrees } from "../worktree.ts";
 
 import {
@@ -36,24 +37,8 @@ const log = createLogger("[events]");
 
 /** Coalesce check_run/check_suite bursts into one fetch per CI step storm. */
 const FETCH_DEBOUNCE_MS = 1_500;
-/**
- * Floor on the sustained refetch rate. The debounce alone only collapses
- * deliveries that arrive *together*; under a stream it schedules a fetch
- * as fast as fetches complete, so the cadence ends up set by query latency
- * rather than by any policy. Measured on an 18-branch fleet with a merge
- * queue running: 130 deliveries in 180s produced 13 full refetches at ~30
- * GraphQL points each, a 7,760 points/hour pace against a 5,000/hour limit
- * — and a rate-limited fetch is the one failure `fetchGithub` deliberately
- * never retries.
- *
- * Costs nothing visible because it is a third of `SNAPSHOT_FRESH_MS`: the
- * TUI serves a snapshot up to 90s old, so a fetch deferred to 30s is still
- * well inside the window the renderer already treats as current. And it
- * only ever delays the *Nth* fetch of a burst — the first delivery after a
- * quiet spell still lands in `FETCH_DEBOUNCE_MS`, which is the case that
- * governs how fast a badge flips after you push.
- */
-const MIN_FETCH_INTERVAL_MS = 30_000;
+/** Bound sustained bursts while retaining the 1.5s response after quiet spells. */
+const MIN_FETCH_INTERVAL_MS = 10_000;
 /**
  * Reject webhook bodies larger than this before buffering them. GitHub
  * payloads are well under this (typically <1MB, hard-capped ~25MB), so the
@@ -62,7 +47,7 @@ const MIN_FETCH_INTERVAL_MS = 30_000;
  */
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 /** Re-read the worktree branch set at most this often when deciding relevance. */
-const LOCAL_BRANCHES_TTL_MS = 30_000;
+const FLEET_BRANCHES_TTL_MS = 10_000;
 
 /** Webhook event types worth a refresh. Everything else is dropped. */
 const RELEVANT_EVENTS = new Set([
@@ -115,7 +100,7 @@ function verifySignature(body: string, header: string | null, secret: string): b
 /**
  * Candidate head branches an event concerns, or null when the event is
  * intentionally unscoped. Null means "don't try to skip — just refetch", so
- * the local-branch gate never drops it; a payload-shape change (or a
+ * the fleet-branch gate never drops it; a payload-shape change (or a
  * cross-cutting event) degrades to more fetches, never to missed updates.
  */
 export function extractBranches(event: string, payload: unknown): string[] | null {
@@ -155,7 +140,7 @@ export function extractBranches(event: string, payload: unknown): string[] | nul
       // head branch — unscopeable, always refetch. Comments on plain
       // (non-PR) issues are identifiable (`issue.pull_request` is absent)
       // and can never affect PR state — return an empty candidate list so
-      // the local-branch gate skips them.
+      // the fleet-branch gate skips them.
       case "issue_comment":
         return p.issue?.pull_request ? null : [];
       // merge_group head_ref is a synthetic `gh-readonly-queue/...` ref, not
@@ -229,7 +214,7 @@ type Delivery = {
 
 export type DaemonDependencies = {
   readonly ensureEventsDir: () => void;
-  readonly currentBranches: () => Effect.Effect<readonly string[], DaemonOperationError>;
+  readonly currentBranches: () => Effect.Effect<EventBranches, DaemonOperationError>;
   readonly fetchOrigin: Effect.Effect<void, DaemonOperationError>;
   readonly fetchGithub: (branches: readonly string[]) => Effect.Effect<GithubResult, DaemonOperationError>;
   readonly writeSnapshot: typeof writeSnapshot;
@@ -251,13 +236,45 @@ const trySync = <A>(operation: string, evaluate: () => A) => Effect.try({
   catch: (cause) => new DaemonOperationError({ operation, cause }),
 });
 
+export type EventBranches = {
+  branches: readonly string[];
+  complete: boolean;
+};
+
+/** Keep known remote identities through outages; unknown scope must not drop events. */
+export function makeEventBranchReader(
+  local: Effect.Effect<readonly string[], DaemonOperationError>,
+  remote: Effect.Effect<readonly string[], DaemonOperationError>,
+): DaemonDependencies["currentBranches"] {
+  let lastRemote: readonly string[] = [];
+  return Effect.fn("eventBranches")(function* () {
+    const localBranches = yield* local;
+    const remoteBranches = yield* remote.pipe(Effect.catch((error) => {
+      log.warn("remote branch inventory unavailable; retaining known branches", { err: error.message });
+      return Effect.succeed(null);
+    }));
+    if (remoteBranches !== null) lastRemote = remoteBranches;
+    return {
+      branches: [...new Set([...localBranches, ...lastRemote])].sort(),
+      complete: remoteBranches !== null,
+    };
+  });
+}
+
 function productionDependencies(): DaemonDependencies {
-  return {
-    ensureEventsDir,
-    currentBranches: () => listWorktrees().pipe(
+  const currentBranches = makeEventBranchReader(
+    listWorktrees().pipe(
       Effect.map((wts) => wts.filter((w) => !w.isMain && w.branch).map((w) => w.branch as string)),
       Effect.mapError((cause) => new DaemonOperationError({ operation: "list worktrees", cause })),
     ),
+    config.remote ? fetchRemoteWorktrees(config.remote).pipe(
+      Effect.map((wts) => wts.map((w) => w.branch).filter(Boolean)),
+      Effect.mapError((cause) => new DaemonOperationError({ operation: "list remote worktrees", cause })),
+    ) : Effect.succeed([]),
+  );
+  return {
+    ensureEventsDir,
+    currentBranches,
     fetchOrigin: fetchOrigin().pipe(
       Effect.mapError((cause) => new DaemonOperationError({ operation: "fetch origin", cause })),
     ),
@@ -310,35 +327,36 @@ export const makeDaemonCore = Effect.fn("makeDaemonCore")(function* (
     }),
   );
 
-  const localBranches = yield* Ref.make<{ readonly branches: ReadonlySet<string>; readonly at: number }>({
-    branches: new Set(), at: 0,
+  const fleetBranches = yield* Ref.make<{ readonly branches: ReadonlySet<string>; readonly complete: boolean; readonly at: number }>({
+    branches: new Set(), complete: false, at: 0,
   });
   const lastFetchStartedAt = yield* Ref.make(0);
   const deliveries = yield* Queue.dropping<Delivery>(64);
   const scheduleSignals = yield* Queue.dropping<void>(1);
   const fetchRequests = yield* Queue.dropping<void>(1);
 
-  const getLocalBranches = Effect.fnUntraced(function* () {
+  const getFleetBranches = Effect.fnUntraced(function* () {
     const now = yield* Clock.currentTimeMillis;
-    const cached = yield* Ref.get(localBranches);
-    if (cached.branches.size > 0 && now - cached.at < LOCAL_BRANCHES_TTL_MS) return cached.branches;
+    const cached = yield* Ref.get(fleetBranches);
+    if (cached.branches.size > 0 && now - cached.at < FLEET_BRANCHES_TTL_MS) return cached;
     const branches = yield* dependencies.currentBranches();
-    const next = { branches: new Set(branches), at: now };
-    yield* Ref.set(localBranches, next);
-    return next.branches;
+    const next = { branches: new Set(branches.branches), complete: branches.complete, at: now };
+    yield* Ref.set(fleetBranches, next);
+    return next;
   });
 
   const processDelivery = Effect.fnUntraced(function* ({ event, branches, receivedAt }: Delivery) {
+    if (branches?.length === 0) return;
     if (branches) {
-      const relevant = yield* getLocalBranches().pipe(
-        Effect.map((local) => branches.some((branch) => local.has(branch))),
+      const relevant = yield* getFleetBranches().pipe(
+        Effect.map((fleet) => !fleet.complete || branches.some((branch) => fleet.branches.has(branch))),
         Effect.catch((error) => {
-          log.warn("local-branch check failed; refetching anyway", { err: causeMessage(error) });
+          log.warn("fleet-branch check failed; refetching anyway", { err: causeMessage(error) });
           return Effect.succeed(true);
         }),
       );
       if (!relevant) {
-        log.debug("ignored event for non-local branch", { event, branches });
+        log.debug("ignored event for branch outside fleet", { event, branches });
         return;
       }
     }
@@ -390,8 +408,9 @@ export const makeDaemonCore = Effect.fn("makeDaemonCore")(function* (
       yield* dependencies.fetchOrigin.pipe(Effect.catch((error) => Effect.sync(() => {
         log.warn("origin refresh after webhook failed", { err: causeMessage(error) });
       })));
-      const branches = yield* dependencies.currentBranches();
-      yield* Ref.set(localBranches, { branches: new Set(branches), at: yield* Clock.currentTimeMillis });
+      const inventory = yield* dependencies.currentBranches();
+      const branches = inventory.branches;
+      yield* Ref.set(fleetBranches, { branches: new Set(branches), complete: inventory.complete, at: yield* Clock.currentTimeMillis });
       const { prs, mergeQueue } = yield* dependencies.fetchGithub(branches);
       const committedAt = yield* Clock.currentTimeMillis;
       yield* Effect.uninterruptible(Effect.gen(function* () {
