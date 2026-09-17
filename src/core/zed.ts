@@ -10,7 +10,7 @@ import {
 } from "./zed-windows.ts";
 
 /**
- * If the frontmost app is a supported terminal (Alacritty or WezTerm),
+ * If the frontmost app is a supported terminal (Ghostty, Alacritty or WezTerm),
  * hide it — same visual effect as Cmd+H. No-op from other terminals or
  * apps. Best-effort; any error (missing osascript, no automation perms,
  * sandboxed terminal) is swallowed because this is purely cosmetic UX.
@@ -27,7 +27,7 @@ import {
  * One osascript call does both the frontmost check and the hide, closing
  * the window where focus could change between two separate invocations.
  * `ignoring case` covers osascript returning the marketing-name
- * capitalization for either terminal. WezTerm shows up as `wezterm-gui`
+ * capitalization for these terminals. WezTerm shows up as `wezterm-gui`
  * (its actual process name) rather than `WezTerm`, so both spellings
  * are checked alongside `wezterm` itself.
  */
@@ -38,7 +38,7 @@ export function hideFrontmostTerminal(): Effect.Effect<void> {
       "-e", "set p to first application process whose frontmost is true",
       "-e", "ignoring case",
       "-e",
-      'if name of p is in {"alacritty", "wezterm-gui", "wezterm"} then set visible of p to false',
+      'if name of p is in {"ghostty", "alacritty", "wezterm-gui", "wezterm"} then set visible of p to false',
       "-e", "end ignoring",
       "-e", "end tell",
     ]).pipe(
