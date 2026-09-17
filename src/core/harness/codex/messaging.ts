@@ -1,7 +1,7 @@
 import { Effect, Result } from "effect";
 
 import { primarySingleSlotSession } from "../session-selection.ts";
-import { listSessionsWithHarnessIds } from "../../tmux/process.ts";
+import { listSessionsWithHarnessIds, runTmux } from "../../tmux/process.ts";
 import { startHarnessSessionDetached } from "../../tmux/lifecycle.ts";
 import {
   injectCodexFallback,
@@ -12,6 +12,7 @@ import { run } from "../../proc.ts";
 import { queueCodexMessage, type CodexAppServerError } from "./app-server.ts";
 import { discoverCodexSessions } from "./discovery.ts";
 import { codexHarness } from "./harness.ts";
+import { recoverCodexLiveIdentity } from "./live-identity.ts";
 import {
   probeCodexLivePaneReadiness,
   probeCodexTerminalReadiness,
@@ -53,6 +54,8 @@ export function isCodexSlashCommand(text: string): boolean {
 type Dependencies = {
   readonly discover: typeof discoverCodexSessions;
   readonly liveInventory: typeof listSessionsWithHarnessIds;
+  readonly stampSession: (tmuxName: string, sessionId: string) => Effect.Effect<boolean>;
+  readonly recoverLiveIdentity: typeof recoverCodexLiveIdentity;
   readonly start: typeof startHarnessSessionDetached;
   readonly nativeQueue: typeof queueCodexMessage;
   readonly cliQueue: (threadId: string, text: string) => Effect.Effect<{
@@ -97,7 +100,15 @@ const cliQueue = Effect.fnUntraced(function* (threadId: string, text: string) {
 
 const defaults: Dependencies = {
   discover: discoverCodexSessions,
+  recoverLiveIdentity: recoverCodexLiveIdentity,
   liveInventory: listSessionsWithHarnessIds,
+  stampSession: (tmuxName, sessionId) => runTmux([
+    "set-option",
+    "-t",
+    `=${tmuxName}`,
+    "@wt-harness-session-id",
+    sessionId,
+  ]).pipe(Effect.map((result) => result.code === 0)),
   start: startHarnessSessionDetached,
   nativeQueue: queueCodexMessage,
   cliQueue,
@@ -151,14 +162,23 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
       };
     }
     let sessions = discovered.success;
-    // A live tmux stamp is the only proof of which conversation currently
+    // A live tmux stamp identifies which conversation currently
     // owns that pane, including a deliberately selected secondary. A stable
     // "primary" name map is useful for a cold start, but cannot establish
-    // ownership of an already-live unstamped slot. That case stays UUID-less
-    // and takes the guarded exact-pane fallback below.
+    // ownership of an already-live unstamped slot. Recover from the pane's
+    // native writer lock before resorting to guarded terminal input.
     let sessionId = liveBefore
       ? stampedLiveId
       : primarySingleSlotSession(sessions)?.sessionId ?? null;
+    if (liveBefore && sessionId === null) {
+      sessionId = yield* deps.recoverLiveIdentity(tmuxName, sessions);
+      if (sessionId !== null) {
+        // Best-effort self-heal. Ownership was established by the live
+        // process's writer lock, so this send may use the exact UUID even if tmux
+        // refuses the metadata write; the next send will re-prove it.
+        yield* deps.stampSession(tmuxName, sessionId);
+      }
+    }
     let coldStarted = false;
 
     if (!liveBefore) {
@@ -215,7 +235,7 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
               resent: false,
               fallbackReason: "the live Codex slot has no recoverable thread UUID",
             }
-          : result;
+          : { ok: false, reason: `No message queued: the live Codex slot has no provable thread UUID; terminal fallback failed: ${result.reason}` };
       }
       if (!coldStarted) {
         return {
