@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { Effect } from "effect";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +8,7 @@ import {
   __setLedgerPathForTests,
   breakerState,
   bumpBreaker,
+  cancelAutomationFires,
   dropFires,
   hasHandledFire,
   lastDispatchAt,
@@ -29,6 +31,31 @@ afterEach(() => {
 });
 
 describe("fire ledger", () => {
+  test("cancelled pending fires survive reload without changing running fires or cooldowns", async () => {
+    markFiresDispatched(["running"], "fix", "a");
+    const before = lastDispatchAt("fix", "a");
+    await Effect.runPromise(cancelAutomationFires(["pending", "running"]));
+    const stored = JSON.parse(readFileSync(join(dir, "automations.json"), "utf8"));
+    expect(stored.fired.pending.state).toBe("cancelled");
+    expect(stored.fired.running.state).toBe("dispatched");
+    __setLedgerPathForTests(join(dir, "automations.json"));
+    expect(hasHandledFire("pending")).toBe(true);
+    expect(hasHandledFire("new-instance")).toBe(false);
+    expect(lastDispatchAt("fix", "a")).toBe(before);
+    expect(breakerState("fix", "a").count).toBe(0);
+    reconcileDispatchedFires(() => false);
+    expect(hasHandledFire("pending")).toBe(true);
+  });
+
+  test("failed cancellation writes roll back memory and report failure", async () => {
+    const obstacle = join(dir, "not-a-directory");
+    writeFileSync(obstacle, "fixture");
+    __setLedgerPathForTests(join(obstacle, "automations.json"));
+    const result = await Effect.runPromise(Effect.result(cancelAutomationFires(["pending"])));
+    expect(result._tag).toBe("Failure");
+    expect(hasHandledFire("pending")).toBe(false);
+  });
+
   test("dispatched keys count as handled and persist across a reload", () => {
     expect(hasHandledFire("ci:a:sha1")).toBe(false);
     markFiresDispatched(["ci:a:sha1", "ci:a:sha2"], "fix-ci", "a");

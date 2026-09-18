@@ -79,6 +79,10 @@ and [code style](https://effect.website/docs/v4/code-style/guidelines).
 
 ## Composition root
 
+The automation hook exposes `clearQueued` to the global `Ctrl+Shift+A` key.
+It persists cancellation of the pending fire keys before removing intents;
+failed persistence retains the queue. Executing actions are outside this scope.
+
 The row action picker applies `ui.action_groups_last` after grouping and assigning
 shortcuts, so personal group ordering never changes quick-pick key ownership.
 

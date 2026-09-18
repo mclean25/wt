@@ -29,6 +29,7 @@ import { theme } from "../theme.ts";
 import type { CleanCandidate } from "../clean-candidate.ts";
 import { config } from "../../core/config.ts";
 import { Effect } from "effect";
+import type { AutomationsState } from "../hooks/useAutomations.ts";
 
 const io = operationErrors("global-keys");
 
@@ -43,7 +44,7 @@ export type GlobalKeysCtx = {
   cleanCandidates: readonly CleanCandidate[];
   toast: (message: string, color?: string, ms?: number) => void;
   reportActionError: (label: string, err: unknown) => void;
-  automations: { configured: boolean; togglePaused: () => Promise<boolean> };
+  automations: Pick<AutomationsState, "configured" | "togglePaused" | "clearQueued">;
   cyclePrimaryHarness: () => Promise<HarnessId>;
   doEnterSlotSession: (slot: SessionSlot) => void;
   /** `M` — the manager command palette (works with or without a row). */
@@ -147,6 +148,21 @@ export function handleGlobalKey(k: KeyEvent, ctx: GlobalKeysCtx): boolean {
       return true;
     }
     setModal({ kind: "cleanConfirm" });
+    return true;
+  }
+  if (k.ctrl && k.shift && k.name.toLowerCase() === "a") {
+    forkReported(
+      automations.clearQueued().pipe(
+        Effect.tap((count) => Effect.sync(() => {
+          toast(
+            count ? `cleared ${count} queued automation${count === 1 ? "" : "s"}` : "no queued automations",
+            theme.fgDim,
+            2500,
+          );
+        })),
+      ),
+      (error) => reportActionError("clear queued automations", error),
+    );
     return true;
   }
   // Shift+A — pause / resume ALL automations. Persisted in wtstate,

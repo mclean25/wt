@@ -56,6 +56,7 @@ import {
   BREAKER_LIMIT,
   breakerState,
   bumpBreaker,
+  cancelAutomationFires,
   dropFires,
   hasHandledFire,
   lastDispatchAt,
@@ -174,6 +175,7 @@ export type AutomationsState = {
   togglePaused: () => Promise<boolean>;
   /** Queued (not yet dispatched) intents, for the title-bar indicator. */
   pendingCount: number;
+  clearQueued: () => Effect.Effect<number, OperationError>;
 };
 
 /** The breaker/cooldown identity: stacks key on stackId (the target
@@ -1142,5 +1144,13 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
       return next;
     },
     pendingCount,
+    clearQueued: Effect.fn("clearQueuedAutomations")(function* () {
+      const pending = [...intents.current.values()];
+      yield* cancelAutomationFires(pending.flatMap((intent) => intent.fire.fireKeys));
+      for (const intent of pending) intents.current.delete(intent.id);
+      setPendingCount(intents.current.size);
+      log.info("cancelled queued automations", { count: pending.length });
+      return pending.length;
+    }),
   };
 }

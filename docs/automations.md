@@ -102,6 +102,15 @@ Dispatch goes through the exact same paths keystrokes use (`launchAction`, the c
 
 ## Pausing
 
+`Ctrl+Shift+A` clears all currently queued automation intents in this TUI.
+Their exact fire keys are recorded as cancelled in the persistent ledger, so
+the same instances do not return on the next poll or restart (subject to the
+ledger's 30-day retention). New trigger instances can still queue normally.
+This does not pause rules, change cooldowns or breakers, stop running actions,
+or recall prompts already handed to a harness's native queue. Unlike clearing,
+pausing drops pending intents without consuming their keys, so they can return
+when resumed.
+
 - `A` toggles a global pause of all automations.
 - `Ctrl+A` pauses the selected worktree — or its whole stack when it's a stack member. A stack pause is stored both under the stack's id (the root branch — covers members stacked on later) and as per-member flags (covers the survivors when the root lands and the stack re-roots under a new id).
 - `Ctrl+A` in the `h` history pauses an **archived** row, and a pause set while the worktree was live survives into that history. This is not a nicety: the reap drops the per-slug record along with the checkout, while a post-merge `external` run is exempted from its row's death on purpose (see below), so the slugs whose automations can still fire are exactly the ones with no live record left to carry a pause. The flag lives on the removed-history entry, `pausedSlugs` reads it alongside the live ones, and the archived details pane shows it — otherwise "this row is done" and "this row still has a run coming" look identical.
