@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 
 import { run } from "./proc.ts";
+import { config } from "./config.ts";
 
 import {
   findZedWindowForPath,
@@ -10,7 +11,7 @@ import {
 } from "./zed-windows.ts";
 
 /**
- * If the frontmost app is a supported terminal (Alacritty or WezTerm),
+ * If the frontmost app is opted in via ui.hide_terminal_apps,
  * hide it — same visual effect as Cmd+H. No-op from other terminals or
  * apps. Best-effort; any error (missing osascript, no automation perms,
  * sandboxed terminal) is swallowed because this is purely cosmetic UX.
@@ -27,25 +28,34 @@ import {
  * One osascript call does both the frontmost check and the hide, closing
  * the window where focus could change between two separate invocations.
  * `ignoring case` covers osascript returning the marketing-name
- * capitalization for either terminal. WezTerm shows up as `wezterm-gui`
- * (its actual process name) rather than `WezTerm`, so both spellings
- * are checked alongside `wezterm` itself.
+ * capitalization for these terminals. WezTerm shows up as `wezterm-gui`
+ * (its actual process name) rather than `WezTerm`; configure process names.
  */
-export function hideFrontmostTerminal(): Effect.Effect<void> {
-  return run([
+export function hideTerminalCommand(apps: readonly string[]): string[] | null {
+  if (apps.length === 0) return null;
+  return [
       "osascript",
+      "-e", "on run terminalApps",
       "-e", 'tell application "System Events"',
       "-e", "set p to first application process whose frontmost is true",
       "-e", "ignoring case",
       "-e",
-      'if name of p is in {"alacritty", "wezterm-gui", "wezterm"} then set visible of p to false',
+      'if name of p is in terminalApps then set visible of p to false',
       "-e", "end ignoring",
       "-e", "end tell",
-    ]).pipe(
+      "-e", "end run",
+      "--", ...apps,
+    ];
+}
+
+export const hideFrontmostTerminal = Effect.fn("hideFrontmostTerminal")(function* () {
+  const command = hideTerminalCommand(config.ui.hideTerminalApps);
+  if (command === null) return;
+  yield* run(command).pipe(
       Effect.catch(() => Effect.void),
       Effect.asVoid,
     );
-}
+});
 
 /**
  * Open `path` in Zed using focus-if-open, else-new-window semantics.

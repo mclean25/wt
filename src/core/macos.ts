@@ -45,8 +45,8 @@ export function openUrl(url: string): Effect.Effect<void, MacosCommandError> {
 /**
  * Hide a frontmost terminal window, *then* open the URL. Order matters:
  * `openUrl` brings the browser to the front, while `hideFrontmostTerminal`
- * shells out to `osascript` to sample the frontmost app and only sends
- * Cmd+H if it's a supported terminal (Alacritty or WezTerm). Firing both
+ * shells out to `osascript` to sample the frontmost app and only hides
+ * it if its process name is in ui.hide_terminal_apps. Firing both
  * without awaiting lets the browser win the race — the frontmost query
  * then sees the browser, not the terminal, and the hide no-ops. Awaiting
  * the hide first keeps the terminal frontmost long enough to be detected

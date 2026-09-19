@@ -79,6 +79,13 @@ and [code style](https://effect.website/docs/v4/code-style/guidelines).
 
 ## Composition root
 
+The automation hook exposes `clearQueued` to the global `Ctrl+Shift+A` key.
+It persists cancellation of the pending fire keys before removing intents;
+failed persistence retains the queue. Executing actions are outside this scope.
+
+The row action picker applies `ui.action_groups_last` after grouping and assigning
+shortcuts, so personal group ordering never changes quick-pick key ownership.
+
 `src/tui/app.tsx` wires everything: state declarations, hook wiring, per-render flow factories, the ctx objects key handlers destructure, and the layout JSX. The pieces:
 
 - **Keyboard** — `src/tui/keyboard/` (`global-keys.ts`, `footer-input-keys.ts`, `removed-view-keys.ts`, `normal-keys.ts`) plus `src/tui/modal-keys/` (one file per modal family; `index.ts` is the dispatcher). The `useKeyboard` callback in app.tsx only routes, in load-bearing order: modal → footer input → removed view → `h` toggle → normal mode. Handler-check order *inside* `normal-keys.ts` is also load-bearing (see its header comment).
@@ -163,6 +170,15 @@ reattaching a client is insufficient for a binary fix.
 Claude session lifecycle lives in `core/harness/claude/sessions.ts`. A target is the canonical cwd plus its deterministic wt conversation UUID and optional managed name. `ensure` serializes cold starts under a per-session lock and reuses the normal detached tmux host. Discovery is Claude's own per-process state directory (`core/harness/claude/registry.ts`), which already drops entries whose pid is gone — so there is exactly one liveness authority and nothing of wt's own to keep in sync. Claude stop hard-kills the hosted session rather than sending control keys.
 
 **Message routing** is `core/harness/agent-routing.ts`. It combines ordinary worktrees with the authoritative special-slot definitions in `core/session-slots.ts`, probes tmux once, and chooses the target's live harness or the Shift+Tab primary when none is live. Multiple live harnesses prefer that primary. An inaccessible registry is a distinct fail-closed result, never an empty inventory. CLI, TUI flows, actions, automations, and remote execution all enter through this harness-neutral layer; the old `wt claude send` spelling delegates to it and cannot force Claude.
+
+Unstamped live Codex slots recover their queue destination from the pane
+process's open native thread-writer lock (`codex/live-identity.ts`). Only a
+single matching root conversation from cwd/slot-filtered discovery qualifies;
+subagent locks, ambiguous roots, failed inspection, and changing pane processes
+do not establish ownership. Startup timestamps and managed names are not proof.
+The recovered UUID is stamped for subsequent sends, and ordinary messages use
+the native queue even while the owner is busy. Missing `lsof` retains the guarded
+terminal fallback without guessing a thread.
 
 **Message delivery** is `core/harness/session-messaging.ts`, the single harness transport choke point after routing. It stamps the sending agent's slug (`WT_AGENT`) and serializes each target across processes. Claude submits through its inspector prompt and falls back to guarded terminal input. Codex wakes the exact tmux host, then uses its durable app-server queue through a short-lived local Unix WebSocket (`core/harness/codex/app-server.ts`): initialize with the experimental capability, `thread/queue/add`, then `thread/queue/start`. The control connection never resumes or subscribes to the thread, so it cannot become a second owner for approvals or questions. Busy, approval, and question turns retain ordinary messages and `$skill` prompts in Codex's native FIFO. A Codex `/command` deliberately uses guarded terminal input because the socket API treats it as message text instead of invoking the TUI command. A stable client message id reconciles an ambiguous add against both `queue/list` and recent `thread/items/list`; if ownership still cannot be proven, wt reports ambiguity and never retries. When the user-managed daemon is offline, one-shot `codex queue --thread <uuid>` writes the same durable queue on that host. Terminal input also remains the compatibility floor for a new thread with no UUID, a definitively old Codex without queue support, or a live tmux slot whose UUID cannot be recovered after a Codex metadata change. UUID-backed fallback uses the exact-rollout readiness check; UUID-less live fallback waits for the empty ordinary composer and rechecks it under the injection lock, so a question, approval, working turn, or draft cannot receive the submit keys. If that slot exits during the wait, delivery fails rather than starting a different conversation. Remote sends re-enter `wt agent send` over SSH, so every socket, queue DB, lock and tmux operation remains host-local. Native status and queue counts are fetched in one scoped connection and enrich rollout discovery; daemon failure preserves the rollout state rather than partially applying a batch. `wt codex selftest` diagnoses the read-only transport surface. Claude inspector details and both fallback ladders: [manager.md](manager.md#how-a-message-reaches-a-session).
 

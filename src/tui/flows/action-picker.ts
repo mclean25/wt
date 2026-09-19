@@ -20,6 +20,7 @@ import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 import type { WorktreeTarget } from "../../core/worktree-target.ts";
 import type { ActionSubjectResolver } from "../action-subject.ts";
 import { theme } from "../theme.ts";
+import { actionGroupsLast } from "../action-group-order.ts";
 
 /** Quick-pick letter for the `!` picker's auto-merge toggle row. */
 const AUTO_MERGE_KEY = "m";
@@ -102,8 +103,7 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
           : { ok: true },
     };
     return [
-      ...[...buckets.values()].flat(),
-      autoMergeItem,
+      ...actionGroupsLast(buckets, config.ui.actionGroupsLast, [autoMergeItem]),
       { kind: "custom" as const },
     ];
   }

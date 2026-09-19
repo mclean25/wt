@@ -349,9 +349,8 @@ export type DiffConfig = {
 /**
  * Optional editor integration (`[editor]`). `wt open` and the `o` / `O`
  * keys open a checkout in an editor; the built-in path drives **Zed**
- * (focus-if-already-open via yabai, plus hiding the terminal), which is
- * what wt did unconditionally before this section existed. Absent ⇒
- * exactly that behavior.
+ * (focus-if-already-open via yabai). Terminal hiding is separately opted
+ * in through ui.hide_terminal_apps.
  *
  * Setting `command` replaces the whole Zed path with a shell command,
  * so any editor works (`cursor {{path}}`, `code -n {{path}}`, `idea
@@ -820,6 +819,10 @@ export type Config = {
   actions: readonly ActionDef[];
   automations: readonly AutomationDef[];
   ui: {
+    /** Opt-in macOS process names to hide before opening links or editors. */
+    hideTerminalApps: readonly string[];
+    /** Action menu groups placed last, in this order. */
+    actionGroupsLast: readonly string[];
     /** Detail-pane row order. Unknown ids are ignored, missing ones hidden. */
     rows: readonly string[];
     /**
@@ -1626,7 +1629,10 @@ function build(
     github,
     actions,
     automations,
-    ui: { rows, hiddenBadges, sort: uiSort, activityPane: uiActivityPane },
+    ui: { rows, hiddenBadges, sort: uiSort, activityPane: uiActivityPane,
+      hideTerminalApps: strArr(ui?.hide_terminal_apps, []),
+      actionGroupsLast: strArr(ui?.action_groups_last, []),
+    },
     skills,
     manager,
     update,

@@ -29,9 +29,16 @@ function fakes(options: {
   cli?: { ok: boolean; reason?: string; unsupported?: boolean };
   terminalFails?: boolean;
   unstamped?: boolean;
+  recoveredId?: string;
+  stampFails?: boolean;
+  liveTerminalFails?: boolean;
 } = {}) {
   const calls: string[] = [];
   const deps = {
+    recoverLiveIdentity: () => {
+      calls.push("recover");
+      return Effect.succeed(options.recoveredId ?? null);
+    },
     discover: () => {
       calls.push("discover");
       return Effect.succeed(options.sessions ?? [session("primary-id", "primary", 1)]);
@@ -46,7 +53,14 @@ function fakes(options: {
             ? [["task-codex", options.stampedId ?? "primary-id"]]
             : [],
         ),
+        sessionCreatedAtMs: new Map(
+          options.live === false ? [] : [["task-codex", 10_000]],
+        ),
       });
+    },
+    stampSession: (_tmuxName: string, sessionId: string) => {
+      calls.push(`stamp:${sessionId}`);
+      return Effect.succeed(!options.stampFails);
     },
     start: (_slug: string, _cwd: string, _harness: "claude" | "codex" | "opencode", _name?: string | null) => {
       calls.push("start");
@@ -80,6 +94,7 @@ function fakes(options: {
     },
     liveTerminal: () => {
       calls.push("live-terminal");
+      if (options.liveTerminalFails) return Effect.succeed({ ok: false as const, reason: "not-idle" });
       return Effect.succeed({
         ok: true as const,
         coldStarted: false,
@@ -252,6 +267,64 @@ describe("Codex message orchestration", () => {
     });
     expect(fake.calls).toContain("live-terminal");
     expect(fake.calls).not.toContain("native:primary-id");
+  });
+
+  test("recovers a busy unstamped root through its writer lock before queueing", async () => {
+    const fake = fakes({
+      live: true,
+      unstamped: true,
+      sessions: [session("fresh-id", "primary", 12_000)],
+      recoveredId: "fresh-id",
+      terminalFails: true,
+    });
+    const result = await Effect.runPromise(fake.send(target));
+
+    expect(result).toMatchObject({
+      ok: true,
+      transport: "codex-app-server",
+      delivered: true,
+    });
+    expect(fake.calls).toContain("stamp:fresh-id");
+    expect(fake.calls).toContain("native:fresh-id");
+    expect(fake.calls).not.toContain("live-terminal");
+  });
+
+  test("does not infer process ownership from rollout age or managed names", async () => {
+    const old = fakes({
+      live: true,
+      unstamped: true,
+      sessions: [session("old-id", "primary", 12_000)],
+    });
+    await Effect.runPromise(old.send(target));
+    expect(old.calls).toContain("live-terminal");
+    expect(old.calls).not.toContain("native:old-id");
+
+    const ambiguous = fakes({
+      live: true,
+      unstamped: true,
+      sessions: [
+        session("first-id", "primary", 12_000),
+        session("second-id", "2", 12_500),
+      ],
+    });
+    await Effect.runPromise(ambiguous.send(target));
+    expect(ambiguous.calls).toContain("live-terminal");
+    expect(ambiguous.calls.some((call) => call.startsWith("native:"))).toBe(false);
+  });
+
+  test("a failed metadata stamp does not prevent queue delivery after ownership proof", async () => {
+    const fake = fakes({ unstamped: true, recoveredId: "primary-id", stampFails: true });
+    expect(await Effect.runPromise(fake.send(target))).toMatchObject({ ok: true, transport: "codex-app-server" });
+    expect(fake.calls).toContain("native:primary-id");
+  });
+
+  test("an unproven busy slot reports why nothing was queued", async () => {
+    const fake = fakes({ unstamped: true, liveTerminalFails: true });
+    expect(await Effect.runPromise(fake.send(target))).toMatchObject({
+      ok: false,
+      reason: "No message queued: the live Codex slot has no provable thread UUID; terminal fallback failed: not-idle",
+    });
+    expect(fake.calls.some((call) => call.startsWith("native:"))).toBe(false);
   });
 
   test("fails closed when tmux liveness cannot be read", async () => {

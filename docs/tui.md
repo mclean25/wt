@@ -129,6 +129,7 @@ Inside these four special sessions, `F10`/`F11`/`F12` all return to wt — slots
 | key | action |
 |---|---|
 | `A` | pause/resume all automations |
+| `Ctrl+Shift+A` | cancel all queued automations, leaving running actions untouched |
 | `Ctrl+A` | pause/resume the selected worktree (or its whole stack); in the `h` history, the selected archived row |
 
 ### Perf overlay (`P`)
