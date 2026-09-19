@@ -1,8 +1,10 @@
+import { eventsConfigEnvironment } from "../../core/events/agent.ts";
+import { EVENTS_DIR } from "../../core/events/store.ts";
 import { describe, expect, test } from "bun:test";
 import { Duration, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import { plistProgramOf, restartLaunchdAgent, waitForRestartedDaemon } from "./events.ts";
+import { plistProgramOf, restartLaunchdAgent, waitForRestartedDaemon, withOwnedEventsAgent } from "./events.ts";
 
 /**
  * The plist bakes an interpreter path, and on Homebrew that path is
@@ -121,4 +123,20 @@ describe("restartLaunchdAgent", () => {
     expect(exit).toBe(1);
     expect(seenPreviousPids).toHaveLength(1);
   });
+});
+
+
+test("ownership is rechecked before a restart can unload or rewrite the agent", async () => {
+  let ran = false;
+  const action = Effect.sync(() => { ran = true; return 0; });
+  const foreign = { EnvironmentVariables: { WT_REPO_CONFIG: "/foreign/.wt.toml" } };
+  expect(await Effect.runPromise(withOwnedEventsAgent(action, () => Effect.succeed(foreign)))).toBe(1);
+  expect(ran).toBe(false);
+  const own = {
+    EnvironmentVariables: eventsConfigEnvironment(),
+    StandardOutPath: `${EVENTS_DIR}/daemon.out.log`,
+    StandardErrorPath: `${EVENTS_DIR}/daemon.err.log`,
+  };
+  expect(await Effect.runPromise(withOwnedEventsAgent(action, () => Effect.succeed(own)))).toBe(0);
+  expect(ran).toBe(true);
 });

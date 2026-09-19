@@ -383,6 +383,17 @@ a 10-second minimum interval; quiet-period deliveries retain the 1.5-second
 debounce. See [GitHub events](github-events.md).
 
 
+### Events launchd ownership
+
+`core/events/agent.ts` reads the per-user launchd plist with `plutil` and checks
+its config selectors and log paths before startup reconciliation reads daemon
+state. Disabled repositories skip the hook outright. `cli/commands/events.ts`
+serializes agent mutations with a per-user lock (`withAsyncFileLock`'s directory
+override); start/stop/restart/uninstall recheck ownership inside the lock.
+Install is the explicit ownership transfer. Children and new plists carry
+absolute config paths so changing cwd cannot change the selected repository.
+
+
 ## Logging
 
 `src/core/logger.ts` gives every source three channels: file-only `debug/info/warn/error(msg, ctx?)`; `event.{info,ok,warn,err,dim}(text, opts?)` which fans out to the file *and* the bottom pane's firehose feed (when the TUI runtime has registered a sink); and `attention.{info,ok,warn,err}(text, opts?)` for the curated attention feed — the pane's default view, reserved for things worth interrupting a scan for (work-status transitions, needs-you signals, new PR comments from other people via `usePrCommentEvents`, detached dev-supervisor crashes via `useDevServerEvents`; `event.err` lines surface there too by level). Lazy daily file at `~/.cache/wt/logs/app/wt-YYYY-MM-DD.log`, 14-day retention, cross-process append-safe. `tui/activity-log.ts` is just the in-memory store + `useEvents` hook — emit through `createLogger(...)`.

@@ -69,10 +69,18 @@ Two halves, in `core/build-id.ts`:
 `wt events status` prints a `build` line when the two disagree, so "running" and
 "up to date" stop being the same answer.
 
-An accepted pre-TUI update also runs `wt events restart` automatically when
-the launchd agent is installed. The daemon therefore moves to the new build
-before the fresh TUI starts. A restart failure is printed but does not block
-the TUI; rerun the command manually after fixing the reported launchd error.
+Every interactive startup reconciles the installed launchd agent unless
+`WT_UPDATE=off`. Repositories without `[github.events]` skip reconciliation
+before inspecting daemon state or acquiring a lock. Enabled repositories also
+skip agents whose ownership cannot be established: the installed repository
+and global config paths and daemon log paths must match the caller's config.
+A live PID or matching build is not ownership evidence.
+
+An owned, stale or stopped daemon is restarted before the TUI starts. The
+restart child receives explicit absolute `WT_CONFIG` and `WT_REPO_CONFIG`
+selectors and keeps the caller's working directory, so the wt source clone
+cannot accidentally become its configuration source. Restart failures retain
+all stderr lines (or stdout when stderr is empty) and do not block the TUI.
 
 The identity is the committed sha, so an **uncommitted** edit moves the code
 without moving it — a daemon started mid-edit still looks current. That gap is
@@ -105,6 +113,16 @@ generate, and say so, naming the missing program when that is why. `wt events
 status` reports an `agent cannot exec` line for the same condition. `restart`
 also waits for a new live daemon PID before returning, so a launchd load that
 never reaches daemon readiness is reported as a failure.
+
+There is still one agent per user (`com.wt.events`), not one per repository.
+Start, stop, restart, and uninstall refuse agents owned by a different or
+unidentifiable configuration. Run those commands from the owning repository.
+`install` explicitly replaces ownership. All five mutations share a per-user
+lock, and ownership is checked inside it before any unload or write; a startup
+check cannot authorize overwriting an agent installed by another repository
+while the restart child was launching. New plists persist absolute config
+selectors; legacy global-only plists are accepted only when their effective
+global config and log paths establish the same owner.
 
 ## Fetch cadence
 

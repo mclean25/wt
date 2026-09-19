@@ -209,15 +209,16 @@ export class AsyncLockError extends Data.TaggedError("AsyncLockError")<{
 export function withAsyncFileLock<A, E, R>(
   name: string,
   effect: Effect.Effect<A, E, R>,
-  opts: { pollMs?: number; timeoutMs?: number } = {},
+  opts: { pollMs?: number; timeoutMs?: number; directory?: string } = {},
 ): Effect.Effect<A, E | AsyncLockError, R> {
   const pollMs = opts.pollMs ?? 150;
   const timeoutMs = opts.timeoutMs ?? 120_000;
   return Effect.acquireUseRelease(
     Effect.try({
       try: () => {
-        ensureLockDir();
-        return openSync(lockPath(name), "a+");
+        const directory = opts.directory ?? config.paths.lockDir;
+        mkdirSync(directory, { recursive: true });
+        return openSync(join(directory, `${name}.lock`), "a+");
       },
       catch: (cause) =>
         new AsyncLockError({

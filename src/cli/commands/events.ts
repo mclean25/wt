@@ -14,6 +14,8 @@ import { dirname, join } from "node:path";
 import { Data, Duration, Effect, Schedule } from "effect";
 
 import { buildSha, sameBuild } from "../../core/build-id.ts";
+import { eventsConfigEnvironment, EVENTS_AGENT_LOCK_DIR, ownsEventsAgent, readEventsAgent } from "../../core/events/agent.ts";
+import { withAsyncFileLock } from "../../core/locks.ts";
 import { config } from "../../core/config.ts";
 import { resolveWebhookSecret, runDaemonForeground } from "../../core/events/daemon.ts";
 import {
@@ -24,7 +26,7 @@ import {
   readState,
   runningDaemonHasForeignBuild,
 } from "../../core/events/store.ts";
-import { operationErrors, type OperationError } from "../../core/errors.ts";
+import { causeMessage, operationErrors, type OperationError } from "../../core/errors.ts";
 import { run as sh } from "../../core/proc.ts";
 import { hasHelpFlag } from "../args.ts";
 import { bold, cyan, dim, green, red, yellow } from "../colors.ts";
@@ -125,8 +127,7 @@ function plistContents(): string {
     HOME: homedir(),
   };
   // Carry config overrides so the daemon loads the same config.toml the TUI does.
-  if (process.env.WT_CONFIG) env.WT_CONFIG = process.env.WT_CONFIG;
-  if (process.env.WT_REPO_CONFIG) env.WT_REPO_CONFIG = process.env.WT_REPO_CONFIG;
+  Object.assign(env, eventsConfigEnvironment());
   if (process.env.XDG_CONFIG_HOME) env.XDG_CONFIG_HOME = process.env.XDG_CONFIG_HOME;
 
   const argLines = argv.map((a) => `    <string>${xmlEscape(a)}</string>`).join("\n");
@@ -246,9 +247,9 @@ const runLaunchctl = Effect.fnUntraced(function* (
       }
     }
     const r = yield* sh(["launchctl", action, "-w", plist]).pipe(
-      Effect.orElseSucceed(() => ({
+      Effect.catch((error) => Effect.succeed({
         stdout: "",
-        stderr: "",
+        stderr: causeMessage(error),
         exitCode: 1,
         timedOut: false,
       })),
@@ -412,7 +413,7 @@ function cmdSecret(): number {
   return 0;
 }
 
-export function run(argv: string[]): Effect.Effect<number, OperationError> {
+function dispatch(argv: string[]): Effect.Effect<number, OperationError> {
   const [sub, ...rest] = argv;
   if (hasHelpFlag(argv)) {
     return Effect.sync(() => {
@@ -456,4 +457,28 @@ export function run(argv: string[]): Effect.Effect<number, OperationError> {
         return 2;
       });
   }
+}
+
+/** Check ownership under the same per-user lock used by every agent mutation. */
+export const withOwnedEventsAgent = Effect.fn("withOwnedEventsAgent")(function* (
+  action: Effect.Effect<number, OperationError>,
+  read: () => Effect.Effect<unknown, Error> = () => readEventsAgent(plistPath()),
+) {
+  const agent = yield* read();
+  if (!ownsEventsAgent(agent, eventsConfigEnvironment(), EVENTS_DIR)) {
+    console.error(red(`events agent at ${plistPath()} belongs to another configuration or its ownership is unknown; run wt events from its owning repository`));
+    return 1;
+  }
+  return yield* action;
+});
+
+export function run(argv: string[]) {
+  const action = Effect.suspend(() => dispatch(argv));
+  const sub = argv[0];
+  if (hasHelpFlag(argv) || argv.length !== 1 || !["install", "uninstall", "start", "stop", "restart"].includes(sub ?? "")) return action;
+  return withAsyncFileLock("events-agent", Effect.suspend(() => {
+    // Install is the explicit ownership transfer. All other mutations must
+    // prove ownership before unloading, rewriting, or removing the agent.
+    return sub === "install" || !existsSync(plistPath()) ? action : withOwnedEventsAgent(action);
+  }), { directory: EVENTS_AGENT_LOCK_DIR, timeoutMs: 35_000 });
 }

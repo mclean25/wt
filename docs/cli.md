@@ -340,6 +340,11 @@ Print the running version — the source clone's git short hash and commit date 
 
 ### `wt events <sub>`
 
+The launchd agent is shared per user. `start`, `stop`, `restart`, and `uninstall`
+require its installed config and log paths to match the current repository;
+run them from the owning repository. `install` explicitly replaces ownership.
+Config paths are persisted as absolute paths. See [GitHub events](github-events.md).
+
 The optional GitHub webhook daemon — see [github-events.md](github-events.md).
 
 | sub | what it does |
