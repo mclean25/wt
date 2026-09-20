@@ -43,8 +43,10 @@ const log = createLogger("[codex]");
 const CODEX_GLYPH = "\u{F4AC}"; // nf-oct-cloud
 const CODEX_COLOR = "#4d56d6";
 const CODEX_TMUX_INFIX = "-codex";
-// Keep Codex in a real full-screen buffer under tmux. Disable animations to
-// avoid composer flicker and background artifacts through the tmux renderer.
+// Keep Codex in a real full-screen buffer under tmux. Codex's Astra animations
+// in the TUI input box currently interact poorly with tmux, causing cursor
+// flicker and background artifacts. Keep animations disabled until that
+// rendering interaction is fixed.
 const CODEX_TMUX_TUI_ARGS = [
   "-c",
   'tui.alternate_screen="always"',
