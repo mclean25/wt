@@ -125,8 +125,13 @@ standard select-and-forward behavior for every non-link click.
 It also leaves tmux's `alternate-screen` support enabled: full-screen harness
 TUIs such as Codex depend on `smcup`/`rmcup` for a stable full-height viewport
 and cursor redraws.
-wt-launched Codex sessions additionally force `tui.alternate_screen="always"`.
-Codex's native animations remain enabled. The private server declares `sync`
+wt-launched Codex sessions additionally force `tui.alternate_screen="always"`
+and `tui.animations=false` to avoid composer flicker and background artifacts
+through tmux. These overrides apply to fresh and resumed sessions, including
+main and manager slots; direct Codex launches retain the user's settings.
+Already-running Codex processes must exit and resume through wt to pick up
+the animation override; reattaching alone does not change launch arguments.
+The private server declares `sync`
 for xterm-family, Alacritty, and nested tmux clients so physical redraws are
 buffered by supporting terminals. tmux accepting synchronized application
 frames does not itself establish this outer-terminal capability. Unsupported
@@ -158,8 +163,9 @@ session handoffs never start additional palette queries.
 still open, even with a sync-capable client. This reproduces with a synthetic
 frame split across writes, independently of Codex or the outer terminal.
 Upstream [57a13664cc2c](https://github.com/tmux/tmux/commit/57a13664cc2cf0db1c6b4f575c4934bf4ec1c4ee)
-preserves cursor state during synchronization. Test a build containing that
-fix before changing terminals or suppressing harness animations. Installing a
+preserves cursor state during synchronization. Animation suppression avoids
+the observed animated-composer artifacts but does not fix tmux's cursor
+synchronization itself. Installing a
 new tmux binary does not upgrade a live server: `tmux -V` identifies the client,
 whereas `tmux -L <socket> display-message -p '#{version}'` identifies the server.
 Replacing the server ends its pane processes, so coordinate that interruption;
