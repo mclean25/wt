@@ -1017,7 +1017,7 @@ const GENERIC_DEFAULTS = {
       name: "Address PR review",
       prompt:
         "Check the requested changes from the review on the PR for this branch and address them. Push the changes, then resolve the review threads (no reply comments). When done, request a re-review from the original reviewers.",
-      target: "headless" as const,
+      target: "session" as const,
       affects: ["git", "github"] as const satisfies readonly EffectTag[],
       requires: ["pr.ready"] as const satisfies readonly RequireTag[],
       argPrompt: null,

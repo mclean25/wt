@@ -718,7 +718,7 @@ Pre-built actions surfaced by the `!` picker (and available as automation target
 - **Prompt actions** (`prompt = "…"`): run the worktree's primary coding agent. Default delivery is a tracked headless run (`claude -p` / `codex exec` / `opencode run`); `target = "session"` instead sends the prompt to the live F12 session, and `target = "manager"` sends it to the singleton [manager session](manager.md) prefixed `[re: <slug>]` (both fire-and-forget: no completion signal, so `affects` won't auto-refresh). Claude prompts are submitted at the live session's own prompt (see [manager.md](manager.md#how-a-message-reaches-a-session)); other harnesses retain their pane adapters. Manager-target actions appear in **both** pickers: row-scoped in `!`, and again in the `M` [manager palette](manager.md#the-command-palette-m), where they launch against the row selected when the palette opened.
 - **Shell actions** (`shell = "…"`): run `$SHELL -lc <shell>` in the worktree path; Enter launches directly with no edit step.
 
-**Replacement semantics:** when `[[actions]]` is absent, two built-ins apply (`rebase-main` "Rebase on base", `address-review` "Address PR review"). The moment you define *any* entry, your list fully replaces the defaults — to drop one default, list everything you keep.
+**Replacement semantics:** when `[[actions]]` is absent, two built-ins apply (`rebase-main` "Rebase on base", `address-review` "Address PR review"). Rebase runs headless; Address PR review sends its prompt into the existing agent session, starting it if needed. The moment you define *any* entry, your list fully replaces the defaults — to drop one default, list everything you keep.
 
 ```toml
 [[actions]]
