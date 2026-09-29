@@ -50,6 +50,7 @@ import {
   ALL_BUILTIN_ACTIONS,
   evaluateActionRequirements,
   type ActionDef,
+  type ActionRowState,
 } from "../../core/actions.ts";
 import type { AutomationDef } from "../../core/config.ts";
 import {
@@ -231,6 +232,18 @@ export function isBreakerExemptFire(fire: AutomationFire, isManagerRun: boolean)
     isPostMergeExternalFire(fire) ||
     isManagerRun
   );
+}
+
+/** An unmet row-backed action requirement is not a queued command. Re-evaluate
+ * it on the next pass, so attaching an issue later can still start the action. */
+export function canQueueActionFire(
+  fire: AutomationFire,
+  requires: ActionDef["requires"],
+  row: ActionRowState | undefined,
+): boolean {
+  if (fire.frozenVars !== null || requires.length === 0) return true;
+  if (!row) return false;
+  return evaluateActionRequirements(requires, row).ok;
 }
 
 function isPostMergeExternalRun(run: string): boolean {
@@ -852,6 +865,17 @@ export function useAutomations(opts: AutomationsOpts): AutomationsState {
     // real for the thing that will actually be remediated.
     for (const [id, fire] of byId) {
       if (executing.current.has(id)) continue;
+      const def = fire.rule.run.startsWith("builtin:") ? null : resolveActionDef(fire.rule.run);
+      const row = ctx.rows.find((r) => r.wt.slug === fire.slug);
+      if (def && !canQueueActionFire(fire, def.requires, row && {
+        slug: fire.slug,
+        issueId: row.issueId,
+        pr: row.pr,
+        deployed: row.fields.deploy.data ?? false,
+      })) {
+        intents.current.delete(id);
+        continue;
+      }
       const unseen = fire.fireKeys.some((k) => !hasHandledFire(k));
       if (!unseen) {
         intents.current.delete(id);
