@@ -9,6 +9,7 @@ import { TestClock } from "effect/testing";
 import {
   CodexTerminalReadinessTimeout,
   codexPaneIsIdle,
+  probeCodexCommandReadiness,
   probeCodexTerminalReadiness,
   waitForCodexTerminalReady,
 } from "./readiness.ts";
@@ -52,6 +53,33 @@ function opts(root: string, sessionId = "thread-a") {
 }
 
 describe("Codex terminal fallback readiness", () => {
+  test("commands reject unknown or switched owners before inspecting readiness", async () => {
+    for (const owner of [null, "other-thread"]) {
+      const result = await Effect.runPromise(probeCodexCommandReadiness(opts("/unused"),
+        () => Effect.succeed({
+          known: owner !== null, all: new Set(["feature-codex"]),
+          harnessSessionIds: new Map(owner ? [["feature-codex", owner]] : []),
+        }),
+        () => { throw new Error("must not probe a different thread"); },
+      ));
+      expect(result).toEqual({ ready: false, reason: "Codex thread no longer owns the slot" });
+    }
+  });
+
+  test("an idle transcript does not permit typing into a nonempty composer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wt-codex-command-"));
+    createRollout(root, "thread-a", [lifecycle("task_complete")]);
+    const result = await Effect.runPromise(probeCodexCommandReadiness(opts(root),
+      () => Effect.succeed({
+        known: true, all: new Set(["feature-codex"]),
+        harnessSessionIds: new Map([["feature-codex", "thread-a"]]),
+      }),
+      probeCodexTerminalReadiness,
+      () => Effect.succeed({ ready: false as const, reason: "not-idle" as const }),
+    ));
+    expect(result).toEqual({ ready: false, reason: "not-idle" });
+  });
+
   test("recognizes only Codex's empty ordinary composer", () => {
     expect(codexPaneIsIdle("output\n\n› Ask Codex to do anything\n\nmodel footer")).toBeTrue();
     expect(codexPaneIsIdle(

@@ -1,6 +1,6 @@
 import { Clock, Data, Duration, Effect } from "effect";
 
-import { capturePane } from "../../tmux/process.ts";
+import { capturePane, listSessionsWithHarnessIds } from "../../tmux/process.ts";
 import {
   findCodexRolloutForSession,
   readCodexTail,
@@ -129,6 +129,25 @@ export const probeCodexTerminalReadiness = Effect.fn("probeCodexTerminalReadines
     });
   },
 );
+
+/** Recheck both thread ownership and the empty composer before a TUI command. */
+export const probeCodexCommandReadiness = Effect.fn("probeCodexCommandReadiness")(function* (
+  opts: CodexTerminalReadinessOptions,
+  inspect: () => Effect.Effect<{
+    readonly known: boolean;
+    readonly harnessSessionIds: ReadonlyMap<string, string>;
+  }> = listSessionsWithHarnessIds,
+  threadProbe: typeof probeCodexTerminalReadiness = probeCodexTerminalReadiness,
+  paneProbe: typeof probeCodexLivePaneReadiness = probeCodexLivePaneReadiness,
+) {
+  const inventory = yield* inspect();
+  if (!inventory.known || inventory.harnessSessionIds.get(`${opts.slug}-codex`) !== opts.sessionId) {
+    return { ready: false as const, reason: "Codex thread no longer owns the slot" };
+  }
+  const thread = yield* threadProbe(opts);
+  if (!thread.ready) return { ready: false as const, reason: thread.reason };
+  return yield* paneProbe(opts);
+});
 
 /** Interruptible polling for a cleanly closed turn in the exact thread. */
 export const waitForCodexTerminalReady = Effect.fn("waitForCodexTerminalReady")(

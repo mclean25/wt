@@ -30,7 +30,7 @@ import { trackIssueStatusAction } from "../../state/issue-status.ts";
 import { operationErrors } from "../../core/errors.ts";
 import type { HarnessId } from "../../core/harness/index.ts";
 import { sendAgentMessage } from "../../core/harness/agent-routing.ts";
-import { sendAgentCompact, type CompactResult } from "../../core/harness/compact.ts";
+import { sendAgentCompact } from "../../core/harness/compact.ts";
 import { createLogger } from "../../core/logger.ts";
 import { sendWorktreeMessage } from "../../core/worktree-executor.ts";
 import { forkReported } from "../effect-boundary.ts";
@@ -520,13 +520,6 @@ export function useActionDispatch(opts: ActionDispatchOpts): {
         slotLog.event.err(`send failed: ${err.message}`, { toast: true });
       },
       onSuccess: (res) => {
-        if ("preparation" in res && (res as CompactResult).preparation) {
-          if (res.ok && res.delivered !== false) slotLog.event.info(
-            `preparation received; submitted /compact to ${slot.label} (execution unconfirmed)`, { toast: true },
-          );
-          else slotLog.event.err(`send failed: ${res.ok ? "command not delivered" : res.reason}`, { toast: true });
-          return;
-        }
         if (res.ok && res.delivered === false) {
           // See the row path above: an unverified briefing stays visible.
           slotLog.attention.warn(

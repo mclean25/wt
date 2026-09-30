@@ -323,6 +323,11 @@ const injectIntoSessionUnlockedEffect = Effect.fnUntraced(function* (opts: {
     const sinceMs = yield* Clock.currentTimeMillis;
     const submitted = yield* pasteAndSubmitEffect(name, harnessId, text);
     if (!submitted.ok) return submitted;
+    if (harnessId === "codex" && text.trim() === "/compact") {
+      // Native compaction never creates a user-message receipt. Waiting for
+      // one wastes time; treating its absence as failure could resend it.
+      return { ok: true as const, coldStarted, delivered: null, resent: false };
+    }
 
     // The pane accepted the keystrokes — that is NOT the same as the
     // conversation accepting the prompt. Ask the harness transcript too.
@@ -389,12 +394,37 @@ function confirmDeliveryEffect(opts: {
   );
 }
 
+/** Native compact is a command, not a pasted prompt needing two Enters. */
+export const typeAndSubmitCodexCompact = Effect.fn("typeAndSubmitCodexCompact")(function* (
+  name: string,
+  command: typeof runTmux = runTmux,
+) {
+  for (const args of [
+    ["send-keys", "-t", paneTarget(name), "-l", "/compact"],
+    ["send-keys", "-t", paneTarget(name), "Enter"],
+  ]) {
+    const { code, stderr } = yield* command(args);
+    if (code !== 0) return {
+      ok: false as const,
+      reason: stderr.trim() || `tmux send-keys exited ${code}; compaction submission unconfirmed`,
+    };
+    // Let Codex finish its input burst before the single submit key.
+    if (args.at(-1) === "/compact") yield* Effect.sleep(Duration.millis(SUBMIT_DELAY_MS));
+  }
+  return { ok: true as const };
+});
+
 /** Paste `text` into a ready pane and press the harness's submit keys. */
 const pasteAndSubmitEffect = Effect.fnUntraced(function* (
   name: string,
   harnessId: HarnessId,
   text: string,
 ) {
+    if (harnessId === "codex" && text.trim() === "/compact") {
+      // No paste retries or second Enter: a command has no user-message
+      // receipt, and retrying an unconfirmed command could compact twice.
+      return yield* typeAndSubmitCodexCompact(name);
+    }
     // Paste, then verify the pane actually changed. A harness can
     // sit visually stable — banner rendered, prompt drawn — while its
     // input is not yet accepting paste (the MCP-connect window on a

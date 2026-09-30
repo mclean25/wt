@@ -14,6 +14,7 @@ import { discoverCodexSessions } from "./discovery.ts";
 import { codexHarness } from "./harness.ts";
 import { recoverCodexLiveIdentity } from "./live-identity.ts";
 import {
+  probeCodexCommandReadiness,
   probeCodexLivePaneReadiness,
   probeCodexTerminalReadiness,
   waitForCodexLivePaneReady,
@@ -115,7 +116,9 @@ const defaults: Dependencies = {
   terminal: (target) => injectCodexFallback(
     target,
     waitForCodexTerminalReady(target),
-    probeCodexTerminalReadiness(target),
+    isCodexSlashCommand(target.text)
+      ? probeCodexCommandReadiness(target)
+      : probeCodexTerminalReadiness(target),
   ),
   liveTerminal: (target) => injectCodexFallback(
     target,

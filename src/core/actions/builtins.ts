@@ -326,8 +326,8 @@ export const MANAGER_BUILTIN_ACTIONS: readonly ActionDef[] = [
     kind: "claude",
     id: "manager-compact",
     name: "Compact manager context",
-    // Claude /compact takes focus instructions. Codex dispatch separates
-    // these from the bare native command (core/harness/compact.ts).
+    // Claude /compact takes focus instructions. Codex dispatch sends only
+    // the native command, with no preparation turn (core/harness/compact.ts).
     // Preserve the fleet coordination
     // state, and make the FIRST post-compact action re-running /manager
     // so the playbook (and its opt-in briefs) survives every compaction
