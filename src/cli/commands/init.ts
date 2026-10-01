@@ -16,14 +16,19 @@ import { Effect } from "effect";
 
 const io = operationErrors("wt init");
 
-const USAGE = `usage: wt init [directory]
+const USAGE = `usage: wt init [directory] [--primary <claude|codex|opencode>]
 
 Create a repository-local .wt.toml. The directory may be anywhere inside
 the repository and defaults to the current directory. Detects the Git root
 and trunk branch, creates a sibling <repo>-worktrees root, and assigns an
 isolated cache namespace and tmux socket derived from the repository path.
 
+--primary writes the repository's default coding agent. When omitted,
+the repository inherits the user config default.
+
 Refuses to overwrite an existing .wt.toml.`;
+
+type PrimaryHarness = "claude" | "codex" | "opencode";
 
 type GitRunner = (cwd: string, args: readonly string[]) => string | null;
 
@@ -82,6 +87,7 @@ export function renderInitConfig(input: {
   baseBranch: string;
   repoId: string;
   home?: string;
+  primary?: PrimaryHarness;
 }): string {
   const home = resolve(input.home ?? homedir());
   const root = resolve(input.repoRoot);
@@ -98,13 +104,17 @@ socket = ${tomlString(`wt-${input.repoId}`)}
 
 [branch]
 base = ${tomlString(input.baseBranch)}
-`;
+${input.primary ? `
+[harness]
+primary = ${tomlString(input.primary)}
+` : ""}`;
 }
 
 export function initializeRepository(
   directory: string,
   deps: {
     home?: string;
+    primary?: PrimaryHarness;
     git?: GitRunner;
     exists?: (path: string) => boolean;
     write?: (path: string, content: string) => void;
@@ -127,6 +137,7 @@ export function initializeRepository(
     baseBranch: detectBaseBranch(git, repoRoot),
     repoId,
     home: deps.home,
+    primary: deps.primary,
   });
   const write =
     deps.write ?? ((path, text) => writeFileSync(path, text, { flag: "wx" }));
@@ -146,17 +157,29 @@ export const run = Effect.fn("wt init")(function* (argv: string[]) {
     console.log(USAGE);
     return 0;
   }
-  const unknown = argv.find((arg) => arg.startsWith("-") && arg !== "-");
-  if (unknown) {
-    console.error(`unknown flag: ${unknown}\n\n${USAGE}`);
-    return 2;
-  }
-  if (argv.length > 1) {
-    console.error(`expected at most one directory\n\n${USAGE}`);
-    return 2;
+  let directory: string | undefined;
+  let primary: PrimaryHarness | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--primary") {
+      const value = argv[++i];
+      if (value !== "claude" && value !== "codex" && value !== "opencode") {
+        console.error(`--primary requires claude, codex, or opencode\n\n${USAGE}`);
+        return 2;
+      }
+      primary = value;
+    } else if (arg.startsWith("-") && arg !== "-") {
+      console.error(`unknown flag: ${arg}\n\n${USAGE}`);
+      return 2;
+    } else if (directory !== undefined) {
+      console.error(`expected at most one directory\n\n${USAGE}`);
+      return 2;
+    } else {
+      directory = arg;
+    }
   }
   const result = yield* io.sync("initialize repository", () =>
-    initializeRepository(argv[0] ?? process.cwd()),
+    initializeRepository(directory ?? process.cwd(), { primary }),
   );
   if (!result.ok) {
     console.error(result.message);

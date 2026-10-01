@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Effect } from "effect";
 
 import {
   detectBaseBranch,
   initializeRepository,
   renderInitConfig,
+  run,
 } from "./init.ts";
 
 describe("detectBaseBranch", () => {
@@ -74,5 +79,38 @@ describe("initializeRepository", () => {
       write: () => { throw new Error("must not write"); },
     });
     expect(result).toEqual({ ok: false, message: "/repo/.wt.toml already exists" });
+  });
+});
+
+describe("init --primary", () => {
+  for (const primary of ["claude", "codex", "opencode"]) {
+    test(`writes ${primary} with the flag before or after the directory`, async () => {
+      for (const flagFirst of [false, true]) {
+        const directory = mkdtempSync(join(tmpdir(), "wt-init-primary-"));
+        try {
+          expect(Bun.spawnSync(["git", "init", "-b", "main", directory]).exitCode).toBe(0);
+          const args = flagFirst
+            ? ["--primary", primary, directory]
+            : [directory, "--primary", primary];
+          expect(await Effect.runPromise(run(args))).toBe(0);
+          const content = readFileSync(join(directory, ".wt.toml"), "utf8");
+          expect(Bun.TOML.parse(content)).toMatchObject({ harness: { primary } });
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      }
+    });
+  }
+
+  test("rejects invalid or missing primary before creating a config", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "wt-init-invalid-"));
+    try {
+      for (const args of [[directory, "--primary", "other"], [directory, "--primary"]]) {
+        expect(await Effect.runPromise(run(args))).toBe(2);
+        expect(existsSync(join(directory, ".wt.toml"))).toBe(false);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

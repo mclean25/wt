@@ -4,12 +4,16 @@
 
 Environment variables: `WT_CONFIG` points at an explicit config file; `XDG_CONFIG_HOME` relocates the default lookup (see [configuration.md](configuration.md)). Both are forwarded into the `wt events` launchd daemon so it loads the same config.
 
-### `wt init [directory]`
+### `wt init [directory] [--primary <claude|codex|opencode>]`
 
 Create `.wt.toml` at the containing Git repository root. This command does not
 require an existing valid wt config. It detects the trunk branch, creates
 defaults for a sibling worktree root, and assigns path-derived cache and tmux
 namespaces. It refuses to overwrite an existing file.
+
+Use `wt init --primary codex` (or `opencode` / `claude`) to write
+`[harness] primary` into the repository config. Omit the flag to inherit
+the coding-agent default from your user config.
 
 ### `wt state migrate [--from <legacy-cache-dir>] [--keep-legacy]`
 
