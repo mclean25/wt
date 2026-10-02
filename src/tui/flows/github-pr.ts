@@ -27,6 +27,7 @@ import {
   disableAutoMerge,
   editReviewers,
   enableAutoMerge,
+  mergeRequestInFlight,
   markPullRequestReady,
   streamFailedRunLog,
 } from "../../core/github.ts";
@@ -149,6 +150,10 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
       toast("no PR for this row", theme.warn, 2000);
       return;
     }
+    if (mergeRequestInFlight(pr.number)) {
+      toast("merge request still processing; wait for its result", theme.warn, 3500);
+      return;
+    }
     // Armed-ness spans BOTH features this keystroke can drive. Keying on
     // `pr.autoMerge` alone left a queued PR looking unarmed, so the disarm
     // leg refused to dequeue it.
@@ -202,7 +207,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
     let retryable = false;
     const mutationEffect = (
       action === "enable"
-        ? enableAutoMerge(prId ?? "", { baseRefName: pr.baseRefName, headRefOid: pr.headRefOid })
+        ? enableAutoMerge(prId ?? "", { prNumber, baseRefName: pr.baseRefName, headRefOid: pr.headRefOid })
         : disableAutoMerge(prNumber, { prId, baseRefName: pr.baseRefName })
     ).pipe(
       Effect.tap((result) =>
@@ -239,6 +244,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
         startAutoMergeRetry(
           prNumber,
           enableAutoMerge(prId ?? "", {
+            prNumber,
             baseRefName: pr.baseRefName,
             headRefOid: pr.headRefOid,
           }),
@@ -408,6 +414,7 @@ export function makeGithubPrFlows(ctx: GithubPrFlowsCtx) {
               autoMerge: { enabledAt, mergeMethod: AUTO_MERGE_METHOD },
             })),
           run: enableAutoMerge(prId ?? "", {
+            prNumber,
             baseRefName: row.pr?.baseRefName,
             headRefOid: row.pr?.headRefOid,
           }).pipe(

@@ -492,6 +492,17 @@ Per-worktree destroy logs live one level up at `~/.cache/wt/logs/<slug>-*.log`; 
 
 **Unhandled errors never touch stdout/stderr while the TUI runs.** `tui/error-store.ts` owns the capture: `installProcessErrorCapture()` (armed in `tui/runtime.tsx` for exactly the renderer's lifetime) replaces Bun's default uncaughtException/unhandledRejection reporters — whose raw multi-line stack print over the alternate screen was the original garbling incident — with a 5-entry in-memory ring, a `log.error` (full stack, file-only), and a `log.event.err` one-liner with `{toast: true}`. `tui/error-boundary.tsx` is the third origin, catching render errors into the same ring (its crash screen replaces the app tree, since a modal can't render there). The error overlay (`panels/error-overlay.tsx` + `modal-keys/errors.ts` + `flows/error-report.ts`, modeled on the perf overlay including the `i` inject flow) auto-pops via `hooks/useErrorOverlay.ts` — queued behind any open modal, acknowledged on dismiss. Deliberate semantics: an uncaughtException keeps the process alive but marks it degraded (banner in the overlay); consecutive identical errors collapse (`×N`) instead of flooding; the renderer's `openConsoleOnError` is disabled so OpenTUI's own error hook can't pop its debug console over the panes; capture detaches right after `renderer.destroy()`, so errors thrown through `runTui()` itself still reach `main.ts`'s top-level catch (and its crash-rollback offer) on plain stderr. `WT_DEBUG_THROW=1|rejection` is the permanent probe hook.
 
+## GitHub merge submission
+
+`core/github/async-merge.ts` owns one async REST queue submission and bounded
+polling of its UUID. `github/mutations.ts` shares it between the TUI and
+`wt merge`, including shell custom actions. Explicit queue mode preserves the
+existing arm-only behavior; classic arming and cancellation remain GraphQL/gh.
+Only a definitive terminal refusal can enter the existing check-wait fallback.
+An ambiguous submission or polling failure never triggers another write. A
+per-PR in-flight guard prevents overlapping local requests and stops cancellation
+from interrupting polling while reporting a remote operation as cancelled.
+
 ## Stable files
 
 These define contracts; touching them ripples. Read them first:

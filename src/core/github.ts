@@ -27,6 +27,7 @@ export {
   disableAutoMerge,
   editReviewers,
   enableAutoMerge,
+  mergeRequestInFlight,
   markPullRequestReady,
   retargetPrBase,
   streamFailedRunLog,

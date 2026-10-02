@@ -181,8 +181,8 @@ export type LivePrInfo = {
   title: string;
   /**
    * GraphQL node id and head sha — what the merge mutations need, and
-   * neither is derivable from the number. `enqueuePullRequest` takes
-   * the head as `expectedHeadOid` so a push between the read and the
+   * neither is derivable from the number. The async merge API takes
+   * the head as `sha` so a push between the read and the
    * mutation refuses instead of queueing a commit nobody saw. Empty
    * when gh returned neither (an older gh, a malformed payload).
    */

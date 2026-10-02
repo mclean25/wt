@@ -136,6 +136,7 @@ export const run = Effect.fn("wt merge")(function* (argv: string[]) {
   }
 
   const res = yield* enableAutoMerge(pr.id, {
+    prNumber: pr.number,
     baseRefName: pr.baseRefName,
     headRefOid: pr.headRefOid,
   });

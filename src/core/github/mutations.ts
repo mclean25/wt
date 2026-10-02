@@ -6,6 +6,7 @@ import { run, runStreaming } from "../proc.ts";
 import type { AutoMergeMethod } from "../types.ts";
 import { GH_TIMEOUT_MS, ghFailureMessage, hasGh, repoSlug } from "./gh-cli.ts";
 import type { GhActionResult, LivePrInfo } from "./types.ts";
+import { enqueueAsyncMerge } from "./async-merge.ts";
 
 const log = createLogger("[gh]");
 
@@ -127,7 +128,8 @@ const mergeQueueIdForBranch = Effect.fnUntraced(function* (
  *
  * **Two different GitHub features wear that label, and picking the wrong
  * one fails outright.** A branch with a MERGE QUEUE gets
- * `enqueuePullRequest`; everything else gets classic auto-merge via
+ * the REST async merge API in explicit queue mode; everything else gets
+ * classic auto-merge via
  * `enablePullRequestAutoMerge`. They are not interchangeable and they
  * are gated on different settings: classic auto-merge requires the
  * repo-level "Allow auto-merge", while a queue does not. Assuming the
@@ -146,9 +148,9 @@ const mergeQueueIdForBranch = Effect.fnUntraced(function* (
  * unprotected repo — the picker's confirm-less "arm" keystroke once
  * shipped a dogfood PR on the spot while toasting "auto-merge enabled".
  */
-export const enableAutoMerge = Effect.fn("enableAutoMerge")(function* (
+const enableAutoMergeRequest = Effect.fnUntraced(function* (
   prId: string,
-  opts: { baseRefName?: string; headRefOid?: string } = {},
+  opts: { prNumber?: number; baseRefName?: string; headRefOid?: string } = {},
 ): Effect.fn.Return<GhActionResult> {
   // Callers guard, but a raw GraphQL "Could not resolve to a node with
   // the global id of ''" toast is useless — fail with a named reason.
@@ -172,22 +174,21 @@ export const enableAutoMerge = Effect.fn("enableAutoMerge")(function* (
     : null;
   if (!queueId) return yield* classic();
 
-  // `expectedHeadOid` makes this fail rather than enqueue a commit we
-  // never saw, if the branch moved between the poll and the keystroke.
-  // The merge queue's own configuration decides the merge method, so
-  // AUTO_MERGE_METHOD deliberately plays no part here.
-  const argv = [
-    "gh", "api", "graphql",
-    "-f",
-    "query=mutation($prId: ID!, $oid: GitObjectID) { enqueuePullRequest(input: {pullRequestId: $prId, expectedHeadOid: $oid}) { mergeQueueEntry { position } } }",
-    "-f", `prId=${prId}`,
-  ];
-  if (opts.headRefOid) argv.push("-f", `oid=${opts.headRefOid}`);
-  const enqueued = yield* runGhMutation(argv, "enqueue failed", {
-    prId,
-    base: opts.baseRefName,
-  });
+  // Explicit queue mode preserves the arm-only contract even if the branch's
+  // queue is removed between our probe and submission. Never use API default.
+  const slug = yield* repoSlug();
+  if (!slug) return { ok: false, error: "could not resolve the origin repo" };
+  if (!opts.prNumber || !opts.headRefOid) {
+    return { ok: false, error: "missing PR number or head SHA; refresh GitHub and retry" };
+  }
+  const enqueued = yield* enqueueAsyncMerge(slug, opts.prNumber, opts.headRefOid);
   if (enqueued.ok) return enqueued;
+  if (missingWorkflowScope(enqueued.error)) {
+    return { ok: false, error: `${enqueued.error} ${WORKFLOW_SCOPE_REMEDY}` };
+  }
+  // An accepted request with an unknown outcome must never arm a second
+  // operation. Only a definitive server refusal can take the fallback.
+  if (!enqueued.definitive) return enqueued;
   // A required check that has not REPORTED yet — never created, or
   // created and still running — is a clock, not a verdict, so it is
   // retryable where the other refusals are not.
@@ -214,6 +215,27 @@ export const enableAutoMerge = Effect.fn("enableAutoMerge")(function* (
       ? `${enqueued.error} That check has not reported for this commit yet, so the refusal clears itself once CI does. (arming instead also failed: ${armed.error})`
       : `${enqueued.error} (arming instead also failed: ${armed.error})`,
   };
+});
+
+const mergeRequestsInFlight = new Set<number>();
+
+/** A local observer is still resolving a remote write; cancellation cannot undo it. */
+export function mergeRequestInFlight(prNumber: number): boolean {
+  return mergeRequestsInFlight.has(prNumber);
+}
+
+export const enableAutoMerge = Effect.fn("enableAutoMerge")(function* (
+  prId: string,
+  opts: { prNumber?: number; baseRefName?: string; headRefOid?: string } = {},
+): Effect.fn.Return<GhActionResult> {
+  const number = opts.prNumber;
+  if (number !== undefined && mergeRequestInFlight(number)) {
+    return { ok: false, error: `#${number}: merge request still processing; wait for its result` };
+  }
+  if (number !== undefined) mergeRequestsInFlight.add(number);
+  return yield* enableAutoMergeRequest(prId, opts).pipe(Effect.ensuring(Effect.sync(() => {
+    if (number !== undefined) mergeRequestsInFlight.delete(number);
+  })));
 });
 
 /**
@@ -353,6 +375,9 @@ export const disableAutoMerge = Effect.fn("disableAutoMerge")(function* (
   prNumber: number,
   opts: { prId?: string; baseRefName?: string } = {},
 ): Effect.fn.Return<GhActionResult> {
+  if (mergeRequestInFlight(prNumber)) {
+    return { ok: false, error: `#${prNumber}: merge request still processing; wait for its result before cancelling` };
+  }
   if (!opts.prId) return { ok: false, error: `cannot inspect #${prNumber}: missing PR node id` };
   if (!(yield* hasGh())) return { ok: false, error: "gh CLI not found" };
   const inspected = yield* run(
