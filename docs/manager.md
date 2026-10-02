@@ -127,6 +127,22 @@ never blindly retried. A `/command` uses guarded tmux input instead: the app
 server queue accepts it as user text rather than executing Codex's TUI command.
 `wt codex selftest` checks the native queue surface without sending.
 
+**Sandboxed callers.** wt inherits the caller's OS sandbox; launching a subprocess does not move it
+onto the host. A Codex `workspace-write` session can edit repository files
+while its effective policy keeps `.git` read-only. `git fetch` still writes
+`.git/FETCH_HEAD`, so that policy requires the harness's supported host-execution
+approval path. An allow rule authorizes that path; it does not make the
+sandboxed attempt writable. Networking and additional writable roots are
+separate settings from protected Git metadata.
+
+Manager delivery also needs host-local sockets and Codex state. If `codex queue`
+exits with its explicit embedded-app-server startup permission denial, wt reports
+`message not submitted` and points to the host-execution approval path. It does
+not elevate itself, change permissions, or fall back to typing. Unknown failures,
+timeouts, and contradictory receipts remain ambiguous: inspect delivery before
+retrying, because the message may already be queued. A PATH-alias warning alone
+does not prove startup or delivery failed.
+
 For Claude, wt submits the message **at the target session's own prompt**, in
 its own process. Every Claude session wt starts is launched under
 `BUN_INSPECT=ws+unix://<cacheRoot>/insp/<tmux name>.sock`, which exposes bun's

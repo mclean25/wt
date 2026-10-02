@@ -3,7 +3,7 @@ import { Effect } from "effect";
 
 import type { HarnessSession } from "../types.ts";
 import { CodexAppServerError } from "./app-server.ts";
-import { createCodexMessenger } from "./messaging.ts";
+import { createCodexMessenger, parseCodexQueueResult } from "./messaging.ts";
 
 const session = (
   id: string,
@@ -26,7 +26,7 @@ function fakes(options: {
   liveKnown?: boolean;
   stampedId?: string;
   nativeFailure?: CodexAppServerError;
-  cli?: { ok: boolean; reason?: string; unsupported?: boolean };
+  cli?: { ok: boolean; reason?: string; unsupported?: boolean; startupPermissionDenied?: boolean };
   terminalFails?: boolean;
   unstamped?: boolean;
   recoveredId?: string;
@@ -119,6 +119,37 @@ const appError = (kind: CodexAppServerError["kind"]) => new CodexAppServerError(
   operation: kind === "absent" ? "connect" : "queue-add",
   kind,
   detail: `${kind} failure`,
+});
+
+describe("Codex CLI queue receipts", () => {
+  const startupError = "Error: failed to start embedded app server: Operation not permitted (os error 1)";
+
+  test.each([
+    { stderr: "Operation not permitted (os error 1)" },
+    { stderr: "WARNING: could not create PATH aliases: Operation not permitted (os error 1)" },
+    { stderr: startupError, stdout: "Queued message q1 for thread t1" },
+    { stderr: startupError, timedOut: true },
+    { stderr: "Error: connection dropped after queue submission" },
+  ])("keeps unknown or contradictory failures ambiguous: %j", (overrides) => {
+    const result = parseCodexQueueResult({ exitCode: 1, stdout: "", ...overrides });
+    expect(result.ok).toBe(false);
+    expect(result.startupPermissionDenied).not.toBe(true);
+  });
+
+  test("a PATH warning does not invalidate a successful receipt", () => {
+    expect(parseCodexQueueResult({
+      exitCode: 0,
+      stdout: "Queued message q1 for thread t1",
+      stderr: "WARNING: could not create PATH aliases: Operation not permitted (os error 1)",
+    })).toEqual({ ok: true });
+  });
+
+  test("a missing receipt remains unconfirmed", () => {
+    expect(parseCodexQueueResult({ exitCode: 0, stdout: "", stderr: "" })).toMatchObject({
+      ok: false,
+      reason: "codex queue exited successfully without a queue receipt",
+    });
+  });
 });
 
 describe("Codex message orchestration", () => {
@@ -226,7 +257,27 @@ describe("Codex message orchestration", () => {
     });
     const result = await Effect.runPromise(fake.send(target));
     expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.reason).toContain("delivery may be ambiguous");
     expect(fake.calls.some((call) => call.startsWith("terminal:"))).toBe(false);
+  });
+
+  test("a CLI startup permission denial reports host routing without resubmitting", async () => {
+    const fake = fakes({
+      nativeFailure: appError("unavailable"),
+      cli: parseCodexQueueResult({
+        exitCode: 1,
+        stdout: "",
+        stderr: "WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)\nError: failed to start embedded app server: Operation not permitted (os error 1)",
+      }),
+    });
+    const result = await Effect.runPromise(fake.send(target));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain("message not submitted");
+      expect(result.reason).toContain("host-execution approval path");
+      expect(result.reason).not.toContain("ambiguous");
+    }
+    expect(fake.calls).toEqual(["live", "discover", "native:primary-id", "cli:primary-id"]);
   });
 
   test("bootstraps only a thread that has no UUID yet", async () => {

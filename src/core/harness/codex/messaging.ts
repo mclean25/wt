@@ -8,7 +8,7 @@ import {
   injectIntoSession,
   type InjectResult,
 } from "../../tmux/inject.ts";
-import { run } from "../../proc.ts";
+import { run, type RunResult } from "../../proc.ts";
 import { queueCodexMessage, type CodexAppServerError } from "./app-server.ts";
 import { discoverCodexSessions } from "./discovery.ts";
 import { codexHarness } from "./harness.ts";
@@ -63,6 +63,7 @@ type Dependencies = {
     readonly ok: boolean;
     readonly reason?: string;
     readonly unsupported?: boolean;
+    readonly startupPermissionDenied?: boolean;
   }>;
   readonly terminal: (
     target: CodexMessageTarget & { readonly sessionId: string },
@@ -84,20 +85,29 @@ const cliQueue = Effect.fnUntraced(function* (threadId: string, text: string) {
       unsupported: /unrecognized subcommand|unknown command|unexpected argument ['\"]queue/i.test(reason),
     };
   }
-  const result = outcome.success;
+  return parseCodexQueueResult(outcome.success);
+});
+
+/** A failed startup precedes queue submission; other failures can follow a write. */
+export function parseCodexQueueResult(result: RunResult) {
   if (result.exitCode !== 0) {
     const reason = result.stderr.trim() || result.stdout.trim() || `codex queue exited ${result.exitCode}`;
     return {
       ok: false,
       reason,
       unsupported: /unrecognized subcommand|unknown command|unexpected argument ['\"]queue/i.test(reason),
+      // Match only the CLI's fatal startup error, not a generic EPERM or a
+      // warning about PATH aliases. A receipt or timeout leaves ambiguity.
+      startupPermissionDenied: !result.timedOut &&
+        !/Queued message\s/i.test(`${result.stdout}\n${result.stderr}`) &&
+        /^Error: failed to start embedded app server: (?:Operation not permitted \(os error 1\)|Permission denied \(os error 13\))\s*$/m.test(result.stderr),
     };
   }
   if (!/Queued message\s+\S+\s+for thread\s+/i.test(result.stdout)) {
     return { ok: false, reason: "codex queue exited successfully without a queue receipt" };
   }
   return { ok: true };
-});
+}
 
 const defaults: Dependencies = {
   discover: discoverCodexSessions,
@@ -288,6 +298,12 @@ export function createCodexMessenger(overrides: Partial<Dependencies> = {}) {
           delivered: true,
           resent: false,
           queueState: "queued-or-started",
+        };
+      }
+      if (queued.startupPermissionDenied) {
+        return {
+          ok: false,
+          reason: `message not submitted: ${queued.reason}; Codex was denied permission before its queue client started. If this command ran in a sandbox, retry through the harness's supported host-execution approval path. wt did not retry or type the message`,
         };
       }
       if (!queued.unsupported) {
