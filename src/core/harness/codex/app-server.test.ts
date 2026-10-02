@@ -260,6 +260,52 @@ describe("Codex app-server queue API", () => {
     expect(calls).toContain("2:thread/queue/start");
   });
 
+  test.each(["connect", "initialize", "thread/queue/list"])("keeps a lost add ambiguous when reconciliation fails at %s", async (failurePoint) => {
+    let connection = 0;
+    let addCalls = 0;
+    const fail = () => {
+      throw new CodexAppServerTransportError("reconciliation connection lost", false);
+    };
+    const dependencies = fakeDependencies(async () => {
+      connection += 1;
+      if (connection === 2 && failurePoint === "connect") fail();
+      return fakeTransport(({ method }) => {
+        if (connection === 2 && method === failurePoint) fail();
+        if (method === "initialize") return initializedResult();
+        if (method === "thread/queue/add") {
+          addCalls += 1;
+          throw new CodexAppServerTransportError("reply lost after add", true);
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+    });
+    const error = await Effect.runPromise(queueCodexMessage({
+      threadId: THREAD_ID, text: "do the thing",
+    }, dependencies).pipe(Effect.flip));
+    expect(error).toMatchObject({ kind: "ambiguous", operation: "queue-add" });
+    expect(addCalls).toBe(1);
+    expect(connection).toBe(2);
+  });
+
+  test("retains a reconciled receipt when queue start loses its connection", async () => {
+    let addCalls = 0;
+    const dependencies = fakeDependencies(async () => fakeTransport(({ method }) => {
+      if (method === "initialize") return initializedResult();
+      if (method === "thread/queue/add") {
+        addCalls += 1;
+        throw new CodexAppServerTransportError("reply lost after add", true);
+      }
+      if (method === "thread/queue/list") return { data: [submission()], nextCursor: null };
+      if (method === "thread/queue/start") throw new CodexAppServerTransportError("connection lost before start", false);
+      throw new Error(`unexpected ${method}`);
+    }));
+    const result = await Effect.runPromise(queueCodexMessage({
+      threadId: THREAD_ID, text: "do the thing",
+    }, dependencies));
+    expect(result).toEqual({ submission: submission(), state: "queued-or-started", reconciled: true });
+    expect(addCalls).toBe(1);
+  });
+
   test("fails ambiguous when reconciliation cannot prove ownership", async () => {
     let addCalls = 0;
     let connection = 0;

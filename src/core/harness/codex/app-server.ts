@@ -867,11 +867,21 @@ export function queueCodexMessage(
     // server whether it owns the stable client message id. Never re-add it.
     return withCodexAppServer((client) => Effect.gen(function* () {
       const ownership = yield* reconcileSubmission(client, args.threadId, clientUserMessageId);
-      const state = ownership.state === "started"
-        ? "started" as const
-        : yield* client.queueStart(args.threadId, ownership.submission.id);
+      // A reconciled receipt is as durable as the original add receipt.
+      // Losing start must not turn an accepted message into a retryable send.
+      const started = ownership.state === "started"
+        ? Result.succeed("started" as const)
+        : yield* Effect.result(client.queueStart(args.threadId, ownership.submission.id));
+      const state = Result.isSuccess(started) ? started.success : "queued-or-started" as const;
       return { submission: ownership.submission, state, reconciled: true };
-    }), dependencies);
+    }), dependencies).pipe(Effect.mapError((error) => error.kind === "ambiguous"
+      ? error
+      : new CodexAppServerError({
+          operation: "queue-add",
+          kind: "ambiguous",
+          detail: `Codex app-server lost the queue/add reply and reconciliation failed; wt will not submit it again: ${error.message}`,
+          cause: error,
+        })));
   }));
 }
 

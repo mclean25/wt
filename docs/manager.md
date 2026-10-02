@@ -127,6 +127,11 @@ never blindly retried. A `/command` uses guarded tmux input instead: the app
 server queue accepts it as user text rather than executing Codex's TUI command.
 `wt codex selftest` checks the native queue surface without sending.
 
+If a connection fails while reconciling a lost add reply, delivery stays
+ambiguous even when the new failure happened before that connection wrote
+anything. Once reconciliation finds the receipt, a later start failure retains
+the accepted state (`queued-or-started`) and cannot trigger a second submission.
+
 **Sandboxed callers.** wt inherits the caller's OS sandbox; launching a subprocess does not move it
 onto the host. A Codex `workspace-write` session can edit repository files
 while its effective policy keeps `.git` read-only. `git fetch` still writes
