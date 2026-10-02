@@ -121,6 +121,8 @@ const appError = (kind: CodexAppServerError["kind"]) => new CodexAppServerError(
   detail: `${kind} failure`,
 });
 
+const stateDatabaseError = "Error: failed to initialize state database: failed to initialize sqlite local db at /home/user/.codex/state_5.sqlite: failed to initialize state runtime at /home/user/.codex: failed to open memories DB at /home/user/.codex/memories_1.sqlite: error returned from database: (code: 14) unable to open database file";
+
 describe("Codex CLI queue receipts", () => {
   const startupError = "Error: failed to start embedded app server: Operation not permitted (os error 1)";
 
@@ -148,6 +150,17 @@ describe("Codex CLI queue receipts", () => {
     expect(parseCodexQueueResult({ exitCode: 0, stdout: "", stderr: "" })).toMatchObject({
       ok: false,
       reason: "codex queue exited successfully without a queue receipt",
+    });
+  });
+
+  test.each([
+    "WARNING: (code: 14) unable to open database file",
+    "Error: failed to initialize state database: database disk image is malformed (code: 11)",
+  ])("does not suggest host routing for unrelated database output: %s", (stderr) => {
+    expect(parseCodexQueueResult({ exitCode: 1, stdout: "", stderr })).toMatchObject({
+      ok: false,
+      reason: stderr,
+      startupPermissionDenied: false,
     });
   });
 });
@@ -276,6 +289,32 @@ describe("Codex message orchestration", () => {
       expect(result.reason).toContain("message not submitted");
       expect(result.reason).toContain("host-execution approval path");
       expect(result.reason).not.toContain("ambiguous");
+    }
+    expect(fake.calls).toEqual(["live", "discover", "native:primary-id", "cli:primary-id"]);
+  });
+
+  test.each([
+    {},
+    { stdout: "Queued message q1 for thread t1" },
+    { timedOut: true },
+  ])("database startup failures explain host routing without changing delivery safety: %j", async (overrides) => {
+    const fake = fakes({
+      nativeFailure: appError("unavailable"),
+      cli: parseCodexQueueResult({
+        exitCode: 1,
+        stdout: "",
+        stderr: `WARNING: could not create PATH aliases: Operation not permitted (os error 1)\n${stateDatabaseError}`,
+        ...overrides,
+      }),
+    });
+    const result = await Effect.runPromise(fake.send(target));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain(stateDatabaseError);
+      expect(result.reason).toContain("inspect delivery before retrying");
+      expect(result.reason).toContain("host-execution approval path");
+      expect(result.reason).toContain("delivery may be ambiguous");
+      expect(result.reason).not.toContain("message not submitted");
     }
     expect(fake.calls).toEqual(["live", "discover", "native:primary-id", "cli:primary-id"]);
   });

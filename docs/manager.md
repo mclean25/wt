@@ -148,6 +148,12 @@ timeouts, and contradictory receipts remain ambiguous: inspect delivery before
 retrying, because the message may already be queued. A PATH-alias warning alone
 does not prove startup or delivery failed.
 
+A fatal local-state SQLite `unable to open database file` error also explains
+the supported host-execution path for sandboxed callers. It does not establish
+a permissions cause or change delivery certainty: inspect delivery before any
+retry. wt preserves the original diagnostic and never repairs or changes the
+Codex state directory itself.
+
 For Claude, wt submits the message **at the target session's own prompt**, in
 its own process. Every Claude session wt starts is launched under
 `BUN_INSPECT=ws+unix://<cacheRoot>/insp/<tmux name>.sock`, which exposes bun's

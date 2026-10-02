@@ -92,9 +92,12 @@ const cliQueue = Effect.fnUntraced(function* (threadId: string, text: string) {
 export function parseCodexQueueResult(result: RunResult) {
   if (result.exitCode !== 0) {
     const reason = result.stderr.trim() || result.stdout.trim() || `codex queue exited ${result.exitCode}`;
+    const stateDatabaseUnavailable = /^Error: failed to initialize state database:.*\(code: 14\) unable to open database file/m.test(result.stderr);
     return {
       ok: false,
-      reason,
+      reason: stateDatabaseUnavailable
+        ? `${reason}; if this ran in a sandbox, inspect delivery before retrying through the harness's supported host-execution approval path`
+        : reason,
       unsupported: /unrecognized subcommand|unknown command|unexpected argument ['\"]queue/i.test(reason),
       // Match only the CLI's fatal startup error, not a generic EPERM or a
       // warning about PATH aliases. A receipt or timeout leaves ambiguity.
