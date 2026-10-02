@@ -301,18 +301,32 @@ When adding a new state source or mutation path, wire one of these (or an explic
 
 **A refresh has a size, and the big one is not free.** `invalidateQueries(["wt"])`
 — the per-worktree wave inside `refreshAll`, i.e. what `r` does — refetches every
-field of every row: `worktrees × 10` git probes issued in one burst. `Bun.spawn`
+field of every row: about 20 git probes per row with the normal field set. `Bun.spawn`
 runs its `posix_spawn` synchronously on the calling thread, so that burst is a
 render-thread stall before it is background work (measured: blocks up to 2.7s on
-a 22-row board). Two things keep it in hand. `run()` in `core/proc.ts` caps
-concurrent subprocesses (`RUN_CONCURRENCY`), which spreads the spawns across
-event-loop turns and took the same refresh to a 185ms worst block. And mutation
+a 22-row board). `run()` in `core/proc.ts` caps concurrent subprocesses at eight
+(`RUN_CONCURRENCY`) and separately admits one launch per event-loop turn.
+The launch gate yields through a cancellable `setImmediate` before the masked
+child allocation and releases immediately after allocation; the lifetime permit
+stays held through termination and stream cleanup. Streaming installs retain
+their separate lifetime so they cannot occupy all query slots. Mutation
 paths reach for the SCOPED refresh that matches what they changed rather than the
 wave: a destroy changes which worktrees exist, not the state of the survivors, so
 `doRemove` / `doCleanRows` call `refreshAfterRemoval` (list + wtState) — the
 github query re-keys itself off the shorter branch list, and the watchers above
-carry the rest. Reach for `refreshAll` when the user asked for "everything", not
+carry the rest. Creation, review checkout, and restore call
+`refreshAfterCreation(slug)` (list + wtState + the created row), including cached
+answers from mid-install. Creation already fetched origin; the changed branch
+list rekeys GitHub, and ref watchers still refresh existing rows when trunk moves.
+Reach for `refreshAll` when the user asked for "everything", not
 as the tail of an operation you can describe precisely.
+
+Creation's configured file copies live in `core/lifecycle-copy.ts`. Glob traversal
+and file writes are asynchronous, existing destination files are preserved, and
+each started write is joined before cancellation can release the creation lock.
+Cancellation stops the remaining batch; it cannot leave writes running after a
+caller has observed interruption. The backend and install still run through the
+scoped subprocess runners.
 
 Three related invariants:
 
@@ -468,7 +482,7 @@ The render loop is **on-demand**: a React commit requests a frame, the frame wal
 
 - **No OpenTUI Timelines, no `requestAnimationFrame`.** Any playing timeline holds a renderer-wide "live" request: the loop goes continuous (full tree walk + full repaint per tick) and `requestRender()` becomes a no-op, so a keypress commit can't pull a frame forward. All chrome animation rides the shared refcounted ticker in `tui/spinner.tsx` (`useAnimationTick`) — ~10fps, only while an animated component is mounted and visible, one batched commit per tick.
 - **Renderable count is a per-commit cost** — every commit's frame walks the whole tree, and scrollbox children pay a layout readback even when culled offscreen. Anything that maps an unbounded buffer renders a window: the events feed (`panels/activity.tsx`) draws a bottom-anchored `TAIL_WINDOW` slice behind an exact-height spacer, expanded ahead of the reader by a slow geometry check and snapped back at the bottom. New unbounded surfaces follow that pattern.
-- **App never observes per-event churn.** `useIsFetching` lives in `panels/title-bar.tsx` (a memoized leaf), NEVER in App — it re-renders its component on every fetch start/finish anywhere. The registries (session/shell/harness tails, actions) replace only the touched entry per update, and their hooks subscribe with per-key selector snapshots (`useSessionRun` et al.), so a pane tailing one session doesn't re-render when another streams. The `! l` dev-log overlay follows the same boundary in miniature: its one-second tmux snapshot poll exists only while that modal is mounted, so log changes re-render the overlay leaf and closing it stops the poll. Aggregations that App does need are identity-stabilized: `useActiveActions` returns the previous Set when membership is unchanged, `useOutputs` returns the previous list when membership/order/status are unchanged (timestamps deliberately excluded). `WorktreeList` and `Details` are `React.memo`'d on the back of all this — new props into either must stay identity-stable across unrelated renders.
+- **App never observes per-event churn.** `useFetchingCount` lives in `panels/title-bar.tsx` (a memoized leaf), never in App. Its `state/fetch-count.ts` store seeds from the cache once per subscription lifetime, then updates membership from the changed query in constant time. Observer-only events do no work; listeners fire only when the count changes. A `useIsFetching` snapshot scans the entire cache on every cache event, including observer option updates, which made refresh waves spend more CPU counting queries than spawning git. The registries (session/shell/harness tails, actions) replace only the touched entry per update, and their hooks subscribe with per-key selector snapshots (`useSessionRun` et al.), so a pane tailing one session doesn't re-render when another streams. The `! l` dev-log overlay follows the same boundary in miniature: its one-second tmux snapshot poll exists only while that modal is mounted, so log changes re-render the overlay leaf and closing it stops the poll. Aggregations that App does need are identity-stabilized: `useActiveActions` returns the previous Set when membership is unchanged, `useOutputs` returns the previous list when membership/order/status are unchanged (timestamps deliberately excluded). `WorktreeList` and `Details` are `React.memo`'d on the back of all this; new props into either must stay identity-stable across unrelated renders.
 - **Parsing stays off the render thread.** The claude session-jsonl tailer (`core/harness/claude/tail-worker.ts`), Codex event poller, detailed Codex output tail (`core/harness/codex/tail-worker.ts`), and Codex historical-session discovery (`core/harness/codex/discovery-worker.ts`) do their directory walks, file reads, and JSON parsing in workers; the main thread applies parsed results. Discovery is serialized and abort-aware so rapid cursor movement retains only the current queued destination instead of building an obsolete scan backlog; tail polls allow only one in-flight batch. A new tail-shaped data source follows the same seam.
 - **`WT_PERF=1` measures all of it**: the loop-lag probe logs any >20ms sync block, and the input-latency probe logs a p50/p90/max keypress→painted-frame histogram every 60s plus the renderer's live-mode duty cycle — nonzero duty means something re-armed continuous rendering and is a regression. Healthy figures: p50 under ~10ms, live duty 0.
 

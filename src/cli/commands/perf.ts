@@ -16,8 +16,8 @@ hand it to an agent as-is.
   --json    raw PerfSnapshot as JSON (fields documented in
             src/core/perf/sample.ts)
 
-%CPU comes from \`ps\` — a lifetime decaying average, i.e. sustained
-pressure, not an instantaneous profile.`;
+%CPU comes from \`ps\`, not an instantaneous profile. On macOS it is
+a decaying average over up to one minute. Process memory is RSS.`;
 
 const KNOWN = new Set(["--json"]);
 

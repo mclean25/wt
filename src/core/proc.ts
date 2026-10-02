@@ -108,6 +108,14 @@ export type ProcError =
 const RUN_CONCURRENCY = 8;
 const TERMINATION_GRACE_MS = 1_000;
 const runSemaphore = Semaphore.makeUnsafe(RUN_CONCURRENCY);
+// Launches themselves are synchronous. Space them across event-loop turns so
+// a wave of query reads cannot block input/rendering while filling all eight
+// child slots. This gate is released after allocation, not after child exit.
+const spawnSemaphore = Semaphore.makeUnsafe(1);
+const nextSpawnTurn = Effect.callback<void>((resume) => {
+  const immediate = setImmediate(() => resume(Effect.void));
+  return Effect.sync(() => clearImmediate(immediate));
+});
 
 type CapturedProcess = {
   readonly proc: Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
@@ -308,10 +316,17 @@ const capturedRunEffect = Effect.fnUntraced(function* (
   if (opts.signal?.aborted) {
     return yield* new ProcInterruptedError({ argv });
   }
-  const running = yield* Effect.acquireRelease(
-    spawnCaptured(argv, { cwd, env: opts.env, input: opts.input }),
-    releaseCaptured,
+  // Keep admission interruptible; only the actual allocation/finalizer
+  // registration belongs in acquireRelease's masked acquisition region.
+  const admitted = spawnSemaphore.withPermits(1)(
+    nextSpawnTurn.pipe(Effect.andThen(Effect.acquireRelease(
+      spawnCaptured(argv, { cwd, env: opts.env, input: opts.input }),
+      releaseCaptured,
+    ))),
   );
+  const running = yield* opts.signal
+    ? Effect.raceFirst(admitted, externalInterruption(argv, opts.signal))
+    : admitted;
   yield* writeInput(argv, running, opts.input);
   if (opts.signal) {
     // AbortSignal is the compatibility boundary used by Promise callers.

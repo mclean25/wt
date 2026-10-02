@@ -48,7 +48,7 @@ type WorktreeCreateFlowsCtx = {
   setRemovedView: (v: boolean) => void;
   setRemoteCreation: (creation: RemoteCreation | null) => void;
   remoteWorktrees: readonly RemoteWorktreeSummary[];
-  refreshAll: () => Promise<void>;
+  refreshAfterCreation: (slug: string) => Promise<void>;
   refreshRemoteWorktrees: () => Promise<readonly RemoteWorktreeSummary[]>;
   toast: (message: string, color?: string, ms?: number) => void;
 };
@@ -62,7 +62,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     setRemovedView,
     setRemoteCreation,
     remoteWorktrees,
-    refreshAll,
+    refreshAfterCreation,
     refreshRemoteWorktrees,
     toast,
   } = ctx;
@@ -162,7 +162,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     newLog.event.ok(`ready at ${result.path}`);
     toast(`created ${result.slug}`, theme.ok, 2200);
     yield* revealLocal(result.slug);
-    void refreshAll();
+    void refreshAfterCreation(result.slug);
     return true;
   });
 
@@ -281,7 +281,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     log.event.ok(`ready at ${result.path} → ${REVIEW_SECTION}`);
     toast(`created ${result.slug} in ${REVIEW_SECTION}`, theme.info, 2200);
     yield* revealLocal(result.slug);
-    void refreshAll();
+    void refreshAfterCreation(result.slug);
   });
 
   function doCheckoutReview(branch: string): Promise<void> {
@@ -312,7 +312,7 @@ export function makeWorktreeCreateFlows(ctx: WorktreeCreateFlowsCtx) {
     toast(`restored ${result.slug}`, theme.ok, 2500);
     setRemovedView(false);
     yield* revealLocal(result.slug);
-    void refreshAll();
+    void refreshAfterCreation(result.slug);
   });
 
   function doRestoreRemoved(entry: RemovedWorktree): Promise<void> {

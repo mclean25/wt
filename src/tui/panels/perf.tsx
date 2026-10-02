@@ -382,7 +382,7 @@ export function PerfOverlay({
 
         <SectionHeader
           title="heaviest processes downstream of wt"
-          note="%cpu is a lifetime decaying average, not an instantaneous sample — read it as sustained pressure."
+          note="%cpu is averaged by ps; on macOS, over up to one minute. It is not instantaneous."
         />
         <ProcList procs={snapshot.top} ceiling={ceiling} width={contentW} />
 

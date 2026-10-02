@@ -181,9 +181,27 @@ Tail a destroy log (`tail -F`). No slug ⇒ the most recently modified log.
 
 ### `wt perf [--json]`
 
-One-shot perf snapshot framed as **wt-downstream vs the rest of the machine** — the headless form of the TUI's [`P` overlay](tui.md#perf-overlay-p): verdict numbers, per-category and per-worktree-session breakdowns, the heaviest processes on both sides, and any leaked headless wt instances. The default output is the same plain-text report the overlay's `i` key sends, written for handing to an agent ("is this load reasonable, and if not, whose is it?"); `--json` emits the raw `PerfSnapshot` instead. Same accuracy caveats as the overlay: `%CPU` is `ps`'s lifetime decaying average, not a profile.
+One-shot perf snapshot framed as **wt-downstream vs the rest of the machine** — the headless form of the TUI's [`P` overlay](tui.md#perf-overlay-p): verdict numbers, per-category and per-worktree-session breakdowns, the heaviest processes on both sides, and any leaked headless wt instances. The default output is the same plain-text report the overlay's `i` key sends, written for handing to an agent ("is this load reasonable, and if not, whose is it?"); `--json` emits the raw `PerfSnapshot` instead. On macOS, `ps` `%CPU` is a decaying average over up to one minute, not an instantaneous profile.
 
 Unlike the overlay (where the TUI process itself anchors the tree), the CLI also roots at any live wt instance it finds in the process table, so the running TUI counts as "us" rather than showing up as an outsider.
+
+Downstream means process ancestry, not task ownership. An agent's tools can be
+launched by an external daemon and appear outside wt. Only the six outsiders
+with the highest sampled CPU are retained, including in JSON; a slow check
+with low CPU can be absent. Recheck PID, working directory, command, elapsed
+time, and accumulated CPU time before claiming that checks still overlap.
+Process memory is RSS, which omits compressed and swapped pages; it is not
+the process's physical footprint. Neither the aggregate memory number nor
+cumulative swap counters establish current thrashing. Use interval samples
+and keep observations separate from explanations.
+
+When checks overlap, confirm which owned runs are still active before starting
+a replacement. For suspected contention, compare a single owned run on unchanged
+inputs, recording wall time, CPU time, diagnostics, and host load. Investigate a
+timeout without a source diagnostic before attributing it to a code regression.
+If the compiler offers concurrency or memory controls, compare a command-scoped trial on the same
+inputs before recommending limits; one slow run does not justify fleet-wide
+defaults or stopping another task.
 
 ### `wt base <slug>` / `wt base set <slug> <ref>` / `wt base clear <slug>`
 

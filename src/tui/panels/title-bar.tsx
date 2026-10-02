@@ -4,15 +4,15 @@
  *
  * Extracted from App for a load-bearing reason, not tidiness: this is
  * the only place that watches the global in-flight query count, and
- * `useIsFetching()` re-renders its component on EVERY fetch start and
+ * `useFetchingCount()` re-renders its component on EVERY fetch start and
  * finish anywhere in the cache. Living in App, that meant the entire
  * tree re-rendered dozens of times a second during refresh waves —
  * precisely when the board is busiest. Here the churn is contained to
  * this one-row component (and the wave it animates). Don't move
- * `useIsFetching` (or any other per-fetch observer) back up into App.
+ * the fetch counter (or any other per-fetch observer) back up into App.
  */
 import { memo } from "react";
-import { useIsFetching } from "@tanstack/react-query";
+import { useFetchingCount } from "../hooks/useFetchingCount.ts";
 
 import { config } from "../../core/config.ts";
 import type { HarnessId } from "../../core/harness/index.ts";
@@ -48,7 +48,7 @@ export const TitleBar = memo(function TitleBar({
   // Using the per-row aggregate alone made the indicator flash briefly
   // at the tail of a refresh (after `git fetch origin` resolved) instead
   // of lighting up for the whole window.
-  const fetchingCount = useIsFetching();
+  const fetchingCount = useFetchingCount();
   const loadingNote = isLoading ? " · loading..." : "";
   const archivedNote = archivedCount > 0 ? ` · ${archivedCount} archived` : "";
   const titleBar = ` wt · ${activeCount} worktree${activeCount === 1 ? "" : "s"}${archivedNote}${loadingNote} `;

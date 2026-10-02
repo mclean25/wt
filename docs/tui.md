@@ -194,17 +194,18 @@ The same snapshot is available headless as [`wt perf`](cli.md#wt-perf---json)
 report, so an agent outside the TUI can be handed one command instead
 of a screenshot.
 
-Two accuracy notes. CPU percentages come from `ps` `%CPU`, which is a
-**lifetime decaying average, not an instantaneous sample** — a process
-showing 130% may be idle right now. Read it as sustained pressure; the
+Two accuracy notes. On macOS, `ps` `%CPU` is a **decaying average over up
+to one minute, not an instantaneous sample**. A process showing 130%
+may be idle right now. Read it as recent pressure; the
 overlay is not a profiler. Memory "used" is computed from `vm_stat` as
 active + wired + compressor pages (Activity Monitor's definition) rather
 than `os.freemem()`, which counts only genuinely free pages and so reads
 ~90% used on any machine that's been up a while.
 
 Unrelated but adjacent: `WT_PERF=1 bun src/main.ts` arms an event-loop
-lag probe that logs whenever wt's own render thread blocks. That's the
-tool for "j/k feels laggy"; this overlay is the tool for "the whole
+lag probe that logs delayed event-loop scheduling, including synchronous
+work and OS descheduling. That's the tool for "j/k feels laggy"; this
+overlay is the tool for "the whole
 machine feels slow".
 
 ### Error overlay

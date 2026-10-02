@@ -496,6 +496,18 @@ export async function runOptimisticMutation<TData, E = unknown>(
   }
 }
 
+/** Creation changes inventory, persisted placement, and the created row only. */
+export const refreshCreatedWorktree = Effect.fn("refreshCreatedWorktree")(
+  function* (qc: import("@tanstack/react-query").QueryClient, slug: string) {
+    yield* Effect.all(
+      [qk.worktrees(), qk.wtState(), qk.wt(slug).all()].map((queryKey) =>
+        io.promise("refresh created worktree", () => qc.invalidateQueries({ queryKey })),
+      ),
+      { concurrency: "unbounded", discard: true },
+    );
+  },
+);
+
 /** Imperative helpers that wrap the raw QueryClient for common ops. */
 export function useWtActions() {
   const qc = useQueryClient();
@@ -626,6 +638,14 @@ export function useWtActions() {
     /** Invalidate everything for a single worktree (useful after an action). */
     invalidateWorktree(slug: string): Promise<void> {
       return Effect.runPromise(invalidate({ queryKey: qk.wt(slug).all() }));
+    },
+    /**
+     * The create already fetched origin. Refresh its row's mid-install
+     * answers and membership without repeating that fetch or probing every
+     * unchanged checkout. The GitHub source rekeys from the new branch list.
+     */
+    refreshAfterCreation(slug: string): Promise<void> {
+      return Effect.runPromise(refreshCreatedWorktree(qc, slug));
     },
     /**
      * Post-removal refresh — deliberately NOT `refreshAll`.

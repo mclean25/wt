@@ -10,8 +10,8 @@
  *
  * ## The %CPU caveat
  *
- * `ps` reports a *decaying average* over the process's lifetime, not an
- * instantaneous sample. A long-lived process showing 130% may be idle
+ * On macOS, `ps` reports a *decaying average* over up to one minute,
+ * not an instantaneous sample. A process showing 130% may be idle
  * right now, and a 2-second-old one is barely averaged at all. That is
  * acceptable (arguably preferable) for "is this load reasonable?", which
  * is a question about sustained pressure rather than this instant — but
@@ -70,7 +70,7 @@ export const CATEGORY_LABEL: Record<PerfCategory, string> = {
 export type PerfProc = {
   pid: number;
   ppid: number;
-  /** ps %CPU — a lifetime decaying average, not instantaneous. */
+  /** ps %CPU; on macOS, a decaying average over up to one minute. */
   cpu: number;
   rssMb: number;
   /** ps ELAPSED, e.g. `02-20:13:52`. */
@@ -673,9 +673,9 @@ export function formatPerfReport(s: PerfSnapshot): string {
       `${pct(s.wtCpu)} of that is wt-downstream ` +
       `(${s.wtProcCount} procs, ${gb(s.wtRssMb)})`,
     "",
-    "NOTE: percentages come from `ps` %CPU, a lifetime decaying average " +
-      "rather than an instantaneous sample. Treat them as sustained " +
-      "pressure, not a profile.",
+    "NOTE: `ps` %CPU is not instantaneous; on macOS it is a decaying " +
+      "average over up to one minute. Process memory is RSS, not footprint. " +
+      "This snapshot does not measure compression or swap activity.",
     "",
     "## wt-downstream by category",
   );
@@ -725,11 +725,12 @@ export function buildPerfInvestigationPrompt(s: PerfSnapshot): string {
     "overlay. Work out whether the load is reasonable for what's actually",
     "running, and if it isn't, what to do about it.",
     "",
-    "Check the wt-downstream share against the machine total first — if the",
-    "heavy processes are outside wt, say so plainly rather than hunting for a",
-    "wt/agent explanation. Verify anything load-bearing with your own tool",
-    "calls instead of trusting these numbers alone; %CPU here is a decaying",
-    "average.",
+    "Compare wt-downstream load with the machine total. Downstream describes",
+    "process ancestry, not task ownership: tools launched by an external agent",
+    "daemon may appear outside wt. Recheck current PIDs, working directories,",
+    "elapsed and CPU time before attributing overlapping checks. Low RSS or",
+    "cumulative swap counters alone do not establish memory pressure or its",
+    "cause; use interval measurements. CPU percentages are averages.",
     "",
     "Do not kill any processes without asking me first.",
     "",

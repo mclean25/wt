@@ -134,6 +134,7 @@ export function App({ onExit }: Props) {
     fetchMe,
     clearAll,
     invalidateWorktree,
+    refreshAfterCreation,
     refreshAfterRemoval,
     refreshStack,
     refreshAiSummary,
@@ -824,7 +825,7 @@ export function App({ onExit }: Props) {
       if (creation) setCreatedSelection(`remote:${remoteEntryKey(creation)}`);
     },
     remoteWorktrees: remoteRows,
-    refreshAll,
+    refreshAfterCreation,
     refreshRemoteWorktrees: async () => {
       const result = await remoteWorktreeList.refetch();
       return result.data ?? [];

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +53,77 @@ const processIsAlive = (pid: number): boolean => {
     return false;
   }
 };
+
+describe("run spawn admission", () => {
+  test("leaves an event-loop turn between launches in a query burst", async () => {
+    let turn = 0;
+    let pulse: ReturnType<typeof setImmediate>;
+    const tick = () => { turn++; pulse = setImmediate(tick); };
+    pulse = setImmediate(tick);
+    const turns: number[] = [];
+    const spawn = Bun.spawn;
+    const spy = spyOn(Bun, "spawn").mockImplementation(((...args: Parameters<typeof Bun.spawn>) => {
+      turns.push(turn);
+      return Reflect.apply(spawn, Bun, args);
+    }) as typeof Bun.spawn);
+    try {
+      const results = await Effect.runPromise(Effect.forEach(
+        Array.from({ length: 16 }),
+        () => run(["true"], { cwd: "/" }),
+        { concurrency: "unbounded" },
+      ));
+      expect(results.every((result) => result.exitCode === 0)).toBe(true);
+      expect(turns).toHaveLength(16);
+      expect(turns[0]).toBeGreaterThan(0);
+      for (let index = 1; index < turns.length; index++) {
+        expect(turns[index]!).toBeGreaterThan(turns[index - 1]!);
+      }
+    } finally {
+      clearImmediate(pulse);
+      spy.mockRestore();
+    }
+  });
+
+  test("cancels launch admission before allocation and preserves all child permits", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wt-proc-admission-cancel-"));
+    const spawn = spyOn(Bun, "spawn");
+    try {
+      // These reach either the pending launch turn, its admission queue, or
+      // the eight-child queue. None may allocate a child after interruption.
+      const native = Array.from({ length: 16 }, () =>
+        Effect.runFork(run(["sleep", "30"], { cwd: "/" })),
+      );
+      await Effect.runPromise(Effect.forEach(native, Fiber.interrupt, { concurrency: "unbounded" }));
+      expect(spawn).not.toHaveBeenCalled();
+
+      const controller = new AbortController();
+      const external = Effect.runPromiseExit(run(["sleep", "30"], {
+        cwd: "/",
+        signal: controller.signal,
+      }));
+      controller.abort();
+      const exit = await external;
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(Exit.isFailure(exit) ? Cause.squash(exit.cause) : null).toBeInstanceOf(ProcInterruptedError);
+      expect(spawn).not.toHaveBeenCalled();
+
+      await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+        const markers = Array.from({ length: 8 }, (_, index) => join(dir, `holder-${index}`));
+        yield* Effect.forEach(markers, (marker) => Effect.forkScoped(holderEffect(marker)), {
+          concurrency: "unbounded",
+        });
+        yield* waitUntilEffect(() => markers.every(existsSync), "all child permits after admission cancellation");
+      })));
+      expect(spawn).toHaveBeenCalledTimes(8);
+      for (const marker of Array.from({ length: 8 }, (_, index) => join(dir, `holder-${index}`))) {
+        expect(processIsAlive(Number(readFileSync(marker, "utf8")))).toBe(false);
+      }
+    } finally {
+      spawn.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("run interruption", () => {
   test("removes a cancelled queued run before it can spawn", async () => {

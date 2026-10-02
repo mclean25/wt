@@ -1,12 +1,11 @@
 import {
   closeSync,
-  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, normalize } from "node:path";
+import { join } from "node:path";
 
 import { clearArchived } from "./archive.ts";
 import { clearClaudeNames } from "./harness/claude/names.ts";
@@ -28,6 +27,7 @@ import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { clearDevServerFiles } from "./dev-server.ts";
 import { resolveInstallCommand } from "./install.ts";
+import { copyWorktreeFiles } from "./lifecycle-copy.ts";
 import {
   branchExists,
   git,
@@ -468,37 +468,11 @@ const createWorktreeProgram = Effect.fnUntraced(function* (
     }
 
     handle.phase("copying env files");
-    for (const name of config.lifecycle.envFilesToCopy) {
-      const src = join(config.paths.mainClone, name);
-      const dst = join(path, name);
-      if (existsSync(src) && !existsSync(dst)) {
-        copyFileSync(src, dst);
-        opts.onLog?.(`copied ${name}`);
-      }
-    }
+    yield* copyWorktreeFiles(config.paths.mainClone, path, config.lifecycle.envFilesToCopy, [], opts.onLog);
 
     if (config.lifecycle.copyGlobs.length > 0) {
       handle.phase("copying configured files");
-      const copied = new Set<string>();
-      for (const pattern of config.lifecycle.copyGlobs) {
-        const glob = new Bun.Glob(pattern);
-        for (const relativePath of glob.scanSync({
-          cwd: config.paths.mainClone,
-          dot: true,
-          onlyFiles: true,
-        })) {
-          const normalizedPath = normalize(relativePath);
-          if (/^\.git(?:[\\/]|$)/.test(normalizedPath)) continue;
-          if (copied.has(normalizedPath)) continue;
-          copied.add(normalizedPath);
-          const src = join(config.paths.mainClone, normalizedPath);
-          const dst = join(path, normalizedPath);
-          if (existsSync(dst)) continue;
-          mkdirSync(dirname(dst), { recursive: true });
-          copyFileSync(src, dst);
-          opts.onLog?.(`copied ${normalizedPath}`);
-        }
-      }
+      yield* copyWorktreeFiles(config.paths.mainClone, path, [], config.lifecycle.copyGlobs, opts.onLog);
     }
 
     // Stage pinning only means something with an SST integration —
