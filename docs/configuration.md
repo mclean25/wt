@@ -9,7 +9,9 @@
 It then searches from the current directory upward for the nearest `.wt.toml` and recursively merges that repository config over the user config. This lets one user config hold personal defaults while each repository supplies its own clone, worktree root, trunk branch, integrations, actions, and other overrides. Run `wt` from within the repository you want to manage.
 
 `wt init [directory]` creates that repository file without requiring an
-already-valid wt config. It derives a readable repository id from the config
+already-valid wt config. Pass `--primary codex`, `--primary opencode`, or
+`--primary claude` to set a repository coding-agent default; omitting the flag
+preserves inheritance from the user config. It derives a readable repository id from the config
 directory (`~/dev/cz/cozee-dev` → `dev-cz-cozee-dev`). That id partitions the
 global durable state database and names the default cache directory and tmux
 socket, so existing and future worktrees in different repositories cannot
