@@ -78,18 +78,18 @@ test("long picker labels keep one row and selected item remains visible after re
 });
 
 test("reviewer selection and harness choice remain on one line in short terminals", async () => {
-  const nodes = [
-    <MultiPickerModal title="reviewers" items={[{ key: "reviewer", label: longName }]} selectedIndex={0} checked={new Set(["reviewer"])} toggleKey="v" />,
-    <HarnessPickerModal slug={longName} selectedIndex={2} />,
+  const cases = [
+    { kind: "reviewer", node: <MultiPickerModal title="reviewers" items={[{ key: "reviewer", label: longName }]} selectedIndex={0} checked={new Set(["reviewer"])} toggleKey="v" /> },
+    { kind: "harness", node: <HarnessPickerModal slug={longName} selectedIndex={2} /> },
   ];
-  for (const node of nodes) {
+  for (const { kind, node } of cases) {
     const setup = await render(node, 80, 12);
     try {
       const frame = setup.captureCharFrame();
       expect(frame).toContain("▸");
       expect(frame).toContain("esc / q cancel");
       expectClosedBorder(frame);
-      if (node.type === HarnessPickerModal) expect(frame).toContain("OpenCode");
+      if (kind === "harness") expect(frame).toContain("OpenCode");
       else expect(setup.renderer.root.findDescendantById("multi:reviewer")?.height).toBe(1);
     } finally { act(() => setup.renderer.destroy()); }
   }
