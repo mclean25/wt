@@ -438,11 +438,14 @@ function readRolloutMeta(path: string): RolloutMetaRaw | null {
     if (typeof id !== "string" || typeof cwd !== "string") return null;
     // Match `codex resume`'s default interactive-session scope. Codex
     // 0.153 started preserving wt's launch originator (`wt`) on the root
-    // conversation; older versions wrote `codex-tui`. Guardian/subagent
-    // rollouts can use either originator, so `thread_source: user` remains
-    // the discriminator that keeps them out of the picker.
+    // conversation; older versions wrote `codex-tui`. Threads created by
+    // the shared desktop server can retain `Codex Desktop` when resumed
+    // in tmux. Guardian/subagent rollouts can share these originators, so
+    // `thread_source: user` remains the discriminator keeping them out.
     if (
-      (obj.payload?.originator !== "codex-tui" && obj.payload?.originator !== "wt") ||
+      (obj.payload?.originator !== "codex-tui" &&
+        obj.payload?.originator !== "wt" &&
+        obj.payload?.originator !== "Codex Desktop") ||
       obj.payload?.thread_source !== "user"
     ) {
       return null;

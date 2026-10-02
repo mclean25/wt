@@ -84,7 +84,7 @@ describe("Codex main/manager ownership", () => {
   });
 });
 
-test("wt-originated root sessions remain discoverable while child sessions stay hidden", () => {
+test.each(["wt", "Codex Desktop"])("%s root sessions remain discoverable while child sessions stay hidden", (originator) => {
   const { root, cwd } = fixture();
   const day = join(root, "2026", "09", "05");
   const write = (id: string, threadSource: string) => {
@@ -93,7 +93,8 @@ test("wt-originated root sessions remain discoverable while child sessions stay 
       payload: {
         id,
         cwd,
-        originator: "wt",
+        originator,
+        source: originator === "Codex Desktop" ? "vscode" : "cli",
         thread_source: threadSource,
       },
     })}\n${message("user", "Do the work.")}${message("assistant", "Ready.")}`);

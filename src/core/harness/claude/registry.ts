@@ -181,8 +181,9 @@ const WATCH_DEBOUNCE_MS = 100;
  * fs.watch can throw ENOENT if the dir doesn't exist yet (fresh
  * machine, never ran claude). FSEvents can also emit a runtime `error`
  * after a successful start (dir replaced, perms changed). Both paths
- * log and fall through to the polling backstop on the query rather
- * than crashing the TUI.
+ * fall through to the polling backstop on the query rather than crashing
+ * the TUI. A missing optional registry is normal on Codex-only machines;
+ * only unexpected failures warrant a warning.
  */
 export function watchRegistry(onChange: () => void): () => void {
   let debounceFiber: Fiber.Fiber<void, never> | null = null;
@@ -216,7 +217,9 @@ export function watchRegistry(onChange: () => void): () => void {
       }
     };
   } catch (err) {
-    log.warn("fs.watch failed", { err: String(err), dir: REGISTRY_DIR });
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      log.warn("fs.watch failed", { err: String(err), dir: REGISTRY_DIR });
+    }
     return () => {};
   }
 }
