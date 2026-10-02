@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Cause, Effect, Exit } from "effect";
 
 import { inspectorSocketPath } from "../harness/claude/inject.ts";
-import { codexPaneOptionArgs } from "./attach.ts";
+import { attachOrCreate, AttachOperationError, codexPaneOptionArgs, sessionsDir } from "./attach.ts";
+import * as tmuxConfig from "./config.ts";
 import { wrapInnerArgs } from "./inner-process.ts";
+import { SESSION_SWITCH_EXIT_CODE } from "./naming.ts";
 
 describe("per-harness pane options", () => {
   test("clears the legacy Codex cursor override on attach", () => {
@@ -48,6 +51,154 @@ async function runWrapped(kind: "shell" | "claude", message: string) {
   ]);
   return { exitCode, stderr, stderrPath };
 }
+
+/** Exercise the real attach flow, replacing every tmux spawn with a harmless
+ * short-lived shell. No real server, terminal, or harness is contacted. */
+async function runAttachScenario(opts: {
+  changed?: boolean;
+  inventory: "unknown" | "empty" | "live";
+  clientCode?: number;
+  clientStderr?: string;
+  innerStderr?: string;
+  spawnError?: Error;
+}) {
+  const dir = mkdtempSync(join(tmpdir(), "wt-attach-result-"));
+  tempDirs.push(dir);
+  const slug = dir.split("/").at(-1)!;
+  const name = `${slug}-diff`;
+  const stderrPath = join(sessionsDir(), `${name}.err`);
+  const calls: string[][] = [];
+  const spawn = Bun.spawn;
+  const configSpy = spyOn(tmuxConfig, "writeConfig").mockReturnValue({
+    path: join(dir, "tmux.conf"),
+    changed: opts.changed ?? false,
+  });
+  const spawnSpy = spyOn(Bun, "spawn").mockImplementation(((argv: string[]) => {
+    if (argv[0] !== "tmux") throw new Error(`unexpected attach subprocess: ${argv[0]}`);
+    calls.push(argv);
+    let code = 0;
+    let stdout = "";
+    let stderr = "";
+    if (argv.includes("list-sessions")) {
+      if (opts.inventory === "unknown") {
+        code = 1;
+        stderr = "error connecting to tmux socket (Permission denied)";
+      } else if (opts.inventory === "live") {
+        stdout = `${name}\n`;
+      }
+    } else if (argv.includes("new-session")) {
+      if (opts.spawnError) throw opts.spawnError;
+      code = opts.clientCode ?? 0;
+      stderr = opts.clientStderr ?? "";
+      if (opts.innerStderr !== undefined) writeFileSync(stderrPath, opts.innerStderr);
+    }
+    return spawn([
+      "sh", "-c", 'printf "%s" "$1"; printf "%s" "$2" >&2; exit "$3"',
+      "_tmux_stub", stdout, stderr, String(code),
+    ], { cwd: dir, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  }) as typeof Bun.spawn);
+  try {
+    const exit = await Effect.runPromiseExit(attachOrCreate({
+      slug,
+      cwd: dir,
+      kind: "diff",
+      base: "main",
+    }));
+    return { calls, exit };
+  } finally {
+    spawnSpy.mockRestore();
+    configSpy.mockRestore();
+    rmSync(stderrPath, { force: true });
+  }
+}
+
+describe("tmux attach config refresh", () => {
+  test("an unknown inventory preserves the server and uses source-file", async () => {
+    const { calls } = await runAttachScenario({ changed: true, inventory: "unknown" });
+    expect(calls.some((args) => args.includes("kill-server"))).toBe(false);
+    expect(calls.some((args) => args.includes("source-file"))).toBe(true);
+  });
+
+  test("a confirmed empty inventory permits an idle server restart", async () => {
+    const { calls } = await runAttachScenario({ changed: true, inventory: "empty" });
+    expect(calls.some((args) => args.includes("kill-server"))).toBe(true);
+    expect(calls.some((args) => args.includes("source-file"))).toBe(false);
+  });
+
+  test("live sessions preserve the server and use source-file", async () => {
+    const { calls } = await runAttachScenario({ changed: true, inventory: "live" });
+    expect(calls.some((args) => args.includes("kill-server"))).toBe(false);
+    expect(calls.some((args) => args.includes("source-file"))).toBe(true);
+  });
+});
+
+describe("tmux attach result", () => {
+  test("a failed client reports its error even when the session survives", async () => {
+    const { exit } = await runAttachScenario({
+      inventory: "live", clientCode: 1,
+      clientStderr: "\x1b[31mopen terminal failed: not a terminal\x1b[0m\n",
+    });
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({
+      kind: "spawn-failed",
+      reason: "tmux attach failed (client exit 1): open terminal failed: not a terminal",
+    });
+  });
+
+  test("a failed client without stderr still reports its status", async () => {
+    const { exit } = await runAttachScenario({ inventory: "empty", clientCode: 1 });
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({
+      kind: "spawn-failed", reason: "tmux attach failed (client exit 1)",
+    });
+  });
+
+  test("a successful client with a live session remains a normal detach", async () => {
+    const { exit } = await runAttachScenario({ inventory: "live" });
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ kind: "detached" });
+  });
+
+  test("private shortcut statuses still request session switches", async () => {
+    for (const target of ["shell", "diff", "harness"] as const) {
+      const { exit } = await runAttachScenario({
+        inventory: "live", clientCode: SESSION_SWITCH_EXIT_CODE[target],
+      });
+      expect(Exit.isSuccess(exit) && exit.value).toEqual({ kind: "switch", target });
+    }
+  });
+
+  test("failed post-attach inventory is not reported as an inner program exit", async () => {
+    const { exit } = await runAttachScenario({ inventory: "unknown" });
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({
+      kind: "spawn-failed",
+      reason: "tmux session state could not be checked after attach; the session may still be running",
+    });
+  });
+
+  test("a zero tmux status cannot turn fatal inner stderr into a successful child exit", async () => {
+    const innerStderr = "timed out probing app-server control socket: deadline has elapsed";
+    const { exit } = await runAttachScenario({ inventory: "empty", innerStderr });
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({
+      kind: "exited", code: null, stderr: innerStderr,
+    });
+  });
+
+  test("an ended session without stderr still has no known child exit code", async () => {
+    const { exit } = await runAttachScenario({ inventory: "empty" });
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({
+      kind: "exited", code: null, stderr: null,
+    });
+  });
+
+  test("a spawn exception keeps its original cause and actionable message", async () => {
+    const spawnError = new Error("posix_spawn: Resource temporarily unavailable");
+    const { exit } = await runAttachScenario({ inventory: "live", spawnError });
+    const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : null;
+    expect(error).toBeInstanceOf(AttachOperationError);
+    expect((error as AttachOperationError).cause).toBe(spawnError);
+    expect((error as AttachOperationError).message).toBe(
+      "tmux attach spawn failed: posix_spawn: Resource temporarily unavailable",
+    );
+  });
+});
 
 describe("tmux inner-process browser identity", () => {
   test("every session can invoke this checkout's wt launcher", async () => {

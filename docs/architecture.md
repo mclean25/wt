@@ -194,6 +194,15 @@ allowing users to pin every terminal setting while following wt's session
 navigation and observed-palette behavior. An omitted value follows defaults;
 an empty string removes the preamble. Both startup and interactive config
 reload use the same renderer.
+Config changes restart the private server only after a session probe confirms
+it is empty. A failed probe preserves the server and uses `source-file`, just
+like a known live inventory. After an interactive attach, a nonzero tmux
+client status reports an attach failure with its stderr even if the session
+survives; the private F-key switch statuses keep their navigation meaning.
+An ended session has no known inner-program exit code because tmux does not
+propagate it. Captured harness stderr is retained separately. The TUI reports
+the attach outcome before refreshing session discovery so a slow or failed
+harness query cannot hide the error that returned the user to wt.
 The private server declares `sync`
 for xterm-family, Alacritty, and nested tmux clients so physical redraws are
 buffered by supporting terminals. tmux accepting synchronized application

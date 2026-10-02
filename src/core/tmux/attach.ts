@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Data, Effect } from "effect";
 
 import { config } from "../config.ts";
+import { causeMessage } from "../errors.ts";
 import { getHarness, type Harness, type HarnessId } from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
 import { run, terminateSubprocess } from "../proc.ts";
@@ -25,11 +26,12 @@ import {
   shQuote,
   TMUX_SOCKET,
 } from "./naming.ts";
-import { listAllSessionsRaw } from "./process.ts";
+import { listAllSessionsRaw, probeSessionNames } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
 export type AttachResult =
+  // tmux does not report its inner program's exit status; null is unknown.
   | { kind: "exited"; code: number | null; stderr: string | null }
   | { kind: "detached" }
   | { kind: "switch"; target: SessionShortcut }
@@ -46,12 +48,14 @@ export class AttachOperationError extends Data.TaggedError("AttachOperationError
 function runAttachedClient(
   args: string[],
   options: Parameters<typeof Bun.spawn>[1],
-  onStderr: (text: string) => void,
-): Effect.Effect<number, AttachOperationError> {
+): Effect.Effect<{ code: number; stderr: string }, AttachOperationError> {
   return Effect.acquireUseRelease(
     Effect.try({
       try: () => Bun.spawn(args, options),
-      catch: (cause) => new AttachOperationError({ message: "tmux attach spawn failed", cause }),
+      catch: (cause) => new AttachOperationError({
+        message: `tmux attach spawn failed: ${causeMessage(cause)}`,
+        cause,
+      }),
     }),
     (proc) => Effect.tryPromise({
       try: async () => {
@@ -60,10 +64,12 @@ function runAttachedClient(
           proc.exited,
           stream ? new Response(stream).text() : Promise.resolve(""),
         ]);
-        if (stderr.trim()) onStderr(stderr);
-        return code;
+        return { code, stderr };
       },
-      catch: (cause) => new AttachOperationError({ message: "tmux attach wait failed", cause }),
+      catch: (cause) => new AttachOperationError({
+        message: `tmux attach wait failed: ${causeMessage(cause)}`,
+        cause,
+      }),
     }),
     (proc) => terminateSubprocess(proc),
   );
@@ -311,11 +317,12 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
     // session, a detached harness still working), killServer()
     // here would cross-kill every one of them just because THIS
     // attach's config render happened to differ. Only kill on the
-    // empty-server path; otherwise apply what tmux can hot-reload via
+    // confirmed empty-server path (a failed probe is unknown); otherwise
+    // apply what tmux can hot-reload via
     // `source-file` and accept that server-start-only settings (e.g.
     // `default-terminal`) lag until the next organic restart.
-    const liveSessions = yield* listAllSessionsRaw();
-    if (liveSessions.size === 0) {
+    const liveSessions = yield* probeSessionNames();
+    if (liveSessions !== null && liveSessions.size === 0) {
       log.info("config changed, killing server before attach (no live sessions)", {
         slug,
         kind,
@@ -344,8 +351,8 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
         "tmux config changed; applied what's hot-reloadable — full effect after all sessions close",
       );
       log.info(
-        "config changed with live sessions present; applied via source-file, full config takes effect at next server restart",
-        { slug, kind, liveSessions: liveSessions.size },
+        "config changed without a confirmed empty server; applied via source-file, full config takes effect at next server restart",
+        { slug, kind, liveSessions: liveSessions?.size ?? null },
       );
     }
   }
@@ -499,7 +506,7 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
               resumeSessionId,
             ]),
       ];
-  const code = yield* runAttachedClient(clientArgs, {
+  const client = yield* runAttachedClient(clientArgs, {
     cwd: tmuxClientCwd(),
     stdin: "inherit",
     stdout: "inherit",
@@ -510,19 +517,32 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
       COLORTERM: process.env.COLORTERM ?? "truecolor",
       FORCE_COLOR: process.env.FORCE_COLOR ?? "3",
     },
-  }, (text) => {
-      const trimmed = text.trim();
-      if (trimmed) log.debug("tmux stderr", { slug, kind, text: trimmed });
   });
+  const clientStderr = scrubStderr(client.stderr);
+  if (clientStderr) log.debug("tmux stderr", { slug, kind, text: clientStderr });
   // tmux client exits with 0 on detach AND on session-end (inner
-  // program exit). Distinguish by re-querying the raw set: if the
+  // program exit), without carrying the inner program's status. Query
+  // liveness without collapsing a failed probe to empty: if the
   // session still exists, the user detached; if not, the inner program
   // exited and tmux cleaned up.
-  const sessions = yield* listAllSessionsRaw();
-  const stillRunning = sessions.has(name);
-  if (stillRunning) {
-    const target = sessionSwitchTarget(code);
+  const sessions = yield* probeSessionNames();
+  if (sessions?.has(name)) {
+    const target = sessionSwitchTarget(client.code);
     if (target) return { kind: "switch", target } as AttachResult;
+  }
+  if (client.code !== 0) {
+    return {
+      kind: "spawn-failed",
+      reason: `tmux attach failed (client exit ${client.code})${clientStderr ? `: ${clientStderr}` : ""}`,
+    } as AttachResult;
+  }
+  if (sessions === null) {
+    return {
+      kind: "spawn-failed",
+      reason: `tmux session state could not be checked after attach; the session may still be running${clientStderr ? `: ${clientStderr}` : ""}`,
+    } as AttachResult;
+  }
+  if (sessions.has(name)) {
     return { kind: "detached" } as AttachResult;
   }
   // A capture-enabled inner program died. Read whatever it wrote so the
@@ -533,15 +553,15 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
   let stderrText: string | null = null;
   if (capturesInnerStderr(kind)) {
     // A missing `.err` file (a session created before the capture wrapper
-    // existed) is a clean exit with nothing to report, not an attach failure.
+    // existed) leaves the inner program's outcome unknown.
     const raw = yield* Effect.try(() => readFileSync(stderrPath, "utf8")).pipe(
       Effect.orElseSucceed((): string | null => null),
     );
     stderrText = raw === null ? null : scrubStderr(raw);
   }
-  return { kind: "exited", code, stderr: stderrText } as AttachResult;
+  return { kind: "exited", code: null, stderr: stderrText } as AttachResult;
 }, Effect.mapError((cause) =>
    cause instanceof AttachOperationError
      ? cause
-     : new AttachOperationError({ message: "tmux attach failed", cause }),
+     : new AttachOperationError({ message: `tmux attach failed: ${causeMessage(cause)}`, cause }),
  ));

@@ -194,17 +194,8 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
           freshSlot: opts.freshSlot,
           diffBase,
         });
-        // Refresh both together so the picker doesn't see a transient
-        // state where tmux says "slot dead" but discovery still has the
-        // session marked live (or vice versa) and the synthetic-row
-        // logic in useHarnessSessions decides incorrectly.
-        yield* Effect.all(
-          [
-            io.promise("refresh tmux sessions", refreshTmuxSessions),
-            io.promise("refresh harness sessions", () => refreshHarnessSessions(slug)),
-          ],
-          { concurrency: 2 },
-        );
+        // Report the known outcome before discovery: an unhealthy harness
+        // can delay or fail that refresh, hiding the startup error itself.
         if (result.kind === "spawn-failed") {
           sessionLog.event.err(`${harness.label} failed to start: ${result.reason}`);
           toast(`${harness.label} failed: ${result.reason}`, theme.err, 3000);
@@ -216,6 +207,17 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
           );
           if (result.stderr) sessionLog.event.err(result.stderr);
         }
+        // Refresh both together so the picker doesn't see a transient
+        // state where tmux says "slot dead" but discovery still has the
+        // session marked live (or vice versa) and the synthetic-row
+        // logic in useHarnessSessions decides incorrectly.
+        yield* Effect.all(
+          [
+            io.promise("refresh tmux sessions", refreshTmuxSessions),
+            io.promise("refresh harness sessions", () => refreshHarnessSessions(slug)),
+          ],
+          { concurrency: 2 },
+        );
       }),
       (error) => reportActionError(label, error),
     );
@@ -272,9 +274,6 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
           freshSlot,
           diffBase: `origin/${config.branch.base}`,
         });
-        yield* io.promise("refresh tmux sessions", refreshTmuxSessions).pipe(
-          Effect.catch(() => Effect.void),
-        );
         if (result.kind === "spawn-failed") {
           slotLog.event.err(`${harness.label} failed to start: ${result.reason}`);
           toast(`${harness.label} failed: ${result.reason}`, theme.err, 3000);
@@ -284,6 +283,9 @@ export function makeSessionFlows(ctx: SessionFlowsCtx) {
           slotLog.event.info(`${harness.label} exited (${result.code ?? "?"})`);
           if (result.stderr) slotLog.event.err(result.stderr);
         }
+        yield* io.promise("refresh tmux sessions", refreshTmuxSessions).pipe(
+          Effect.catch(() => Effect.void),
+        );
       }),
       (error) => reportActionError(label, error),
     );
