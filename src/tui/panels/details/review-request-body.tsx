@@ -9,6 +9,7 @@ import { NF } from "../../icons.ts";
 import { checkBadge, reviewBadge } from "../../badges.ts";
 import { theme } from "../../theme.ts";
 import { RRRow } from "./row-cell.tsx";
+import { detailPaneTitle } from "./title.tsx";
 
 /** Map GitHub's `reviewDecision` to a glyph + color + human label. */
 export function reviewDecisionBadge(
@@ -43,9 +44,11 @@ export function reviewDecisionBadge(
  */
 export function ReviewRequestBody({
   pr,
+  width,
   scrollRef,
 }: {
   pr: ReviewRequestPr;
+  width: number;
   scrollRef?: RefObject<ScrollBoxRenderable | null>;
 }) {
   const created = pr.createdAt ? Date.parse(pr.createdAt) : NaN;
@@ -69,7 +72,7 @@ export function ReviewRequestBody({
       border
       borderStyle="single"
       borderColor={theme.border}
-      title={` ${pr.repoNameWithOwner}#${pr.number} `}
+      title={detailPaneTitle(`${pr.repoNameWithOwner}#${pr.number}`, width)}
       titleAlignment="left"
       padding={1}
       flexDirection="column"
@@ -118,7 +121,7 @@ export function ReviewRequestBody({
       ) : null}
       {check || review ? (
         <RRRow label="status">
-          <text wrapMode="none">
+          <text wrapMode="word">
             {check ? (
               <span fg={check.fg}>{`${check.glyph}  ${pr.checks === "pass" ? "passing" : pr.checks === "fail" ? "failing" : "pending"}`}</span>
             ) : null}

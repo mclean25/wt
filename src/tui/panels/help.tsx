@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTerminalDimensions } from "@opentui/react";
 
 import { config } from "../../core/config.ts";
 import { getHarness } from "../../core/harness/index.ts";
@@ -7,10 +8,12 @@ import type { WorkState } from "../../core/work-status.ts";
 import { workStateColor, workStateGlyph } from "../badges.ts";
 import { STATE_DOT, STATE_FG } from "../claude-state.ts";
 import { NF } from "../icons.ts";
-import { Modal } from "../modal.tsx";
+import { Modal, modalContentWidth } from "../modal.tsx";
 import type { KeyHintPair } from "../key-hint.tsx";
 import { useOverlayScroll, WtScrollbox } from "../scrollbox.tsx";
-import { editSpans, type TextEdit } from "../text-edit.tsx";
+import type { TextEdit } from "../text-edit.tsx";
+import { TextInput } from "../text-input.tsx";
+import { wrapText } from "../text.ts";
 import { theme } from "../theme.ts";
 
 type LegendGlyph = ReactNode;
@@ -280,6 +283,7 @@ const KEY_BLOCKS: Block[] = [
       { key: "⏎", label: "confirm highlighted" },
       { key: "esc / q", label: "cancel" },
       { key: "1-9", label: "quick pick by row digit (actions use assigned keys, reviewers use space)" },
+      { key: "j/k · PgUp/Dn", label: "scroll long confirmations; Home/End jump to edges" },
     ],
   },
 ];
@@ -468,17 +472,18 @@ function countRows(blocks: Block[]): number {
 
 // ── Row renderers ──────────────────────────────────────────────────────
 
-function KeyRow({ keyText, label }: { keyText: string; label: string }) {
+function KeyRow({ keyText, label, width }: { keyText: string; label: string; width: number }) {
+  const keyWidth = Math.min(KEY_W, Math.max(1, Math.floor(width * 0.4)));
   return (
-    <box flexDirection="row">
-      <box width={KEY_W} flexShrink={0}>
-        <text fg={theme.accent} attributes={1} wrapMode="word">
-          {keyText}
+    <box flexDirection="row" flexShrink={0}>
+      <box width={keyWidth} flexShrink={0}>
+        <text fg={theme.accent} attributes={1} wrapMode="none">
+          {wrapText(keyText, Math.max(1, keyWidth - 1)).join("\n")}
         </text>
       </box>
       <box flexGrow={1} flexShrink={1}>
-        <text fg={theme.fg} wrapMode="word">
-          {label}
+        <text fg={theme.fg} wrapMode="none">
+          {wrapText(label, Math.max(1, width - keyWidth)).join("\n")}
         </text>
       </box>
     </box>
@@ -490,20 +495,22 @@ function GlyphRow({
   color,
   label,
   width,
+  rowWidth,
 }: {
   glyph: LegendGlyph;
   color: string;
   label: string;
   width: number;
+  rowWidth: number;
 }) {
   return (
-    <box flexDirection="row">
+    <box flexDirection="row" flexShrink={0}>
       <box width={width} flexShrink={0}>
         {typeof glyph === "string" ? <text fg={color}>{glyph}</text> : glyph}
       </box>
       <box flexGrow={1} flexShrink={1}>
-        <text fg={theme.fg} wrapMode="word">
-          {label}
+        <text fg={theme.fg} wrapMode="none">
+          {wrapText(label, Math.max(1, rowWidth - width)).join("\n")}
         </text>
       </box>
     </box>
@@ -511,15 +518,15 @@ function GlyphRow({
 }
 
 /** Render a block's rows as the bare list (no header). */
-function blockRows(block: Block): ReactNode[] {
+function blockRows(block: Block, rowWidth: number): ReactNode[] {
   if (block.kind === "keys") {
     return block.items.map((it) => (
-      <KeyRow key={it.key} keyText={it.key} label={it.label} />
+      <KeyRow key={it.key} keyText={it.key} label={it.label} width={rowWidth} />
     ));
   }
   const width = block.glyphWidth ?? 5;
   return block.items.map((it) => (
-    <GlyphRow key={it.label} glyph={it.glyph} color={it.color} label={it.label} width={width} />
+    <GlyphRow key={it.label} glyph={it.glyph} color={it.color} label={it.label} width={width} rowWidth={rowWidth} />
   ));
 }
 
@@ -547,25 +554,26 @@ function Grid({ rows }: { rows: ReactNode[] }) {
  *  and the empty tail of the line reads as a solid rectangle. */
 function SectionHeader({ title }: { title: string }) {
   return (
-    <box backgroundColor={theme.rowSelectedBg} paddingLeft={1} marginBottom={1}>
-      <text fg={theme.fgBright} attributes={1}>
+    <box backgroundColor={theme.rowSelectedBg} paddingLeft={1} marginBottom={1} flexShrink={0}>
+      <text fg={theme.fgBright} attributes={1} wrapMode="none" truncate>
         {title}
       </text>
     </box>
   );
 }
 
-function BlockView({ block }: { block: Block }) {
-  const rows = blockRows(block);
+function BlockView({ block, width }: { block: Block; width: number }) {
+  const grid = block.cols === 2 && width >= 68;
+  const rows = blockRows(block, grid ? Math.floor((width - 3) / 2) : width);
   return (
-    <box flexDirection="column" marginBottom={1}>
+    <box flexDirection="column" marginBottom={1} flexShrink={0}>
       <SectionHeader title={block.title} />
       {block.note ? (
-        <text fg={theme.fgDim} wrapMode="word">
-          {block.note}
+        <text fg={theme.fgDim} wrapMode="none" flexShrink={0}>
+          {wrapText(block.note, width).join("\n")}
         </text>
       ) : null}
-      {block.cols === 2 ? (
+      {grid ? (
         <Grid rows={rows} />
       ) : (
         <box flexDirection="column">{rows}</box>
@@ -587,6 +595,8 @@ export function HelpOverlay({
   // (the shared overlay keymap), not the focused-scrollbox built-in —
   // that's what keeps the step size uniform with every other pane.
   const scrollRef = useOverlayScroll();
+  const { width } = useTerminalDimensions();
+  const contentWidth = Math.max(1, modalContentWidth(width, { left: "6%", right: "6%" }) - 1);
   const q = query.value.trim().toLowerCase();
   const blocks = filterBlocks(ALL_BLOCKS, q);
   const matches = countRows(blocks);
@@ -620,21 +630,15 @@ export function HelpOverlay({
       fill
     >
       {searching || query.value ? (
-        <box flexShrink={0} flexDirection="row" marginBottom={1}>
-          {/* One text node so the `/`, query, and cursor sit flush — separate
-              siblings leave a spacer cell when the query is empty. */}
-          <text>
-            <span fg={searching ? theme.accent : theme.fgDim} attributes={1}>
-              /
-            </span>
-            {searching ? (
-              editSpans(query, theme.fg, "▌")
-            ) : (
-              <span fg={theme.fg}>{query.value}</span>
-            )}
-          </text>
+        <box flexShrink={0} flexDirection="row" marginBottom={1} height={1}>
+          <text flexShrink={0} fg={searching ? theme.accent : theme.fgDim}>/</text>
+          {searching ? (
+            <TextInput edit={query} fg={theme.fg} cursorChar="▌" />
+          ) : (
+            <text flexGrow={1} flexShrink={1} wrapMode="none" truncate fg={theme.fg}>{query.value}</text>
+          )}
           {!empty ? (
-            <text fg={theme.fgDim}>
+            <text fg={theme.fgDim} flexShrink={0} wrapMode="none">
               {"  "}
               {matches} match{matches === 1 ? "" : "es"}
             </text>
@@ -643,12 +647,12 @@ export function HelpOverlay({
       ) : null}
       {empty ? (
         <box flexGrow={1} alignItems="center" justifyContent="center">
-          <text fg={theme.fgDim}>no matches for "{query.value.trim()}"</text>
+          <text fg={theme.fgDim} wrapMode="none" truncate>no matches for "{query.value.trim()}"</text>
         </box>
       ) : (
         <WtScrollbox scrollRef={scrollRef}>
           {blocks.map((b) => (
-            <BlockView key={b.title} block={b} />
+            <BlockView key={b.title} block={b} width={contentWidth} />
           ))}
         </WtScrollbox>
       )}

@@ -8,14 +8,22 @@ import type { Modal } from "../modal-state.ts";
 import type { SimpleModalContext } from "./ctx.ts";
 import { handleYesNoKey } from "./list-picker.ts";
 import { Effect } from "effect";
+import { handleOverlayScrollKey } from "../scrollbox.tsx";
 
 const io = operationErrors("modal-keys/confirm");
+
+function scrollConfirm(k: KeyEvent): boolean {
+  // Preserve the existing confirmation priority, including its modifier
+  // handling; the overlay's Ctrl+Y alias must not steal a confirmation.
+  return k.name !== "y" && k.name !== "return" && handleOverlayScrollKey(k);
+}
 
 export function handleKillActionConfirmKey(
   k: KeyEvent,
   modal: Extract<Modal, { kind: "killActionConfirm" }>,
   { setModal, logWarn }: SimpleModalContext,
 ): boolean {
+  if (scrollConfirm(k)) return true;
   return handleYesNoKey(k, {
     onConfirm: () => {
       const { slug, actionName } = modal;
@@ -41,6 +49,7 @@ export function handleKillSessionConfirmKey(
   modal: Extract<Modal, { kind: "killSessionConfirm" }>,
   { setModal, refreshTmuxSessions, logWarn, logErr }: SimpleModalContext,
 ): boolean {
+  if (scrollConfirm(k)) return true;
   const { sessionKind } = modal;
   return handleYesNoKey(k, {
     onConfirm: () => {
@@ -68,6 +77,7 @@ export function handleCleanConfirmKey(
   k: KeyEvent,
   { setModal, doClean, logErr }: SimpleModalContext,
 ): boolean {
+  if (scrollConfirm(k)) return true;
   return handleYesNoKey(k, {
     onConfirm: () => {
       setModal(null);
@@ -113,6 +123,7 @@ export function handleConfirmKey(
   modal: Extract<Modal, { kind: "confirm" }>,
   ctx: SimpleModalContext,
 ): boolean {
+  if (scrollConfirm(k)) return true;
   const {
     setModal,
     doRemoveWorktree,

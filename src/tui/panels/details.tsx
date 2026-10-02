@@ -42,7 +42,7 @@ import {
 import { resolveRows, type RowModule } from "../rows/index.ts";
 import type { FetchLike, RowContext } from "../rows/types.ts";
 import { WtScrollbox } from "../scrollbox.tsx";
-import { ageMsToText, ELLIPSIS } from "../text.ts";
+import { ageMsToText, ELLIPSIS, wrapText } from "../text.ts";
 import { Spinner, useBouncingBall } from "../spinner.tsx";
 import { theme } from "../theme.ts";
 import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
@@ -215,8 +215,8 @@ function RenderedRow({ module: m, ctx }: { module: RowModule; ctx: RowContext })
       trailing={glyph ? <Glyph kind={glyph} /> : undefined}
     >
       {err ? (
-        <text fg={theme.err} wrapMode="none" truncate>
-          {err.message}
+        <text fg={theme.err} wrapMode="none">
+          {wrapText(err.message, Math.max(1, ctx.valueWidth)).join("\n")}
         </text>
       ) : (
         m.render(ctx)
@@ -581,7 +581,7 @@ function RemoteDetails({
       const status = id ? issues.data?.[id] : undefined;
       return (
         <Row key={module.id} label={module.label} labelWidth={LABEL_WIDTH} trailing={glyph ? <Glyph kind={glyph} /> : undefined}>
-          {fetchError ? <text fg={theme.err} wrapMode="none" truncate>{fetchError.message}</text> : (
+          {fetchError ? <text fg={theme.err} wrapMode="none">{wrapText(fetchError.message, Math.max(1, valueWidth)).join("\n")}</text> : (
           <IssueLine id={id} githubIssue={summary?.githubIssue} status={status} optimistic={!!id && issues.expected.has(id)} />
           )}
         </Row>
@@ -616,7 +616,7 @@ function RemoteDetails({
           trailing={glyph ? <Glyph kind={glyph} /> : undefined}
         >
           {fetchError ? (
-            <text fg={theme.err} wrapMode="none" truncate>{fetchError.message}</text>
+            <text fg={theme.err} wrapMode="none">{wrapText(fetchError.message, Math.max(1, valueWidth)).join("\n")}</text>
           ) : (
             <PrLine pr={pr} mq={mq} valueWidth={valueWidth} />
           )}
@@ -726,7 +726,7 @@ export const Details = memo(function Details({
   if (removed) {
     // Key by slug so cursor moves across history entries remount cleanly.
     const issueId = resolveIssueId(removed.slug, removed.issueId);
-    return <RemovedBody key={`removed:${removed.slug}`} entry={removed} width={width} issueStatus={issueId ? removedIssueStatuses?.[issueId] : undefined} />;
+    return <RemovedBody key={`removed:${removed.slug}`} entry={removed} width={width} issueStatus={issueId ? removedIssueStatuses?.[issueId] : undefined} scrollRef={scrollRef} />;
   }
   if (section) {
     return (
@@ -746,6 +746,7 @@ export const Details = memo(function Details({
       <ReviewRequestBody
         key={reviewRequest.url}
         pr={reviewRequest}
+        width={width}
         scrollRef={scrollRef}
       />
     );

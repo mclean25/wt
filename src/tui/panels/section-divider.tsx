@@ -3,6 +3,7 @@
  * rule (the worktree list's manual and stack sections).
  */
 import { theme } from "../theme.ts";
+import { truncateEnd } from "../text.ts";
 
 /**
  * One style for every section — manual sections and auto-managed stack
@@ -20,20 +21,16 @@ export function Divider({
   /** Optional group identity glyph. Status still belongs on each row. */
   icon?: { glyph: string; fg: string };
 }) {
-  // Leave room for padding (border+paddingLeft+paddingRight roughly 4
-  // cells) so the rule doesn't bleed past the panel edge.
-  const inner = Math.max(0, width - 4);
-  const labelStr = ` ${label} `;
-  const iconCells = icon ? 3 : 0;
-  const padding = Math.max(0, inner - labelStr.length - iconCells - 2);
+  // Borders, row padding, and the scrollbox's reserved gutter consume
+  // five cells. Measure the label in cells so a wide section name keeps
+  // its space instead of being squeezed by an over-long trailing rule.
+  const inner = Math.max(0, width - 5);
+  const iconCells = icon ? Bun.stringWidth(` ${icon.glyph} `) : 0;
+  const labelStr = truncateEnd(icon ? `${label} ` : ` ${label} `, Math.max(0, inner - iconCells - 2));
+  const padding = Math.max(0, inner - Bun.stringWidth(labelStr) - iconCells - 2);
   const trail = "─".repeat(padding);
-  // The trail is sized for the full width, but when the list overflows the
-  // vertical scrollbar steals a column, making the row one cell too wide.
-  // Flex layout absorbs that: the `──` prefix is pinned (`flexShrink={0}`),
-  // while the label and trail sit in `overflow="hidden"` boxes that shrink —
-  // so the stolen column clips a `─` off the (much wider) trail, and the
-  // label's `truncate` only ever ellipsises its TAIL, never eating the
-  // leading space after `──`. height={1} + wrapMode="none" keep it one line.
+  // The label already fits its cell budget; any residual layout pressure
+  // should shorten the decorative rule first. Keep the row to one line.
   return (
     <box flexDirection="row" height={1} paddingLeft={1} paddingRight={1}>
       <box flexShrink={0}>
@@ -44,9 +41,9 @@ export function Divider({
           <text fg={icon.fg} wrapMode="none">{` ${icon.glyph} `}</text>
         </box>
       ) : null}
-      <box flexShrink={1} overflow="hidden">
-        <text fg={theme.fgDim} wrapMode="none" truncate>
-          {icon ? `${label} ` : labelStr}
+      <box flexShrink={0} overflow="hidden">
+        <text fg={theme.fgDim} wrapMode="none">
+          {labelStr}
         </text>
       </box>
       <box flexShrink={1} overflow="hidden">

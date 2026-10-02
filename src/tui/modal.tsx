@@ -3,6 +3,7 @@ import { useTerminalDimensions } from "@opentui/react";
 
 import { KeyHint, type KeyHintPair } from "./key-hint.tsx";
 import { theme } from "./theme.ts";
+import { truncateEnd } from "./text.ts";
 
 type Percent = `${number}%`;
 
@@ -27,7 +28,7 @@ const DEFAULT_INSET: Required<Inset> = {
  * (caller insets included: whatever margin looked right at 130 cols
  * is wrong at 35).
  */
-const NARROW_WIDTH = 60;
+const NARROW_WIDTH = 80;
 
 const NARROW_INSET: Required<Inset> = {
   top: "5%",
@@ -109,6 +110,9 @@ export function Modal({
     maxWidth === null
       ? { left: i.left, right: i.right }
       : capWidth(i.left, i.right, width, maxWidth);
+  const top = height < 24 ? 1 : Math.floor((height * pct(i.top)) / 100);
+  const bottom = height < 24 ? 1 : Math.floor((height * pct(i.bottom)) / 100);
+  const outerWidth = width - insetCells(left, width) - insetCells(right, width);
   // Height is content-driven by default: the box grows with its
   // children and the vertical insets only bound the MAXIMUM. A seven-
   // row picker renders as a seven-row modal instead of a fixed
@@ -116,10 +120,17 @@ export function Modal({
   // for content that owns the space (help's scrolling sections — a
   // bare flexGrow scrollbox doesn't self-measure, so auto-height
   // would collapse it).
-  const maxHeight = Math.max(
-    8,
-    Math.floor((height * (100 - pct(i.top) - pct(i.bottom))) / 100),
-  );
+  const maxHeight = Math.max(0, height - top - bottom);
+  // At very short heights secondary shortcuts can consume the entire
+  // frame. Keep movement, the primary action and dismissal visible.
+  const visibleHints = height < 14
+    ? hints.filter(([key, label], index) =>
+      index === 0 ||
+      index === hints.length - 1 ||
+      key.includes("⏎") ||
+      label === "back" ||
+      label === "cancel")
+    : hints;
   return (
     // The outer box paints a 1-cell gutter either side of the border:
     // the pane behind keeps rendering, and without the gutter its text
@@ -127,27 +138,32 @@ export function Modal({
     // reads as garbled overprint rather than background.
     <box
       position="absolute"
-      top={i.top}
+      top={top}
       left={left}
       right={right}
-      {...(fill ? { bottom: i.bottom } : { maxHeight })}
+      {...(fill ? { bottom } : { maxHeight })}
       zIndex={10}
       backgroundColor={theme.bg}
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
+      overflow="hidden"
     >
       <box
         backgroundColor={theme.bg}
         border
         borderStyle="double"
         borderColor={borderColor}
-        title={` ${title} `}
+        title={` ${truncateEnd(title, Math.max(0, outerWidth - 8))} `}
         titleAlignment="left"
-        padding={1}
+        paddingLeft={1}
+        paddingRight={1}
+        paddingTop={height < 18 ? 0 : 1}
+        paddingBottom={height < 18 ? 0 : 1}
         flexDirection="column"
         flexShrink={1}
         minHeight={0}
+        overflow="hidden"
         {...(fill ? { flexGrow: 1 } : {})}
       >
         <box
@@ -163,7 +179,7 @@ export function Modal({
             instead of overrunning the border. Each chip is one unbreakable
             <text>; wrapping happens only between chips. */}
         <box flexShrink={0} flexDirection="row" flexWrap="wrap" marginTop={1}>
-          <KeyHint pairs={hints} />
+          <KeyHint pairs={visibleHints} />
         </box>
       </box>
     </box>
@@ -173,6 +189,23 @@ export function Modal({
 function pct(p: Percent): number {
   const n = parseFloat(p);
   return Number.isFinite(n) ? n : 0;
+}
+
+function insetCells(inset: Percent | number, size: number): number {
+  return typeof inset === "number" ? inset : Math.round((size * pct(inset)) / 100);
+}
+
+/** Cell budget inside the border and padding; scroll lists reserve one more cell. */
+export function modalContentWidth(
+  termWidth: number,
+  inset?: Inset,
+  maxWidth: number | null = MAX_CONTENT_WIDTH,
+): number {
+  const i = termWidth < NARROW_WIDTH ? NARROW_INSET : { ...DEFAULT_INSET, ...inset };
+  const { left, right } = maxWidth === null
+    ? i
+    : capWidth(i.left, i.right, termWidth, maxWidth);
+  return Math.max(0, termWidth - insetCells(left, termWidth) - insetCells(right, termWidth) - 6);
 }
 
 /**

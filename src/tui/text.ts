@@ -10,6 +10,15 @@ import { humanAge } from "../core/locks.ts";
 export const ELLIPSIS = "...";
 export const ELLIPSIS_WIDTH = 3;
 
+const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** Whole displayed characters, including combining marks and emoji sequences. */
+export function graphemes(s: string): string[] {
+  return /^[\x20-\x7e]*$/.test(s)
+    ? s.split("")
+    : Array.from(segmenter.segment(s), ({ segment }) => segment);
+}
+
 /**
  * Format a millisecond delta as a human-readable age string ("12m",
  * "3h", "5d", …). Negative deltas clamp to zero — common when system
@@ -71,20 +80,20 @@ export function wrapText(s: string, width: number, firstWidth = width): string[]
         lineW = w;
         continue;
       }
-      // Over-long word (a URL, a path): hard-break it by cells. Same
-      // deliberately non-grapheme-aware trim as `truncateEnd`.
-      let rest = word;
-      while (Bun.stringWidth(rest) > budget()) {
-        let cut = rest;
-        while (cut.length > 0 && Bun.stringWidth(cut) > budget()) cut = cut.slice(0, -1);
-        // Pathological only: a wide glyph against a 1-cell budget, where
-        // no prefix fits. Emit the glyph anyway so the loop terminates.
-        if (cut.length === 0) cut = rest.slice(0, 1);
-        out.push(cut);
-        rest = rest.slice(cut.length);
+      // Break long paths by displayed characters, never UTF-16 halves.
+      for (const ch of graphemes(word)) {
+        const cells = Bun.stringWidth(ch);
+        if (lineW > 0 && lineW + cells > budget()) breakLine();
+        // A two-cell glyph cannot fit a one-cell pane. Preserve the width
+        // invariant with a visible replacement instead of drawing outside it.
+        if (cells > budget()) {
+          line += "�";
+          lineW++;
+        } else {
+          line += ch;
+          lineW += cells;
+        }
       }
-      line = rest;
-      lineW = Bun.stringWidth(rest);
     }
     // A newline in the source is a hard break; an empty paragraph keeps
     // its blank line.
@@ -119,14 +128,13 @@ export function truncateEnd(s: string, maxWidth: number): string {
   if (maxWidth <= 0) return "";
   if (Bun.stringWidth(s) <= maxWidth) return s;
   if (maxWidth < ELLIPSIS_WIDTH) return ELLIPSIS.slice(0, maxWidth);
-  let cut = s;
-  // Code-unit trim, deliberately NOT grapheme-aware: cutting through a
-  // surrogate pair can leave a dangling half before the ellipsis. Known
-  // and accepted — inputs here (slugs, branch names, titles) are
-  // overwhelmingly ASCII and the worst case is one mojibake cell;
-  // grapheme segmentation isn't worth it on this hot render path.
-  while (cut.length > 0 && Bun.stringWidth(cut) + ELLIPSIS_WIDTH > maxWidth) {
-    cut = cut.slice(0, -1);
+  let cut = "";
+  let cells = 0;
+  for (const ch of graphemes(s)) {
+    const next = Bun.stringWidth(ch);
+    if (cells + next + ELLIPSIS_WIDTH > maxWidth) break;
+    cut += ch;
+    cells += next;
   }
   return `${cut.trimEnd()}${ELLIPSIS}`;
 }

@@ -262,7 +262,7 @@ export function WorkStatusRecordBlock({
     sections.reduce((w, s) => Math.max(w, s.label ? s.label.length : 0), 0) + 2;
   return (
     <box flexDirection="column" marginBottom={1}>
-      <text wrapMode="none" truncate>
+      <text wrapMode="word">
         <span fg={color}>{blocked ? "⊘" : bannerGlyph(record.state)}{" "}</span>
         <span fg={color} attributes={1}>
           {blocked

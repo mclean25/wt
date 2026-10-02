@@ -7,6 +7,7 @@
 import { actionRegistry } from "../../core/actions.ts";
 import { eventsOutputId, type Output, outputStatusLabel } from "../../core/outputs.ts";
 import { theme } from "../theme.ts";
+import { truncateEnd } from "../text.ts";
 
 import {
   ActionContent,
@@ -19,6 +20,8 @@ import { ActivityContent, DestroyContent } from "./activity.tsx";
 type Props = {
   output: Output;
   height: number;
+  /** Actual pane width, which can be only the right column of the terminal. */
+  width: number;
 };
 
 function borderColor(o: Output): string {
@@ -40,46 +43,51 @@ function borderColor(o: Output): string {
       return theme.border;
   }
 }
-function titleFor(o: Output): string {
-  if (o.kind === "events") return o.title;
-  if (o.kind === "session") return o.title;
-  if (o.kind === "destroy") {
-    return `destroy · ${o.slug ?? "?"} · running`;
-  }
+function titleFor(o: Output, width: number): string {
+  if (o.kind === "events" || o.kind === "session") return truncateEnd(o.title, width);
   const killHint = o.status === "running" ? " · ! kill" : "";
-  return `action · ${o.title} · ${outputStatusLabel(o.status)}${killHint}`;
+  const status = o.kind === "destroy" ? "running" : `${outputStatusLabel(o.status)}${killHint}`;
+  const suffix = ` · ${status}`;
+  // Keep the outcome visible when a long task or session name fills the
+  // border. Native box titles disappear completely when they do not fit.
+  if (Bun.stringWidth(suffix) >= width) return truncateEnd(status, width);
+  const label = o.kind === "destroy" ? `destroy · ${o.slug ?? "?"}` : `action · ${o.title}`;
+  return `${truncateEnd(label, width - Bun.stringWidth(suffix))}${suffix}`;
 }
 
-export function OutputViewer({ output, height }: Props) {
-  const title = ` ${titleFor(output)} `;
+export function OutputViewer({ output, height, width }: Props) {
+  const title = ` ${titleFor(output, Math.max(0, width - 8))} `;
   return (
     <box
       flexShrink={0}
       height={height}
+      width={width}
       border
       borderStyle="single"
       borderColor={borderColor(output)}
       title={title}
       titleAlignment="left"
       flexDirection="column"
+      overflow="hidden"
       paddingLeft={1}
       paddingRight={1}
     >
-      <OutputContent output={output} height={height} />
+      <OutputContent output={output} height={height} width={width} />
     </box>
   );
 }
 
-function OutputContent({ output, height }: { output: Output; height: number }) {
+function OutputContent({ output, height, width }: Props) {
   if (output.kind === "events") {
     return (
       <ActivityContent
         feed={output.id === eventsOutputId() ? "attention" : "firehose"}
+        width={width}
       />
     );
   }
   if (output.kind === "destroy" && output.slug) {
-    return <DestroyContent slug={output.slug} />;
+    return <DestroyContent slug={output.slug} width={width} />;
   }
   if (output.kind === "session" && output.slug) {
     // Both claude and shell tail their tmux pane: claude reads

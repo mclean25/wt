@@ -1,7 +1,8 @@
 import type { HistoryEntry } from "../../core/actions.ts";
 import type { KeyHintPair } from "../key-hint.tsx";
 import { Modal } from "../modal.tsx";
-import { editSpans, type TextEdit } from "../text-edit.tsx";
+import type { TextEdit } from "../text-edit.tsx";
+import { TextInput } from "../text-input.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
 
@@ -74,32 +75,35 @@ export function PickerModal({
               backgroundColor={bg}
               paddingLeft={1}
               paddingRight={1}
+              height={1}
+              flexShrink={0}
+              overflow="hidden"
             >
-              <text fg={selected ? theme.accent : theme.fgDim}>
-                {selected ? "▸ " : "  "}
-              </text>
-              {showDigitColumn ? (
-                <text fg={selected ? theme.accent : theme.fgDim}>
-                  {digit ? `${digit} ` : "  "}
-                </text>
-              ) : null}
-              {itemKeys ? (
-                <text fg={selected ? theme.accent : theme.fgDim}>
-                  {chord ? `${chord} ` : "  "}
-                </text>
-              ) : null}
-              {itemGlyphs ? (
-                itemGlyphs[i] ? (
-                  // Two trailing spaces: Nerd Font dots draw wider than
-                  // their single cell, so one space reads as glyph-glued-
-                  // to-label. Null rows pad the same 3 cells to stay
-                  // aligned.
-                  <text fg={itemGlyphs[i]!.color}>{`${itemGlyphs[i]!.glyph}  `}</text>
-                ) : (
-                  <text>{"   "}</text>
-                )
-              ) : null}
-              <text fg={fg} wrapMode="none" truncate>
+              <text width="100%" height={1} wrapMode="none" truncate fg={fg}>
+                <span fg={selected ? theme.accent : theme.fgDim}>
+                  {selected ? "▸ " : "  "}
+                </span>
+                {showDigitColumn ? (
+                  <span fg={selected ? theme.accent : theme.fgDim}>
+                    {digit ? `${digit} ` : "  "}
+                  </span>
+                ) : null}
+                {itemKeys ? (
+                  <span fg={selected ? theme.accent : theme.fgDim}>
+                    {chord ? `${chord} ` : "  "}
+                  </span>
+                ) : null}
+                {itemGlyphs ? (
+                  itemGlyphs[i] ? (
+                    // Two trailing spaces: Nerd Font dots draw wider than
+                    // their single cell, so one space reads as glyph-glued-
+                    // to-label. Null rows pad the same 3 cells to stay
+                    // aligned.
+                    <span fg={itemGlyphs[i]!.color}>{`${itemGlyphs[i]!.glyph}  `}</span>
+                  ) : (
+                    <span>{"   "}</span>
+                  )
+                ) : null}
                 {item}
               </text>
             </box>
@@ -172,12 +176,15 @@ export function MultiPickerModal({
               backgroundColor={bg}
               paddingLeft={1}
               paddingRight={1}
+              height={1}
+              flexShrink={0}
+              overflow="hidden"
             >
-              <text fg={cursor ? theme.accent : theme.fgDim}>
-                {cursor ? "▸ " : "  "}
-              </text>
-              <text fg={boxFg}>{box} </text>
-              <text fg={fg} wrapMode="none" truncate>
+              <text width="100%" height={1} fg={fg} wrapMode="none" truncate>
+                <span fg={cursor ? theme.accent : theme.fgDim}>
+                  {cursor ? "▸ " : "  "}
+                </span>
+                <span fg={boxFg}>{box} </span>
                 {item.label}
                 {item.hint ? (
                   <span fg={theme.fgDim}> {item.hint}</span>
@@ -237,10 +244,9 @@ export function ArgPickerModal({
           ["^C", "cancel"],
         ]}
       >
-        <box flexDirection="row" paddingLeft={1} paddingRight={1}>
-          <text fg={theme.accent} attributes={1}>{prompt}</text>
-          <text fg={theme.fg}> </text>
-          <text>{editSpans(input, theme.fgBright)}</text>
+        <box flexDirection="column" paddingLeft={1} paddingRight={1}>
+          <text flexShrink={0} fg={theme.accent} attributes={1} wrapMode="word">{prompt}</text>
+          <TextInput edit={input} fg={theme.fgBright} />
         </box>
       </Modal>
     );
@@ -276,11 +282,14 @@ export function ArgPickerModal({
               backgroundColor={bg}
               paddingLeft={1}
               paddingRight={1}
+              height={1}
+              flexShrink={0}
+              overflow="hidden"
             >
-              <text fg={selected ? theme.accent : theme.fgDim}>
-                {selected ? "▸ " : "  "}
-              </text>
-              <text fg={labelFg} wrapMode="none" truncate>
+              <text width="100%" height={1} fg={labelFg} wrapMode="none" truncate>
+                <span fg={selected ? theme.accent : theme.fgDim}>
+                  {selected ? "▸ " : "  "}
+                </span>
                 {row.label}
                 {row.hint ? <span fg={theme.fgDim}> · {row.hint}</span> : null}
               </text>

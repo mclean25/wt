@@ -1,5 +1,6 @@
 import { Modal } from "../modal.tsx";
 import { theme } from "../theme.ts";
+import { ConfirmBody } from "./confirm-body.tsx";
 
 type Props = {
   title: string;
@@ -35,20 +36,21 @@ export function ConfirmModal({
       hints={[
         ["y / ⏎", confirmLabel],
         ["n / esc / q", "cancel"],
+        ["j/k", "scroll"],
       ]}
     >
-      <box flexDirection="column">
-        <text fg={theme.fg} wrapMode="word">
+      <ConfirmBody>
+        <text flexShrink={0} fg={theme.fg} wrapMode="word">
           {message}
         </text>
         {detail ? (
-          <box marginTop={1} flexDirection="column">
+          <box flexShrink={0} marginTop={1} flexDirection="column">
             <text fg={theme.fgDim} wrapMode="word">
               {detail}
             </text>
           </box>
         ) : null}
-      </box>
+      </ConfirmBody>
     </Modal>
   );
 }

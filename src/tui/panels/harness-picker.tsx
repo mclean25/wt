@@ -11,6 +11,7 @@
  */
 import { VISIBLE_HARNESSES } from "../../core/harness/index.ts";
 import { Modal } from "../modal.tsx";
+import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
 
 type Props = {
@@ -34,30 +35,34 @@ export function HarnessPickerModal({ slug, selectedIndex }: Props) {
         ["esc / q", "cancel"],
       ]}
     >
-      <box flexDirection="column" flexGrow={1}>
+      <ScrollableList selectedId={`harness:${items[selectedIndex]?.id}`}>
         {items.map((h, i) => {
           const selected = i === selectedIndex;
           const bg = selected ? theme.rowSelectedBg : undefined;
           return (
             <box
               key={h.id}
+              id={`harness:${h.id}`}
               flexDirection="row"
               backgroundColor={bg}
               paddingLeft={1}
               paddingRight={1}
+              height={1}
+              flexShrink={0}
+              overflow="hidden"
             >
-              <text fg={selected ? theme.accent : theme.fgDim}>
-                {selected ? "▸ " : "  "}
+              <text width="100%" height={1} wrapMode="none" truncate fg={selected ? theme.fgBright : theme.fg}>
+                <span fg={selected ? theme.accent : theme.fgDim}>
+                  {selected ? "▸ " : "  "}
+                </span>
+                <span fg={theme.fgDim}>{h.letter} </span>
+                <span fg={h.color}>{h.glyph}  </span>
+                {h.label}
               </text>
-              <box width={2} flexShrink={0}>
-                <text fg={theme.fgDim}>{h.letter}</text>
-              </box>
-              <text fg={h.color}>{h.glyph}  </text>
-              <text fg={selected ? theme.fgBright : theme.fg}>{h.label}</text>
             </box>
           );
         })}
-      </box>
+      </ScrollableList>
     </Modal>
   );
 }

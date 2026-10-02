@@ -247,12 +247,12 @@ export function RemovedList({
       paddingTop={0}
     >
       {entries.length === 0 ? (
-        <box padding={1} flexDirection="row">
-          <text fg={theme.fgDim}>No removed worktrees. Press </text>
-          <text fg={theme.accent} attributes={1}>
-            h
+        <box padding={1}>
+          <text fg={theme.fgDim}>
+            {"No removed worktrees. Press "}
+            <span fg={theme.accent} attributes={1}>h</span>
+            {" to go back."}
           </text>
-          <text fg={theme.fgDim}> to go back.</text>
         </box>
       ) : (
         <WtScrollbox scrollRef={listRef}>

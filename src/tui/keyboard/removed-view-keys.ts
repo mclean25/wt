@@ -5,7 +5,8 @@
  * is swallowed so worktree-keyed actions can't fire against the hidden
  * live selection. Extracted from `app.tsx`.
  */
-import type { KeyEvent } from "@opentui/core";
+import type { RefObject } from "react";
+import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 
 import { config } from "../../core/config.ts";
 import { createLogger } from "../../core/logger.ts";
@@ -17,6 +18,7 @@ import { operationErrors } from "../../core/errors.ts";
 import { forkReported } from "../effect-boundary.ts";
 import type { Modal } from "../modal-state.ts";
 import { theme } from "../theme.ts";
+import { SCROLL_STEP } from "../scrollbox.tsx";
 import { Effect } from "effect";
 
 const io = operationErrors("removed-view-keys");
@@ -27,6 +29,7 @@ export type RemovedViewKeysCtx = {
   removedEntries: readonly RemovedWorktree[];
   removedCursor: number;
   setRemovedIndex: (i: number) => void;
+  detailsScrollRef: RefObject<ScrollBoxRenderable | null>;
   openPrUrl: (
     url: string,
     number: number,
@@ -50,6 +53,7 @@ export function handleRemovedViewKey(
     removedEntries,
     removedCursor,
     setRemovedIndex,
+    detailsScrollRef,
     openPrUrl,
     doYank,
     setModal,
@@ -61,6 +65,10 @@ export function handleRemovedViewKey(
     return;
   }
   if (handleGlobalKey(k)) return;
+  if (k.name === "linefeed" || (k.ctrl && !k.shift && (k.name === "j" || k.name === "k"))) {
+    detailsScrollRef.current?.scrollBy(k.name === "k" ? -SCROLL_STEP : SCROLL_STEP);
+    return;
+  }
   if (k.name === "j" || k.name === "down") {
     setRemovedIndex(
       Math.min(removedCursor + 1, Math.max(0, removedEntries.length - 1)),

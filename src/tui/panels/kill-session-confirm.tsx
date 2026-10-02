@@ -2,6 +2,7 @@ import type { SessionKind } from "../../core/tmux.ts";
 import type { KeyHintPair } from "../key-hint.tsx";
 import { Modal } from "../modal.tsx";
 import { theme } from "../theme.ts";
+import { ConfirmBody } from "./confirm-body.tsx";
 
 type Props = {
   slug: string;
@@ -36,6 +37,7 @@ export function KillSessionConfirmModal({ slug, sessionKind }: Props) {
   const hints: KeyHintPair[] = [
     ["y", "kill"],
     ["n / esc / q", "cancel"],
+    ["j/k", "scroll"],
   ];
   return (
     <Modal
@@ -44,17 +46,17 @@ export function KillSessionConfirmModal({ slug, sessionKind }: Props) {
       inset={{ top: "30%", right: "25%", bottom: "30%", left: "25%" }}
       hints={hints}
     >
-      <box flexDirection="column">
-        <text fg={theme.fg}>
+      <ConfirmBody>
+        <text flexShrink={0} fg={theme.fg}>
           {copy.title} <span fg={theme.accent}>{slug}</span>
           ?
         </text>
-        <box marginTop={1} flexDirection="column">
+        <box flexShrink={0} marginTop={1} flexDirection="column">
           <text fg={theme.fgDim} wrapMode="word">
             {copy.body}
           </text>
         </box>
-      </box>
+      </ConfirmBody>
     </Modal>
   );
 }

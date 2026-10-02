@@ -31,15 +31,18 @@
  *    at that session's log, mirroring the outputs picker.
  */
 import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/react";
+import { Fragment } from "react";
 
 import type { DerivedState } from "../../core/harness/status.ts";
 import { VISIBLE_HARNESSES, type HarnessId } from "../../core/harness/index.ts";
 import { STATE_DOT, stateColor } from "../claude-state.ts";
 import type { HarnessSessionEntry } from "../hooks/useHarnessSessions.ts";
-import { Modal } from "../modal.tsx";
-import { editSpans, type TextEdit } from "../text-edit.tsx";
+import { Modal, modalContentWidth } from "../modal.tsx";
+import type { TextEdit } from "../text-edit.tsx";
+import { TextInput } from "../text-input.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
-import { ageMsToText } from "../text.ts";
+import { ageMsToText, clipLines } from "../text.ts";
 import { theme } from "../theme.ts";
 
 /** Stable scroll-anchor id for a picker row. */
@@ -76,9 +79,11 @@ type ListProps = {
 function SummaryPanel({
   row,
   summaries,
+  width,
 }: {
   row: PickerRow | null;
   summaries: SummaryBySessionId;
+  width: number;
 }) {
   if (!row || row.kind !== "session") {
     return (
@@ -96,8 +101,8 @@ function SummaryPanel({
     );
   }
   return (
-    <text fg={theme.fg} attributes={TextAttributes.ITALIC} wrapMode="word">
-      {summary.text}
+    <text fg={theme.fg} attributes={TextAttributes.ITALIC} wrapMode="none">
+      {clipLines(summary.text, width, 3).join("\n")}
     </text>
   );
 }
@@ -108,6 +113,9 @@ export function SessionsPickerList({
   selectedIndex,
   summaries,
 }: ListProps) {
+  const { width, height } = useTerminalDimensions();
+  const contentWidth = modalContentWidth(width);
+  const compact = contentWidth < 48;
   // Track digit assignments for session rows only; "+ new" rows get
   // their per-harness letter prefix instead.
   let sessionDigitCursor = 0;
@@ -147,7 +155,7 @@ export function SessionsPickerList({
           if (row.kind === "new") {
             const h = VISIBLE_HARNESSES.find((h) => h.id === row.harnessId)!;
             return (
-              <>
+              <Fragment key={`new:${row.harnessId}`}>
                 {spacer}
                 <box
                   id={`sess:new:${row.harnessId}`}
@@ -156,8 +164,11 @@ export function SessionsPickerList({
                   backgroundColor={bg}
                   paddingLeft={1}
                   paddingRight={1}
+                  height={1}
+                  flexShrink={0}
+                  overflow="hidden"
                 >
-                  <text fg={selected ? theme.accent : theme.fgDim}>
+                  <text width={2} flexShrink={0} fg={selected ? theme.accent : theme.fgDim}>
                     {selected ? "▸ " : "  "}
                   </text>
                   <box width={2} flexShrink={0}>
@@ -167,11 +178,11 @@ export function SessionsPickerList({
                   <box width={3} flexShrink={0}>
                     <text fg={selected ? h.color : theme.fgDim}>{h.glyph}</text>
                   </box>
-                  <text fg={selected ? theme.fgBright : theme.fgDim}>
+                  <text height={1} wrapMode="none" truncate fg={selected ? theme.fgBright : theme.fgDim}>
                     new {h.label} session
                   </text>
                 </box>
-              </>
+              </Fragment>
             );
           }
           const e = row.entry;
@@ -205,8 +216,11 @@ export function SessionsPickerList({
               backgroundColor={bg}
               paddingLeft={1}
               paddingRight={1}
+              height={1}
+              flexShrink={0}
+              overflow="hidden"
             >
-              <text fg={selected ? theme.accent : theme.fgDim}>
+              <text width={2} flexShrink={0} fg={selected ? theme.accent : theme.fgDim}>
                 {selected ? "▸ " : "  "}
               </text>
               <box width={2} flexShrink={0}>
@@ -216,52 +230,60 @@ export function SessionsPickerList({
               <box width={3} flexShrink={0}>
                 <text fg={h.color}>{h.glyph}</text>
               </box>
-              <box flexGrow={1} flexShrink={1} overflow="hidden">
-                <text fg={labelFg} wrapMode="none" truncate>
+              <box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                <text width="100%" height={1} fg={labelFg} wrapMode="none" truncate>
                   {e.displayName}
                 </text>
               </box>
               {e.extras.queued > 0 ? (
-                <text fg={theme.warn}>{e.extras.queued}⏵ </text>
+                <text height={1} flexShrink={0} wrapMode="none" fg={theme.warn}> {e.extras.queued}⏵ </text>
               ) : null}
               {/* Tweak 1: fixed-width status and age columns */}
-              <box width={13} flexShrink={0} justifyContent="flex-end">
-                <text fg={stateFg}>
-                  {state ? STATE_DOT[state] : "●"} {statusText}
+              <box width={compact ? 3 : 13} flexShrink={0}>
+                <text height={1} wrapMode="none" fg={stateFg}>
+                  {state ? STATE_DOT[state] : "●"}{compact ? "" : ` ${statusText}`}
                 </text>
               </box>
-              <box width={6} flexShrink={0} justifyContent="flex-end">
-                <text fg={theme.fgDim}>{ageText ?? ""}</text>
-              </box>
-              {/* `x` kills this row (no confirm) — render the chord dim so
-                  it's visible in-row, since the "+ new" rows' letter chord
-                  (`c`/`x`/`o`) occupies the digit column here instead. */}
-              <box width={2} flexShrink={0} justifyContent="flex-end">
-                <text fg={theme.fgDim}>x</text>
-              </box>
+              {!compact ? (
+                <>
+                  <box width={6} flexShrink={0} justifyContent="flex-end">
+                    <text height={1} wrapMode="none" fg={theme.fgDim}>{ageText ?? ""}</text>
+                  </box>
+                  {/* `x` kills this row (no confirm) — render the chord dim so
+                      it's visible in-row, since the "+ new" rows' letter chord
+                      (`c`/`x`/`o`) occupies the digit column here instead. */}
+                  <box width={2} flexShrink={0} justifyContent="flex-end">
+                    <text fg={theme.fgDim}>x</text>
+                  </box>
+                </>
+              ) : null}
             </box>
           );
         })}
         </ScrollableList>
-        {/* Summary stays pinned below the scrolling list (flexShrink={0});
-            summaries are short snippets, so natural height is fine. */}
-        <box flexShrink={0} marginTop={1} flexDirection="row">
-          <text fg={theme.fgDim}>
-            {"─".repeat(2)} summary {"─".repeat(2)}
-          </text>
-        </box>
-        <box
-          flexShrink={0}
-          overflow="hidden"
-          paddingLeft={1}
-          paddingRight={1}
-          marginTop={1}
-        >
-          <SummaryPanel
-            row={rows[selectedIndex] ?? null}
-            summaries={summaries}
-          />
-        </box>
+        {/* Keep the optional preview from displacing the session list. */}
+        {height >= 24 ? (
+          <>
+            <box flexShrink={0} marginTop={1} flexDirection="row">
+              <text fg={theme.fgDim}>
+                {"─".repeat(2)} summary {"─".repeat(2)}
+              </text>
+            </box>
+            <box
+              flexShrink={0}
+              overflow="hidden"
+              paddingLeft={1}
+              paddingRight={1}
+              marginTop={1}
+            >
+              <SummaryPanel
+                row={rows[selectedIndex] ?? null}
+                summaries={summaries}
+                width={Math.max(1, contentWidth - 2)}
+              />
+            </box>
+          </>
+        ) : null}
       </box>
     </Modal>
   );
@@ -293,12 +315,14 @@ export function SessionsPickerNew({ slug, input, autoName, error }: NewProps) {
       ]}
     >
       <box flexDirection="row" paddingLeft={1} paddingRight={1}>
-        <text fg={theme.fgDim}>name </text>
-        <text>{editSpans(input, theme.accent)}</text>
-        <text fg={theme.fgDim}>
-          {input.value ? "" : `(blank → ${autoName})`}
-        </text>
+        <text flexShrink={0} fg={theme.fgDim}>name </text>
+        <TextInput edit={input} fg={theme.accent} />
       </box>
+      {!input.value ? (
+        <text flexShrink={0} paddingLeft={1} paddingRight={1} fg={theme.fgDim} wrapMode="word">
+          (blank → {autoName})
+        </text>
+      ) : null}
       {error ? (
         <box paddingLeft={1} paddingRight={1}>
           <text fg={theme.err}>{error}</text>

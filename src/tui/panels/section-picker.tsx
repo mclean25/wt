@@ -1,5 +1,6 @@
 import { Modal } from "../modal.tsx";
-import { editSpans, type TextEdit } from "../text-edit.tsx";
+import type { TextEdit } from "../text-edit.tsx";
+import { TextInput } from "../text-input.tsx";
 import { ScrollableList } from "./scroll-list.tsx";
 import { theme } from "../theme.ts";
 
@@ -38,8 +39,8 @@ export function SectionPickerModal({ title, items, selectedIndex, newName }: Pro
         ]}
       >
         <box flexDirection="row" paddingLeft={1}>
-          <text fg={theme.fgDim}>name: </text>
-          <text>{editSpans(newName, theme.fgBright, "▎")}</text>
+          <text flexShrink={0} fg={theme.fgDim}>name: </text>
+          <TextInput edit={newName} fg={theme.fgBright} cursorChar="▎" />
         </box>
       </Modal>
     );
@@ -80,14 +81,15 @@ export function SectionPickerModal({ title, items, selectedIndex, newName }: Pro
             backgroundColor={bg}
             paddingLeft={1}
             paddingRight={1}
+            height={1}
+            flexShrink={0}
+            overflow="hidden"
           >
-            <text fg={selected ? theme.accent : theme.fgDim}>
-              {selected ? "▸ " : "  "}
-            </text>
-            <box width={2} flexShrink={0}>
-              <text fg={prefixFg}>{prefix}</text>
-            </box>
-            <text fg={labelFg} wrapMode="none" truncate>
+            <text width="100%" height={1} fg={labelFg} wrapMode="none" truncate>
+              <span fg={selected ? theme.accent : theme.fgDim}>
+                {selected ? "▸ " : "  "}
+              </span>
+              <span fg={prefixFg}>{prefix} </span>
               {itemLabel(item)}
             </text>
           </box>

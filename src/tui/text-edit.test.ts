@@ -7,6 +7,7 @@ import {
   makeEdit,
   wordLeft,
   wordRight,
+  visibleEdit,
   type EditKey,
   type TextEdit,
 } from "./text-edit.tsx";
@@ -19,6 +20,30 @@ function key(name: string, mods: Partial<EditKey> = {}): EditKey {
 function te(value: string, cursor: number): TextEdit {
   return { value, cursor };
 }
+
+test("editing advances and deletes whole Unicode characters", () => {
+  for (const character of ["😀", "👩‍💻", "e\u0301", "🇨🇦"]) {
+    const value = `a${character}b`;
+    const after = 1 + character.length;
+    expect(applyEditKey(key("right"), te(value, 1))).toEqual(te(value, after));
+    expect(applyEditKey(key("left"), te(value, after))).toEqual(te(value, 1));
+    expect(applyEditKey(key("backspace"), te(value, after))).toEqual(te("ab", 1));
+    expect(applyEditKey(key("delete"), te(value, 1))).toEqual(te("ab", 1));
+  }
+});
+
+test("the input viewport follows the cursor by terminal cells without changing stored text", () => {
+  const edit = makeEdit("a-long-name-日本語-👩‍💻-end");
+  for (const width of [1, 4, 10, 20, 80]) {
+    const visible = visibleEdit(edit, width);
+    expect(Bun.stringWidth(visible.value) + 1).toBeLessThanOrEqual(width);
+    expect(visible.value.isWellFormed()).toBe(true);
+    if (width >= 10) expect(visible.value).toEndWith("-end");
+  }
+  expect(visibleEdit(te("long-name", 0), 5)).toEqual(te("long", 0));
+  expect(visibleEdit(makeEdit("one\ntwo"), 20)).toEqual(makeEdit("one two"));
+  expect(edit.value).toBe("a-long-name-日本語-👩‍💻-end");
+});
 
 describe("wordLeft / wordRight", () => {
   test("slug words: foo-bar-123 has three words", () => {

@@ -422,6 +422,23 @@ so the flow remains valid when multiple remotes are added.
 
 ## Modal UX rules
 
+`modalContentWidth` is the shared horizontal budget for modal prose; callers
+subtract their own scroll gutter. The shell truncates border titles and adapts
+its insets and padding to narrow or short terminals. `ScrollableList` reanchors
+the selected row after initial layout and size changes, without reanchoring
+unchanged frames during mouse scrolling. Confirmation bodies register their
+scroll region through `ConfirmBody`, preserving confirm/cancel key priority.
+
+`TextInput` measures its allocated box and displays a cursor-following slice of
+the shared editor value. The stored text remains intact. Truncation, hard word
+breaks, cursor movement, and deletion respect grapheme boundaries. Help's compact
+grids collapse before their fixed key columns can displace the descriptions.
+
+`OutputViewer` receives the actual pane width from the composition root and
+passes it to its activity content. Terminal width is not a pane width in the
+default split layout. The removed-details body scrolls through the same details
+ref as live worktrees; its restore hints stay outside the scroll region.
+
 Every list-picker modal follows the same shape so muscle memory carries across pickers — and the shape is now CODE, not convention: `tui/modal-keys/list-picker.ts` (`handleListPickerKey`) implements move/digits/chords/confirm/cancel once, and every picker handler delegates to it after its picker-specific pre-checks (text-input modes, space-toggle, preview-on-move). Add new pickers through it; hand-rolling the base keys is how pickers drift. The rules it encodes:
 
 - **Trigger-key re-press confirms.** Whatever key opens the picker (`l`, `;`, `'`, `!`, `M`, `v`, `b`, `u`, `y`, `Shift+F12`) also commits the highlighted row when pressed again (`l l`, `; ;`, `' '`, `! !`, `M M`, `v v`, `u u`, `y y`) — the `confirm` option. Shifted-letter triggers work through `matchesTrigger`'s `isShiftedLetter` leg (csi-u never delivers the uppercase literal in `sequence`).

@@ -1,5 +1,6 @@
 import { Modal } from "../modal.tsx";
 import { theme } from "../theme.ts";
+import { ConfirmBody } from "./confirm-body.tsx";
 
 type Props = {
   slug: string;
@@ -15,10 +16,11 @@ export function KillActionConfirmModal({ slug, actionName }: Props) {
       hints={[
         ["y", "kill"],
         ["! / n / esc / q", "cancel"],
+        ["j/k", "scroll"],
       ]}
     >
-      <box flexDirection="column">
-        <text fg={theme.fg}>
+      <ConfirmBody>
+        <text flexShrink={0} fg={theme.fg}>
           Kill{" "}
           <span fg={theme.warn} attributes={1}>
             {actionName}
@@ -27,13 +29,13 @@ export function KillActionConfirmModal({ slug, actionName }: Props) {
           <span fg={theme.accent}>{slug}</span>
           ?
         </text>
-        <box marginTop={1} flexDirection="column">
+        <box flexShrink={0} marginTop={1} flexDirection="column">
           <text fg={theme.fgDim} wrapMode="word">
             The Claude process gets SIGTERM. Any in-progress git/SST
             commands it spawned can keep running until they finish.
           </text>
         </box>
-      </box>
+      </ConfirmBody>
     </Modal>
   );
 }

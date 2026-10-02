@@ -91,8 +91,11 @@ export function OutputsPicker({ slug, items, selectedIndex }: Props) {
               backgroundColor={bg}
               paddingLeft={1}
               paddingRight={1}
+              height={1}
+              flexShrink={0}
+              overflow="hidden"
             >
-              <text fg={selected ? theme.accent : theme.fgDim}>
+              <text width={2} flexShrink={0} fg={selected ? theme.accent : theme.fgDim}>
                 {selected ? "▸ " : "  "}
               </text>
               <box width={2} flexShrink={0}>
@@ -101,12 +104,12 @@ export function OutputsPicker({ slug, items, selectedIndex }: Props) {
               <box width={9} flexShrink={0}>
                 <text fg={statusFg(o.status)}>{outputStatusLabel(o.status)}</text>
               </box>
-              <box flexGrow={1} flexShrink={1} overflow="hidden">
-                <text fg={fg} wrapMode="none" truncate>
+              <box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                <text width="100%" height={1} fg={fg} wrapMode="none" truncate>
                   {shortTitle(o.title)}
                 </text>
               </box>
-              <text fg={theme.fgDim}>{right}</text>
+              <text marginLeft={1} flexShrink={0} height={1} wrapMode="none" fg={theme.fgDim}>{right}</text>
             </box>
           );
         })}

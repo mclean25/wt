@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { useTerminalDimensions } from "@opentui/react";
 
 import type { DerivedState } from "../../core/harness/status.ts";
 import type { HarnessId } from "../../core/harness/index.ts";
@@ -21,7 +22,9 @@ import {
   WT_SOURCE_SLOT,
   type SessionSlot,
 } from "../sessions/slots.ts";
-import { editSpans, type TextEdit } from "../text-edit.tsx";
+import type { TextEdit } from "../text-edit.tsx";
+import { TextInput } from "../text-input.tsx";
+import { truncateEnd } from "../text.ts";
 import { theme } from "../theme.ts";
 import { useToast } from "../toast.ts";
 
@@ -121,6 +124,9 @@ function contextPctColor(pct: number): string {
 }
 
 export function Footer({ mode, hint }: Props) {
+  const { width } = useTerminalDimensions();
+  const inputHint = width >= 80 ? " (⏎ submit, esc cancel)" : "";
+  const promptWidth = Math.max(0, Math.min(Math.floor(width * 0.45), width - Bun.stringWidth(inputHint) - 15));
   // Every special session gets a permanent `[key]` button, grouped at
   // the far right. Key color follows the TAB-selected primary
   // harness's live session in that slot: a slot keybind always opens
@@ -159,23 +165,25 @@ export function Footer({ mode, hint }: Props) {
         ) : null}
         {mode.kind === "input" ? (
           <>
-            <text>
+            <text flexShrink={0} wrapMode="none">
               <span fg={theme.accent} attributes={1}>
-                {mode.prompt}
+                {truncateEnd(mode.prompt, promptWidth)}
               </span>
               <span> </span>
-              {editSpans(mode.edit, theme.fgBright)}
             </text>
-            <text fg={theme.fgDim}> (⏎ submit, esc cancel)</text>
+            <TextInput edit={mode.edit} fg={theme.fgBright} />
+            {inputHint ? (
+              <text flexShrink={0} wrapMode="none" fg={theme.fgDim}>{inputHint}</text>
+            ) : null}
           </>
         ) : null}
       </box>
-      {hint ? (
+      {hint && mode.kind === "legend" ? (
         <box flexShrink={0} flexDirection="row">
           <text fg={theme.fgDim}>{hint}</text>
         </box>
       ) : null}
-      <box flexShrink={0} marginLeft={2} flexDirection="row">
+      {mode.kind === "legend" ? <box flexShrink={0} marginLeft={2} flexDirection="row">
         {managerPct !== null ? (
           <box flexShrink={0} marginRight={1}>
             <text wrapMode="none" fg={contextPctColor(managerPct)}>
@@ -196,7 +204,7 @@ export function Footer({ mode, hint }: Props) {
             />
           </box>
         ))}
-      </box>
+      </box> : null}
     </box>
   );
 }

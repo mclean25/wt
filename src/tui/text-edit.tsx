@@ -27,6 +27,7 @@ import type { KeyEvent } from "@opentui/core";
 import type { ReactNode } from "react";
 
 import { theme } from "./theme.ts";
+import { ELLIPSIS, graphemes } from "./text.ts";
 
 export type TextEdit = {
   readonly value: string;
@@ -86,6 +87,59 @@ function withCursor(te: TextEdit, cursor: number): TextEdit {
   return cursor === te.cursor ? te : { value: te.value, cursor };
 }
 
+function characterLeft(value: string, cursor: number): number {
+  let start = 0;
+  for (const ch of graphemes(value)) {
+    const end = start + ch.length;
+    if (end >= cursor) return start;
+    start = end;
+  }
+  return start;
+}
+
+function characterRight(value: string, cursor: number): number {
+  let end = 0;
+  for (const ch of graphemes(value)) {
+    end += ch.length;
+    if (end > cursor) return end;
+  }
+  return value.length;
+}
+
+/** Single-line presentation only: retain the cursor and the text nearest it. */
+export function visibleEdit(te: TextEdit, width: number): TextEdit {
+  const budget = Math.max(0, Math.floor(width) - 1); // block cursor
+  const before = graphemes(te.value.slice(0, te.cursor).replace(/[\r\n\t]/g, " "));
+  const after = graphemes(te.value.slice(te.cursor).replace(/[\r\n\t]/g, " "));
+  let left = "";
+  let used = 0;
+  let index = before.length;
+  while (index > 0) {
+    const ch = before[index - 1]!;
+    const cells = Bun.stringWidth(ch);
+    if (used + cells > budget) break;
+    left = ch + left;
+    used += cells;
+    index--;
+  }
+  if (index > 0 && budget >= 6) {
+    const chars = graphemes(left);
+    while (used + 3 > budget && chars.length > 0) {
+      used -= Bun.stringWidth(chars.shift()!);
+    }
+    left = ELLIPSIS + chars.join("");
+    used += 3;
+  }
+  let right = "";
+  for (const ch of after) {
+    const cells = Bun.stringWidth(ch);
+    if (used + cells > budget) break;
+    right += ch;
+    used += cells;
+  }
+  return { value: left + right, cursor: left.length };
+}
+
 /**
  * Apply one editing keystroke. Returns the next state when the key is
  * an editing key (possibly unchanged — still swallow it), or `null`
@@ -96,12 +150,12 @@ export function applyEditKey(k: EditKey, te: TextEdit): TextEdit | null {
   const { value, cursor } = te;
   const word = k.ctrl || k.meta || k.option;
   if (k.name === "left") {
-    return withCursor(te, word ? wordLeft(value, cursor) : Math.max(0, cursor - 1));
+    return withCursor(te, word ? wordLeft(value, cursor) : characterLeft(value, cursor));
   }
   if (k.name === "right") {
     return withCursor(
       te,
-      word ? wordRight(value, cursor) : Math.min(value.length, cursor + 1),
+      word ? wordRight(value, cursor) : characterRight(value, cursor),
     );
   }
   // ESC b / ESC f — the readline word jumps (also what iTerm/Terminal
@@ -126,7 +180,7 @@ export function applyEditKey(k: EditKey, te: TextEdit): TextEdit | null {
   }
   if (k.name === "backspace") {
     // alt/option+backspace deletes the word left of the cursor.
-    const start = k.meta || k.option ? wordLeft(value, cursor) : cursor - 1;
+    const start = k.meta || k.option ? wordLeft(value, cursor) : characterLeft(value, cursor);
     if (cursor === 0) return te;
     return {
       value: value.slice(0, Math.max(0, start)) + value.slice(cursor),
@@ -135,7 +189,7 @@ export function applyEditKey(k: EditKey, te: TextEdit): TextEdit | null {
   }
   if (k.name === "delete") {
     if (cursor >= value.length) return te;
-    return { value: value.slice(0, cursor) + value.slice(cursor + 1), cursor };
+    return { value: value.slice(0, cursor) + value.slice(characterRight(value, cursor)), cursor };
   }
   return null;
 }

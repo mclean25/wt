@@ -19,9 +19,10 @@ import {
   useCapturedErrors,
   type CapturedError,
 } from "../error-store.ts";
-import { Modal } from "../modal.tsx";
+import { Modal, modalContentWidth } from "../modal.tsx";
 import { useOverlayScroll, WtScrollbox } from "../scrollbox.tsx";
 import { theme } from "../theme.ts";
+import { graphemes, wrapText } from "../text.ts";
 
 /** Status of the `i` inject-and-enter flow, surfaced above the stack. */
 export type ErrorInjectState =
@@ -33,26 +34,31 @@ export type ErrorInjectState =
 const WRAP_INDENT = "      ";
 
 /**
- * Columns available inside the modal's scroll area — same geometry
- * mirror as the perf overlay's `useContentWidth` (6% side insets above
- * the narrow cutoff, 1 border + 1 padding each side, scrollbar).
+ * Share the shell's width calculation, reserving its scroll gutter.
  */
 function useContentWidth(): number {
   const { width } = useTerminalDimensions();
-  const modalW = width < 60 ? width : width - Math.round(width * 0.06) * 2;
-  return Math.max(36, Math.min(modalW, 102) - 4 /* border+padding */ - 2 /* scrollbar */);
+  return Math.max(1, modalContentWidth(width, { left: "6%", right: "6%" }) - 1);
 }
 
 /** Hard-wrap one stack line to `width`, indenting continuations. */
 function wrapLine(line: string, width: number): string[] {
-  if (line.length <= width) return [line];
-  const out: string[] = [line.slice(0, width)];
-  let rest = line.slice(width);
-  const contW = Math.max(8, width - WRAP_INDENT.length);
-  while (rest.length > 0) {
-    out.push(WRAP_INDENT + rest.slice(0, contW));
-    rest = rest.slice(contW);
+  if (Bun.stringWidth(line) <= width) return [line];
+  const out: string[] = [];
+  const indent = WRAP_INDENT.slice(0, Math.max(0, width - 2));
+  let part = "";
+  let cells = 0;
+  for (const ch of graphemes(line)) {
+    const size = Bun.stringWidth(ch);
+    if (cells + size > width && part) {
+      out.push(part);
+      part = indent;
+      cells = indent.length;
+    }
+    part += size > width ? "�" : ch;
+    cells += size > width ? 1 : size;
   }
+  if (part) out.push(part);
   return out;
 }
 
@@ -77,9 +83,9 @@ function ErrorBlock({
     .split("\n")
     .flatMap((line) => wrapLine(line, width));
   return (
-    <box flexDirection="column" marginBottom={1}>
-      <box backgroundColor={theme.rowSelectedBg} paddingLeft={1}>
-        <text wrapMode="none">
+    <box flexDirection="column" marginBottom={1} flexShrink={0}>
+      <box backgroundColor={theme.rowSelectedBg} paddingLeft={1} flexShrink={0}>
+        <text wrapMode="none" truncate>
           <span fg={latest ? theme.err : theme.fgDim} attributes={1}>
             {error.origin}
           </span>
@@ -87,7 +93,7 @@ function ErrorBlock({
         </text>
       </box>
       {stackLines.map((line, i) => (
-        <text key={i} fg={i === 0 ? theme.fgBright : theme.fg} wrapMode="none">
+        <text key={i} fg={i === 0 ? theme.fgBright : theme.fg} wrapMode="none" flexShrink={0}>
           {line}
         </text>
       ))}
@@ -110,9 +116,9 @@ export function ErrorOverlay({ inject }: { inject: ErrorInjectState }) {
   const newestFirst = [...errors].reverse();
   const injectLine =
     inject.kind === "sending" ? (
-      <text fg={theme.accent}>sending error to the wt session…</text>
+      <text fg={theme.accent} flexShrink={0} wrapMode="none">{wrapText("sending error to the wt session…", contentW).join("\n")}</text>
     ) : inject.kind === "failed" ? (
-      <text fg={theme.err} wrapMode="word">inject failed: {inject.reason}</text>
+      <text fg={theme.err} flexShrink={0} wrapMode="none">{wrapText(`inject failed: ${inject.reason}`, contentW).join("\n")}</text>
     ) : null;
 
   return (
@@ -123,21 +129,18 @@ export function ErrorOverlay({ inject }: { inject: ErrorInjectState }) {
       hints={hints}
       fill
     >
-      <box flexShrink={0} flexDirection="column" marginBottom={1}>
-        <text fg={theme.fgDim} wrapMode="word">
-          Captured instead of being printed over the panes; the full
-          stack is also in the daily log.
-        </text>
-        {isProcessDegraded() ? (
-          <text fg={theme.warn} wrapMode="word">
-            an uncaughtException escaped the event loop — wt keeps
-            running, but internal state may be inconsistent; restart
-            when convenient
-          </text>
-        ) : null}
-        {injectLine}
-      </box>
       <WtScrollbox scrollRef={scrollRef}>
+        <box flexShrink={0} flexDirection="column" marginBottom={1}>
+          <text fg={theme.fgDim} wrapMode="none" flexShrink={0}>
+            {wrapText("Captured instead of being printed over the panes; the full stack is also in the daily log.", contentW).join("\n")}
+          </text>
+          {isProcessDegraded() ? (
+            <text fg={theme.warn} wrapMode="none" flexShrink={0}>
+              {wrapText("an uncaughtException escaped the event loop: wt keeps running, but internal state may be inconsistent; restart when convenient", contentW).join("\n")}
+            </text>
+          ) : null}
+          {injectLine}
+        </box>
         {newestFirst.map((e, i) => (
           <ErrorBlock key={e.id} error={e} width={contentW} latest={i === 0} />
         ))}

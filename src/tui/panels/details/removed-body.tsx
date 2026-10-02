@@ -1,8 +1,11 @@
+import type { RefObject } from "react";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { isMergedRemoval, type RemovedWorktree } from "../../../core/wtstate.ts";
 import { resolveIssueId } from "../../../core/issue-tracker.ts";
 import { ageMsToText, truncateEnd } from "../../text.ts";
 import { NF } from "../../icons.ts";
 import { theme } from "../../theme.ts";
+import { WtScrollbox } from "../../scrollbox.tsx";
 import { IssueLine } from "../../rows/issue.tsx";
 import { RRRow } from "./row-cell.tsx";
 import { detailPaneTitle, DetailTitleLine } from "./title.tsx";
@@ -32,10 +35,11 @@ export function removedPrBadge(state: string | undefined): {
  * comes from the history view's existing batch, never a per-slug read.
  * `⏎` restores, `p`/`i` open the PR/issue from the parent.
  */
-export function RemovedBody({ entry, width, issueStatus }: {
+export function RemovedBody({ entry, width, issueStatus, scrollRef }: {
   entry: RemovedWorktree;
   width: number;
   issueStatus?: string;
+  scrollRef?: RefObject<ScrollBoxRenderable | null>;
 }) {
   const removedMs = Date.parse(entry.removedAt);
   const removedText = Number.isFinite(removedMs)
@@ -56,75 +60,75 @@ export function RemovedBody({ entry, width, issueStatus }: {
       padding={1}
       flexDirection="column"
     >
-      <DetailTitleLine title={entry.title ?? entry.slug} />
-      {entry.work ? (
-        <WorkStatusRecordBlock
-          record={entry.work}
-          contentWidth={Math.max(1, width - 4)}
-          verifyExpanded={null}
-          landed={isMergedRemoval(entry)}
-          lastCommitMs={null}
-        />
-      ) : (
-        <text fg={theme.fgDim}>status unknown</text>
-      )}
-      <RRRow label="branch">
-        <text fg={theme.fg} wrapMode="none" truncate>
-          {entry.branch}
-        </text>
-      </RRRow>
-      {issueId || entry.githubIssue ? (
-        <RRRow label="issue">
-          <IssueLine id={issueId} githubIssue={entry.githubIssue} status={issueStatus} />
-        </RRRow>
-      ) : null}
-      {entry.prNumber !== undefined ? (
-        <RRRow label="pr">
-          <text wrapMode="none" truncate>
-            <span fg={pr?.fg ?? theme.fg}>
-              {`${pr ? `${pr.glyph}  ` : ""}#${entry.prNumber}`}
-            </span>
-            {pr ? <span fg={theme.fgDim}>{` · ${pr.label}`}</span> : null}
+      <WtScrollbox scrollRef={scrollRef}>
+        <DetailTitleLine title={entry.title ?? entry.slug} />
+        {entry.work ? (
+          <WorkStatusRecordBlock
+            record={entry.work}
+            contentWidth={Math.max(1, width - 5)}
+            verifyExpanded={null}
+            landed={isMergedRemoval(entry)}
+            lastCommitMs={null}
+          />
+        ) : (
+          <text fg={theme.fgDim}>status unknown</text>
+        )}
+        <RRRow label="branch">
+          <text fg={theme.fg} wrapMode="none" truncate>
+            {entry.branch}
           </text>
         </RRRow>
-      ) : null}
-      {removedText ? (
-        <RRRow label="removed">
-          <text fg={theme.fgDim} wrapMode="none" truncate>
-            {removedText}
-          </text>
-        </RRRow>
-      ) : null}
-      {/* Same shape as the live pane's `AutomationsPausedLine`. It
-          matters more here than there: a post-merge `external` run
-          outlives the checkout, so this is the only surface that can
-          say whether one is still going to fire for this slug. */}
-      {entry.automationsPaused ? (
-        <box marginTop={1}>
-          <text wrapMode="none" truncate>
-            <span fg={theme.warn}>{"⏸ "}</span>
-            <span fg={theme.fgDim}>
-              {"automations paused for this archived worktree (ctrl+a resumes)"}
-            </span>
-          </text>
-        </box>
-      ) : null}
-      {entry.prUrl ? (
-        <box marginTop={1}>
-          <text fg={theme.fgDim} wrapMode="none" truncate>
-            {entry.prUrl}
-          </text>
-        </box>
-      ) : null}
-      <box flexGrow={1} flexShrink={1} minHeight={0} />
+        {issueId || entry.githubIssue ? (
+          <RRRow label="issue">
+            <IssueLine id={issueId} githubIssue={entry.githubIssue} status={issueStatus} />
+          </RRRow>
+        ) : null}
+        {entry.prNumber !== undefined ? (
+          <RRRow label="pr">
+            <text wrapMode="none" truncate>
+              <span fg={pr?.fg ?? theme.fg}>
+                {`${pr ? `${pr.glyph}  ` : ""}#${entry.prNumber}`}
+              </span>
+              {pr ? <span fg={theme.fgDim}>{` · ${pr.label}`}</span> : null}
+            </text>
+          </RRRow>
+        ) : null}
+        {removedText ? (
+          <RRRow label="removed">
+            <text fg={theme.fgDim} wrapMode="none" truncate>
+              {removedText}
+            </text>
+          </RRRow>
+        ) : null}
+        {/* Same shape as the live pane's `AutomationsPausedLine`. It
+            matters more here than there: a post-merge `external` run
+            outlives the checkout, so this is the only surface that can
+            say whether one is still going to fire for this slug. */}
+        {entry.automationsPaused ? (
+          <box marginTop={1}>
+            <text wrapMode="none" truncate>
+              <span fg={theme.warn}>{"⏸ "}</span>
+              <span fg={theme.fgDim}>
+                {"automations paused for this archived worktree (ctrl+a resumes)"}
+              </span>
+            </text>
+          </box>
+        ) : null}
+        {entry.prUrl ? (
+          <box marginTop={1}>
+            <text fg={theme.fgDim} wrapMode="none" truncate>
+              {entry.prUrl}
+            </text>
+          </box>
+        ) : null}
+      </WtScrollbox>
       {/* Hand-rolled end-truncation, not opentui's native `truncate`:
           this line teaches keybinds, so a middle-clip silently deleting
           `p PR · i issue` from the middle is the worst possible failure
           mode. End-truncation at least drops from the tail (`h back`),
-          which is the least critical hint. No scrollbox here (unlike
-          the worktree details pane), so the budget is just border +
-          padding on each side. */}
-      <text fg={theme.fgDim} wrapMode="none">
+          which is the least critical hint. The hint stays outside the
+          scrollbox, with just border + padding on each side. */}
+      <text fg={theme.fgDim} wrapMode="none" flexShrink={0}>
         {truncateEnd(
           "⏎ restore · p PR · i issue · y yank · ctrl+a autos · h back",
           Math.max(0, width - 4),

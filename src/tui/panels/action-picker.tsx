@@ -305,21 +305,26 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
               backgroundColor={bg}
               paddingLeft={1}
               paddingRight={1}
+              height={1}
+              flexShrink={0}
+              overflow="hidden"
             >
-              <text fg={selected ? theme.accent : theme.fgDim}>
+              <text width={2} flexShrink={0} wrapMode="none" fg={selected ? theme.accent : theme.fgDim}>
                 {selected ? "▸ " : "  "}
               </text>
               <box width={2} flexShrink={0}>
                 <text fg={prefixFg}>{prefix}</text>
               </box>
-              <box flexGrow={1} flexShrink={1} overflow="hidden">
-                <text fg={labelFg} wrapMode="none" truncate>
+              <box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                <text width="100%" height={1} fg={labelFg} wrapMode="none" truncate>
                   {label}
                 </text>
               </box>
-              <text fg={theme.fgDim} wrapMode="none">
-                {hint}
-              </text>
+              <box maxWidth="45%" flexShrink={0} overflow="hidden" marginLeft={1}>
+                <text height={1} fg={theme.fgDim} wrapMode="none" truncate>
+                  {hint}
+                </text>
+              </box>
             </box>
           </Fragment>
         );

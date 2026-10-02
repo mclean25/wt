@@ -1,8 +1,9 @@
 import { StatusKind } from "../../core/types.ts";
+import { useTerminalDimensions } from "@opentui/react";
 import { destroyHazard, destroyHazardLabel } from "../app-helpers.ts";
 import { NF } from "../icons.ts";
-import { Modal } from "../modal.tsx";
-import { ScrollableList } from "./scroll-list.tsx";
+import { Modal, modalContentWidth } from "../modal.tsx";
+import { ConfirmBody } from "./confirm-body.tsx";
 import { theme } from "../theme.ts";
 import {
   remoteCleanHazardLabel,
@@ -42,6 +43,8 @@ function hazardFor(candidate: CleanCandidate): string | null {
 }
 
 export function CleanConfirmModal({ candidates }: Props) {
+  const { width } = useTerminalDimensions();
+  const compact = modalContentWidth(width, { left: "15%", right: "15%" }) < 60;
   // The sweep refuses to force, so a candidate holding uncommitted work
   // or unpushed commits survives it (see `doCleanRows`). Count and label
   // what will ACTUALLY be destroyed — a modal that promises 5 and
@@ -62,33 +65,34 @@ export function CleanConfirmModal({ candidates }: Props) {
       hints={[
         ["y", "confirm"],
         ["n / esc / q", "cancel"],
+        ["j/k", "scroll"],
       ]}
     >
-      <box flexDirection="column" marginBottom={1}>
-        <text fg={theme.fg}>
-          About to destroy{" "}
-          <span fg={theme.warn} attributes={1}>
-            {count}
-          </span>{" "}
-          worktree{count === 1 ? "" : "s"}
-          {stageCount > 0 ? (
-            <>
-              {" · "}
-              <span fg={theme.warn}>{stageCount}</span> stage
-              {stageCount === 1 ? "" : "s"}
-            </>
-          ) : null}
-          . Branches will be deleted.
-          {keptCount > 0 ? (
-            <>
-              {" "}
-              <span fg={theme.warn}>{keptCount}</span> kept — destroy those
-              with d to force.
-            </>
-          ) : null}
-        </text>
-      </box>
-      <ScrollableList>
+      <ConfirmBody>
+        <box flexShrink={0} flexDirection="column" marginBottom={1}>
+          <text fg={theme.fg}>
+            About to destroy{" "}
+            <span fg={theme.warn} attributes={1}>
+              {count}
+            </span>{" "}
+            worktree{count === 1 ? "" : "s"}
+            {stageCount > 0 ? (
+              <>
+                {" · "}
+                <span fg={theme.warn}>{stageCount}</span> stage
+                {stageCount === 1 ? "" : "s"}
+              </>
+            ) : null}
+            . Branches will be deleted.
+            {keptCount > 0 ? (
+              <>
+                {" "}
+                <span fg={theme.warn}>{keptCount}</span> kept — destroy those
+                with d to force.
+              </>
+            ) : null}
+          </text>
+        </box>
         {candidates.map((candidate) => {
           const row = candidate.kind === "local" ? candidate.row : null;
           const remote = candidate.kind === "remote" ? candidate.entry : null;
@@ -99,36 +103,35 @@ export function CleanConfirmModal({ candidates }: Props) {
             : `remote:${remoteWorktreeLedgerKey(remote!.hostKey, remote!.slug)}`;
           const label = row ? row.wt.slug : `${remote!.slug} @ ${remote!.hostLabel}`;
           return (
-            <box key={key} flexDirection="row">
-              <box width={2} flexShrink={0}>
-                <text fg={theme.fgDim}>·</text>
+            <box key={key} flexDirection={compact ? "column" : "row"} flexShrink={0} marginBottom={compact ? 1 : 0}>
+              <box flexDirection="row" flexGrow={1} flexShrink={compact ? 0 : 1} minWidth={0} overflow="hidden">
+                <text width={2} flexShrink={0} fg={theme.fgDim}>·</text>
+                <box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                  <text width="100%" fg={hazard ? theme.fgDim : theme.fg} wrapMode={compact ? "word" : "none"} truncate={!compact}>
+                    {label}
+                  </text>
+                </box>
               </box>
-              <box flexGrow={1} flexShrink={1} overflow="hidden">
-                <text fg={hazard ? theme.fgDim : theme.fg} wrapMode="none" truncate>
-                  {label}
-                </text>
-              </box>
-              <box flexShrink={0} flexDirection="row">
-                <text fg={theme.fgDim}>{"  "}</text>
-                <text fg={theme.fgDim}>{reasonFor(candidate).padEnd(10)}</text>
+              <text flexShrink={0} fg={theme.fgDim} wrapMode="word">
+                {`  ${reasonFor(candidate).padEnd(10)}`}
                 {hazard ? (
-                  <text fg={theme.warn}> kept · {hazard}</text>
+                  <span fg={theme.warn}> kept · {hazard}</span>
                 ) : remote ? (
-                  <text fg={theme.fgDim}> remote</text>
+                  <span> remote</span>
                 ) : deployed ? (
                   // Two spaces after the bolt: opentui's native renderer
                   // treats the PUA codepoint as 1-cell wide so a single
                   // space leaves "destroys" overlapping the icon's right
                   // half. Same pattern as `ChecksBadge` in details.
-                  <text fg={theme.warn}> {NF.bolt}  destroys stage</text>
+                  <span fg={theme.warn}> {NF.bolt}  destroys stage</span>
                 ) : (
-                  <text fg={theme.fgDim}> no stage</text>
+                  <span> no stage</span>
                 )}
-              </box>
+              </text>
             </box>
           );
         })}
-      </ScrollableList>
+      </ConfirmBody>
     </Modal>
   );
 }

@@ -37,7 +37,7 @@ import {
 } from "../../row-gutter.tsx";
 import type { SpineCell } from "../../../core/stack-layout.ts";
 import { WtScrollbox } from "../../scrollbox.tsx";
-import { clipLines } from "../../text.ts";
+import { clipLines, truncateEnd } from "../../text.ts";
 import { theme } from "../../theme.ts";
 import {
   isRemoteSummary,
@@ -513,7 +513,7 @@ export function SectionSummaryBody({
     <box
       flexGrow={1}
       width={width}
-      flexShrink={0}
+      flexShrink={1}
       overflow="hidden"
       border
       borderStyle="single"
@@ -552,10 +552,13 @@ export function SectionSummaryBody({
           block advertises only the key it HAS — it is pinned to the
           bottom and named by wt, so rename and move do nothing there
           and offering them reads as a bug the first time you try. */}
-      <text fg={theme.fgDim} wrapMode="none" truncate flexShrink={0}>
-        {section.sectionKey === GROUP_ARCHIVED
-          ? "TAB expand · y yank"
-          : "TAB expand · y yank · L rename · J/K move"}
+      <text fg={theme.fgDim} wrapMode="none" flexShrink={0}>
+        {truncateEnd(
+          section.sectionKey === GROUP_ARCHIVED
+            ? "TAB expand · y yank"
+            : "TAB expand · y yank · L rename · J/K move",
+          Math.max(0, width - 4),
+        )}
       </text>
     </box>
   );

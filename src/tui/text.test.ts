@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import { clipLines, wrapText } from "./text.ts";
+import { clipLines, truncateEnd, wrapText } from "./text.ts";
+
+test("truncation preserves whole Unicode characters within a cell budget", () => {
+  expect(truncateEnd("abc😀xyz", 7)).toBe("abc...");
+  expect(truncateEnd("ab👩‍💻xyzw", 7)).toBe("ab👩‍💻...");
+  expect(truncateEnd("abe\u0301xyzw", 6)).toBe("abe\u0301...");
+  expect(truncateEnd("日本語文字", 7)).toBe("日本...");
+});
 
 describe("wrapText", () => {
   test("wraps on word boundaries within the budget", () => {
@@ -53,6 +60,17 @@ describe("wrapText", () => {
   test("counts terminal cells, not code units", () => {
     // Each CJK glyph is 2 cells, so 4 fill an 8-cell line.
     expect(wrapText("日本語文字体系", 8)).toEqual(["日本語文", "字体系"]);
+  });
+
+  test("hard wrapping preserves emoji sequences and never exceeds narrow cells", () => {
+    expect(wrapText("👩‍💻👩‍💻👩‍💻", 3)).toEqual(["👩‍💻", "👩‍💻", "👩‍💻"]);
+    expect(wrapText("e\u0301e\u0301e\u0301", 2)).toEqual(["e\u0301e\u0301", "e\u0301"]);
+    for (const width of [1, 2, 3, 4]) {
+      for (const line of wrapText("日本語👩‍💻", width)) {
+        expect(line.isWellFormed()).toBe(true);
+        expect(Bun.stringWidth(line)).toBeLessThanOrEqual(width);
+      }
+    }
   });
 
   test("degenerate widths return nothing rather than looping", () => {

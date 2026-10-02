@@ -282,7 +282,7 @@ const RowView = memo(function RowView({
     splitParentSection && refRoom >= SECTION_REF_MIN
       ? `${REF_ARROW}${truncateEnd(splitParentSection, refRoom)}`
       : "";
-  const labelCells = budget - parentRef.length - (parentRef ? REF_SLACK : 0);
+  const labelCells = budget - Bun.stringWidth(parentRef) - (parentRef ? REF_SLACK : 0);
   return (
     <box
       id={row.wt.slug}
@@ -662,15 +662,11 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
               {emptySummary ? (
                 <text fg={theme.fgDim}>No active worktrees ({emptySummary}).</text>
               ) : null}
-              <box flexDirection="row">
-                <text fg={theme.fgDim}>
-                  {emptySummary ? "Press " : "No worktrees. Press "}
-                </text>
-                <text fg={theme.accent} attributes={1}>
-                  n
-                </text>
-                <text fg={theme.fgDim}> to create one.</text>
-              </box>
+              <text fg={theme.fgDim}>
+                {emptySummary ? "Press " : "No worktrees. Press "}
+                <span fg={theme.accent} attributes={1}>n</span>
+                {" to create one."}
+              </text>
             </>
           )}
         </box>
@@ -680,12 +676,12 @@ export const WorktreeList = memo(function WorktreeList({ items, archivedItems, r
             // No worktrees but review-requests are loaded — still surface
             // the new-worktree hint so the user isn't left wondering where
             // the worktree column went. The PR section renders below.
-            <box padding={1} flexDirection="row">
-              <text fg={theme.fgDim}>No worktrees. Press </text>
-              <text fg={theme.accent} attributes={1}>
-                n
+            <box padding={1}>
+              <text fg={theme.fgDim}>
+                {"No worktrees. Press "}
+                <span fg={theme.accent} attributes={1}>n</span>
+                {" to create one."}
               </text>
-              <text fg={theme.fgDim}> to create one.</text>
             </box>
           ) : null}
           {/* The whole list scrolls as one — active worktrees, review

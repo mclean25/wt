@@ -965,6 +965,7 @@ export function App({ onExit }: Props) {
         removedEntries,
         removedCursor,
         setRemovedIndex,
+        detailsScrollRef,
         openPrUrl,
         doYank,
         setModal,
@@ -1130,12 +1131,12 @@ export function App({ onExit }: Props) {
             verifyExpanded={verifyExpanded}
           />
           {activityInColumn && (
-            <OutputViewer output={displayedOutput} height={activityHeight} />
+            <OutputViewer output={displayedOutput} height={activityHeight} width={detailsWidth} />
           )}
         </box>
       </box>
       {!activityInColumn && (
-        <OutputViewer output={displayedOutput} height={activityHeight} />
+        <OutputViewer output={displayedOutput} height={activityHeight} width={width} />
       )}
       <PreFooterModals
         modal={modal}

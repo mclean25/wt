@@ -17,8 +17,9 @@ import {
   type PerfSnapshot,
 } from "../../core/perf.ts";
 import type { KeyHintPair } from "../key-hint.tsx";
-import { Modal } from "../modal.tsx";
+import { Modal, modalContentWidth } from "../modal.tsx";
 import { useOverlayScroll, WtScrollbox } from "../scrollbox.tsx";
+import { truncateEnd } from "../text.ts";
 import { theme } from "../theme.ts";
 
 /** Status of the `i` inject-and-enter flow, surfaced in the hint row. */
@@ -51,28 +52,26 @@ function mem(mb: number): string {
 
 /** Fixed-width right-aligned cell, so columns line up without a table. */
 function pad(text: string, width: number): string {
-  return text.length >= width ? text : " ".repeat(width - text.length) + text;
+  return " ".repeat(Math.max(0, width - Bun.stringWidth(text))) + text;
 }
 
-/** Left-aligned fixed-width cell, `…`-ellipsized when it doesn't fit. */
+/** Left-aligned fixed-width terminal cell, marked when it does not fit. */
 function fit(text: string, width: number): string {
   if (width <= 0) return "";
-  const cut = text.length > width ? `${text.slice(0, width - 1)}…` : text;
-  return cut + " ".repeat(width - cut.length);
+  const cut = truncateEnd(text, width);
+  return cut + " ".repeat(Math.max(0, width - Bun.stringWidth(cut)));
 }
 
 /**
  * Columns available INSIDE the modal's scroll area. Mirrors the Modal
- * geometry (6% insets each side above the narrow cutoff, else full
- * width; 1 border + 1 padding each side) minus room for the scrollbox
- * scrollbar. Every row below is preformatted in JS to this budget —
+ * geometry, including its maximum frame width and scrollbox gutter.
+ * Every row below is preformatted in JS to this budget —
  * terminal cells never rely on the renderer clipping overlong text,
  * which is exactly what used to wrap/garble long command lines.
  */
 function useContentWidth(): number {
   const { width } = useTerminalDimensions();
-  const modalW = width < 60 ? width : width - Math.round(width * 0.06) * 2;
-  return Math.max(36, modalW - 4 /* border+padding */ - 2 /* scrollbar */);
+  return Math.max(1, modalContentWidth(width, { left: "6%", right: "6%" }) - 1);
 }
 
 function Bar({
@@ -116,11 +115,21 @@ function MeterRow({
   /** Content budget; the trailing text is `…`-clipped to what remains. */
   width: number;
 }) {
+  // Values are the useful part at narrow widths. A fixed 22-cell bar
+  // would otherwise consume the entire row and hide every number.
+  if (width < LABEL_W + BAR_W + 18) {
+    return (
+      <box flexDirection="column" height={2} flexShrink={0}>
+        <text height={1} flexShrink={0} fg={theme.fgDim} wrapMode="none">{truncateEnd(label, width)}</text>
+        <text height={1} flexShrink={0} fg={color ?? theme.fg} wrapMode="none">{truncateEnd(trailing.trim(), width)}</text>
+      </box>
+    );
+  }
   const trailW = Math.max(0, width - LABEL_W - BAR_W - 2);
   return (
-    <box flexDirection="row">
+    <box flexDirection="row" height={1} flexShrink={0} overflow="hidden">
       <box width={LABEL_W} flexShrink={0}>
-        <text fg={theme.fgDim} wrapMode="none">{label}</text>
+        <text fg={theme.fgDim} wrapMode="none">{fit(label, LABEL_W - 1)}</text>
       </box>
       <box width={BAR_W} flexShrink={0}>
         <Bar value={value} max={max} color={color} />
@@ -166,12 +175,12 @@ function ProcList({
   const shown = procs.filter((p) => p.cpu >= 0.5 || p.rssMb >= 100);
   const visible = shown.length >= 3 ? shown : procs.slice(0, 3);
   const hidden = procs.length - visible.length;
-  const sessions = visible.some((p) => p.session);
-  const sessW = sessions
-    ? Math.min(16, Math.max(...visible.map((p) => p.session?.length ?? 0)))
+  const sessW = visible.some((p) => p.session)
+    ? Math.min(16, Math.max(0, width - 27), Math.max(...visible.map((p) => Bun.stringWidth(p.session ?? ""))))
     : 0;
+  const sessions = sessW > 0;
   // "  cpu% memM  [session  ]command…"
-  const cmdW = width - 5 - 1 - 5 - 2 - (sessions ? sessW + 2 : 0);
+  const cmdW = Math.max(0, width - 5 - 1 - 5 - 2 - (sessions ? sessW + 2 : 0));
   return (
     <box flexDirection="column">
       {visible.map((p) => (
@@ -180,9 +189,9 @@ function ProcList({
           <span fg={theme.fgDim}>{pad(mem(p.rssMb), 6)}</span>
           {"  "}
           {sessions ? (
-            <span fg={theme.accentAlt}>{fit(p.session ?? "", sessW + 2)}</span>
+            <span fg={theme.accentAlt}>{fit(p.session ?? "", sessW)}{"  "}</span>
           ) : null}
-          <span fg={theme.fg}>{fit(shortCommand(p.command, cmdW), cmdW)}</span>
+          <span fg={theme.fg}>{fit(shortCommand(p.command, p.command.length), cmdW)}</span>
         </text>
       ))}
       {procs.length === 0 ? <text fg={theme.fgDim}>none</text> : null}
@@ -325,7 +334,7 @@ export function PerfOverlay({
             width={contentW}
             trailing={`${mem(snapshot.memUsedMb)} of ${mem(snapshot.memTotalMb)}`}
           />
-          <box flexDirection="row">
+          <box flexDirection={contentW < LABEL_W + 30 ? "column" : "row"} flexShrink={0}>
             <box width={LABEL_W} flexShrink={0}>
               <text fg={theme.fgDim}>load avg</text>
             </box>
@@ -360,7 +369,7 @@ export function PerfOverlay({
               {snapshot.sessions.map((s) => (
                 <MeterRow
                   key={s.name}
-                  label={fit(s.name, LABEL_W - 1).trimEnd()}
+                  label={s.name}
                   value={s.cpu}
                   max={ceiling}
                   width={contentW}

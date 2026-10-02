@@ -25,6 +25,21 @@ const entries: RemovedWorktree[] = [
   },
 ];
 
+test("empty removed history hint wraps in reading order", async () => {
+  for (const width of [20, 30]) {
+    const setup = await testRender(<RemovedList entries={[]} selectedIndex={0} width={width} />, { width, height: 12 });
+    try {
+      await setup.flush();
+      const prose = setup.captureCharFrame().split("\n")
+        .filter((line) => line.startsWith("│"))
+        .map((line) => line.slice(1, -1).trim()).filter(Boolean).join(" ");
+      expect(prose).toBe("No removed worktrees. Press h to go back.");
+    } finally {
+      act(() => setup.renderer.destroy());
+    }
+  }
+});
+
 test("removed rows stay one TUI line with aligned trailing slots", async () => {
   for (const width of [30, 35, 45, 60]) {
     const setup = await testRender(

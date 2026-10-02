@@ -37,8 +37,34 @@ type Props = {
  */
 export function ScrollableList({ selectedId, revision, children }: Props) {
   const listRef = useRef<ScrollBoxRenderable>(null);
+  const lastLayout = useRef("");
   useEffect(() => {
     if (selectedId) scrollCursorIntoView(listRef.current, selectedId);
   }, [selectedId, revision]);
-  return <WtScrollbox scrollRef={listRef}>{children}</WtScrollbox>;
+  return (
+    <box
+      flexGrow={1}
+      flexShrink={1}
+      minHeight={0}
+      renderAfter={() => {
+        const list = listRef.current;
+        if (!list || !selectedId) return;
+        const selected = list.content.findDescendantById(selectedId);
+        if (!selected) return;
+        // Effects run before Yoga has placed a newly mounted list. Re-anchor
+        // once its viewport is real, and again when a resize changes it.
+        // Do not re-anchor unchanged frames: mouse scrolling remains free.
+        // Candidate order can change without changing the content height.
+        // Relative position stays stable during mouse scrolling.
+        const selectedY = selected.y - list.content.y;
+        const layout = `${list.viewport.width}:${list.viewport.height}:${list.content.height}:${selectedId}:${selectedY}:${selected.height}`;
+        if (layout !== lastLayout.current) {
+          lastLayout.current = layout;
+          scrollCursorIntoView(list, selectedId);
+        }
+      }}
+    >
+      <WtScrollbox scrollRef={listRef}>{children}</WtScrollbox>
+    </box>
+  );
 }

@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/react";
 
 import {
   useAttentionEvents,
@@ -9,11 +8,11 @@ import {
   type WtEvent,
 } from "../activity-log.ts";
 import { WtScrollbox } from "../scrollbox.tsx";
-import { wrapText } from "../text.ts";
+import { truncateEnd, wrapText } from "../text.ts";
 import { theme } from "../theme.ts";
 
-/** `HH:MM:SS` + gap + right-aligned source column + gap. */
-const PREFIX_WIDTH = 8 + 1 + 16 + 1;
+/** Right-aligned source column at ordinary terminal widths. */
+const SOURCE_WIDTH = 16;
 /**
  * Hanging indent for a wrapped message's continuation lines. Two cells:
  * enough to read as "still the same entry", cheap enough that the tail
@@ -121,9 +120,12 @@ function EventsList({
   emptyText,
   seenTs,
   wrap = false,
+  width,
 }: {
   events: readonly WtEvent[];
   emptyText: string;
+  /** Outer pane width supplied by the active layout. */
+  width: number;
   /**
    * Attention "seen" watermark (`x`): rows at or before it render
    * entirely dim, with a `── seen HH:MM:SS` rule after the last one —
@@ -159,13 +161,15 @@ function EventsList({
   // window once they return to the bottom.
   const [windowSize, setWindowSize] = useState(TAIL_WINDOW);
   const windowStart = Math.max(0, events.length - windowSize);
-  // The bottom pane spans the full terminal width, so the message
-  // budgets come from the terminal minus this pane's own chrome —
-  // there's no parent-measured width to read here. Only the wrapping
-  // feed needs them; the truncating feeds let flexbox do the clipping.
-  const { width } = useTerminalDimensions();
+  // The output pane can share the terminal with the worktree list. Its
+  // actual width governs both the message and fixed prefix budgets.
   const avail = Math.max(1, width - PANE_CHROME);
-  const firstWidth = Math.max(1, avail - PREFIX_WIDTH);
+  const timeCells = Math.min(9, Math.max(0, avail - 1));
+  // Preserve message space on narrow terminals by shortening the source
+  // column first. These are display cells, including each column's gap.
+  const sourceCells = Math.min(SOURCE_WIDTH, Math.max(0, avail - timeCells - 13));
+  const prefixCells = timeCells + (sourceCells > 0 ? sourceCells + 1 : 0);
+  const firstWidth = Math.max(1, avail - prefixCells);
   const restWidth = Math.max(1, avail - CONT_INDENT.length);
   // Rows hidden above the window, so the spacer reproduces their exact
   // height and scroll geometry matches a full render. There is no
@@ -242,6 +246,7 @@ function EventsList({
         const seen = seenTs !== undefined && e.ts <= seenTs;
         const fg = seen ? theme.fgDim : levelFg(e.level);
         const lines = wrap ? wrappedLinesFor(e, restWidth, firstWidth) : null;
+        const source = truncateEnd(e.source, sourceCells);
         return (
           <Fragment key={e.id}>
             {/* The prefix (time + source) is grouped into a
@@ -259,12 +264,16 @@ function EventsList({
             <box flexDirection="column" flexShrink={0}>
               <box flexDirection="row" flexShrink={0} overflow="hidden">
                 <box flexShrink={0} flexDirection="row">
-                  <text fg={theme.fgDim}>{fmtTime(e.ts)}</text>
-                  <text> </text>
-                  <text fg={seen ? theme.fgDim : sourceFg(e.source)}>
-                    {e.source.slice(0, 16).padStart(16)}
-                  </text>
-                  <text> </text>
+                  <box width={timeCells} flexShrink={0}>
+                    <text fg={theme.fgDim} wrapMode="none">{truncateEnd(`${fmtTime(e.ts)} `, timeCells)}</text>
+                  </box>
+                  {sourceCells > 0 ? (
+                    <box width={sourceCells + 1} flexShrink={0}>
+                      <text fg={seen ? theme.fgDim : sourceFg(e.source)} wrapMode="none">
+                        {`${" ".repeat(sourceCells - Bun.stringWidth(source))}${source} `}
+                      </text>
+                    </box>
+                  ) : null}
                 </box>
                 <box flexGrow={1} flexShrink={1} overflow="hidden">
                   <text fg={fg} wrapMode="none" truncate={!lines}>
@@ -306,6 +315,7 @@ function EventsList({
  */
 export function ActivityContent({
   feed = "firehose",
+  width,
 }: {
   /**
    * `attention` shows the curated channel plus any error-level line
@@ -315,6 +325,7 @@ export function ActivityContent({
    * not the complement.
    */
   feed?: "attention" | "firehose";
+  width: number;
 }) {
   const all = useEvents();
   const attention = useAttentionEvents();
@@ -331,6 +342,7 @@ export function ActivityContent({
       // and stays fully bright.
       seenTs={feed === "attention" && seenTs > 0 ? seenTs : undefined}
       wrap={feed === "attention"}
+      width={width}
     />
   );
 }
@@ -343,13 +355,13 @@ export function ActivityContent({
  * non-destroy events for the same slug also land here, but during a
  * destroy the destroy lines dominate by volume.
  */
-export function DestroyContent({ slug }: { slug: string }) {
+export function DestroyContent({ slug, width }: { slug: string; width: number }) {
   const events = useEvents();
   const filtered = useMemo(
     () => events.filter((e) => e.source === slug),
     [events, slug],
   );
   return (
-    <EventsList events={filtered} emptyText="(waiting for destroy output…)" />
+    <EventsList events={filtered} emptyText="(waiting for destroy output…)" width={width} />
   );
 }
