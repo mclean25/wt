@@ -30,6 +30,7 @@ commands:
   edge        assert / list merge-order edges between worktrees (self-expiring)
   section     list / move / rename / drop the fleet's sections (the human's batching)
   manager     attach the fleet-coordinator session / send it a message / report a result
+  hold        set / release / check a bounded resource hold (never a fleet gate)
   issue       show a worktree's issue links / attach a GitHub issue (--gh)
   agent       send to / list wt-owned agent targets; start worktree agents
   claude      inspect or control Claude Code sessions (legacy send / ls / stop)
@@ -104,6 +105,7 @@ const RUNNERS: Record<string, Loader> = {
   edge: () => import("./commands/edge.ts"),
   section: () => import("./commands/section.ts"),
   manager: () => import("./commands/manager.ts"),
+  hold: () => import("./commands/hold.ts"),
   issue: () => import("./commands/issue.ts"),
   agent: () => import("./commands/agent.ts"),
   claude: () => import("./commands/claude.ts"),

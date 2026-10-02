@@ -190,7 +190,32 @@ A session blocked on a human (`waiting`, e.g. AskUserQuestion or a permission pr
 
 ## Feedback channel (opt-in)
 
-With `[manager] wt_feedback = true` ([configuration.md](configuration.md#manager)), the manager's playbook includes a standing brief to proactively send workflow papercuts and missing-sense observations from fleet work to the session working on the wt source repo, which reviews and applies what's warranted. Off by default — it presumes you run such a session.
+`[manager] wt_feedback = true` permits new actionable evidence for the wt owner.
+It does not authorize automatic papercut forwarding, progress reports, or
+acknowledgment chains. Verify that a fact is current and changes the recipient's
+next action before sending it. Off by default.
+
+## Transient maintenance holds
+
+Use [`wt hold`](cli.md#wt-hold) for a bounded resource window owned by one agent.
+`wt agent send <target> --hold <id>` (also `wt manager send --hold <id>`) checks
+the existing reference and sends its original scope, owner, event time and
+deadline. Sending never extends the window. The recipient must run the embedded
+`wt hold check <id>` before acting: native harness queues can deliver it after
+release, expiry or replacement. A successful read with `active: false`, an
+unknown ID, or a failed read grants no new hold. It is not proof a tool is healthy.
+
+Set/release write state without sending messages. Release watermarks survive
+expiry and prevent an older set from resurrecting a freeze. New active holds
+cannot displace another active owner or silently extend the same owner's window.
+Only operations conflicting with actual maintenance pause; unrelated work and
+merges continue. Recheck resource existence and active execution rather than
+waiting on retained sessions. Record checks owed during broken-tool repair.
+
+This protocol does not retract prompts already accepted by a harness, parse
+free-text freezes, or mutate work-status/merge gates. Ordinary messages and
+acknowledgments carry no transient-hold authority. Native queue receipts still
+describe delivery, not current applicability or execution.
 
 ## Lifecycle
 

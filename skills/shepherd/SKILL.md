@@ -62,13 +62,16 @@ so and propose automations instead. It is less machinery and it cannot rot.
 
 ## The prompt is a snapshot — keep facts out of it
 
-If you do set a timer, **the recurring prompt must carry policy, not facts.**
-A real run had to be torn down and recreated three times in an hour, every time
-because a standing fact baked into the prompt had decayed: "suite X is red on
-the mainline and <slug> owns fixing it" (retracted 40 minutes later), "a failed
-start means rebuild" (it never fails), and a rule about response codes that was
-simply wrong. There is usually no edit operation, so each correction is a
-delete and a full re-create.
+If you set a timer, **the recurring prompt carries policy, not facts.** Re-read
+current state each pass. Send only new actionable cross-owner facts; do not
+resend unchanged nudges, acknowledge messages, forward papercuts, or request
+routine progress. A retained session does not prove active execution.
+
+Apply the manager playbook's maintenance rules: one owner, a bounded hold on
+only resource operations conflicting with an actual mutation. Before honoring
+a delayed hold, require `wt hold check <id>` to return `active: true`. Keep
+unrelated code, tests, reviews, and merges moving. Broken tooling must not block
+its own repair; record owed verification and resume it when possible.
 
 Facts belong in wt, where they expire on their own:
 

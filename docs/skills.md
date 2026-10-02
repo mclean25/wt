@@ -26,6 +26,11 @@ The instructions block exists because skills only load when invoked — the
 ownership rules ("you own testing", "never end without a status") have to be
 in the always-loaded instructions layer to actually govern behavior.
 
+The block and manager/shepherd playbooks restrict coordination to new actionable
+cross-owner facts. Transient holds require a current `wt hold check` result;
+acknowledgments do not renew them. Maintenance pauses only affected operations,
+while independent work continues and unavailable checks remain recorded as owed.
+
 It's also the only layer that can *correct* a repo. A shared repo's own
 `CLAUDE.md`/`AGENTS.md` is written for the contributors who don't use wt, so it
 says things like "run `pnpm dev`" — always loaded, and wrong inside a worktree.

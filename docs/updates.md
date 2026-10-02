@@ -128,7 +128,7 @@ first) plus current / last-good / skipped shas.
 
 ## Evolve: data compatibility across hot updates
 
-Three stores, three policies:
+Stores have explicit compatibility policies:
 
 - **`~/.local/state/wt/wt.sqlite`** (fork bases, controller-owned local/remote sections, work statuses,
   archives and removed history — durable, not rebuildable): one database for
@@ -153,6 +153,11 @@ Three stores, three policies:
   migrations, ever. `CACHE_BUSTER` in `src/state/client.ts` busts the
   whole persisted cache on any shape change; busting is the *correct*
   policy for this store, formalized.
+- **`communication-holds.json` beside the state database** stores the latest
+  resource event. Version 1 is parsed strictly; malformed or newer formats fail
+  without rewriting. Release watermarks are not a disposable cache. Hold
+  deadlines bound only transient holds, not other durable state. Older builds
+  leave this separate file untouched.
 - **User config** (hand-written TOML): never rewritten by wt. Renames
   get loader aliases plus a deprecation warning (the
   `TRIGGER_ALIASES` pattern in `core/config.ts`); new fields get

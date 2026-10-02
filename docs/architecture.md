@@ -532,6 +532,21 @@ Per-worktree destroy logs live one level up at `~/.cache/wt/logs/<slug>-*.log`; 
 
 **Unhandled errors never touch stdout/stderr while the TUI runs.** `tui/error-store.ts` owns the capture: `installProcessErrorCapture()` (armed in `tui/runtime.tsx` for exactly the renderer's lifetime) replaces Bun's default uncaughtException/unhandledRejection reporters — whose raw multi-line stack print over the alternate screen was the original garbling incident — with a 5-entry in-memory ring, a `log.error` (full stack, file-only), and a `log.event.err` one-liner with `{toast: true}`. `tui/error-boundary.tsx` is the third origin, catching render errors into the same ring (its crash screen replaces the app tree, since a modal can't render there). The error overlay (`panels/error-overlay.tsx` + `modal-keys/errors.ts` + `flows/error-report.ts`, modeled on the perf overlay including the `i` inject flow) auto-pops via `hooks/useErrorOverlay.ts` — queued behind any open modal, acknowledged on dismiss. Deliberate semantics: an uncaughtException keeps the process alive but marks it degraded (banner in the overlay); consecutive identical errors collapse (`×N`) instead of flooding; the renderer's `openConsoleOnError` is disabled so OpenTUI's own error hook can't pop its debug console over the panes; capture detaches right after `renderer.destroy()`, so errors thrown through `runTui()` itself still reach `main.ts`'s top-level catch (and its crash-rollback offer) on plain stderr. `WT_DEBUG_THROW=1|rejection` is the permanent probe hook.
 
+## Transient communication holds
+
+`core/communication-holds.ts` stores only the latest hold/release event for each
+resource beside `paths.state_db` in `communication-holds.json`. This host-local
+file is shared by repositories using that state directory. The existing async
+file lock serializes atomic read/modify/rename writes; corrupt state is an error,
+never an empty success. Original event time orders updates, with release winning
+ties. Released watermarks remain; a hold's fixed deadline bounds only that hold.
+Exact replays retain identity and deadline, and an active window has one owner.
+
+`wt hold` imports no session machinery, so broken delivery cannot prevent release
+or inspection. `agent-routing.ts` checks references before submission and embeds
+a required recipient check after queue delays. Native queues are not rewritten.
+There is no status, automation, merge-gate or durable-fact expiration side effect.
+
 ## GitHub merge submission
 
 `core/github/async-merge.ts` owns one async REST queue submission and bounded

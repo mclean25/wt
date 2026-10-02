@@ -8,11 +8,9 @@
  *
  * The manager is a plain harness session in the main clone whose role
  * comes from its playbook skill + what wt sends it. Worktree agents
- * can `wt manager send "..."` to escalate fleet-level questions or
- * report papercuts (`"papercut: ..."`) without pulling the human in —
- * fire-and-forget in both directions, nothing is returned to the
- * caller; `[[actions]]` with `target = "manager"` and automations
- * brief it through the same message-delivery path.
+ * use `wt manager send "..."` for new actionable cross-owner facts or
+ * questions. Receipts and progress need no reply or forwarding.
+ * Actions and automations use the same message-delivery path.
  *
  * Messages sent from inside a wt harness session are stamped with that
  * session's slug automatically (see `stampSender`), so the manager can
@@ -30,6 +28,7 @@ import {
 } from "../../core/manager.ts";
 import { hasHelpFlag } from "../args.ts";
 import { dim, green, red } from "../colors.ts";
+import { managerMessageArgs } from "./agent-args.ts";
 
 // The session machinery (tmux, the harness registry, message delivery) is
 // imported per-branch rather than at module load, so `wt manager report`
@@ -54,8 +53,8 @@ export const run = Effect.fn("wt manager")(function* (argv: string[]) {
   if (hasHelpFlag([sub ?? ""])) {
     console.log(
       "usage: wt manager                 attach the manager session (create if missing)\n" +
-        "       wt manager send <text...>  send a message to it (fleet question,\n" +
-        '                                  or "papercut: ..." — fire and forget)\n' +
+        "       wt manager send [--hold <id>] <text...>\n" +
+        "                                  send a new actionable cross-owner fact\n" +
         "       wt manager report [--ok|--warn|--err] <text...>\n" +
         "                                  surface a result on wt's attention feed",
     );
@@ -95,7 +94,7 @@ export const run = Effect.fn("wt manager")(function* (argv: string[]) {
     // `rest` is free-text message content and must not be scanned for it
     // (a message that happens to contain the word "--help" still sends).
     if (hasHelpFlag([rest[0] ?? ""])) {
-      console.log("usage: wt manager send <text...>   send a message to the manager session");
+      console.log("usage: wt manager send [--hold <id>] <text...>   send a new actionable fact to the manager");
       return 0;
     }
     const text = rest.join(" ").trim();
@@ -104,7 +103,7 @@ export const run = Effect.fn("wt manager")(function* (argv: string[]) {
       return 2;
     }
     const agent = yield* io.promise("load neutral agent command", () => import("./agent.ts"));
-    return yield* agent.run(["send", MANAGER_SLUG, text]);
+    return yield* agent.run(["send", MANAGER_SLUG, ...managerMessageArgs(rest)]);
   }
 
   if (sub !== undefined) {

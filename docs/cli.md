@@ -301,7 +301,12 @@ Merge fields (`merge_state` from GitHub's `mergeStateStatus`, `mergeable`) are l
 
 ### `wt manager` / `wt manager send <text…>` / `wt manager report [--ok|--warn|--err] <text…>`
 
-Attach the singleton [manager session](manager.md) (create on first use), or send a message to it. This is the fire-and-forget outbound channel for worktree agents and scripts, carrying both fleet-level questions and `papercut:` reports. `wt manager send` cold-starts the session detached when it is not running; the message lands as its next turn, and nothing comes back. Same session the TUI's `m` key enters. For Codex, both shell attachment and detached startup resume the manager-owned primary conversation; the main-clone `.` slot has separate ownership (see [migration behavior](manager.md)).
+Attach the singleton [manager session](manager.md), or send a new actionable
+cross-owner fact or question. Routine progress, acknowledgments and papercuts
+require no reply or onward message. `wt manager send` cold-starts the session
+detached when absent; nothing comes back. It is the TUI's `m` session. Codex
+resumes its manager-owned primary conversation, separate from the `.` slot.
+`wt manager send --hold <id> [text...]` shares a checked hold reference.
 
 `wt manager report` is the reverse channel: it appends a short result line to a spool a running TUI watches and surfaces on the **attention feed** (with a toast). It's how [`M` palette](manager.md#the-command-palette-m) commands hand their outcome back without the human attaching; the level flag (default `info`) picks the line's color/loudness. Reports while no TUI runs aren't replayed later — it's a live-delivery channel, not a log (the daily log records whatever surfaced).
 
@@ -413,6 +418,7 @@ quietly reading as "nothing is live".
 | sub | what it does |
 |---|---|
 | `send <target> [text...]` | ensure the target's selected harness session exists, then submit text; reads stdin when no text args |
+| `send <target> --hold <id> [text...]` | validate an existing resource-hold reference and send its immutable metadata plus recipient check; never renews it |
 | `start <slug>` | ensure that session exists and invoke the bundled `start` skill using that harness's native prefix (`/start` for Claude, `$start` for Codex/OpenCode) |
 | `ls [--json]` | list the complete address book with target kind, cwd, live harnesses, selected harness, and whether selection was live or the primary fallback |
 
@@ -433,6 +439,42 @@ into that exact slot and reports that terminal transport was used. Codex slash
 commands such as `/compact` also use guarded terminal input because its socket
 queue treats them as ordinary text; `$skill` prompts continue through the
 durable queue.
+
+### `wt hold`
+
+Record a transient resource window without messaging agents or changing fleet
+gates. These commands need no running manager, browser, tmux or Codex daemon.
+
+```sh
+wt hold set browser:19989 --scope 'browser execution during restart' \
+  --at 2026-10-02T18:40:00Z --until 2026-10-02T19:00:00Z \
+  --owner repair-owner 'Release once the restart finishes'
+wt agent send affected-worker --hold <returned-id>
+wt hold check <returned-id>
+wt hold release browser:19989 --at 2026-10-02T18:41:00Z \
+  --owner repair-owner 'Restart finished'
+wt hold status browser:19989
+```
+
+Use current dates when running this example. `--at` is the original event time,
+never queue/delivery time; future events are rejected. Owner defaults to
+`WT_AGENT`, and is required explicitly outside an agent. Name the affected
+operations in `--scope` and the release condition in the reason. The window must
+be at most one hour. Release promptly when mutation ends. A different active
+owner cannot replace/release a hold; the same owner cannot silently extend it.
+
+Set returns JSON including a stable ID; exact replay preserves its deadline.
+Check/status return `{active,reason,hold}`; exit 0 means the query completed,
+and only `active:true` authorizes the named hold. Receivers must check at the
+point of use because a native queue may deliver an already-released reference.
+Inactive/unknown/error results grant no new freeze, without proving tool health.
+
+Only the latest event per resource is stored; release watermarks prevent a late
+older set from reviving a hold. Ordinary messages, acknowledgments, sends and
+checks never create or renew holds. The host-local file beside `paths.state_db`
+is shared only by callers using that state directory. A reference from another
+host/store is unknown, not an instruction to pause work. Durable statuses,
+merge dependencies and verification obligations do not expire with holds.
 
 ### `wt codex selftest`
 
