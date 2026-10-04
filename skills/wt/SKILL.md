@@ -64,12 +64,11 @@ in each one.
   (`todo`/`working`/`review`/`needs-testing`/`needs-human`/`ready`/`dropped`).
   Built for agents; it prints the rules and expected next steps as you use
   it. `wt status --all` is the fleet overview.
-- `wt manager send <text…>` — fire-and-forget message to the manager session.
-  Two uses: fleet-level questions (merge order, cross-branch conflicts,
-  ownership of shared changes), and papercuts worth fixing for everyone
-  (`wt manager send "papercut: ..."` — misleading output, a wrong doc, a
-  trap that cost you time). Nothing is returned; keep working either way.
-  Your own slug is stamped on automatically — don't prefix the message.
+- `wt manager send <text…>` sends new actionable cross-owner facts or questions
+  about merge order, conflicts, or shared ownership. Do not send routine progress,
+  acknowledgments, or forward papercuts. Keep working on independent tasks;
+  wt stamps your slug automatically. Honor transient holds only after
+  `wt hold check <id>` returns `active: true`; messages and acks cannot renew them.
 - `wt edge <from> <before|conflicts|enables> <to> [--blocks|--prefer] [-m why]`
   — record merge-order knowledge as a pairwise edge instead of prose: `before`
   / `enables` order the pair, `conflicts` means same-files-sequence-them.

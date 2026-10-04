@@ -17,6 +17,7 @@ import { dim, green, red, yellow } from "../colors.ts";
 import { parseAgentArgs, skillPrompt } from "./agent-args.ts";
 
 const USAGE = `usage: wt agent send <target> [text...]   send to the target's active agent
+       wt agent send <target> --hold <id> [text...]  send a checked resource-hold reference
        wt agent start <worktree>          start that agent on its prompt.txt brief
        wt agent ls [--json]               list every addressable target and its routing
 
@@ -157,15 +158,15 @@ export const run = Effect.fn("wt agent")(function* (argv: string[]) {
   }
   const text = parsed.kind === "start"
     ? skillPrompt(harness.skillPrefix, "start")
-    : yield* messageText(parsed.textArgs);
-  if (!text) {
+    : parsed.holdId && parsed.textArgs.length === 0 ? "" : yield* messageText(parsed.textArgs);
+  if (!text && !(parsed.kind === "send" && parsed.holdId)) {
     if (parsed.kind === "send" && parsed.textArgs.length !== 1) {
       console.error(red("nothing to send — pass text args or pipe stdin"));
     }
     return 2;
   }
 
-  const result = yield* sendAgentMessageToRoute(route, text);
+  const result = yield* sendAgentMessageToRoute(route, text, undefined, parsed.kind === "send" ? parsed.holdId : undefined);
   if (!result.ok) {
     console.error(red(`send failed: ${result.reason}`));
     return 1;

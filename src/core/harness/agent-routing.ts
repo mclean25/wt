@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 
+import { operationErrors } from "../errors.ts";
 import { SESSION_SLOTS, type SessionSlot } from "../session-slots.ts";
 import { ensureManagerClaudeName, MANAGER_SLUG } from "../manager.ts";
 import { dirSlug } from "../stage.ts";
@@ -32,6 +33,8 @@ export type AgentRoute = {
 export type RoutedAgentMessageResult =
   | ({ route: AgentRoute } & SessionMessageResult)
   | { ok: false; reason: string; route: AgentRoute | null };
+
+const io = operationErrors("agent routing");
 
 /** One authoritative address book shared by send and inventory. */
 export function agentTargets(
@@ -112,7 +115,17 @@ export const sendAgentMessageToRoute = Effect.fn("sendAgentMessageToRoute")(func
   route: AgentRoute,
   text: string,
   deliver: typeof sendSessionMessage = sendSessionMessage,
+  holdId?: string,
 ): Effect.fn.Return<RoutedAgentMessageResult, SessionMessagingError> {
+  if (holdId) {
+    const prepared = yield* Effect.result(
+      io.promise("load hold reference", () => import("../communication-message.ts")).pipe(
+        Effect.flatMap(({ prepareHoldMessage }) => prepareHoldMessage(holdId, text)),
+      ),
+    );
+    if (prepared._tag === "Failure") return { ok: false, reason: prepared.failure.message, route };
+    text = prepared.success;
+  }
   const harnessId = route.choice.harnessId;
   if (harnessId === null) {
     return {

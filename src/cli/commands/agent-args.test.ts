@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseAgentArgs, skillPrompt } from "./agent-args.ts";
+import { managerMessageArgs, parseAgentArgs, skillPrompt } from "./agent-args.ts";
 
 describe("parseAgentArgs", () => {
   test("parses send and preserves free text", () => {
@@ -20,6 +20,29 @@ describe("parseAgentArgs", () => {
     expect(parseAgentArgs(["ls"])).toEqual({ kind: "list", json: false });
     expect(parseAgentArgs(["ls", "--json"])).toEqual({ kind: "list", json: true });
     expect(parseAgentArgs(["ls", "extra"])).toMatchObject({ kind: "error" });
+  });
+
+  test("a hold reference is explicit and preserves its original ID", () => {
+    const id = "a".repeat(64);
+    expect(parseAgentArgs(["send", "manager", "--hold", id, "browser operations only"])).toEqual({
+      kind: "send", target: "manager", holdId: id, textArgs: ["browser operations only"],
+    });
+    expect(parseAgentArgs(["send", "manager", "--hold"])).toMatchObject({ kind: "error" });
+    expect(parseAgentArgs(["send", "manager", "--hold", "acknowledged"])).toMatchObject({ kind: "error" });
+    expect(parseAgentArgs(["send", "manager", "--", "--hold", id])).toEqual({
+      kind: "send", target: "manager", textArgs: ["--hold", id],
+    });
+  });
+
+  test("manager forwarding preserves flag-looking prose without swallowing the message", () => {
+    const words = ["the", "--help", "output", "mentions", "--harness"];
+    expect(parseAgentArgs(["send", "manager", ...managerMessageArgs(words)])).toEqual({
+      kind: "send", target: "manager", textArgs: ["the --help output mentions --harness"],
+    });
+    const id = "b".repeat(64);
+    expect(parseAgentArgs(["send", "manager", ...managerMessageArgs(["--hold", id])])).toEqual({
+      kind: "send", target: "manager", holdId: id, textArgs: [],
+    });
   });
 
   test("start is one worktree and no extra arguments", () => {

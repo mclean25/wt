@@ -715,7 +715,7 @@ entry remains last.
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `wt_feedback` | no | `false` | Standing brief for the [manager session](manager.md): proactively send workflow papercuts/nits observed during fleet work to the session working on the wt source repo, which reviews and applies them. Opt-in because it presumes you run such a session; the manager skill reads this flag from the config TOML at session time. |
+| `wt_feedback` | no | `false` | Allows the [manager](manager.md) to send new actionable evidence to the wt owner. Does not authorize automatic papercut forwarding, progress reports or acknowledgment chains. The manager skill reads this flag at session time. |
 
 ## `[update]`
 

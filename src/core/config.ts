@@ -878,12 +878,9 @@ export type Config = {
   };
   manager: {
     /**
-     * Standing brief for the manager session to proactively send
-     * workflow papercuts/nits it observes during fleet work to the
-     * wt-source session, which reviews and applies them. Opt-in
-     * (`[manager] wt_feedback = true`): the manager skill reads this
-     * flag from the config TOML at session time — most users don't
-     * run a session on the wt repo itself.
+     * Allow new actionable evidence for the wt owner, without automatic
+     * papercut forwarding or acknowledgment chains. The manager skill
+     * reads this opt-in flag at session time.
      */
     wtFeedback: boolean;
   };

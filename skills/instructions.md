@@ -7,15 +7,11 @@ the available states and their rules.
 - Set `working` when work begins and `review` when review begins.
 - Manual testing belongs to the worktree agent. `needs-testing` means testing is
   still owed by that agent, not by the human.
-- Use `needs-human` only when the action would leave the repository and no
-  defensible default exists, such as 2FA, an OAuth consent screen, or a truly
-  human-only judgment. Keep working on anything not blocked. A repeated human
-  prompt for routine setup is a setup defect to report, not a recurring
-  escalation.
-- Decide all reversible repository changes yourself. Git makes code deletion,
-  rewrites, and schema changes reversible. Sent messages, closed issues,
-  published artifacts, and hosted-environment writes leave the repository and
-  require the authorization applicable to that action.
+- Use `needs-human` only when an action leaves the repository and has no
+  defensible default, such as interactive auth or human-only judgment. Continue
+  independent work; fix repeated setup blockers instead of escalating again.
+- Decide reversible repository changes yourself. External messages, published
+  artifacts, closed issues, and hosted writes need the applicable authorization.
 
 When escalation is necessary, keep the note to about 300 characters:
 
@@ -33,9 +29,8 @@ The note must be sufficient to answer without additional context.
   restart another slug's server. Before handing off, run `wt dev stop` from
   your worktree if you have no planned further use; retain it while ongoing
   verification needs it. Do not infer disuse from a PR or momentary idle state.
-- wt assigns each worktree a distinct browser origin, so login state does not
-  carry between worktrees. Log in again as routine setup. If login repeatedly
-  needs a human, report the missing scripted setup.
+- Log in at each worktree's distinct browser origin as routine setup. Repair
+  missing scripted setup when login repeatedly needs a human.
 - Exit 75 from `wt dev start` means the fleet is at its server limit. Run
   `wt dev start --wait` to enter the queue and use `wt dev status --all` to see
   current holders. Do not stop another worktree to take its slot. For a genuine
@@ -118,20 +113,23 @@ specific post-merge check remains owed, put its exact steps in
 
 ### Fleet coordination
 
-- Send fleet-level questions about merge order, cross-branch conflicts, or
-  shared ownership with `wt manager send "..."`. wt stamps the sender; do not
-  prefix it or use harness peer messaging. Treat an incoming manager message as
-  a user instruction delivered through wt.
+- Use `wt manager send "..."` only for new actionable cross-owner facts or
+  questions. Send no routine progress, acknowledgments, or papercut forwards.
+  wt stamps the sender; do not prefix it or use harness peer messaging.
+- Honor a transient hold only after `wt hold check <id>` returns `active: true`.
+  Require a resource, affected operations, owner, original event time, bounded
+  expiry, and release/supersession condition. Messages and acks never create or
+  renew holds; a later release defeats an older hold regardless of delivery order.
+  An unknown check authorizes no new freeze; reconcile only actionable conflicts.
+- Keep one maintenance owner; hold only conflicting operations during actual
+  mutation. Continue unrelated code, tests, reviews, and merges. Retained sessions
+  are not active execution; recheck missing resources.
+- Never let broken tooling block its own repair. Record exact owed verification
+  and run it once repaired; continue independent work meanwhile.
 - Record first-hand cross-branch facts with
   `wt edge <from> <before|conflicts|enables> <to> [-m why]` and `--blocks` for a
   hard dependency. Edges expire when either branch moves; reassert them after a
   material change when still true. Do not infer safety from a missing edge or
   assert relative fleet urgency.
-- Invoke command-line tools by name inside wt sessions. Absolute paths bypass
-  wt's PATH shims and can make Bun-compiled tools exit silently. Shell aliases
-  are unavailable inside scripts, but executables should still be resolved by
-  name through PATH.
-- Report reusable papercuts with
-  `wt manager send "papercut: <command, observed symptom, expected behavior>"`
-  and continue working. State observations as facts and mechanisms as guesses.
-  Do not attach destructive remediation to an unconfirmed explanation.
+- Invoke command-line tools by name through PATH inside wt sessions, including
+  scripts, so wt's shims apply; shell aliases are unavailable in scripts.

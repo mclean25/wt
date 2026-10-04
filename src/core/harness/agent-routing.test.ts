@@ -162,4 +162,16 @@ describe("agent target address book", () => {
     expect(selected).toBe("opencode");
     expect(result).toMatchObject({ ok: true, coldStarted: true });
   });
+
+  test("an unknown hold reference cannot cold-start or send to a worker", async () => {
+    const route = routeAgentTargets([worktree("ordinary")], new Set(), "codex", [])[0]!;
+    let deliveries = 0;
+    const result = await Effect.runPromise(sendAgentMessageToRoute(route, "freeze", () => {
+      deliveries++;
+      return Effect.succeed({ ok: false as const, reason: "must not deliver" });
+    }, "0".repeat(64)));
+    expect(deliveries).toBe(0);
+    expect(result).toMatchObject({ ok: false, route });
+    expect(!result.ok && result.reason).toContain("was not sent");
+  });
 });
