@@ -547,6 +547,14 @@ from interrupting polling while reporting a remote operation as cancelled.
 
 These define contracts; touching them ripples. Read them first:
 
+Repository config discovery also reads linked Git worktree metadata. If the
+parent-directory search finds no `.wt.toml`, `core/config-layer.ts` follows the
+nearest repository's `.git` pointer and `commondir` file to the main clone.
+This supplies ignored config files to agent shells with no inherited
+`WT_REPO_CONFIG`. Explicit selection and parent-directory config retain
+priority. The nearest Git root prevents fallback through an outer worktree
+when the caller is inside a nested repository.
+
 - `src/core/config.ts` — schema, defaults, validation ([reference](configuration.md)). The user config is recursively overlaid by the nearest `.wt.toml`; arrays replace whole, and `WT_REPO_CONFIG` preserves selection across child processes. Fail-fast loader, one aggregated error. Optional sections (`sst`, `issueTracker`, `devServer`, `naming`) are `null` when absent; `reviewBot` is always present (CodeRabbit preset when `[review_bot]` is omitted), as are `editor` (whose `command: null` selects the built-in Zed path in `core/editor.ts`) and `tmux` (whose `socket` resolves `WT_TMUX_SOCKET` → `[tmux] socket` → `"wt"`, env-first because that half propagates into spawned sessions); `requireSst()` is the typed boundary for SST-only paths. Pure discovery/merge helpers live in `src/core/config-layer.ts`, including `canonicalRepositoryConfig` — the seam that keeps repository identity a property of the REPOSITORY rather than of the caller's cwd. Discovery walks up from the working directory, so it finds a worktree's copy of the repository `.wt.toml` from inside a worktree and nothing at all from a shell outside the repo; `canonicalRepositoryConfig` re-points both cases at `<paths.main_clone>/.wt.toml` before the build, and `build` identifies by `main_clone` anyway whenever the file it was handed sits under `worktree_root`. Everything namespaced follows that one answer — `repoId`, `repoPath`, the state database, the cache root and its whole runtime tree, and the tmux socket — and all of them key on the same predicate (does the repository declare itself with its own `.wt.toml`), never on whether discovery happened to find a file. A `.wt.toml` outside `worktree_root` is still a repository of its own, which is what keeps several repositories isolated.
 - `src/tui/rows/types.ts` — the `RowModule` contract; `src/tui/rows/index.ts` — the registry.
 - `src/tui/hooks/useWorktreeRows.ts` — per-worktree field aggregator (`FieldState<T>` carries `error`).

@@ -8,6 +8,15 @@
 
 It then searches from the current directory upward for the nearest `.wt.toml` and recursively merges that repository config over the user config. This lets one user config hold personal defaults while each repository supplies its own clone, worktree root, trunk branch, integrations, actions, and other overrides. Run `wt` from within the repository you want to manage.
 
+If that search finds no file in a linked Git worktree, `wt` reads its `.git`
+pointer and Git `commondir` file. It then checks the main clone for `.wt.toml`.
+This also works from subdirectories and when the repository config is ignored
+by Git. It does not require inherited environment variables or global paths.
+An explicit `$WT_REPO_CONFIG` or a config found by the parent-directory search
+has priority. A nested Git repository does not use the outer worktree's Git
+link. Bare repositories and separate Git directories require the usual config
+file or explicit selection.
+
 `wt init [directory]` creates that repository file without requiring an
 already-valid wt config. Pass `--primary codex`, `--primary opencode`, or
 `--primary claude` to set a repository coding-agent default; omitting the flag
@@ -103,8 +112,9 @@ status asserted in a worktree is then invisible everywhere else, `wt manager
 send` cold-starts a manager on a tmux server the TUI never reads, and a tracker
 id set in the TUI is invisible to the session it names.
 
-`wt` inside a worktree, in the main clone, and from an unrelated directory all
-resolve the same configuration, byte for byte.
+`wt` inside a linked worktree and in the main clone resolve the same repository
+configuration. From an unrelated directory, set `$WT_REPO_CONFIG` or supply
+`paths.main_clone` and `paths.worktree_root` in the user config.
 
 > **Upgrade note (Aug 2026):** `wt state migrate` imports the current repository's attributable records from the former shared `~/.cache/wt/state.json` and `archive.json`, writes timestamped backups, and prunes only records successfully imported. It also adopts records an earlier build filed under a per-worktree namespace or wrote into a second state database, and carries the non-rebuildable runtime files (the `automations.json` fire ledger, `harness.json`, and the harness session-name registries) into this repository's cache root. Stranded sources are read, never written or deleted, and current values win every conflict. It is idempotent; use `--keep-legacy` for a copy-only first pass or `--from <dir>` for a relocated legacy cache.
 
