@@ -18,9 +18,10 @@ status — is backend-agnostic and lives in `lifecycle.ts` / `worktree.ts`.
 ## Why rift
 
 `rift create` copy-on-write-clones the whole working tree (APFS
-`clonefile` on macOS, btrfs snapshots / reflinks on Linux). It's
-near-instant even on a large repo, and with `--copy-all` it brings
-`node_modules` across **for free** — so a rift checkout has packages
+`clonefile` on macOS, btrfs snapshots / reflinks on Linux). File data is
+shared until modified, although creating file metadata still takes time
+on large trees. With `--copy-all` it brings
+`node_modules` across without a package install, so a rift checkout has packages
 installed the moment it exists, with no install step. wt passes
 `--copy-all` always; the `--no-install` flag (`runInstall`) is a no-op
 for this backend.
@@ -67,8 +68,13 @@ INCLUDING any uncommitted modifications, and a plain switch would
 refuse whenever those files differ across the jump — which used to
 abort creation any time the main clone was dirty. The dirt exists only
 in the throwaway copy (the main clone is never touched), so discarding
-it is safe and removes the clean-main-clone requirement entirely. This
-independent-clone model is the crucial difference from a git worktree,
+it is safe and removes the clean-main-clone requirement entirely.
+
+Before switching, wt refreshes the copied Git index's file metadata.
+The clone has new inodes, so using the source index unchanged makes a forced
+switch rewrite files whose contents already match. Refreshing avoids that
+write and watcher burst while still discarding copied local modifications.
+This independent-clone model is the crucial difference from a git worktree,
 and it drives the rest of the design:
 
 - **Discovery.** A rift checkout never appears in `git worktree list`.
@@ -76,7 +82,9 @@ and it drives the rest of the design:
   a `.rift` marker and synthesizes rows, reading the branch straight from
   `.git/HEAD` (pure fs, no subprocess per checkout). Done regardless of
   the configured backend, so existing checkouts of either kind stay
-  visible after a flip.
+  visible after a flip. A clone under a live creation lock stays out of the
+  inventory until initialization finishes, preventing status and diff queries
+  from competing with checkout. Stale locks do not hide completed worktrees.
 - **Freshness.** rift create/remove happen under the worktree root, not
   `.git/worktrees/`, so a dedicated worktree-root watcher is the push
   signal for the list (see the freshness table in

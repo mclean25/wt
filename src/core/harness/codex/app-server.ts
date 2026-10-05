@@ -21,6 +21,11 @@ export type CodexQueuePage = {
   readonly nextCursor: string | null;
 };
 
+export type CodexExperimentalFeaturePage = {
+  readonly data: readonly Record<string, unknown>[];
+  readonly nextCursor: string | null;
+};
+
 export type CodexAppServerInfo = {
   readonly userAgent: string;
   readonly codexHome: string;
@@ -43,7 +48,7 @@ export type CodexAppServerFailureKind =
   | "ambiguous";
 
 export class CodexAppServerError extends Data.TaggedError("CodexAppServerError")<{
-  readonly operation: "connect" | "initialize" | "queue-add" | "queue-list" | "queue-start" | "thread-items" | "thread-read";
+  readonly operation: "connect" | "initialize" | "queue-add" | "queue-list" | "queue-start" | "thread-items" | "thread-read" | "experimental-feature-list";
   readonly kind: CodexAppServerFailureKind;
   readonly detail: string;
   readonly code?: number;
@@ -55,7 +60,7 @@ export class CodexAppServerError extends Data.TaggedError("CodexAppServerError")
 }
 
 export type CodexAppServerTransport = {
-  request(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
+  request(method: string, params: Record<string, unknown>, signal?: AbortSignal, timeoutMs?: number): Promise<unknown>;
   notify(method: string, params?: Record<string, unknown>): Promise<void>;
   close(): void;
 };
@@ -385,7 +390,7 @@ async function connectUnixWebSocket(
   });
 
   return {
-    request(method, params, requestSignal) {
+    request(method, params, requestSignal, timeoutMs = REQUEST_TIMEOUT_MS) {
       if (dead) return Promise.reject(dead);
       const id = nextId++;
       // @effect-diagnostics-next-line effect/newPromise:off -- one reply slot in the JSON-RPC transport
@@ -397,10 +402,10 @@ async function connectUnixWebSocket(
           pending.abort?.();
           cancelUnwrittenFrame(pending);
           reject(new CodexAppServerTransportError(
-            `Codex app-server did not answer ${method} within ${REQUEST_TIMEOUT_MS}ms`,
+            `Codex app-server did not answer ${method} within ${timeoutMs}ms`,
             pending.wrote,
           ));
-        }, REQUEST_TIMEOUT_MS);
+        }, timeoutMs);
         const pending: PendingRequest = { resolve, reject, wrote: false, timer };
         if (requestSignal) {
           const onAbort = () => {
@@ -460,7 +465,8 @@ function unsupportedResponse(error: RpcResponseError): boolean {
   return error.code === -32_601 || (
     error.code === -32_600 && (
       error.message.includes("requires experimentalApi capability") ||
-      error.message.startsWith("Invalid request: unknown variant `thread/queue/")
+      error.message.startsWith("Invalid request: unknown variant `thread/queue/") ||
+      error.message.startsWith("Invalid request: unknown variant `experimentalFeature/list`")
     )
   );
 }
@@ -505,9 +511,10 @@ function requestEffect(
   operation: CodexAppServerError["operation"],
   method: string,
   params: Record<string, unknown>,
+  timeoutMs?: number,
 ): Effect.Effect<unknown, CodexAppServerError> {
   return Effect.tryPromise({
-    try: (signal) => transport.request(method, params, signal),
+    try: (signal) => transport.request(method, params, signal, timeoutMs),
     catch: (cause) => operationError(operation, cause),
   });
 }
@@ -553,17 +560,22 @@ export type CodexAppServerClient = {
   readonly threadReadStatus: (
     threadId: string,
   ) => Effect.Effect<CodexThreadStatus, CodexAppServerError>;
+  readonly experimentalFeatureList: (
+    cursor: string | null,
+    timeoutMs: number,
+  ) => Effect.Effect<CodexExperimentalFeaturePage, CodexAppServerError>;
 };
 
 function initializeClient(
   transport: CodexAppServerTransport,
   dependencies: CodexAppServerDependencies,
+  requestTimeoutMs?: number,
 ): Effect.Effect<CodexAppServerClient, CodexAppServerError> {
   return Effect.gen(function* () {
     const initialized = yield* requestEffect(transport, "initialize", "initialize", {
       clientInfo: { name: "wt", title: "wt", version: dependencies.clientVersion },
       capabilities: { experimentalApi: true, requestAttestation: false },
-    });
+    }, requestTimeoutMs);
     const record = asRecord(initialized);
     if (!record || typeof record.userAgent !== "string" || typeof record.codexHome !== "string") {
       return yield* protocolError("initialize", "Codex app-server returned an invalid initialize response");
@@ -688,6 +700,20 @@ function initializeClient(
         }
         return Effect.succeed(record as CodexThreadStatus);
       })),
+      experimentalFeatureList: (cursor, timeoutMs) => requestEffect(
+        transport,
+        "experimental-feature-list",
+        "experimentalFeature/list",
+        { threadId: null, cursor, limit: 100 },
+        timeoutMs,
+      ).pipe(Effect.flatMap((result) => {
+        const page = asRecord(result);
+        if (!page || !Array.isArray(page.data) || !(page.nextCursor === null || typeof page.nextCursor === "string") ||
+          !page.data.every((entry) => asRecord(entry) !== null)) {
+          return Effect.fail(protocolError("experimental-feature-list", "Codex app-server returned an invalid experimentalFeature/list response"));
+        }
+        return Effect.succeed({ data: page.data as Record<string, unknown>[], nextCursor: page.nextCursor });
+      })),
     };
   });
 }
@@ -695,6 +721,7 @@ function initializeClient(
 export function withCodexAppServer<A, E, R>(
   use: (client: CodexAppServerClient) => Effect.Effect<A, E, R>,
   dependencies: CodexAppServerDependencies = defaultCodexAppServerDependencies,
+  requestTimeoutMs?: number,
 ): Effect.Effect<A, E | CodexAppServerError, R> {
   const acquire = Effect.tryPromise({
     try: (signal) => dependencies.connect(dependencies.socketPath(), signal),
@@ -702,7 +729,7 @@ export function withCodexAppServer<A, E, R>(
   });
   return Effect.acquireUseRelease(
     acquire,
-    (transport) => initializeClient(transport, dependencies).pipe(Effect.flatMap(use)),
+    (transport) => initializeClient(transport, dependencies, requestTimeoutMs).pipe(Effect.flatMap(use)),
     (transport) => Effect.sync(() => transport.close()),
   );
 }

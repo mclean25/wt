@@ -112,6 +112,14 @@ stay as they are until a second consumer asks for a `Layer`.
 Pure synchronous transforms, synchronous SQLite/fs reads used from render
 paths, and React's own lifecycle hooks remain plain TypeScript.
 
+The disposable TanStack query cache is an asynchronous storage boundary:
+`state/persister-worker.ts` owns SQLite initialization, reads, writes, clearing,
+and closing. The UI never waits synchronously on its writer lock or disk flush.
+Messages preserve operation order, with a bounded backlog. Query-client shutdown
+flushes queued writes and close for up to two seconds, then abandons the disposable
+cache. A late startup snapshot cannot resurrect an evicted key, replace fresh data,
+or populate a closed client. Cache failures remain misses rather than application failures.
+
 `bun run lint` runs the official language-service diagnostics and `bun run
 typecheck` runs them again through the patched compiler. The rules this project
 relies on are promoted to warning severity in `tsconfig.json`; at their default
@@ -189,6 +197,16 @@ including for main and manager slots. Codex reads terminal preferences from its
 own config, keeping the shared background server available. Already-running
 Codex processes must exit and resume through wt to pick up launcher changes;
 reattaching alone does not change their arguments.
+Local cold Codex launches first read the daemon's feature catalog with a single bounded
+30-second request sequence. This runs after workspace trust preparation and before
+suspending the board or replacing an existing slot; repeated launch keys cannot
+queue additional terminal handoffs. Existing live slots attach without that check.
+An absent/refused socket or unsupported API leaves native startup in charge; other
+failures preserve the board and the old slot. wt never restarts the shared daemon
+or switches to disconnected mode. The native client repeats feature discovery, so
+this readiness check cannot extend the native client's own timeout.
+Do not retry from the native timeout text: cancelling Codex's recovery screen
+emits that same error, so it is also an explicit user cancellation.
 `[tmux] terminal_config` replaces the built-in terminal preamble as a whole,
 allowing users to pin every terminal setting while following wt's session
 navigation and observed-palette behavior. An omitted value follows defaults;
@@ -316,6 +334,10 @@ lock. Release refreshes inventory; only a successful inventory update can attach
 watchers again, with one local dirty/deploy/conflict catch-up for deferred rows. Fetch-start
 and invalidation events still contain stale rows and must not resurrect a watcher
 on a checkout that was just removed.
+Rift inventory withholds a clone under a live `init` lock, including after its
+branch becomes readable, so row queries cannot race initialization. A branchless
+clone under a live lock also stays hidden during the metadata-write window.
+The kernel flock determines liveness; stale lock files cannot hide finished rows.
 The coalesced inventory refresh cancels any existing fetch first, including the
 initial fetch with no cached data, so it cannot join a snapshot taken before the
 create/remove operation finished.

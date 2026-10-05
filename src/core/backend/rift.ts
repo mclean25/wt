@@ -160,6 +160,16 @@ const materializeBranchEffect = Effect.fnUntraced(function* (input: {
   onLog?: (line: string) => void;
 }) {
   const { path, branch, baseRef, baseSourcePath, onLog } = input;
+  // CoW preserves file contents, not the source index's inode/stat metadata.
+  // A forced switch with that stale index rewrites unchanged tracked files,
+  // turning a cheap clone into a disk and filesystem-event storm. Refresh
+  // metadata first; exit 1 means copied local edits still need discarding.
+  onLog?.("refreshing copied Git index");
+  const refreshed = yield* run(["git", "update-index", "--refresh"], { cwd: path });
+  if (refreshed.exitCode !== 0 && refreshed.exitCode !== 1) {
+    return yield* new RiftBackendError({ operation: "materialize", detail:
+      `could not refresh copied Git index: ${(refreshed.stderr || refreshed.stdout || `exit ${refreshed.exitCode}`).trim()}` });
+  }
   // --discard-changes: `--copy-all` CoW-copies the main clone's working
   // tree INCLUDING its uncommitted modifications, and a plain switch
   // refuses when those files differ across the jump ("Your local

@@ -3,7 +3,7 @@ import { experimental_createQueryPersister } from "@tanstack/query-persist-clien
 
 import { config } from "../core/config.ts";
 
-import { createSqliteAsyncStorage } from "./persister.ts";
+import { createSqliteAsyncStorage, type AsyncStorageDb } from "./persister.ts";
 
 export const CACHE_DB = config.paths.cacheDb;
 
@@ -146,11 +146,10 @@ export type WtQueryClient = {
    */
   evict(queryKey: readonly unknown[]): void;
   /** Stop the persister, close the storage handle. */
-  shutdown(): void;
+  shutdown(): Promise<void>;
 };
 
-export function createWtQueryClient(): WtQueryClient {
-  const storage = createSqliteAsyncStorage(CACHE_DB);
+export function createWtQueryClient(storage: AsyncStorageDb = createSqliteAsyncStorage(CACHE_DB)): WtQueryClient {
   const persister = experimental_createQueryPersister<string>({
     storage,
     buster: CACHE_BUSTER,
@@ -221,12 +220,33 @@ export function createWtQueryClient(): WtQueryClient {
   // observers mount, and the first frame would show empty placeholders
   // for everything. The runtime races this against a small budget so a
   // huge cache doesn't block startup.
-  const restored = persister.restoreQueries(client);
+  const evictedDuringRestore = new Set<string>();
+  let restoring = true;
+  let closed = false;
+  const restored = (async () => {
+    // Disk reads may finish after startup's restore budget. Stage the snapshot
+    // so it cannot resurrect evicted keys or overwrite a newer live fetch.
+    const snapshot = new QueryClient();
+    try {
+      await persister.restoreQueries(snapshot);
+      if (closed) return;
+      for (const query of snapshot.getQueryCache().getAll()) {
+        if (evictedDuringRestore.has(query.queryHash)) continue;
+        if (client.getQueryState(query.queryKey)?.dataUpdatedAt) continue;
+        client.setQueryData(query.queryKey, query.state.data, { updatedAt: query.state.dataUpdatedAt });
+      }
+    } finally {
+      snapshot.clear();
+      evictedDuringRestore.clear();
+      restoring = false;
+    }
+  })();
 
   return {
     client,
     restored,
     evict(queryKey): void {
+      if (restoring) evictedDuringRestore.add(hashKey([...queryKey]));
       // Mirror what the persister does on write: storage key = prefix
       // + hashKey(queryKey). hashKey is the same hasher the QueryCache
       // uses to dedupe observers, so it's the only correct way to
@@ -234,10 +254,11 @@ export function createWtQueryClient(): WtQueryClient {
       client.removeQueries({ queryKey: [...queryKey], exact: true });
       storage.removeItem(`${STORAGE_PREFIX}-${hashKey([...queryKey])}`);
     },
-    shutdown(): void {
+    async shutdown(): Promise<void> {
+      closed = true;
       client.getQueryCache().clear();
       client.unmount();
-      storage.close();
+      await storage.close();
     },
   };
 }
