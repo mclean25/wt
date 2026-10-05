@@ -99,7 +99,6 @@ import {
 import { config } from "../core/config.ts";
 import { issueStatusIds, type IssueStatuses } from "../core/issue-status.ts";
 import { issueStatusExpectations } from "./issue-status.ts";
-import type { DiffContext } from "../core/diff/index.ts";
 import { causeMessage } from "../core/errors.ts";
 import { gitRun, invalidateMainFirstParents } from "../core/git.ts";
 import { fetchAuthenticatedLogin } from "../core/github.ts";
@@ -115,6 +114,7 @@ import {
   setSlugBase as setSlugBaseOnDisk,
   setWorktreeSection as setWorktreeSectionOnDisk,
   setSlugIssueId as setSlugIssueIdOnDisk,
+  setSlugManualTitle,
   dismissReviewRequest as dismissReviewRequestOnDisk,
   setSlugWorkStatus as setSlugWorkStatusOnDisk,
   swapOrders as swapOrdersOnDisk,
@@ -126,6 +126,7 @@ import {
 
 import { CACHE_DB } from "./client.ts";
 import { qk } from "./keys.ts";
+import { regenerateWorktreeTitle } from "./title-actions.ts";
 import { clearPersistedCache } from "./persister.ts";
 import { operationErrors } from "./queries/boundary.ts";
 import {
@@ -855,63 +856,15 @@ export function useWtActions() {
         };
       });
     },
-    /**
-     * Force the AI summary call to re-run for one worktree. Returns
-     * false when there's no cached diff context yet — the caller
-     * decides how to message that (we don't want the gesture to mean
-     * "warm up cold").
-     *
-     * `aiSummary` is hash-keyed; force regen refetches the diff
-     * context, then `invalidateQueries` on the AI summary entry for
-     * the resulting hash. The active observer refetches the queryFn
-     * (starting the naming harness), and `placeholderData: keepPreviousData`
-     * keeps the prior summary on screen during the gap. Using
-     * `invalidateQueries` instead of `removeQueries` is deliberate:
-     * deleting the entry blanks the display because the observer's
-     * keepPreviousData fallback only kicks in on a queryKey change,
-     * not on an evicted same-key entry.
-     */
+    /** Explicit generation replaces a saved title while preserving its lock. */
     refreshAiSummary(slug: string): Promise<boolean> {
-      return Effect.runPromise(
-        Effect.gen(function* () {
-          // The diffContext key is per-(slug, base) so a worktree can
-          // have multiple cached entries (trunk, parent A, parent B…) as
-          // its stack relationship evolves. Prefix-match to address every
-          // cached entry for this slug; the row aggregator observes only
-          // the *current* base, so on next render the live observer's
-          // refetch produces the up-to-date value regardless of which
-          // entries we touched here.
-          const prefix = ["wt", slug, "diffContext"] as const;
-          const existing = yield* Effect.sync(() =>
-            qc.getQueriesData<DiffContext | null>({ queryKey: prefix }),
-          );
-          if (existing.length === 0 || existing.every(([, v]) => !v)) {
-            return false;
-          }
-          // `invalidateQueries` awaits the refetch of any active observer
-          // (default `refetchType: "active"`), so by the time this resolves
-          // the diff context cache holds the new hash.
-          yield* invalidate({ queryKey: prefix });
-          const refreshed = yield* Effect.sync(() =>
-            qc.getQueriesData<DiffContext | null>({ queryKey: prefix }),
-          );
-          if (refreshed.every(([, v]) => !v)) return false;
-          // Invalidate (don't remove) the AI summary entry for each
-          // still-present hash. Invalidate triggers an active-observer
-          // refetch even with `staleTime: Infinity`, and the cache entry
-          // stays put so `keepPreviousData` has data to show during the
-          // gap.
-          yield* Effect.all(
-            refreshed
-              .filter(([, ctx]) => !!ctx)
-              .map(([, ctx]) =>
-                invalidate({ queryKey: qk.aiSummary(ctx!.hash) }),
-              ),
-            { concurrency: "unbounded", discard: true },
-          );
-          return true;
-        }),
-      );
+      return Effect.runPromise(regenerateWorktreeTitle(qc, slug));
+    },
+    setManualTitle(slug: string, title: string): Promise<void> {
+      return Effect.runPromise(setSlugManualTitle(slug, title).pipe(
+        Effect.tap(() => invalidate({ queryKey: qk.wtState() })),
+        Effect.asVoid,
+      ));
     },
     /**
      * Flip the archived flag for a slug. Optimistically patches the

@@ -141,6 +141,7 @@ export type NormalKeysCtx = {
   openSectionPicker: ReturnType<typeof makeSectionFlows>["openSectionPicker"];
   openSectionRename: ReturnType<typeof makeSectionFlows>["openSectionRename"];
   openIssueIdPrompt: () => void;
+  openWorktreeTitlePrompt: () => void;
   openBasePicker: ReturnType<typeof makeBaseFlows>["openBasePicker"];
   openStatusPicker: () => void;
   openActionPicker: (target: NonNullable<VisualItems["currentTarget"]>) => void;
@@ -161,6 +162,7 @@ export type NormalKeysCtx = {
   toggleSectionFold: (key: string) => Promise<boolean>;
   setSectionFolded: (key: string, folded: boolean) => Promise<boolean>;
   refreshAiSummary: (slug: string) => Promise<boolean>;
+  namingConfigured: boolean;
   /** `V`'s override of the details pane's post-merge-steps block. */
   verifyExpanded: boolean | null;
   setVerifyExpanded: (v: boolean | null) => void;
@@ -205,6 +207,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     openSectionPicker,
     openSectionRename,
     openIssueIdPrompt,
+    openWorktreeTitlePrompt,
     openBasePicker,
     openStatusPicker,
     openActionPicker,
@@ -220,6 +223,7 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     toggleSectionFold,
     setSectionFolded,
     refreshAiSummary,
+    namingConfigured,
     verifyExpanded,
     setVerifyExpanded,
     toast,
@@ -951,6 +955,10 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
     // `wt rm` command so its lock, dirty, and unpushed-work checks stay
     // authoritative.
     if (selectedRemote) {
+      if (isPlainLetter(k, "t") || isShiftedLetter(k, "t")) {
+        toast("edit or generate this title in wt on its remote host", theme.warn, 2500);
+        return;
+      }
       if (isPlainLetter(k, "d")) {
         if (!isRemoteSummary(selectedRemote)) {
           toast("remote worktree is still being created", theme.warn, 1800);
@@ -1213,7 +1221,11 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       return;
     }
     if (isPlainLetter(k, "t")) {
-      if (!config.naming) {
+      openWorktreeTitlePrompt();
+      return;
+    }
+    if (isShiftedLetter(k, "t")) {
+      if (!namingConfigured) {
         toast("worktree naming not configured", theme.warn, 2000);
         return;
       }
@@ -1225,8 +1237,10 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
       forkReported(
         keyPromise("refresh AI summary", () => refreshAiSummary(slug)).pipe(
           Effect.tap((ok) => Effect.sync(() => {
-            if (ok) rowLog.event.dim("regenerating worktree summary");
-            else toast("no diff context yet", theme.warn, 2000);
+            if (ok) {
+              rowLog.event.dim("generated worktree title");
+              toast("generated worktree title", theme.info, 2000);
+            } else toast("no diff context yet", theme.warn, 2000);
           })),
         ),
         (error) => reportActionError(error.label, error.cause),

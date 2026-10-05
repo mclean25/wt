@@ -12,6 +12,20 @@ The TUI is split into three layers; respect the boundaries:
 
 The list panel (`src/tui/panels/list.tsx`) is deliberately **not** row-driven — different layout (one line of glyphs, no labels). Don't try to unify them.
 
+Worktree titles resolve as `manual > llm > pr > commit > slug`. The `t` footer
+editor prefills that resolved title and saves it in the existing wtstate slug
+record. An unchanged submission still pins it. Both list and detail observers
+disable background naming for pinned titles; existing naming configuration is
+unchanged. `T` explicitly fetches fresh diff context and its AI summary, even
+with disabled observers or an empty cache, bypassing the disk cache's stale
+restore. Wtstate itself is read from its canonical local database, never restored
+from the disposable query cache; naming waits for that first read. Generation
+replaces a pinned title only if its revision has not advanced, preserving later
+edits made during inventory, diff, or model work.
+Pinned titles suppress the AI brief used by the list so both panes agree.
+Sorting breaks status/manual-order ties by stable slug (stack root for groups),
+never by title or filesystem enumeration.
+
 When `[branch] production` is configured, the list's left marker combines
 agent work-status color with release-position shape. PR fetch supplies the
 merged result SHA, a single git walk checks all visible merge SHAs against the

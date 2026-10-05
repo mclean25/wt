@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import type { KeyEvent } from "@opentui/core";
+import { setImmediate as settle } from "node:timers/promises";
 
 import type { PullRequest } from "../../core/types.ts";
 import type { ReviewRequestPr } from "../../core/github.ts";
 import type { WorktreeModel } from "../worktree-model.ts";
 import { handleNormalKey, type NormalKeysCtx } from "./normal-keys.ts";
+import type { WorktreeRow } from "../hooks/useWorktreeRows.ts";
 
 const plainKey = (name: string): KeyEvent =>
   ({
@@ -41,6 +43,57 @@ function remoteModel(pr?: PullRequest, archived = false): WorktreeModel {
     archived,
   } as WorktreeModel;
 }
+
+function titleContext(overrides: Partial<NormalKeysCtx>): NormalKeysCtx {
+  return {
+    focusedOutputId: null,
+    consumePrTargetChord: () => false,
+    handleGlobalKey: () => false,
+    current: { wt: { slug: "local-title" }, status: { kind: "clean" } } as WorktreeRow,
+    ...overrides,
+  } as NormalKeysCtx;
+}
+
+test("t opens manual title editing when AI naming is not configured", () => {
+  let opened = 0;
+  handleNormalKey(plainKey("t"), titleContext({
+    namingConfigured: false,
+    openWorktreeTitlePrompt: () => { opened++; },
+    refreshAiSummary: async () => { throw new Error("must not generate"); },
+    toast: () => { throw new Error("manual titles need no naming configuration"); },
+  }));
+  expect(opened).toBe(1);
+});
+
+test("Shift+T explicitly generates rather than editing and reports completion", async () => {
+  const calls: string[] = [];
+  handleNormalKey(Object.assign(plainKey("t"), { shift: true, sequence: "T" }), titleContext({
+    namingConfigured: true,
+    openWorktreeTitlePrompt: () => { throw new Error("must not open editor"); },
+    refreshAiSummary: async (slug) => { calls.push(slug); return true; },
+    toast: (message) => { calls.push(message); },
+    reportActionError: (_label, error) => { throw error; },
+  }));
+  await settle();
+  expect(calls).toEqual(["local-title", "generated worktree title"]);
+});
+
+test("remote title keys never edit or generate a same-named local title", () => {
+  const messages: string[] = [];
+  const ctx = titleContext({
+    selectedRemote: { hostLabel: "dellserver" } as NormalKeysCtx["selectedRemote"],
+    selectedWorktree: remoteModel(),
+    openWorktreeTitlePrompt: () => { throw new Error("must not edit local state"); },
+    refreshAiSummary: async () => { throw new Error("must not generate locally"); },
+    toast: (message) => messages.push(message),
+  });
+  handleNormalKey(plainKey("t"), ctx);
+  handleNormalKey(Object.assign(plainKey("t"), { shift: true, sequence: "T" }), ctx);
+  expect(messages).toEqual([
+    "edit or generate this title in wt on its remote host",
+    "edit or generate this title in wt on its remote host",
+  ]);
+});
 
 test("p opens the selected remote worktree PR", () => {
   const opened: Array<{ url: string; number: number; logName: string }> = [];

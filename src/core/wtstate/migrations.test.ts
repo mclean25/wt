@@ -46,6 +46,17 @@ describe("migrateRawWtState (constant-bound wrapper)", () => {
     expect(value.reviewRequestDismissals).toEqual([]);
   });
 
+  test("v17 preserves existing slug data for optional manual titles", () => {
+    const { value, from, to } = migrateRawWtState({
+      version: 16,
+      slugs: { task: { section: null, order: 2, manualTitle: "Pinned", manualTitleRevision: 4 } },
+    });
+    expect({ from, to, version: value.version }).toEqual({ from: 16, to: 17, version: 17 });
+    expect(value.slugs).toEqual({
+      task: { section: null, order: 2, manualTitle: "Pinned", manualTitleRevision: 4 },
+    });
+  });
+
   test("invalid version values are treated as 0 and migrated", () => {
     const raw = { version: "not-a-number", slugs: { a: 1 } };
     const { value, from } = migrateRawWtState(raw);

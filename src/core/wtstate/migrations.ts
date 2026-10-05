@@ -22,7 +22,7 @@
  */
 
 /** Current schema version. Bump alongside a new entry in `WT_STATE_MIGRATIONS`. */
-export const WT_STATE_VERSION = 16;
+export const WT_STATE_VERSION = 17;
 
 export type WtStateMigration = {
   /** Target version this step produces. */
@@ -180,6 +180,12 @@ export const WT_STATE_MIGRATIONS: WtStateMigration[] = [
         ? raw
         : { ...raw, reviewRequestDismissals: [] }
     ),
+  },
+  {
+    // v17: optional user-pinned worktree title and its write revision.
+    // Nothing to backfill: an AI title is not a user assertion.
+    to: 17,
+    up: (raw) => raw,
   },
 ];
 

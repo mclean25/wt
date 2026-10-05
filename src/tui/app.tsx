@@ -74,6 +74,7 @@ import { handleRemovedViewKey } from "./keyboard/removed-view-keys.ts";
 import { makeActionPickerFlows } from "./flows/action-picker.ts";
 import { makeBaseFlows } from "./flows/base.ts";
 import { useIssueIdFlow } from "./flows/issue-id.ts";
+import { makeWorktreeTitleFlows } from "./flows/worktree-title.ts";
 import { makeWorkStatusFlows, type PendingStatusText } from "./flows/work-status.ts";
 import { makeDestroyFlows } from "./flows/destroy.ts";
 import { makeErrorFlows } from "./flows/error-report.ts";
@@ -146,6 +147,7 @@ export function App({ onExit }: Props) {
     setBase,
     setWorkStatus,
     setIssueId,
+    setManualTitle,
     swapOrder,
     placeSlug,
     renameSection,
@@ -651,6 +653,15 @@ export function App({ onExit }: Props) {
     toast,
   });
 
+  // Worktree title editor (`t`) captures the displayed title and its owner.
+  const { openWorktreeTitlePrompt, commitWorktreeTitle } = makeWorktreeTitleFlows({
+    current,
+    setFooter,
+    setManualTitle,
+    isSlugLive: (slug) => rows.some((r) => r.wt.slug === slug),
+    toast,
+  });
+
   // Work-status picker flow (`u`) — extracted to `flows/work-status.ts`.
   const { openStatusPicker, commitStatusPick, beginStatusNote, commitStatusText } =
     makeWorkStatusFlows({
@@ -954,6 +965,7 @@ export function App({ onExit }: Props) {
         pendingIssueSlug,
         setPendingIssueSlug,
         commitIssueId,
+        commitWorktreeTitle,
       });
       return;
     }
@@ -1018,6 +1030,7 @@ export function App({ onExit }: Props) {
       openSectionPicker,
       openSectionRename,
       openIssueIdPrompt,
+      openWorktreeTitlePrompt,
       openBasePicker,
       openStatusPicker,
       openActionPicker,
@@ -1033,6 +1046,7 @@ export function App({ onExit }: Props) {
       toggleSectionFold,
       setSectionFolded,
       refreshAiSummary,
+      namingConfigured: !!config.naming,
       toast,
       reportActionError,
     };

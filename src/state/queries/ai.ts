@@ -23,6 +23,14 @@ import { KEEP_PREV, NO_CTX_HASH, STALE } from "./shared.ts";
 const io = operationErrors("ai");
 const aiLog = createLogger("ai");
 
+/** A saved title disables background naming without changing configuration. */
+export function canGenerateAutomatically(
+  naming: object | null,
+  manualTitle?: string,
+): boolean {
+  return !!naming && !manualTitle;
+}
+
 /**
  * Diff context + content hash for the AI summary. The hash is the
  * stable cache key for `aiSummaryQuery`; the prompt body lives only in
@@ -239,7 +247,7 @@ export const stackTitleQuery = (
         }),
         signal,
       ),
-    enabled: members.length > 0 && !!config.naming,
+    enabled: members.length > 0 && canGenerateAutomatically(config.naming),
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: Number.POSITIVE_INFINITY,
   });

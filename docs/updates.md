@@ -137,6 +137,9 @@ Stores have explicit compatibility policies:
   `core/state-db.ts`. The repository-state payload retains its existing
   forward-only `WT_STATE_VERSION` transformations, so the proven migration
   helpers remain the compatibility boundary while storage evolves. The
+  v17 payload adds an optional trimmed `manualTitle` and its monotonic
+  `manualTitleRevision` on worktree slug records; existing titles are not
+  inferred from cached AI summaries. The
   current-schema read path opens the existing database read-only and does not
   refresh repository timestamps; only writes and a pending schema migration
   need write access. This keeps `wt status` and `wt fleet` usable from a

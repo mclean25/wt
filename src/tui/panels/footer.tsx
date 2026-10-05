@@ -34,7 +34,9 @@ export type FooterMode =
       kind: "input";
       prompt: string;
       edit: TextEdit;
-      purpose: "new" | "new-remote" | "rename-section" | "status-text" | "issue-id";
+      purpose: "new" | "new-remote" | "rename-section" | "status-text" | "issue-id" | "worktree-title";
+      /** Capture the title's owner while inventory/selection can change. */
+      titleSlug?: string;
       /**
        * Optional default `--base` ref for the new-worktree input (set
        * by the `N` keybinding). Not rendered in the prompt; the event
@@ -160,6 +162,11 @@ export function Footer({ mode, hint }: Props) {
             <text wrapMode="none">
               <span fg={theme.accent}>?</span>
               <span fg={theme.fgDim}> help</span>
+              {width >= 80 ? <>
+                <span fg={theme.fgDim}> · </span>
+                <span fg={theme.accent}>t</span>
+                <span fg={theme.fgDim}> title</span>
+              </> : null}
             </text>
           )
         ) : null}

@@ -121,6 +121,16 @@ export function parseWtState(raw: unknown): WtState {
         : null;
       const order = typeof rec.order === "number" && Number.isFinite(rec.order) ? rec.order : 0;
       slugs[k] = { section, order };
+      if (typeof rec.manualTitle === "string" && rec.manualTitle.trim() !== "") {
+        slugs[k]!.manualTitle = rec.manualTitle.trim();
+      }
+      if (
+        typeof rec.manualTitleRevision === "number" &&
+        Number.isSafeInteger(rec.manualTitleRevision) &&
+        rec.manualTitleRevision >= 0
+      ) {
+        slugs[k]!.manualTitleRevision = rec.manualTitleRevision;
+      }
       if (typeof rec.createdAt === "string" && Number.isFinite(Date.parse(rec.createdAt))) {
         slugs[k]!.createdAt = rec.createdAt;
       }

@@ -1,4 +1,4 @@
-import { hashKey, QueryClient } from "@tanstack/react-query";
+import { hashKey, notifyManager, QueryClient } from "@tanstack/react-query";
 import { experimental_createQueryPersister } from "@tanstack/query-persist-client-core";
 
 import { config } from "../core/config.ts";
@@ -168,6 +168,9 @@ export function createWtQueryClient(storage: AsyncStorageDb = createSqliteAsyncS
     filters: {
       predicate: (query) => {
         const key = query.queryKey;
+        // Canonical state is local and already durable. A stale second copy
+        // can hide a manual-title lock and start unwanted background naming.
+        if (key[0] === "wtState") return false;
         if (key[0] === "claudeRegistry") return false;
         // Session discovery is ephemeral (live-session state, polled for
         // codex/opencode) and worthless across runs — restoring it would
@@ -210,7 +213,16 @@ export function createWtQueryClient(storage: AsyncStorageDb = createSqliteAsyncS
         // persister wrapper. Restored entries skip the queryFn on first
         // observe; subsequent calls hit storage on success and retrieve
         // on cold cache.
-        persister: persister.persisterFn,
+        persister: async (queryFn, context, query) => {
+          if (context.meta?.forceFresh === true) {
+            // Explicit regeneration must await the fresh result, even on a
+            // cold cache. Still persist it after Query has installed the data.
+            const result = await queryFn(context);
+            notifyManager.schedule(() => { void persister.persistQuery(query); });
+            return result;
+          }
+          return persister.persisterFn(queryFn, context, query);
+        },
       },
     },
   });
@@ -231,6 +243,9 @@ export function createWtQueryClient(storage: AsyncStorageDb = createSqliteAsyncS
       await persister.restoreQueries(snapshot);
       if (closed) return;
       for (const query of snapshot.getQueryCache().getAll()) {
+        // restoreQueries does not apply the persister's write predicate.
+        // Ignore legacy snapshots of this now-canonical-only query as well.
+        if (query.queryKey[0] === "wtState") continue;
         if (evictedDuringRestore.has(query.queryHash)) continue;
         if (client.getQueryState(query.queryKey)?.dataUpdatedAt) continue;
         client.setQueryData(query.queryKey, query.state.data, { updatedAt: query.state.dataUpdatedAt });

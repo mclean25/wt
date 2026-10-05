@@ -54,3 +54,47 @@ test("a cache read finishing after shutdown does not repopulate the client", asy
   await target.restored;
   expect(target.client.getQueryCache().getAll()).toHaveLength(0);
 });
+
+test("canonical wtstate never restores or persists a stale title-lock snapshot", async () => {
+  const entries = await persistedSnapshot();
+  const legacy = JSON.parse(entries[0]![1]);
+  legacy.queryKey = ["wtState"];
+  legacy.queryHash = JSON.stringify(legacy.queryKey);
+  legacy.state.data = { slugs: { task: { section: null, order: 0 } } };
+  const legacyEntry: [string, string] = [`wt-${legacy.queryHash}`, JSON.stringify(legacy)];
+  const writes: string[] = [];
+  const storage = memoryStorage(Promise.resolve([legacyEntry]), (key) => { writes.push(key); });
+  storage.getItem = async () => legacyEntry[1];
+  const target = createWtQueryClient(storage);
+  try {
+    await target.restored;
+    expect(target.client.getQueryData(["wtState"])).toBeUndefined();
+    const canonical = { slugs: { task: { section: null, order: 0, manualTitle: "Pinned" } } };
+    let reads = 0;
+    expect(await target.client.fetchQuery<typeof canonical>({
+      queryKey: ["wtState"],
+      queryFn: async () => { reads++; return canonical; },
+    })).toEqual(canonical);
+    expect(reads).toBe(1);
+    expect(writes).toEqual([]);
+  } finally { await target.shutdown(); }
+});
+
+test("explicit refresh bypasses cold restoration and persists the fresh result", async () => {
+  const entries = await persistedSnapshot();
+  const entry = entries.find(([, value]) => JSON.parse(value).queryKey[0] === "normal")!;
+  const written = Promise.withResolvers<string>();
+  const storage = memoryStorage(Promise.resolve([]), (_key, value) => { written.resolve(value); });
+  storage.getItem = async () => entry[1];
+  const target = createWtQueryClient(storage);
+  try {
+    await target.restored;
+    let calls = 0;
+    expect(await target.client.fetchQuery<string>({
+      queryKey: ["normal"], staleTime: 0, meta: { forceFresh: true },
+      queryFn: async () => { calls++; return "fresh"; },
+    })).toBe("fresh");
+    expect(calls).toBe(1);
+    expect(JSON.parse(await written.promise).state.data).toBe("fresh");
+  } finally { await target.shutdown(); }
+});

@@ -38,6 +38,23 @@ describe("parseWtState", () => {
     expect(state.slugs.old?.createdAt).toBeUndefined();
     expect(state.slugs.invalid?.createdAt).toBeUndefined();
   });
+  test("trims manual titles and accepts only nonnegative safe title revisions", () => {
+    const state = parseWtState({
+      slugs: {
+        valid: { manualTitle: "  Pinned title  ", manualTitleRevision: 2 },
+        blank: { manualTitle: "  ", manualTitleRevision: -1 },
+        malformed: { manualTitle: 42, manualTitleRevision: Number.MAX_SAFE_INTEGER + 1 },
+      },
+    });
+    expect(state.slugs.valid).toEqual({
+      section: null,
+      order: 0,
+      manualTitle: "Pinned title",
+      manualTitleRevision: 2,
+    });
+    expect(state.slugs.blank).toEqual({ section: null, order: 0 });
+    expect(state.slugs.malformed).toEqual({ section: null, order: 0 });
+  });
   test("round-trips a full slug record including the work status", () => {
     const state = parseWtState({
       slugs: {
