@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import { makeDebounced } from "./repo-watch.ts";
+import {
+  makeDebounced,
+  unlockedWatchTargets,
+  WorktreeWatchSet,
+} from "./repo-watch.ts";
 
 describe("makeDebounced", () => {
   test("retriggering cancels and replaces the pending callback", async () => {
@@ -45,5 +49,58 @@ describe("makeDebounced", () => {
       yield* TestClock.adjust(100);
       expect(calls).toBe(0);
     })).pipe(Effect.provide(TestClock.layer())));
+  });
+});
+
+describe("worktree watcher creation gate", () => {
+  test("does not attach during a lock, then attaches once with one catch-up", () => {
+    let targets = [{ slug: "slice", path: "/worktrees/slice" }];
+    let locked = true;
+    const attached: string[] = [];
+    const disposed: string[] = [];
+    const catchups: string[] = [];
+    let changes = 0;
+    const watchers = new WorktreeWatchSet(
+      () => { changes++; },
+      {
+        onAttach: (slug) => catchups.push(slug),
+        watchDir: (path) => {
+          attached.push(path);
+          return () => disposed.push(path);
+        },
+      },
+    );
+
+    const reconcile = (): void => {
+      watchers.reconcile(unlockedWatchTargets(targets, () => locked));
+    };
+    reconcile();
+    expect(attached).toEqual([]);
+    expect(catchups).toEqual([]);
+    expect(changes).toBe(0);
+
+    locked = false;
+    reconcile();
+    reconcile();
+    expect(attached).toEqual(["/worktrees/slice"]);
+    expect(catchups).toEqual(["slice"]);
+    expect(changes).toBe(0);
+
+    // A subsequent destroy lock removes the recursive watcher; a missing
+    // row on the next inventory reconciliation disposes it permanently.
+    locked = true;
+    reconcile();
+    expect(disposed).toEqual(["/worktrees/slice"]);
+    targets = [];
+    locked = false;
+    reconcile();
+    expect(attached).toEqual(["/worktrees/slice"]);
+    expect(catchups).toEqual(["slice"]);
+    // Recreating the slug attaches a new watcher exactly once.
+    targets = [{ slug: "slice", path: "/worktrees/slice" }];
+    reconcile();
+    expect(attached).toEqual(["/worktrees/slice", "/worktrees/slice"]);
+    expect(catchups).toEqual(["slice", "slice"]);
+    watchers.dispose();
   });
 });

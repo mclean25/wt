@@ -45,7 +45,7 @@
  */
 import { mkdirSync, watch, type FSWatcher } from "node:fs";
 import { basename, join } from "node:path";
-import { Effect, Exit, Fiber, Ref, Scope } from "effect";
+import { Clock, Duration, Effect, Exit, Fiber, Scope } from "effect";
 
 import { createLogger } from "./logger.ts";
 import { closeSilent } from "./tail-util.ts";
@@ -91,29 +91,44 @@ export const makeDebounced = Effect.fn("makeDebounced")(function* (
 ): Effect.fn.Return<Debounced, never, Scope.Scope> {
   const context = yield* Effect.context<never>();
   const scope = yield* Effect.scope;
-  const disposed = yield* Ref.make(false);
-  const current = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
+  const clock = yield* Clock.Clock;
+  const quietPeriodNanos = BigInt(Math.max(0, Math.ceil(ms * 1_000_000)));
+  let disposed = false;
+  type Pending = { due: bigint; fiber?: Fiber.Fiber<void, never> };
+  let current: Pending | null = null;
 
-  const cancelCurrent = Effect.gen(function* () {
-    const fiber = yield* Ref.getAndSet(current, null);
-    if (fiber) yield* Fiber.interrupt(fiber);
+  const cancel = Effect.suspend(() => {
+    disposed = true;
+    const pending = current;
+    current = null;
+    return pending?.fiber ? Fiber.interrupt(pending.fiber).pipe(Effect.asVoid) : Effect.void;
   });
-  const cancel = Ref.set(disposed, true).pipe(Effect.andThen(cancelCurrent));
   yield* Effect.addFinalizer(() => cancel);
 
   return {
     trigger: () => {
-      if (Effect.runSyncWith(context)(Ref.get(disposed))) return;
-      Effect.runSyncWith(context)(cancelCurrent);
-      const fiber = Effect.runSyncWith(context)(
-        Effect.sleep(ms).pipe(
-          Effect.andThen(Effect.sync(() => {
-            if (!Effect.runSyncWith(context)(Ref.get(disposed))) onChange();
-          })),
-          Effect.forkIn(scope),
-        ),
-      );
-      Effect.runSyncWith(context)(Ref.set(current, fiber));
+      if (disposed) return;
+      const due = clock.monotonicTimeNanosUnsafe() + quietPeriodNanos;
+      // Clone/install bursts can contain hundreds of thousands of events.
+      // Updating a deadline must not interrupt/fork a fiber for every file.
+      if (current) { current.due = due; return; }
+      const pending: Pending = { due };
+      current = pending;
+      pending.fiber = Effect.runSyncWith(context)(Effect.gen(function* () {
+        while (!disposed && current === pending) {
+          const remaining = pending.due - clock.monotonicTimeNanosUnsafe();
+          if (remaining > 0n) {
+            yield* clock.sleep(Duration.millis(Number(remaining) / 1_000_000));
+            continue;
+          }
+          // Clear before the callback so a reentrant trigger starts its own burst.
+          current = null;
+          onChange();
+        }
+      }).pipe(
+        Effect.ensuring(Effect.sync(() => { if (current === pending) current = null; })),
+        Effect.forkIn(scope),
+      ));
     },
     cancelUnsafe: () => {
       Effect.runSyncWith(context)(cancel);
@@ -571,6 +586,11 @@ export class RiftRebaseWatchSet {
     }
   }
 
+  suspend(slug: string): void {
+    this.handles.get(slug)?.();
+    this.handles.delete(slug);
+  }
+
   dispose(): void {
     for (const dispose of this.handles.values()) dispose();
     this.handles.clear();
@@ -578,6 +598,19 @@ export class RiftRebaseWatchSet {
 }
 
 export type WatchTarget = { slug: string; path: string };
+
+/**
+ * A checkout being created or removed is not a stable working tree yet.
+ * Callers filter these targets using the per-slug operation lock before
+ * reconciling recursive watchers. The predicate is intentionally supplied
+ * by the caller so tests can cover the gate without touching lock files.
+ */
+export function unlockedWatchTargets(
+  targets: ReadonlyArray<WatchTarget>,
+  isLocked: (slug: string) => boolean,
+): WatchTarget[] {
+  return targets.filter(({ slug }) => !isLocked(slug));
+}
 
 /**
  * Per-slug worktree dir watcher set. Reconcile against the current
@@ -589,9 +622,19 @@ export type WatchTarget = { slug: string; path: string };
 export class WorktreeWatchSet {
   private readonly handles = new Map<string, () => void>();
   private readonly onSlugChange: (slug: string, area: WorktreeDirArea) => void;
+  private readonly onAttach: (slug: string) => void;
+  private readonly watchDir: typeof watchWorktreeDir;
 
-  constructor(onSlugChange: (slug: string, area: WorktreeDirArea) => void) {
+  constructor(
+    onSlugChange: (slug: string, area: WorktreeDirArea) => void,
+    opts: {
+      onAttach?: (slug: string) => void;
+      watchDir?: typeof watchWorktreeDir;
+    } = {},
+  ) {
     this.onSlugChange = onSlugChange;
+    this.onAttach = opts.onAttach ?? (() => {});
+    this.watchDir = opts.watchDir ?? watchWorktreeDir;
   }
 
   reconcile(targets: ReadonlyArray<WatchTarget>): void {
@@ -605,11 +648,19 @@ export class WorktreeWatchSet {
     }
     for (const [slug, path] of want) {
       if (this.handles.has(slug)) continue;
-      const dispose = watchWorktreeDir(path, (area) =>
+      const dispose = this.watchDir(path, (area) =>
         this.onSlugChange(slug, area),
       );
       this.handles.set(slug, dispose);
+      this.onAttach(slug);
     }
+  }
+
+  /** Detach immediately when a create/remove lock appears, without
+   * reconciling unrelated rows from a possibly stale inventory snapshot. */
+  suspend(slug: string): void {
+    this.handles.get(slug)?.();
+    this.handles.delete(slug);
   }
 
   dispose(): void {

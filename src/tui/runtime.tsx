@@ -1,11 +1,11 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryCacheNotifyEvent } from "@tanstack/react-query";
 import { Cause, Data, Deferred, Effect, Fiber } from "effect";
 import type * as EffectScope from "effect/Scope";
 
 import { actionRegistry } from "../core/actions.ts";
-import { causeMessage } from "../core/errors.ts";
+import { causeMessage, operationErrors } from "../core/errors.ts";
 import { reapArchived } from "../core/archive.ts";
 import { recordWorktreeEdit } from "../core/automations.ts";
 import { watchRegistry } from "../core/harness/claude/registry.ts";
@@ -31,6 +31,7 @@ import {
 import {
   RiftRebaseWatchSet,
   WorktreeWatchSet,
+  unlockedWatchTargets,
   watchLockDir,
   watchRebaseState,
   watchRefs,
@@ -97,6 +98,27 @@ export function invalidateRefQueries(
     invalidate(key);
   }
 }
+
+/** Ignore fetch-start/invalidation notifications: their cached inventory may
+ * still contain a row removed by a lock holder. Only a successful response
+ * is authoritative for adding/removing filesystem watchers. */
+export function isSuccessfulWorktreeInventoryUpdate(event: QueryCacheNotifyEvent): boolean {
+  return event.type === "updated" &&
+    event.query.queryKey[0] === "worktrees" &&
+    event.action.type === "success";
+}
+
+const inventoryIo = operationErrors("TUI inventory refresh");
+
+/** An initial fetch has no cached data, so invalidateQueries otherwise joins
+ * it instead of refetching. Its snapshot may predate the completed operation. */
+export const refreshWorktreeInventory = Effect.fn("refreshWorktreeInventory")(function* (
+  client: QueryClient,
+) {
+  const filter = { queryKey: qk.worktrees(), exact: true };
+  yield* inventoryIo.promise("cancel stale inventory fetch", () => client.cancelQueries(filter));
+  yield* inventoryIo.promise("refresh worktree inventory", () => client.invalidateQueries(filter));
+});
 
 /**
  * Attach a resource to the current Effect scope. Cleanup failures are defects
@@ -241,9 +263,9 @@ class InvalidationScheduler {
     this.jobs.clear();
     for (const job of jobs) {
       if (job.kind === "key") {
-        forkBestEffort(() =>
-          this.client.invalidateQueries({ queryKey: job.key }),
-        );
+        forkBestEffort(() => job.key.length === 1 && job.key[0] === "worktrees"
+          ? Effect.runPromise(refreshWorktreeInventory(this.client))
+          : this.client.invalidateQueries({ queryKey: job.key }));
       } else if (job.kind === "claudeHarnessSessions") {
         forkBestEffort(() =>
           this.client.invalidateQueries({
@@ -511,38 +533,7 @@ export const runTui = Effect.gen(function* () {
       }),
     (stop) => stop(),
   );
-  // Per-slug lock churn → refresh that slug's lock query. Acquire /
-  // phase writes / release all land here, so the busy state is push-
-  // based in both directions: a create's "pnpm install" phase appears
-  // and clears the moment it happens (any process), instead of waiting
-  // on the lock query's while-held poll — which never arms at all when
-  // the lock appears after the query last fetched null. The release
-  // side then chains through `useLockReleasedInvalidator`, which
-  // refreshes the released slug's field queries.
-  yield* acquireSyncResource(
-    () =>
-      watchLockDir(config.paths.lockDir, (slug) => {
-        if (slug === "*") {
-          // Event without a filename — can't target one slug; refresh the
-          // whole per-worktree namespace rather than risk a stuck "busy". A
-          // create/destroy may also have completed, so refresh the list too.
-          invalidations.key(["wt"]);
-          invalidations.key(qk.worktrees());
-          return;
-        }
-        invalidations.key(qk.wt(slug).lock());
-        // A lock that's now GONE means a create or destroy just finished, so
-        // worktree membership may have changed — refresh the list. This is the
-        // completion signal the fs-dir watchers can't give for a rift create:
-        // its `.rift` marker (what makes the row discoverable) is written INSIDE
-        // the new dir, after the worktree-root watcher already fired on the bare
-        // dir appearing — so without this a CLI `wt new` row would only surface
-        // on the next interval. Gated on release (lock gone) so mid-op phase
-        // writes during a long restack don't churn the list.
-        if (!lockStatus(slug)) invalidations.key(qk.worktrees());
-      }),
-    (stop) => stop(),
-  );
+  const deferredWatcherSlugs = new Set<string>();
   const worktreeWatchSet = yield* acquireSyncResource(
     () =>
       new WorktreeWatchSet((slug, area) => {
@@ -553,6 +544,16 @@ export const runTui = Effect.gen(function* () {
         // Feed the automations engine's settle window: any observed write
         // (tree edit or deploy churn) counts as "someone is working here".
         recordWorktreeEdit(slug);
+      }, {
+        // A new watcher may attach after a create lock releases, having
+        // missed the writes that happened while the checkout was hidden.
+        // Refresh only that row's local filesystem answers once on attach.
+        onAttach: (slug) => {
+          if (!deferredWatcherSlugs.delete(slug)) return;
+          invalidations.key(qk.wt(slug).dirty());
+          invalidations.key(qk.wt(slug).deploy());
+          invalidations.key(qk.wt(slug).conflictAny());
+        },
       }),
     (watchSet) => watchSet.dispose(),
   );
@@ -566,16 +567,65 @@ export const runTui = Effect.gen(function* () {
     const targets = wts
       .filter((w) => !w.isMain && w.path)
       .map((w) => ({ slug: w.slug, path: w.path }));
-    worktreeWatchSet.reconcile(targets);
+    const targetSlugs = new Set(targets.map((t) => t.slug));
+    for (const slug of deferredWatcherSlugs) {
+      if (!targetSlugs.has(slug)) deferredWatcherSlugs.delete(slug);
+    }
+    // A locked checkout may be mid-create (including a rift --copy-all
+    // clone) or mid-destroy. Do not recursively watch its changing tree or
+    // its rebase directory until the operation releases the lock.
+    const unlocked = unlockedWatchTargets(targets, (slug) => {
+      const locked = lockStatus(slug) !== null;
+      if (locked) deferredWatcherSlugs.add(slug);
+      return locked;
+    });
+    worktreeWatchSet.reconcile(unlocked);
     // Only rift slices carry their own `.git` rebase state; a `.rift`
     // marker probe keeps the watcher set to the clones that need it.
-    riftRebaseWatchSet.reconcile(targets.filter((t) => isRiftWorktree(t.path)));
+    riftRebaseWatchSet.reconcile(unlocked.filter((t) => isRiftWorktree(t.path)));
   };
+  // Per-slug lock churn → lock-query refresh. A lock acquire removes the
+  // slug from watcher reconciliation; release refreshes inventory, whose
+  // successful update reattaches eligible watchers and performs one local
+  // catch-up invalidation through WorktreeWatchSet.onAttach. Unknown-name
+  // events refetch inventory, whose update reconciles every cached row.
+  yield* acquireSyncResource(
+    () =>
+      watchLockDir(config.paths.lockDir, (slug) => {
+        if (slug === "*") {
+          const cached = wtClient.client.getQueryData<Worktree[]>(qk.worktrees()) ?? [];
+          for (const target of cached) {
+            if (lockStatus(target.slug)) {
+              deferredWatcherSlugs.add(target.slug);
+              worktreeWatchSet.suspend(target.slug);
+              riftRebaseWatchSet.suspend(target.slug);
+            }
+          }
+          invalidations.key(["wt"]);
+          invalidations.key(qk.worktrees());
+          return;
+        }
+        invalidations.key(qk.wt(slug).lock());
+        const held = lockStatus(slug) !== null;
+        // An acquire/update must detach a cached row's recursive watchers
+        // immediately. On release, wait for the inventory refetch below:
+        // a create will then attach with a catch-up read, while a destroy
+        // will already have disappeared and cannot be reattached briefly.
+        if (held) {
+          deferredWatcherSlugs.add(slug);
+          worktreeWatchSet.suspend(slug);
+          riftRebaseWatchSet.suspend(slug);
+        }
+        // Release is also the reliable membership signal for rift creates:
+        // their marker lives inside the checkout, after the root event.
+        if (!held) invalidations.key(qk.worktrees());
+      }),
+    (stop) => stop(),
+  );
   yield* acquireSyncResource(
     () =>
       wtClient.client.getQueryCache().subscribe((event) => {
-        if (event.type !== "updated") return;
-        if (event.query.queryKey[0] !== "worktrees") return;
+        if (!isSuccessfulWorktreeInventoryUpdate(event)) return;
         reconcileWatchers(event.query.state.data as Worktree[] | undefined);
       }),
     (unsubscribe) => unsubscribe(),

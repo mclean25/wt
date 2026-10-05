@@ -308,6 +308,18 @@ One deliberate exception: `perfSnapshotQuery` (the `P` overlay) polls as its *pr
 
 When adding a new state source or mutation path, wire one of these (or an explicit invalidation at the call site) rather than shortening a staleTime — staleTimes only bound how wrong things can be when a trigger is missed. Watchers live in `src/core/repo-watch.ts` and are wired in `src/tui/runtime.tsx` through a 50ms-coalescing invalidation scheduler.
 
+Filesystem debouncers keep one pending fiber per burst and move its trailing
+deadline on each event. Creating and interrupting a fiber per file turns clone
+and install bursts into render-thread work before any refetch happens. Recursive
+checkout and rift-rebase watchers are suspended while that slug holds an operation
+lock. Release refreshes inventory; only a successful inventory update can attach
+watchers again, with one local dirty/deploy/conflict catch-up for deferred rows. Fetch-start
+and invalidation events still contain stale rows and must not resurrect a watcher
+on a checkout that was just removed.
+The coalesced inventory refresh cancels any existing fetch first, including the
+initial fetch with no cached data, so it cannot join a snapshot taken before the
+create/remove operation finished.
+
 **A refresh has a size, and the big one is not free.** `invalidateQueries(["wt"])`
 — the per-worktree wave inside `refreshAll`, i.e. what `r` does — refetches every
 field of every row: about 20 git probes per row with the normal field set. `Bun.spawn`
