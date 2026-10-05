@@ -7,7 +7,8 @@
  *   3. `~/.config/wt/config.toml`
  *
  * It then searches from the current directory upward for `.wt.toml`
- * and recursively merges that repository config over the user config.
+ * and checks a linked worktree's main clone when that search finds none.
+ * It recursively merges that repository config over the user config.
  * Arrays replace wholesale. `WT_REPO_CONFIG` carries the selected file
  * into child processes whose working directory changes (notably tmux).
  *

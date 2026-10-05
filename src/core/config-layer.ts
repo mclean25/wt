@@ -1,6 +1,6 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 
 export const REPOSITORY_CONFIG_FILE = ".wt.toml";
 export const REPOSITORY_CONFIG_ENV = "WT_REPO_CONFIG";
@@ -91,7 +91,27 @@ export function canonicalRepositoryConfig(
   return ownExists ? own : discovered;
 }
 
-/** Find the nearest repository config, or honor the path inherited by a child process. */
+/** Find the main clone's config through a linked worktree's Git files. */
+function linkedRepositoryConfig(worktree: string): string | null {
+  try {
+    const pointer = readFileSync(join(worktree, ".git"), "utf8").trim();
+    const match = /^gitdir: (.+)$/.exec(pointer);
+    if (!match) return null;
+    const gitDir = resolve(worktree, match[1]!);
+    const commonPath = readFileSync(join(gitDir, "commondir"), "utf8").trim();
+    if (!commonPath) return null;
+    const commonDir = canonicalPath(resolve(gitDir, commonPath));
+    // A bare or separate Git directory does not identify a main clone.
+    if (basename(commonDir) !== ".git") return null;
+    const candidate = join(dirname(commonDir), REPOSITORY_CONFIG_FILE);
+    return existsSync(candidate) ? candidate : null;
+  } catch {
+    // Missing or unreadable Git files leave the user-config fallback intact.
+    return null;
+  }
+}
+
+/** Find the nearest config, then try the linked main clone. Explicit paths win. */
 export function repositoryConfigPath(
   cwd = process.cwd(),
   env = process.env,
@@ -100,11 +120,13 @@ export function repositoryConfigPath(
   if (inherited) return resolve(inherited);
 
   let dir = resolve(cwd);
+  let gitRoot: string | null = null;
   while (true) {
     const candidate = join(dir, REPOSITORY_CONFIG_FILE);
     if (existsSync(candidate)) return candidate;
+    if (gitRoot === null && existsSync(join(dir, ".git"))) gitRoot = dir;
     const parent = dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir) return gitRoot ? linkedRepositoryConfig(gitRoot) : null;
     dir = parent;
   }
 }

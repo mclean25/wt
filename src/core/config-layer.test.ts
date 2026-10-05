@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -53,6 +53,49 @@ describe("repositoryConfigPath", () => {
   test("prefers the inherited repository config path", () => {
     const path = join(tmpdir(), "selected-wt.toml");
     expect(repositoryConfigPath("/", { [REPOSITORY_CONFIG_ENV]: path })).toBe(path);
+  });
+
+  test.each([false, true])("finds the main config through Git links (relative: %s)", (useRelative) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wt-config-linked-")));
+    try {
+      const main = join(root, "main");
+      const common = join(main, ".git");
+      const admin = join(common, "worktrees", "feature");
+      const worktree = join(root, "worktrees", "feature");
+      const nested = join(worktree, "src");
+      mkdirSync(admin, { recursive: true });
+      mkdirSync(nested, { recursive: true });
+      const configPath = join(main, ".wt.toml");
+      writeFileSync(configPath, "[branch]\nbase = \"main\"\n");
+      writeFileSync(join(worktree, ".git"), `gitdir: ${useRelative ? relative(worktree, admin) : admin}\n`);
+      writeFileSync(join(admin, "commondir"), `${useRelative ? relative(admin, common) : common}\n`);
+
+      expect(repositoryConfigPath(nested, {})).toBe(configPath);
+      const local = join(worktree, ".wt.toml");
+      writeFileSync(local, "");
+      expect(repositoryConfigPath(nested, {})).toBe(local);
+      expect(repositoryConfigPath(nested, { [REPOSITORY_CONFIG_ENV]: "/explicit.toml" })).toBe("/explicit.toml");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("does not use an outer worktree's config for a nested Git repository", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wt-config-nested-git-")));
+    try {
+      const main = join(root, "main");
+      const admin = join(main, ".git", "worktrees", "feature");
+      const worktree = join(root, "feature");
+      const nested = join(worktree, "other-repo");
+      mkdirSync(admin, { recursive: true });
+      mkdirSync(join(nested, ".git"), { recursive: true });
+      writeFileSync(join(main, ".wt.toml"), "");
+      writeFileSync(join(worktree, ".git"), `gitdir: ${admin}\n`);
+      writeFileSync(join(admin, "commondir"), "../..\n");
+      expect(repositoryConfigPath(nested, {})).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -595,6 +638,42 @@ prefix = "alex"
       expect(fromOutside).toEqual(fromMainClone);
       expect(fromMainClone.repoPath).toBe(mainClone);
       expect(fromMainClone.tmuxSocket).toBe(`wt-${fromMainClone.repoId}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a real linked worktree loads ignored main config without inherited paths", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wt-config-git-link-")));
+    try {
+      const main = join(root, "main");
+      const worktree = join(root, "worktrees", "feature");
+      mkdirSync(main, { recursive: true });
+      const git = (...args: string[]) => {
+        const result = Bun.spawnSync(["git", ...args], { cwd: main, stdout: "pipe", stderr: "pipe" });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+      };
+      git("init");
+      git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "Initial commit");
+      writeFileSync(join(main, ".git", "info", "exclude"), ".wt.toml\n");
+      writeFileSync(join(main, ".wt.toml"), `[paths]\nmain_clone = ${JSON.stringify(main)}\nworktree_root = ${JSON.stringify(join(root, "worktrees"))}\nstate_db = ${JSON.stringify(join(root, "state.sqlite"))}\ncache_db = ${JSON.stringify(join(root, "cache", "cache.sqlite"))}\n`);
+      git("worktree", "add", "--detach", worktree);
+      const nested = join(worktree, "src");
+      mkdirSync(nested);
+      const userConfig = join(root, "user.toml");
+      writeFileSync(userConfig, '[branch]\nprefix = "test"\n');
+
+      expect(repositoryConfigPath(nested, {})).toBe(join(main, ".wt.toml"));
+      expect(identityFrom(nested, userConfig)).toEqual(identityFrom(main, userConfig));
+      const env: Record<string, string | undefined> = { ...process.env, WT_CONFIG: userConfig };
+      delete env[REPOSITORY_CONFIG_ENV];
+      delete env.WT_TMUX_SOCKET;
+      const result = Bun.spawnSync([
+        "bun", join(import.meta.dir, "../main.ts"),
+        "status", "working", "-m", "Test config discovery",
+      ], { cwd: nested, env, stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(result.stdout.toString()).toContain("working");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
