@@ -401,7 +401,7 @@ const DetailsBody = memo(function DetailsBody({
   // The diff context is `base..HEAD` only — uncommitted work is never
   // included, so a dirty tree doesn't change what the AI would see.
   // Only pause for busy worktrees, where racing the destroy is unsafe.
-  const aiEnabled = !!config.naming;
+  const aiEnabled = !!config.naming?.autoRename;
   const allowFetch = aiEnabled && !isBusy;
 
   // Diff context + summary observers are duplicated with `useWorktreeRows`

@@ -118,6 +118,8 @@ export const qk = {
   wt: (slug: string) =>
     ({
       all: () => ["wt", slug] as const,
+      /** Name requested by the user; fixed until the next request. */
+      manualSummary: () => ["wt", slug, "manualSummary"] as const,
       dirty: () => ["wt", slug, "dirty"] as const,
       lock: () => ["wt", slug, "lock"] as const,
       deploy: () => ["wt", slug, "deploy"] as const,

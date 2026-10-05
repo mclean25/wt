@@ -89,7 +89,7 @@ Both read "unpushed" as commits missing from `origin/<branch>` — the `(↑n �
 | `I` | open the primary tracker issue (needs `[issue_tracker]` with a URL template, or a `gh-`prefixed slug id) |
 | `#` | set the worktree's tracker id — a footer prompt seeded with whatever the row resolves to today; `Enter` saves, **an empty line asserts the worktree has no tracker issue**, `Esc` cancels. Emptying a field that was seeded with the current answer is the natural way to say "not this one", and it has to be a stored none rather than a cleared override: on a slug that carries an id — the population most likely to be wrong — dropping the override just re-supplied it from the slug, so the prompt was a no-op on exactly the rows you would want to detach. `wt issue <slug> --clear-id` is the way back to the derived value. Validated (`COZ-2185` shape), stored per-slug, and preferred over the slug everywhere: the issue row, `i`/`I`, `{{issue_id}}`, and `requires = ["issue.tracker"]`. This is how a worktree named for the work rather than the ticket gets one |
 | `s` | open the deployed stage URL, or the running `[dev_server]` URL when no stage is deployed |
-| `t` | regenerate the AI summary |
+| `t` | rename the worktree with AI (also `! t`) |
 | `V` | expand / collapse the row's [`verifyAfterMerge`](cli.md#wt-status-slug-state--m-note---risk-r) steps in the details pane. The field is dormant until the branch lands, so the block starts collapsed to a header plus a two-line preview and opens by itself once the check has come due; this flips whichever applies, and resets when the cursor moves. Collapsing is the point: a 1896-character field wrapped to fourteen lines pushed the note, the gate and every definition row below the fold, and it was rendering that way on the one row that could not act on it yet |
 | `y` | yank picker — copy branch (`b`), stage (`s`), stage URL (`S`), dev-server URL (`d`), path (`p`), slug (`n`), preferred issue (`i`, tracker URL first, then attached GitHub issue), primary tracker issue (`I`), PR URL (`r`); a full picker since the rebuild: `j`/`k` move, `1`–`9` quick-pick, `y`/`Enter` confirm the highlight, direct letters still fire immediately. On a folded section header the same key yanks the BATCH instead: name (`n`), member slugs (`s`), member branches (`b`), and a pasteable list (`l` — the name, then one `- <slug>: <title>` line per member). Slugs and branches are space-joined so they drop straight into a command; the list is the form a message to the manager wants, which is why it exists |
 | `r` / `Ctrl+R` | refresh / hard refresh (clear caches, confirm) |
@@ -270,3 +270,9 @@ Text inputs scroll horizontally to keep the cursor visible, and cursor movement
 and deletion preserve whole Unicode characters. Footer input uses the full row
 while editing; long prompts shorten to leave room for the value. The submit and
 cancel hint hides below 80 columns, with Enter and Esc still active.
+
+The row action palette (`!`) includes **Rename worktree with AI** (`t`).
+It uses the selected local worktree. It also works when `auto_rename = false`
+under `[naming]`. That setting stops automatic AI naming. The direct
+`t` key requests the same name update. The Git branch and directory stay
+unchanged.

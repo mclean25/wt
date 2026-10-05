@@ -6,6 +6,7 @@ import { buildHarnessCompletion } from "./completion.ts";
 const naming = (
   overrides: Partial<NamingConfig> = {},
 ): NamingConfig => ({
+  autoRename: true,
   harness: "primary",
   models: {
     claude: "cheap-claude",

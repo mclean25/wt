@@ -56,6 +56,7 @@ export type PickerItem =
       key: string;
       availability: ActionAvailability;
     }
+  | { kind: "renameWorktree"; key: string; availability: ActionAvailability }
   | { kind: "custom" };
 
 /**
@@ -174,6 +175,7 @@ type Props = {
 /** Group label for header clustering of configured and local rows. */
 function itemGroup(item: PickerItem): string | null {
   if (item.kind === "custom" || item.kind === "openEditor") return null;
+  if (item.kind === "renameWorktree") return "worktree";
   if (item.kind === "devLogs") return "dev server";
   if (item.kind === "autoMerge") return "github";
   return item.def.group ?? null;
@@ -192,7 +194,9 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
           ? "action:__open-editor__"
           : item.kind === "devLogs"
             ? "action:__dev-logs__"
-            : `action:${item.def.id}`;
+            : item.kind === "renameWorktree"
+              ? "action:__rename-worktree__"
+              : `action:${item.def.id}`;
   const selectedId = items[selectedIndex]
     ? rowId(items[selectedIndex]!)
     : undefined;
@@ -267,7 +271,9 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
               ? "Open in editor"
               : item.kind === "devLogs"
                 ? "Open dev server logs"
-                : item.def.name;
+                : item.kind === "renameWorktree"
+                  ? "Rename worktree with AI"
+                  : item.def.name;
         // Trailing hint: a kind/target marker plus the action id. `$` for
         // shell commands; the Claude robot glyph for claude prompts (two
         // spaces: the nerd-font glyph renders wide and reads cramped with
@@ -285,7 +291,9 @@ export function ActionPickerModal({ slug, surface, items, selectedIndex }: Props
                 ? "local"
                 : item.kind === "devLogs"
                   ? "live · scrollable"
-                  : item.def.kind === "shell"
+                  : item.kind === "renameWorktree"
+                    ? "AI"
+                    : item.def.kind === "shell"
                     ? `$ ${item.def.id}`
                     : item.def.target === "session"
                       ? `${claudeGlyph}  ↪ ${item.def.id}`

@@ -387,6 +387,8 @@ export type NamingReasoningEffort =
   | "max";
 
 export type NamingConfig = {
+  /** Generate new names when worktree changes are detected. */
+  autoRename: boolean;
   /** Resolve through the selected primary harness, or pin one explicitly. */
   harness: HarnessId | "primary";
   /** Optional model override per harness; absent entries use that CLI's default. */
@@ -1494,9 +1496,14 @@ function build(
   if (obj(raw.ai) !== null) {
     errs.add("[ai] is no longer supported; use [naming] with a coding-agent harness");
   }
+  const namingAutoRenameRaw = namingRaw?.auto_rename;
+  if (namingAutoRenameRaw !== undefined && typeof namingAutoRenameRaw !== "boolean") {
+    errs.add("naming.auto_rename must be a boolean");
+  }
   const naming: NamingConfig | null = namingRaw === null
     ? null
     : {
+      autoRename: namingAutoRenameRaw !== false,
       harness: errs.optEnum(
         namingRaw,
         "naming",

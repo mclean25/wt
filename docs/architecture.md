@@ -586,5 +586,11 @@ when the caller is inside a nested repository.
 - `src/tui/rows/types.ts` — the `RowModule` contract; `src/tui/rows/index.ts` — the registry.
 - `src/tui/hooks/useWorktreeRows.ts` — per-worktree field aggregator (`FieldState<T>` carries `error`).
 - `src/core/diff/` — graceful-degradation diff compactor for the AI pipeline (`parts.ts` parses, `render.ts` transforms per mode, `fit.ts` runs the priority-aware greedy reducer). Cache keys are SHA-256 prefixes of the *unfiltered* diff so filter tweaks don't invalidate prior summaries.
+- Worktree naming uses hash-keyed AI summaries by default. With
+  `[naming] auto_rename = false`, row and details observers do not start
+  diff or AI fetches. Manual naming fetches the current row's diff base
+  and saves the result under `["wt", slug, "manualSummary"]`. This persisted
+  key keeps the name fixed across commits. The `! t` action and direct
+  `t` key use the same refresh function in `state/hooks.ts`.
 - `src/core/ai.ts` — harness-backed naming pipeline returning `{title, brief, description}` from a line-prefixed response, with a lenient parser; `core/harness/completion.ts` owns the safe one-shot CLI contract.
 - `src/core/logger.ts` — see above.

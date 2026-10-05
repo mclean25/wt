@@ -886,6 +886,7 @@ export function App({ onExit }: Props) {
           doYank,
           doClean,
           doRemoveWorktree,
+          refreshAiSummary,
           doAutoMerge: async (_slug, mode, target) => {
             const subject = target ? actionSubjectFor(target) : undefined;
             if (!subject) {

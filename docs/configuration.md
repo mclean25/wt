@@ -550,6 +550,7 @@ isolated `--pure` mode.
 
 ```toml
 [naming]
+auto_rename      = true
 harness          = "primary"
 reasoning_effort = "low"
 
@@ -559,13 +560,21 @@ codex = "gpt-6-luna"
 
 | key | required | default | meaning |
 |---|---|---|---|
+| `auto_rename` | no | `true` | Generate names when changes are detected. Set `false` to request names only with `! t` or `t`. |
 | `harness` | no | `"primary"` | `"primary"` follows the repository's effective primary harness; `"claude"`, `"codex"`, or `"opencode"` pins naming independently. |
 | `models.<harness>` | no | *(harness default)* | Harness-native model override for `claude`, `codex`, or `opencode`. Per-harness keys keep `harness = "primary"` valid when the selected primary changes. |
 | `reasoning_effort` | no | `"low"` | Naming-only effort/variant: `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Claude maps `minimal` to `low`. Model support is enforced by the selected CLI. |
 | `max_input_tokens` | no | `8000` | Soft prompt budget; diff hunks are dropped largest-first to stay under it. |
 | `timeout_ms` | no | `120000` | Per-process timeout, including harness startup. |
 
-Summaries are content-addressed by a hash of the diff, so identical diffs (across rebases, amends, branch renames) reuse the cached result.
+With `auto_rename = true`, summaries use a hash of the diff as their cache key.
+Identical diffs reuse the result. With `auto_rename = false`, automatic AI
+naming stops. Select a local worktree and press `!`, then select **Rename
+worktree with AI** (`t`). The direct `t` key does the same operation.
+The requested name stays fixed until you request another name, including
+after new commits and TUI restarts. Naming changes the displayed title,
+brief, and description. It does not change the Git branch or directory name.
+A worktree needs committed changes for AI naming.
 
 ## `[browser]` — legacy settings
 

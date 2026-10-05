@@ -131,7 +131,7 @@ describe("mergeConfig", () => {
 });
 
 describe("config loader integration", () => {
-  test("builds config from user defaults plus repository overrides", () => {
+  test.each([undefined, false, true, "false"])("builds config from user defaults plus repository overrides (auto rename: %s)", (autoRename) => {
     const root = mkdtempSync(join(tmpdir(), "wt-config-load-"));
     try {
       const repo = join(root, "repo");
@@ -177,6 +177,7 @@ base = "develop"
 [lifecycle]
 copy_globs = [".agents/**"]
 
+${autoRename === undefined ? "" : `[naming]\nauto_rename = ${JSON.stringify(autoRename)}\n`}
 [browser]
 chrome_profile = "Profile 3"
 
@@ -226,6 +227,11 @@ reviewers = false
         stderr: "pipe",
       });
 
+      if (typeof autoRename === "string") {
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr.toString()).toContain("naming.auto_rename must be a boolean");
+        return;
+      }
       expect(result.exitCode).toBe(0);
       const repoId = repositoryNamespace(join(repo, ".wt.toml"));
       expect(JSON.parse(result.stdout.toString())).toMatchObject({
@@ -233,6 +239,7 @@ reviewers = false
         instance: { role: "worker" },
         harness: { primary: "codex", hidden: ["opencode"] },
         naming: {
+          autoRename: autoRename !== false,
           harness: "primary",
           models: { codex: "gpt-cheap" },
           reasoningEffort: "low",

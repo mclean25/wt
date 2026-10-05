@@ -41,3 +41,20 @@ test("a numeric chord dispatches its assigned action, not the highlighted row", 
   await Promise.resolve();
   expect(launched).toEqual(["review"]);
 });
+
+test("rename uses the captured worktree and its current stack diff base", async () => {
+  const row = { wt: { slug: "selected", path: "/tmp/selected" }, stackedOn: { diffBase: "parent" } };
+  const calls: unknown[] = [];
+  const ctx = {
+    setModal: () => {}, rows: [row],
+    buildActionPickerItems: () => [{ kind: "renameWorktree", key: "t", availability: { ok: true } }],
+    canPickAction: () => true,
+    refreshAiSummary: async (...args: unknown[]) => { calls.push(args); return true; },
+    toast: () => {},
+    reportActionError: () => { throw new Error("unexpected rename failure"); },
+  } as unknown as SimpleModalContext;
+  const modal = { kind: "actionPicker", state: { mode: "list", surface: "row", slug: "selected", rowSlug: null, index: 0 } } as Extract<Modal, { kind: "actionPicker" }>;
+  handleActionPickerKey({ name: "t", sequence: "t" } as KeyEvent, modal, ctx);
+  await Promise.resolve();
+  expect(calls).toEqual([[row.wt, "parent"]]);
+});

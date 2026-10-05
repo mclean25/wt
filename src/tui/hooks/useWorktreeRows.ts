@@ -755,7 +755,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
   // hits; only new/changed worktrees start a naming harness. Gated on
   // the lock state from the batch above so we don't race a destroying
   // worktree's git state.
-  const aiEnabled = !!config.naming;
+  const aiEnabled = !!config.naming?.autoRename;
   const busyByIndex = worktrees.map((_, i) => {
     const lock = results[i * FIELD_ORDER.length + LOCK_FIELD_INDEX]?.data as
       | Partial<LockMeta>

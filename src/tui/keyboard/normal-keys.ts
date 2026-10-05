@@ -28,6 +28,7 @@ import { lockLabel, lockStatus } from "../../core/locks.ts";
 import { createLogger } from "../../core/logger.ts";
 import { eventsOutputId, firehoseOutputId, indexOfOutput } from "../../core/outputs.ts";
 import { stageUrl } from "../../core/stage.ts";
+import type { Worktree } from "../../core/types.ts";
 import { StatusKind } from "../../core/types.ts";
 import {
   worktreeActionKey,
@@ -160,7 +161,7 @@ export type NormalKeysCtx = {
   ) => Promise<void>;
   toggleSectionFold: (key: string) => Promise<boolean>;
   setSectionFolded: (key: string, folded: boolean) => Promise<boolean>;
-  refreshAiSummary: (slug: string) => Promise<boolean>;
+  refreshAiSummary: (wt: Worktree, base?: string | null) => Promise<boolean>;
   /** `V`'s override of the details pane's post-merge-steps block. */
   verifyExpanded: boolean | null;
   setVerifyExpanded: (v: boolean | null) => void;
@@ -1221,9 +1222,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toast(`${current.wt.slug} is busy`, theme.warn, 2000);
         return;
       }
-      const slug = current.wt.slug;
       forkReported(
-        keyPromise("refresh AI summary", () => refreshAiSummary(slug)).pipe(
+        keyPromise("refresh AI summary", () => refreshAiSummary(current.wt, current.stackedOn?.diffBase)).pipe(
           Effect.tap((ok) => Effect.sync(() => {
             if (ok) rowLog.event.dim("regenerating worktree summary");
             else toast("no diff context yet", theme.warn, 2000);
