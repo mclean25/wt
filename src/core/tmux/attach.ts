@@ -7,6 +7,7 @@ import { Data, Effect } from "effect";
 import { config } from "../config.ts";
 import { causeMessage } from "../errors.ts";
 import { getHarness, type Harness, type HarnessId } from "../harness/index.ts";
+import { waitForCodexStartup } from "../harness/codex/startup.ts";
 import { createLogger } from "../logger.ts";
 import { run, terminateSubprocess } from "../proc.ts";
 import { shellLogPath } from "../shell-tail.ts";
@@ -41,6 +42,10 @@ export class AttachOperationError extends Data.TaggedError("AttachOperationError
   readonly message: string;
   readonly cause: unknown;
 }> {}
+
+export type PreparedAttach = {
+  readonly attach: Effect.Effect<AttachResult, AttachOperationError>;
+};
 
 /** Run the interactive tmux client as a scoped resource. Interruption must
  * terminate the client and reap it, otherwise an aborted renderer handoff
@@ -288,8 +293,31 @@ export function attachOrCreate(opts: {
    */
   base?: string;
 }): Effect.Effect<AttachResult, AttachOperationError> {
-  return attachOrCreateInternal(opts);
+  return prepareAttachOrCreate(opts).pipe(Effect.flatMap(({ attach }) => attach));
 }
+
+/** Prepare a cold start while the caller still owns a responsive terminal.
+ * The returned attach operation performs the actual interactive handoff.
+ * Reattaching an existing session never waits for daemon readiness. */
+export const prepareAttachOrCreate = Effect.fn("prepareAttachOrCreate")(function* (
+  opts: Parameters<typeof attachOrCreate>[0],
+  options: { freshSlot?: boolean } = {},
+) {
+  const { harness, name } = resolveSessionIdentity(opts.slug, opts.kind, opts.managedName);
+  yield* ensureHarnessTrusted(harness, opts.cwd);
+  if (opts.kind === "codex") {
+    const sessions = options.freshSlot ? null : yield* probeSessionNames();
+    if (options.freshSlot || (sessions !== null && !sessions.has(name))) {
+      log.event.dim(`connecting Codex for ${opts.slug}…`, { toast: true });
+      const readiness = yield* waitForCodexStartup();
+      log.debug("Codex startup readiness", { slug: opts.slug, ...readiness });
+    }
+  }
+  return { attach: attachOrCreateInternal(opts) };
+}, Effect.mapError((cause) => new AttachOperationError({
+  message: `session preparation failed: ${causeMessage(cause)}`,
+  cause,
+})));
 
 const attachOrCreateInternal = Effect.fnUntraced(function* (
   opts: Parameters<typeof attachOrCreate>[0],
@@ -372,7 +400,6 @@ const attachOrCreateInternal = Effect.fnUntraced(function* (
   // to the configured command via the user's login shell so PATH/init
   // (pyenv, mise, …) apply. The shell branch is just the login shell
   // with no command — exit (Ctrl+D / `exit`) ends the session.
-  yield* ensureHarnessTrusted(harness, cwd);
   const innerArgs = buildInnerArgs({
     slug,
     cwd,

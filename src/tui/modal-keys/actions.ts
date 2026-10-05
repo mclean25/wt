@@ -86,7 +86,7 @@ export function handleActionPickerKey(
         if (!row) return;
         setModal(null);
         launchFireAndForget("rename worktree", async () => {
-          const ok = await ctx.refreshAiSummary(row.wt, row.stackedOn?.diffBase);
+          const ok = await ctx.refreshAiSummary(row.wt.slug);
           toast(ok ? "worktree name updated" : "no committed changes to name", ok ? ctx.infoColor : warnColor, 2000);
         }, reportActionError);
         return;

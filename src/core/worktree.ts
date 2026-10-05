@@ -11,7 +11,7 @@ import { createLogger } from "./logger.ts";
 import { latestLogFor } from "./logs.ts";
 import { runOk, runQuiet, runStreaming, type ProcError } from "./proc.ts";
 import { computeStage } from "./stage.ts";
-import { type Status, StatusKind, type Worktree } from "./types.ts";
+import { type LockMeta, type Status, StatusKind, type Worktree } from "./types.ts";
 
 const log = createLogger("[worktree]");
 const FETCH_ORIGIN_LOCK = "__fetch_origin__";
@@ -98,7 +98,11 @@ function parseWorktrees(out: string): Worktree[] {
  * resolution reads `.git/HEAD` directly (pure fs, no subprocess), with
  * the same mid-rebase recovery the porcelain path uses.
  */
-function appendRiftWorktrees(worktrees: Worktree[]): void {
+export function appendRiftWorktrees(
+  worktrees: Worktree[],
+  worktreeRoot = config.paths.worktreeRoot,
+  liveLockFor: (slug: string) => Partial<LockMeta> | null = lockStatus,
+): void {
   // Dedup against the porcelain rows by path. Both sides are used raw (no
   // realpath): git's porcelain output is already canonical and
   // `listRiftWorktreePaths` joins the config's `worktree_root`, which wt
@@ -106,11 +110,21 @@ function appendRiftWorktrees(worktrees: Worktree[]): void {
   // makes). A checkout can't be both a linked worktree AND carry a `.rift`
   // marker under normal operation, so the two sets don't actually overlap.
   const seen = new Set(worktrees.map((w) => w.path));
-  for (const path of listRiftWorktreePaths(config.paths.worktreeRoot)) {
+  for (const path of listRiftWorktreePaths(worktreeRoot)) {
     if (seen.has(path)) continue;
     const slug = basename(path);
     let branch = headBranch(path);
     if (!branch) branch = rebasingBranch(path);
+    // Rift's marker appears before the detached clone has been switched onto
+    // its target branch. Do not publish a row that would start Git queries
+    // against the changing checkout, or let it become usable between the
+    // branch switch and the remaining create-time initialization. The lock
+    // reader checks the cross-process flock, so stale/dead lock files do not
+    // hold a completed (or abandoned) clone out of inventory. The branchless
+    // fallback covers the acquire-before-metadata-write window; branchful
+    // rows under unrelated locks remain visible.
+    const liveLock = liveLockFor(slug);
+    if (liveLock && (liveLock.op === "init" || !branch)) continue;
     worktrees.push({
       path,
       branch,

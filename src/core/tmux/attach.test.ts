@@ -5,8 +5,11 @@ import { join } from "node:path";
 import { Cause, Effect, Exit } from "effect";
 
 import { inspectorSocketPath } from "../harness/claude/inject.ts";
-import { attachOrCreate, AttachOperationError, codexPaneOptionArgs, sessionsDir } from "./attach.ts";
+import { getHarness } from "../harness/index.ts";
+import * as startup from "../harness/codex/startup.ts";
+import { attachOrCreate, AttachOperationError, codexPaneOptionArgs, prepareAttachOrCreate, sessionsDir } from "./attach.ts";
 import * as tmuxConfig from "./config.ts";
+import * as tmuxProcess from "./process.ts";
 import { wrapInnerArgs } from "./inner-process.ts";
 import { SESSION_SWITCH_EXIT_CODE } from "./naming.ts";
 
@@ -26,6 +29,40 @@ describe("per-harness pane options", () => {
 });
 
 const tempDirs: string[] = [];
+
+describe("Codex attach preparation", () => {
+  test("live attachment skips readiness, but a replacement waits without spawning", async () => {
+    const harness = getHarness("codex");
+    const trust = spyOn(harness, "ensureTrusted").mockReturnValue(Effect.void);
+    const inventory = spyOn(tmuxProcess, "probeSessionNames").mockReturnValue(Effect.succeed(new Set(["startup-proof-codex"])));
+    const ready = spyOn(startup, "waitForCodexStartup").mockReturnValue(Effect.succeed({ kind: "ready", elapsedMs: 0, features: 0, pages: 1 }));
+    const spawn = spyOn(Bun, "spawn");
+    try {
+      const opts = { slug: "startup-proof", cwd: "/unused", kind: "codex" as const };
+      await Effect.runPromise(prepareAttachOrCreate(opts));
+      expect(ready).not.toHaveBeenCalled();
+      inventory.mockReturnValue(Effect.succeed(null));
+      await Effect.runPromise(prepareAttachOrCreate(opts));
+      expect(ready).not.toHaveBeenCalled();
+      await Effect.runPromise(prepareAttachOrCreate(opts, { freshSlot: true }));
+      expect(ready).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally { trust.mockRestore(); inventory.mockRestore(); ready.mockRestore(); spawn.mockRestore(); }
+  });
+
+  test("a failed cold-start readiness check never starts a tmux client", async () => {
+    const trust = spyOn(getHarness("codex"), "ensureTrusted").mockReturnValue(Effect.void);
+    const inventory = spyOn(tmuxProcess, "probeSessionNames").mockReturnValue(Effect.succeed(new Set()));
+    const ready = spyOn(startup, "waitForCodexStartup").mockReturnValue(Effect.fail(new startup.CodexStartupReadinessError({ detail: "readiness timed out" })));
+    const spawn = spyOn(Bun, "spawn");
+    try {
+      const result = await Effect.runPromiseExit(attachOrCreate({ slug: "startup-proof", cwd: "/unused", kind: "codex" }));
+      expect(result._tag).toBe("Failure");
+      expect(ready).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally { trust.mockRestore(); inventory.mockRestore(); ready.mockRestore(); spawn.mockRestore(); }
+  });
+});
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {

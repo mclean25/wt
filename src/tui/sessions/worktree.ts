@@ -13,10 +13,11 @@ import {
 } from "../../core/tmux.ts";
 import {
   AttachOperationError,
-  attachOrCreate,
+  prepareAttachOrCreate,
+  type PreparedAttach,
 } from "../../core/tmux/attach.ts";
 import { killHarnessSession } from "../../core/tmux/admin.ts";
-import { handoffTerminal } from "./renderer-handoff.ts";
+import { handoffTerminal, withTerminalTransition } from "./renderer-handoff.ts";
 
 export type HarnessRoute = {
   harnessId: HarnessId;
@@ -46,44 +47,55 @@ export type EnterWorktreeSessionOptions = {
   switchable?: boolean;
 };
 
-export function enterWorktreeSession(opts: EnterWorktreeSessionOptions) {
+export const enterWorktreeSession = Effect.fn("enterWorktreeSession")(function* (opts: EnterWorktreeSessionOptions) {
   const { renderer, slug, cwd, diffBase, harness, switchable = true } = opts;
-  return handoffTerminal(renderer, cwd, Effect.gen(function* () {
-    let target = opts.initial;
+  // Preparation is asynchronous with the board still usable. Do not queue
+  // repeated F12 presses into later, surprising terminal handoffs.
+  return yield* withTerminalTransition(renderer, Effect.gen(function* () {
     let harnessPrepared = false;
 
-    const attachTarget = (): Effect.Effect<AttachResult, AttachOperationError> => Effect.gen(function* () {
+    const prepareTarget = (target: WorktreeSessionTarget): Effect.Effect<PreparedAttach, AttachOperationError> => Effect.gen(function* () {
       if (target === "shell") {
-        return yield* attachOrCreate({ slug, cwd, kind: "shell" });
+        return yield* prepareAttachOrCreate({ slug, cwd, kind: "shell" });
       }
       if (target === "diff") {
-        return yield* attachOrCreate({ slug, cwd, kind: "diff", base: diffBase });
+        return yield* prepareAttachOrCreate({ slug, cwd, kind: "diff", base: diffBase });
       }
 
-      if (!harnessPrepared) {
-        harnessPrepared = true;
-        if (harness.freshSlot && getHarness(harness.harnessId).singleSlot) {
-          createLogger(slug).event.warn(
-            `replacing ${getHarness(harness.harnessId).label} slot`,
-          );
-          yield* killHarnessSession(slug, harness.harnessId);
-        }
-      }
-      return yield* attachOrCreate({
+      const replace = !harnessPrepared && !!harness.freshSlot && getHarness(harness.harnessId).singleSlot;
+      const prepared = yield* prepareAttachOrCreate({
         slug,
         cwd,
         kind: harness.harnessId,
         managedName: harness.managedName,
         resumeSessionId: harness.resumeSessionId,
         claudeDisplayName: harness.claudeDisplayName,
-      });
+      }, { freshSlot: replace });
+      harnessPrepared = true;
+      return { attach: Effect.gen(function* () {
+        // Preserve the old slot if preparation fails. Replacement happens
+        // only once the new launch is ready to take terminal ownership.
+        if (replace) {
+          createLogger(slug).event.warn(
+            `replacing ${getHarness(harness.harnessId).label} slot`,
+          );
+          yield* killHarnessSession(slug, harness.harnessId);
+        }
+        return yield* prepared.attach;
+      }) };
     });
 
-    for (;;) {
-      const result = yield* attachTarget();
-      if (result.kind !== "switch") return result;
-      if (!switchable) return { kind: "detached" } as const;
-      target = result.target;
-    }
-  }));
-}
+    // In particular, a slow Codex readiness request must not suspend stdin.
+    let prepared = yield* prepareTarget(opts.initial);
+    return yield* handoffTerminal(renderer, cwd, Effect.gen(function* () {
+      for (;;) {
+        const result = yield* prepared.attach;
+        if (result.kind !== "switch") return result;
+        if (!switchable) return { kind: "detached" } as const;
+        prepared = yield* prepareTarget(result.target);
+      }
+    }));
+  })).pipe(Effect.catchTag("TerminalTransitionError", (error) => Effect.succeed({
+    kind: "spawn-failed" as const, reason: error.message,
+  })));
+});

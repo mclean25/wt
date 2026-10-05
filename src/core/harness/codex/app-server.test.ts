@@ -14,6 +14,7 @@ import {
   queueCodexMessage,
   readCodexAppServerInfo,
   readCodexNativeSnapshots,
+  withCodexAppServer,
 } from "./app-server.ts";
 
 const THREAD_ID = "123e4567-e89b-12d3-a456-426614174000";
@@ -59,11 +60,13 @@ function fakeDependencies(
 function fakeTransport(
   handle: (request: Request) => unknown | Promise<unknown>,
   events: string[] = [],
+  timeouts: number[] = [],
 ): CodexAppServerTransport {
   let id = 0;
   return {
-    request(method, params) {
+    request(method, params, _signal, timeoutMs) {
       events.push(`request:${method}`);
+      if (timeoutMs !== undefined) timeouts.push(timeoutMs);
       return Promise.resolve(handle({ id: ++id, method, params }));
     },
     notify(method) {
@@ -516,6 +519,8 @@ test("real Unix WebSocket initializes, ignores notifications, queues, and starts
   const path = join(dir, "app-server-control.sock");
   const received: Record<string, unknown>[] = [];
   let rejectQueueAdd = false;
+  let hangFeatureList = false;
+  let rejectFeatureList = false;
   const server = Bun.listen<{ buffer: Buffer; upgraded: boolean }>({
     unix: path,
     socket: {
@@ -545,6 +550,11 @@ test("real Unix WebSocket initializes, ignores notifications, queues, and starts
           const message = JSON.parse(frame.text) as Record<string, unknown>;
           received.push(message);
           if (typeof message.id !== "number") continue;
+          if (message.method === "experimentalFeature/list" && hangFeatureList) continue;
+          if (message.method === "experimentalFeature/list" && rejectFeatureList) {
+            socket.write(serverFrame({ id: message.id, error: { code: -32600, message: "Invalid request: unknown variant `experimentalFeature/list`" } }));
+            continue;
+          }
           // An unrelated notification before every response proves response
           // routing is by id rather than by arrival position.
           socket.write(serverFrame({ method: "thread/status/changed", params: { threadId: THREAD_ID } }));
@@ -587,11 +597,24 @@ test("real Unix WebSocket initializes, ignores notifications, queues, and starts
     threadId: THREAD_ID,
     text: "unsupported on old daemon",
   }, dependencies).pipe(Effect.flip));
+  hangFeatureList = true;
+  const featureTimeout = await Effect.runPromise(withCodexAppServer(
+    (client) => client.experimentalFeatureList(null, 20).pipe(Effect.flip),
+    dependencies,
+  ));
+  hangFeatureList = false;
+  rejectFeatureList = true;
+  const unsupportedFeature = await Effect.runPromise(withCodexAppServer(
+    (client) => client.experimentalFeatureList(null, 1_000).pipe(Effect.flip),
+    dependencies,
+  ));
   await Bun.sleep(10);
 
   expect(info).toEqual(initializedResult());
   expect(delivery).toEqual({ submission: submission(), state: "started", reconciled: false });
   expect(unsupported).toMatchObject({ operation: "queue-add", kind: "unsupported" });
+  expect(featureTimeout.detail).toContain("within 20ms");
+  expect(unsupportedFeature).toMatchObject({ operation: "experimental-feature-list", kind: "unsupported" });
   expect(received.map((message) => message.method)).toEqual([
     "initialize",
     "initialized",
@@ -602,6 +625,12 @@ test("real Unix WebSocket initializes, ignores notifications, queues, and starts
     "initialize",
     "initialized",
     "thread/queue/add",
+    "initialize",
+    "initialized",
+    "experimentalFeature/list",
+    "initialize",
+    "initialized",
+    "experimentalFeature/list",
   ]);
   expect(received[0]?.params).toMatchObject({
     capabilities: { experimentalApi: true, requestAttestation: false },

@@ -7,7 +7,7 @@ import type { WorktreeTarget } from "../../core/worktree-target.ts";
 import { runWorktreeWt } from "../../core/worktree-executor.ts";
 import { setWezTermTabTitle } from "../../core/wezterm.ts";
 import { NF } from "../icons.ts";
-import { handoffTerminal } from "./renderer-handoff.ts";
+import { handoffTerminal, withTerminalTransition } from "./renderer-handoff.ts";
 
 export class RemoteSessionTargetError extends Data.TaggedError("RemoteSessionTargetError")<{
   readonly message: string;
@@ -31,7 +31,7 @@ export const enterRemoteWorktreeSession = Effect.fn("enterRemoteWorktreeSession"
       });
     }
     const remote = worktree.location.endpoint;
-    return yield* setWezTermTabTitle(
+    return yield* withTerminalTransition(renderer, setWezTermTabTitle(
       `${NF.remote} ${worktree.slug} · ${remote.label}`,
       config.paths.weztermCli,
     ).pipe(
@@ -47,5 +47,5 @@ export const enterRemoteWorktreeSession = Effect.fn("enterRemoteWorktreeSession"
       Effect.ensuring(
         setWezTermTabTitle("wt", config.paths.weztermCli).pipe(Effect.ignore),
       ),
-    );
+    ));
 });

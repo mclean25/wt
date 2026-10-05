@@ -11,6 +11,7 @@ import { operationErrors } from "../../core/errors.ts";
 import { printableText } from "../app-helpers.ts";
 import { forkReported } from "../effect-boundary.ts";
 import type { PendingStatusText } from "../flows/work-status.ts";
+import type { makeWorktreeTitleFlows } from "../flows/worktree-title.ts";
 import type { FooterMode } from "../panels/footer.tsx";
 import { applyEditKey, insertText, makeEdit } from "../text-edit.tsx";
 import { theme } from "../theme.ts";
@@ -47,6 +48,7 @@ export type FooterInputKeysCtx = {
   pendingIssueSlug: string | null;
   setPendingIssueSlug: (v: string | null) => void;
   commitIssueId: (slug: string, raw: string) => void;
+  commitWorktreeTitle: ReturnType<typeof makeWorktreeTitleFlows>["commitWorktreeTitle"];
 };
 
 export function restoreFailedCreateFooter(
@@ -76,6 +78,7 @@ export function handleFooterInputKey(
     pendingIssueSlug,
     setPendingIssueSlug,
     commitIssueId,
+    commitWorktreeTitle,
   } = ctx;
   if (k.name === "escape" || (k.ctrl && k.name === "c")) {
     setFooter({ kind: "legend" });
@@ -87,6 +90,12 @@ export function handleFooterInputKey(
     return;
   }
   if (k.name === "return") {
+    if (footer.purpose === "worktree-title") {
+      // The title flow validates before closing, so an empty submit keeps
+      // the editor open and never erases the existing title.
+      commitWorktreeTitle(footer);
+      return;
+    }
     const raw = footer.edit.value.trim();
     const base = footer.base;
     const purpose = footer.purpose;

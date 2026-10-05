@@ -7,6 +7,7 @@ import {
   type HarnessId,
 } from "../harness/index.ts";
 import { createLogger } from "../logger.ts";
+import { waitForCodexStartup } from "../harness/codex/startup.ts";
 import {
   buildInnerArgs,
   codexPaneOptionArgs,
@@ -17,7 +18,7 @@ import {
 import { ensureConfig } from "./config.ts";
 import { prepareInspectorSocket, wrapInnerArgs } from "./inner-process.ts";
 import { sessionName, TMUX_SOCKET } from "./naming.ts";
-import { listAllSessionsRaw, runTmux } from "./process.ts";
+import { listAllSessionsRaw, probeSessionNames, runTmux } from "./process.ts";
 
 const log = createLogger("[tmux]");
 
@@ -59,6 +60,8 @@ export const startHarnessSessionDetached = Effect.fn("startHarnessSessionDetache
 ): Effect.fn.Return<StartHarnessSessionResult> {
   const harness = getHarness(harnessId);
   const name = sessionName(slug, harnessId, managedName);
+  const sessions = yield* probeSessionNames();
+  if (sessions?.has(name)) return { ok: true, adopted: true };
   // ensureConfig, NOT writeConfig: this can run from inside the wt tmux
   // server. Rewriting config there could kill every live session.
   const configPath = ensureConfig();
@@ -86,6 +89,10 @@ export const startHarnessSessionDetached = Effect.fn("startHarnessSessionDetache
     resumeSessionId = primarySingleSlotSession(sessions)?.sessionId ?? null;
   }
   yield* ensureHarnessTrusted(harness, cwd);
+  if (harnessId === "codex" && sessions !== null) {
+    const readiness = yield* Effect.result(waitForCodexStartup());
+    if (Result.isFailure(readiness)) return { ok: false, reason: readiness.failure.message };
+  }
   const innerArgs = buildInnerArgs({
     slug,
     cwd,

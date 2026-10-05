@@ -99,7 +99,6 @@ import {
 import { config } from "../core/config.ts";
 import { issueStatusIds, type IssueStatuses } from "../core/issue-status.ts";
 import { issueStatusExpectations } from "./issue-status.ts";
-import { aiSummaryQuery, wtDiffContextQuery } from "./queries/ai.ts";
 import { causeMessage } from "../core/errors.ts";
 import { gitRun, invalidateMainFirstParents } from "../core/git.ts";
 import { fetchAuthenticatedLogin } from "../core/github.ts";
@@ -115,6 +114,7 @@ import {
   setSlugBase as setSlugBaseOnDisk,
   setWorktreeSection as setWorktreeSectionOnDisk,
   setSlugIssueId as setSlugIssueIdOnDisk,
+  setSlugManualTitle,
   dismissReviewRequest as dismissReviewRequestOnDisk,
   setSlugWorkStatus as setSlugWorkStatusOnDisk,
   swapOrders as swapOrdersOnDisk,
@@ -126,6 +126,7 @@ import {
 
 import { CACHE_DB } from "./client.ts";
 import { qk } from "./keys.ts";
+import { regenerateWorktreeTitle } from "./title-actions.ts";
 import { clearPersistedCache } from "./persister.ts";
 import { operationErrors } from "./queries/boundary.ts";
 import {
@@ -855,22 +856,15 @@ export function useWtActions() {
         };
       });
     },
-    /** Generate a name for the current diff, including with automatic naming off. */
-    refreshAiSummary(wt: Pick<Worktree, "slug" | "path">, base?: string | null): Promise<boolean> {
-      return Effect.runPromise(
-        Effect.gen(function* () {
-          const ctx = yield* io.promise("read naming diff", () =>
-            qc.fetchQuery({ ...wtDiffContextQuery(wt, base), staleTime: 0 }),
-          );
-          if (!ctx) return false;
-          const options = aiSummaryQuery(wt.slug, ctx);
-          yield* io.promise("invalidate worktree name", () =>
-            qc.invalidateQueries({ queryKey: options.queryKey, exact: true, refetchType: "none" }),
-          );
-          yield* io.promise("rename worktree", () => qc.fetchQuery(options));
-          return true;
-        }),
-      );
+    /** Explicit generation replaces a saved title while preserving its lock. */
+    refreshAiSummary(slug: string): Promise<boolean> {
+      return Effect.runPromise(regenerateWorktreeTitle(qc, slug));
+    },
+    setManualTitle(slug: string, title: string): Promise<void> {
+      return Effect.runPromise(setSlugManualTitle(slug, title).pipe(
+        Effect.tap(() => invalidate({ queryKey: qk.wtState() })),
+        Effect.asVoid,
+      ));
     },
     /**
      * Flip the archived flag for a slug. Optimistically patches the

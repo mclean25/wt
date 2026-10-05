@@ -1,3 +1,5 @@
+import { Data, Effect } from "effect";
+import { operationErrors } from "../errors.ts";
 import { sameWorkClaim, type WorkStatusRecord } from "../work-status.ts";
 import {
   isRemoteWorktreeLedgerKey,
@@ -6,6 +8,24 @@ import {
 import { readWtState, withWtStateLock, writeWtState } from "./io.ts";
 import { GROUP_INBOX, stackIdFromSectionKey } from "./types.ts";
 import type { WtSlugState, WtState } from "./types.ts";
+
+const titleIo = operationErrors("manual title");
+
+class EmptyManualTitle extends Data.TaggedError("EmptyManualTitle")<{
+  readonly slug: string;
+}> {
+  override get message(): string {
+    return `set title for ${this.slug}: manual title must not be empty`;
+  }
+}
+
+class ManualTitleRevisionExhausted extends Data.TaggedError("ManualTitleRevisionExhausted")<{
+  readonly slug: string;
+}> {
+  override get message(): string {
+    return `set title for ${this.slug}: manual title revision exhausted`;
+  }
+}
 
 /**
  * Drop dead groups from `sectionsOrder`: manual sections no slug
@@ -43,6 +63,44 @@ export function clearSlugState(slug: string): void {
     writeWtState(next);
   });
 }
+
+/**
+ * Store a user-pinned worktree title. `expectedRevision` makes delayed
+ * explicit generation conditional on no intervening title edit; the
+ * revision advances even when the submitted text is unchanged.
+ */
+export const setSlugManualTitle = Effect.fn("setSlugManualTitle")(function*(
+  slug: string,
+  title: string,
+  options?: { expectedRevision?: number },
+) {
+  const normalized = title.trim();
+  if (!normalized) return yield* new EmptyManualTitle({ slug });
+  const result = yield* titleIo.sync(`save title for ${slug}`, () => withWtStateLock(() => {
+    const state = readWtState();
+    const prev = state.slugs[slug];
+    const revision = prev?.manualTitleRevision ?? 0;
+    if (
+      options?.expectedRevision !== undefined &&
+      revision !== options.expectedRevision
+    ) return false;
+    if (revision >= Number.MAX_SAFE_INTEGER) {
+      return new ManualTitleRevisionExhausted({ slug });
+    }
+    const next: WtState = { ...state, slugs: { ...state.slugs } };
+    next.slugs[slug] = {
+      section: null,
+      order: 0,
+      ...prev,
+      manualTitle: normalized,
+      manualTitleRevision: revision + 1,
+    };
+    writeWtState(next);
+    return true;
+  }));
+  if (result instanceof ManualTitleRevisionExhausted) return yield* result;
+  return result;
+});
 
 /** Max order in a given section. Returns `null` when section is empty. */
 function maxOrderIn(state: WtState, section: string | null): number | null {

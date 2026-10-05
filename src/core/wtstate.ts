@@ -41,6 +41,7 @@ export {
   setSlugExamined,
   setSlugGithubIssue,
   setSlugIssueId,
+  setSlugManualTitle,
   setSlugSection,
   setWorktreeSection,
   setSlugWorkStatus,

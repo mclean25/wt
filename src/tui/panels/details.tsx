@@ -397,12 +397,18 @@ const DetailsBody = memo(function DetailsBody({
   // `useWorktreeRows`.
   const github = useGithub();
 
+  // Shared with the row aggregator. Wait for canonical state before naming:
+  // a missing state snapshot is not proof that this title is unpinned.
+  const wtState = useQuery(wtStateQuery());
+
   const isBusy = row.status.kind === StatusKind.Busy;
   // The diff context is `base..HEAD` only — uncommitted work is never
   // included, so a dirty tree doesn't change what the AI would see.
-  // Only pause for busy worktrees, where racing the destroy is unsafe.
+  // Saved titles prevent background generation here as well
+  // as in the row observers. Cached descriptions can still be displayed.
   const aiEnabled = !!config.naming?.autoRename;
-  const allowFetch = aiEnabled && !isBusy;
+  const allowFetch = aiEnabled && wtState.data !== undefined &&
+    !wtState.data.slugs[row.wt.slug]?.manualTitle && !isBusy;
 
   // Diff context + summary observers are duplicated with `useWorktreeRows`
   // (cache-shared, not refetched) so this pane has direct access to the
@@ -426,10 +432,6 @@ const DetailsBody = memo(function DetailsBody({
   // Stack pause wins the label — it explains why a slice with no flag
   // of its own is still protected. The global pause is title-bar chrome,
   // not repeated here.
-  const wtState = useQuery({
-    ...wtStateQuery(),
-    enabled: config.automations.length > 0,
-  });
   const stackPaused =
     !!row.stack &&
     (wtState.data?.pausedStacks ?? []).includes(row.stack.stackId);

@@ -19,7 +19,29 @@
 import type { CliRenderer } from "@opentui/core";
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
+
+export class TerminalTransitionError extends Data.TaggedError("TerminalTransitionError")<{}> {
+  override get message(): string { return "A session is already opening in this terminal"; }
+}
+
+const transitions = new WeakSet<CliRenderer>();
+
+/** Reserve terminal ownership before asynchronous preparation, for local and SSH entries. */
+export const withTerminalTransition = Effect.fnUntraced(function* <A, E, R>(
+  renderer: CliRenderer,
+  effect: Effect.Effect<A, E, R>,
+): Effect.fn.Return<A, E | TerminalTransitionError, R> {
+  return yield* Effect.acquireUseRelease(
+    Effect.sync(() => {
+      if (transitions.has(renderer)) return false;
+      transitions.add(renderer);
+      return true;
+    }).pipe(Effect.flatMap((acquired) => acquired ? Effect.void : Effect.fail(new TerminalTransitionError()))),
+    () => effect,
+    () => Effect.sync(() => { transitions.delete(renderer); }),
+  );
+});
 
 /**
  * Clear-screen + cursor-home. opentui's suspend emits `\x1b[?1049l`

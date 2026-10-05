@@ -108,7 +108,8 @@ const KEY_BLOCKS: Block[] = [
         key: "y",
         label: "on a folded section: yank the batch — name (n), slugs (s), branches (b), list (l)",
       },
-      { key: "t", label: "rename worktree with AI (also ! t)" },
+      { key: "t", label: "edit title (prefilled; Enter saves and disables automatic naming)" },
+      { key: "T", label: "regenerate AI title (also replaces a manual title)" },
       {
         key: "V",
         label:

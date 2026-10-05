@@ -560,7 +560,7 @@ codex = "gpt-6-luna"
 
 | key | required | default | meaning |
 |---|---|---|---|
-| `auto_rename` | no | `true` | Generate names when changes are detected. Set `false` to request names only with `! t` or `t`. |
+| `auto_rename` | no | `true` | Generate names when changes are detected. Set `false` to request names only with `! t` or `T`. |
 | `harness` | no | `"primary"` | `"primary"` follows the repository's effective primary harness; `"claude"`, `"codex"`, or `"opencode"` pins naming independently. |
 | `models.<harness>` | no | *(harness default)* | Harness-native model override for `claude`, `codex`, or `opencode`. Per-harness keys keep `harness = "primary"` valid when the selected primary changes. |
 | `reasoning_effort` | no | `"low"` | Naming-only effort/variant: `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Claude maps `minimal` to `low`. Model support is enforced by the selected CLI. |
@@ -570,7 +570,9 @@ codex = "gpt-6-luna"
 With `auto_rename = true`, summaries use a hash of the diff as their cache key.
 Identical diffs reuse the result. With `auto_rename = false`, automatic AI
 naming stops. Select a local worktree and press `!`, then select **Rename
-worktree with AI** (`t`). The direct `t` key does the same operation.
+worktree with AI** (`t`). The direct `T` key does the same operation.
+The `t` key opens the manual title editor. A saved manual title disables
+automatic naming for that worktree. Explicit AI generation can replace it.
 The requested name stays fixed until you request another name, including
 after new commits and TUI restarts. Naming changes the displayed title,
 brief, and description. It does not change the Git branch or directory name.

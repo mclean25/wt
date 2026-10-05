@@ -38,6 +38,7 @@ import { resolveIssueId } from "../../core/issue-tracker.ts";
 import { resolveLanding, type Landing } from "../landing.ts";
 import type { GithubData } from "../../state/queries/github.ts";
 import { qk } from "../../state/keys.ts";
+import { canGenerateAutomatically } from "../../state/queries/ai.ts";
 import {
   aiSummaryQuery,
   archiveQuery,
@@ -67,7 +68,7 @@ import {
  * terminal fallback — the prettified slug is always available, so a
  * row's title field is never empty.
  */
-export type TitleSource = "llm" | "pr" | "commit" | "slug";
+export type TitleSource = "manual" | "llm" | "pr" | "commit" | "slug";
 
 export type FieldState<T> = {
   data: T | undefined;
@@ -173,7 +174,7 @@ export type WorktreeRow = {
   work: WorkStatusRecord | null;
   archived: boolean;
   /**
-   * Resolved title with `llm > pr > commit > slug` fallback. Both the
+   * Resolved title with `manual > llm > pr > commit > slug` fallback. Both the
    * list row label and the details-pane title bar read this so they
    * stay in sync. Always non-empty — `slugLabel` produces a prettified
    * fallback for any worktree, so consumers never need to check for
@@ -412,12 +413,14 @@ function deriveStatus(
  * raw slug, so we always render something and the details pane keeps
  * a stable line count.
  */
-function resolveTitle(
+export function resolveTitle(
   slug: string,
   llmTitle: string | null,
   prTitle: string | null,
   commitTitle: string | null,
+  manualTitle?: string,
 ): { title: string; source: TitleSource } {
+  if (manualTitle) return { title: manualTitle, source: "manual" };
   if (llmTitle) return { title: llmTitle, source: "llm" };
   if (prTitle) return { title: prTitle, source: "pr" };
   if (commitTitle) return { title: commitTitle, source: "commit" };
@@ -474,9 +477,8 @@ export function rowWorkRank(row: WorktreeRow): number {
  * Cursor stability across re-sorts is structural: the selection is
  * keyed by slug (see app.tsx `sel`), never by index.
  */
-function sortActiveRows(
+export function sortActiveRows(
   active: WorktreeRow[],
-  unsortedIndex: ReadonlyMap<string, number>,
   effectiveOrders: ReadonlyMap<string, number>,
   sectionsOrder: readonly string[],
   statusSort: boolean,
@@ -538,7 +540,7 @@ function sortActiveRows(
       const ia = a.stack?.index ?? 0;
       const ib = b.stack?.index ?? 0;
       if (ia !== ib) return ia - ib;
-      return (unsortedIndex.get(a.wt.slug) ?? 0) - (unsortedIndex.get(b.wt.slug) ?? 0);
+      return a.wt.slug.localeCompare(b.wt.slug);
     }
     if (statusSort) {
       const wr = (unitRank.get(keyA) ?? 0) - (unitRank.get(keyB) ?? 0);
@@ -547,7 +549,9 @@ function sortActiveRows(
     const orderA = unitOrder.get(keyA) ?? -Infinity;
     const orderB = unitOrder.get(keyB) ?? -Infinity;
     if (orderA !== orderB) return orderA - orderB;
-    return (unsortedIndex.get(a.wt.slug) ?? 0) - (unsortedIndex.get(b.wt.slug) ?? 0);
+    // Display titles and filesystem enumeration can both change between reads.
+    // Use one stable identity for each stack so tied units stay contiguous.
+    return (a.stack?.stackId ?? a.wt.slug).localeCompare(b.stack?.stackId ?? b.wt.slug);
   });
 }
 
@@ -752,10 +756,12 @@ export function useWorktreeRows(): WorktreeRowsResult {
   // Diff context + AI summary observers for every worktree, so the list
   // panel can render LLM-generated titles next to each row. The cache is
   // content-addressed and persisted, so steady-state these are no-op
-  // hits; only new/changed worktrees start a naming harness. Gated on
+  // hits; only new/changed, unpinned rows start a naming harness. Gated on
   // the lock state from the batch above so we don't race a destroying
   // worktree's git state.
-  const aiEnabled = !!config.naming?.autoRename;
+  const autoNaming = worktrees.map((wt) =>
+    wtState.data !== undefined && canGenerateAutomatically(config.naming, stateSlugs[wt.slug]?.manualTitle),
+  );
   const busyByIndex = worktrees.map((_, i) => {
     const lock = results[i * FIELD_ORDER.length + LOCK_FIELD_INDEX]?.data as
       | Partial<LockMeta>
@@ -773,14 +779,14 @@ export function useWorktreeRows(): WorktreeRowsResult {
     .sort();
   useLockReleasedInvalidator(JSON.stringify(lockedSlugs));
 
-  // Gated on `aiEnabled`: the diff context exists only to feed
+  // Gated on automatic naming: the diff context exists only to feed
   // `aiSummaryQuery`, so with AI unconfigured there's no consumer — and
   // running it would dispatch a worker-pool job (spawning the pool) per
   // worktree just to compute a hash nothing reads.
   const diffResults = useQueries({
     queries: worktrees.map((wt, i) => ({
       ...wtDiffContextQuery(wt, rowLayout.bases[i]!),
-      enabled: aiEnabled && !busyByIndex[i],
+      enabled: autoNaming[i] && !busyByIndex[i],
       notifyOnChangeProps: DATA_PROPS,
     })),
     combine: combineQueryData,
@@ -795,7 +801,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
       const ctx = diffResults[i] ?? null;
       return {
         ...aiSummaryQuery(wt.slug, ctx),
-        enabled: aiEnabled && !busyByIndex[i] && !!ctx,
+        enabled: autoNaming[i] && !busyByIndex[i] && !!ctx,
         placeholderData: keepPreviousData,
         notifyOnChangeProps: DATA_PROPS,
       };
@@ -885,7 +891,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
       const createdAt = stateSlugs[wt.slug]?.createdAt;
       const work = stateSlugs[wt.slug]?.work ?? null;
       const llmTitle = aiResults[i]?.title ?? null;
-      const llmBrief = aiResults[i]?.brief ?? null;
+      const llmBrief = stateSlugs[wt.slug]?.manualTitle ? null : aiResults[i]?.brief ?? null;
       const prTitle = pr?.title ?? null;
       const commitTitle = firstCommitResults[i] ?? null;
       const { title, source: titleSource } = resolveTitle(
@@ -893,6 +899,7 @@ export function useWorktreeRows(): WorktreeRowsResult {
         llmTitle,
         prTitle,
         commitTitle,
+        stateSlugs[wt.slug]?.manualTitle,
       );
       // After per-field reuse above, identity-equality on each `fields.X`,
       // `status`, `pr`, `mq` plus primitives is sufficient — anything
@@ -972,15 +979,10 @@ export function useWorktreeRows(): WorktreeRowsResult {
     // Section-aware sort lives in `sortActiveRows`. Archived rows are
     // flat at the bottom in original list order — the archive divider is
     // a hard visual break, secondary grouping there would be noise.
-    const listIndexOf = new Map<string, number>();
-    for (let i = 0; i < unsorted.length; i++) {
-      listIndexOf.set(unsorted[i]!.wt.slug, i);
-    }
     const sectionsOrder = wtState.data?.sectionsOrder ?? [];
     const active = applyMergeEdgeOrder(
       sortActiveRows(
         unsorted.filter((r) => !r.archived),
-        listIndexOf,
         effectiveOrders,
         sectionsOrder,
         config.ui.sort === "status",

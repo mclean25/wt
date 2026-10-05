@@ -49,6 +49,10 @@ export type WorktreeLayout = {
 };
 
 export type WtSlugState = WorktreeLayout & {
+  /** User-pinned display title; when present, automatic naming is disabled. */
+  manualTitle?: string;
+  /** Advances on every accepted title save, including unchanged text. */
+  manualTitleRevision?: number;
   /** Successful wt creation, written once for this checkout; absent on legacy rows. */
   createdAt?: string;
   /** Section name. `null` = unsectioned (rendered at top, no header). */
