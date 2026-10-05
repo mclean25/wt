@@ -18,8 +18,11 @@ function open(path: string): Database {
   mkdirSync(dirname(path), { recursive: true });
   const next = new Database(path, { create: true });
   try {
-    next.exec("PRAGMA journal_mode = WAL;");
+    // Opening or switching journal mode also takes SQLite locks. Install
+    // the bounded wait before initialization so a closing/checkpointing
+    // connection cannot turn the first read into an immediate cache miss.
     next.exec("PRAGMA busy_timeout = 1500;");
+    next.exec("PRAGMA journal_mode = WAL;");
     next.exec(`
       CREATE TABLE IF NOT EXISTS cache (
         id TEXT PRIMARY KEY,

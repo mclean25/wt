@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { Effect } from "effect";
 
 import { clearPersistedCache, createSqliteAsyncStorage } from "./persister.ts";
+import type { CacheRequest, CacheResult } from "./persister-protocol.ts";
 
 const dirs: string[] = [];
 
@@ -49,6 +50,42 @@ describe("SQLite query persistence", () => {
     const reopened = createSqliteAsyncStorage(path);
     expect(await reopened.entries()).toEqual([]);
     await reopened.close();
+  });
+
+  test("worker initialization waits for a transient journal lock before reading cached data", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wt-persister-test-"));
+    dirs.push(dir);
+    const path = join(dir, "cache.sqlite");
+    const blocker = new Database(path, { create: true });
+    blocker.exec(`
+      PRAGMA journal_mode = DELETE;
+      CREATE TABLE cache (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      INSERT INTO cache VALUES ('seed', 'retained', 0);
+      BEGIN EXCLUSIVE;
+    `);
+    const worker = new Worker(new URL("./persister-worker.ts", import.meta.url).href);
+    let nextId = 0;
+    const request = (message: Omit<CacheRequest, "id">): Promise<CacheResult> => {
+      const id = ++nextId;
+      const { promise, resolve } = Promise.withResolvers<CacheResult>();
+      worker.addEventListener("message", (event: MessageEvent<CacheResult>) => resolve(event.data), { once: true });
+      worker.postMessage({ ...message, id });
+      return promise;
+    };
+    try {
+      // Start the worker without opening SQLite, so slow worker startup
+      // cannot consume the lock's lifetime and accidentally pass the test.
+      await request({ type: "clear", dbPath: join(dir, "missing.sqlite") });
+      const read = request({ type: "get", dbPath: path, key: "seed" });
+      const release = delay(200).then(() => blocker.exec("ROLLBACK;"));
+      const result = await read;
+      await release;
+      expect(result).toEqual({ type: "result", id: 2, value: "retained" });
+      await request({ type: "close", dbPath: path });
+    } finally {
+      worker.terminate();
+      blocker.close();
+    }
   });
 
   test("a held SQLite writer lock does not block the main event loop", async () => {
