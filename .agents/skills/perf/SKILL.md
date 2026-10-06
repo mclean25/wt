@@ -1,6 +1,6 @@
 ---
 name: perf
-description: Investigate and improve performance — "the machine feels slow", "wt/the TUI feels laggy", high CPU/memory, runaway processes, or proactive perf review of wt code. Runs the wt perf tooling, attributes load, diagnoses against known failure signatures, and proposes fixes. Keeps notes.md (same dir) current with baseline, open issues, and learnings.
+description: Investigates machine freezes, wt input latency, high CPU or memory, and runaway processes using measured load and known failure signatures. Use for performance diagnosis or fixes; maintain the adjacent notes.md with evidence and unresolved causes.
 ---
 
 # perf — investigate & improve performance
@@ -10,7 +10,7 @@ deliverable is an **assessment plus a proposed fix** — do not apply
 code changes or kill processes without an explicit go-ahead, unless the
 user's invocation already asked for a fix.
 
-**Read `notes.md` (next to this file) FIRST.** It holds the current
+**Read [notes.md](notes.md) FIRST.** It holds the current
 baseline, open issues, and the learnings ledger — a symptom you're
 about to investigate may already have a known signature there.
 

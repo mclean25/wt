@@ -96,7 +96,13 @@ and it drives the rest of the design:
   plus any unpushed ancestry) before branching. Fork-off-trunk needs no
   fetch (`origin/*` is already in the copy).
 - **Removal.** `rift remove` trashes the subtree, then `rift gc` reclaims
-  it. Branch deletion is moot — the branch vanishes with the clone. The
+  it. Every GC call, including failed-create rollback and stale-registry
+  cleanup, uses `nice -n 10` when available and macOS `taskpolicy -b` when
+  available to yield CPU and I/O scheduling to foreground work. Cleanup
+  remains awaited, with the same failure handling. Missing priority tools
+  fall back independently to the remaining tools or plain GC. GC start,
+  completion, and elapsed time are logged separately from removal.
+  Branch deletion is moot — the branch vanishes with the clone. The
   fork-base reparenting of *dependents* is backend-agnostic (it edits
   wtstate) and still runs.
   **`force` is advisory here, so callers own the dirty guard.** wt passes

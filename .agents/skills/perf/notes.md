@@ -3,27 +3,46 @@
 Companion to SKILL.md. Keep current per its §6: refresh the baseline,
 track open issues, grow the ledger, prune ruthlessly.
 
-## Baseline (captured 2026-08-09, commit 31734d2)
+## Baseline (captured 2026-10-06)
 
-Machine: 12 cores / 32 GB (Apple Silicon, macOS 25.5).
+Machine: 12 cores / 32 GB (Apple Silicon). The reported freeze was a few
+minutes before the user's initial report, approximately 09:13 local
+(16:13Z). Historical samples at 16:13–16:14Z showed load 17–18,
+Vitest 228–260% CPU, wt 94–129%, native pg_cron ~100%, Brave ~100%, and
+WindowServer ~50%. These are ps decaying averages, not instantaneous
+measurements or proof of which process blocked the desktop.
 
-A representative working afternoon (live TUI + 6 worktree sessions,
-one active agent, dev server up):
+Later samples had 42–52% CPU idle and stable 350 MB swap use, with no
+swap/pageout/compression growth over eight seconds. This quieter baseline
+does not disprove the earlier freeze. Small old Supabase Docker containers
+used roughly 350 MB and less than 1% CPU; the hot database was native.
+Brave's background thread still consumed a core. The wt main-thread
+sample was mostly idle while a worker periodically became busy.
 
-- Machine-wide: ~110% of 1200% CPU, ~14 GB memory in use. Load avg ~1.9.
-- wt-downstream: ~45-50% of that CPU, ~6.4 GB RSS across ~30 procs.
-- The active claude agent dominates (~33%, ~1.1 GB); the TUI itself
-  idles at ~13% average / ~0.5-0.7 GB RSS.
-- Each *idle* worktree session still holds ~0.5-0.8 GB RSS (a resident
-  claude + shells). RSS scales with fleet size even when CPU doesn't.
-- Typical biggest outsider: browser (Brave ~40-50% across helpers).
-
-Rule of thumb: an idle-ish fleet under ~150% total with agents quiet is
-normal. One core pinned (~100%) by a single wt-category process that
-should be idle is a bug, not load (see bare-promise signature below).
+Shared Codex daemon children can fall outside wt's process ancestry even
+when the work began in a wt session. Correlate cwd, session history, and
+command times before assigning all "not downstream" processes to other
+apps. RSS is not macOS physical footprint; wt measured ~209 MB footprint
+despite roughly 900 MB RSS.
 
 ## Open issues
 
+- **Native Supabase cron startup remains broken.** CLI 2.119.0's native
+  Postgres for set-your-status exposed only a Unix socket, while cron
+  connected to localhost:5432. It accumulated 18,115 failed attempts and
+  almost 15 CPU-hours. Reloading `cron.launch_active_jobs=off` stopped the
+  loop without changing the 67 jobs or 23 active flags; CPU time and
+  attempt count stayed unchanged over 61 seconds. The worktree was later
+  removed and its original processes were gone. Retained stack metadata
+  is not evidence of an orphan. Future/restored stacks still need a
+  functional startup fix (upstream Supabase CLI issue #6977), including
+  database-test startup. Background-worker cron requires a controlled
+  restart and functional verification. No Cozee source change was made.
+- **Brave background CPU and severe desktop freezes remain unexplained.**
+  PID 57049 consumed about one core with its AppKit thread idle in a native
+  sample. No browser state was changed. Reduced test concurrency and wt
+  scan work remove demonstrated pressure; they do not prove elimination
+  of every freeze or Codex's native feature-discovery timeout.
 - **Destroy dispatch double-fetches GitHub** — two concurrent
   `fetching GitHub...` ~40ms apart (double invalidation while the first
   is in flight). Harmless, minor quota waste. Found in dogfood sweep
@@ -33,6 +52,35 @@ should be idle is a bug, not load (see bare-promise signature below).
 
 Failure signatures (check these first):
 
+- **Obsolete test caps silently allow all-core parallelism.** Vitest 5
+  honors `VITEST_MAX_WORKERS`, not the old fork/thread env limits. Here
+  it defaulted to 11 workers. set-your-status's 394.5s native typecheck
+  overlapped an uncapped full suite after a review prompt demanded both.
+  The later two-worker run passed 6,613 tests in 219.37s, but is not a
+  controlled speed comparison because typechecking had finished. The
+  agent Node preload now defaults modern workers and `GOMAXPROCS` to 2,
+  preserves explicit choices, and applies to existing sessions on their
+  next Node command. Real Vitest worker counts and native Go scheduler
+  traces verified inheritance. Direct native commands bypassing Node
+  still need their own limits. User wt actions run checks serially and
+  the review action reuses relevant completed checks instead of always
+  requesting another full suite.
+- **Excluded histories still cost reads unless exclusions are cached.**
+  Codex guardian/subagent rollouts failed the interactive filter and were
+  reread for every slot on every scan. On 1,684 real rollouts, a warm scan
+  read 1,480 excluded 64 KiB prefixes (~93 MB requested) in 270.78ms.
+  Caching complete exclusions against size, mtime, ctime, inode and device
+  reduced that to zero reads and 27.33ms. Cold scans were unchanged.
+  Keep this bounded and retry changed/incomplete/unrecognized headers;
+  caching a partial first line as a permanent rejection hides sessions.
+- **Removal has a separate reclamation phase.** `rift remove` moves a
+  clone to trash; immediate `rift gc` physically deletes its files. The
+  16:46Z facebook-status removal coincided with a transient Rift/FSEventsd
+  CPU spike, not proof that the filesystem watcher or that deletion caused
+  a desktop freeze. GC now has separate phase timing and requests nice 10
+  plus macOS background scheduling when available. It remains awaited.
+  Verify scheduling in an isolated child; do not delete live worktrees to
+  reproduce load. An OS priority request does not guarantee zero latency.
 - **Bun spins at 100% on a bare pending promise.** `await new
   Promise(() => {})` with no other event-loop handle makes Bun busy-spin
   instead of block (bun 1.3.14; 19h CPU burned in `wt _home` once —
@@ -205,8 +253,9 @@ Measurement traps:
 Design rules with perf teeth (from CLAUDE.md, restated here because
 perf work is where they get bent):
 
-- The github source is ONE batched GraphQL round trip — never split
-  into per-row fetches; new PR fields go into `PR_FRAGMENT`.
+- The GitHub source batches fixed-size chunks to stay below the server's
+  execution-time ceiling; never fetch per row. New PR fields go into
+  `PR_FRAGMENT`.
 - Freshness is push-based; never shorten a staleTime to paper over a
   missing invalidation trigger.
 - Perf sampling itself is free when idle: the `P` overlay samples only

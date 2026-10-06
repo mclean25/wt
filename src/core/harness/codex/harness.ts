@@ -275,9 +275,9 @@ const exactRolloutPathCache = new Map<string, string>();
 
 /**
  * Return the most-recently-modified rollout path for the given cwd, or
- * null when none exist. Stops after the first matching file found when
- * walking newest-first (significantly cheaper than full scanRollouts for
- * the polling hot path). Caps at SCAN_MAX_DAYS to bound the walk.
+ * null when none exist. Scan every partition in the bounded window: a
+ * resumed conversation can append to an older creation-day directory.
+ * Metadata caching keeps unchanged rollouts out of the read/parse path.
  */
 export function latestRolloutForCwd(cwd: string, slug: string, sessionsDir = CODEX_SESSIONS_DIR): { path: string; mtimeMs: number; size: number } | null {
   if (!existsSync(sessionsDir)) return null;
@@ -386,12 +386,38 @@ type RolloutMetaRaw = Omit<RolloutMeta, "path">;
  * identity is cacheable by path for the process lifetime. This matters:
  * the 3s `harnessSessionsQuery` poll and the 2.5s tail/event pollers
  * each walk the sessions tree and would otherwise re-open + re-parse a
- * 64KB head per rollout per tick. Only SUCCESSFUL parses are cached — a
- * just-created rollout can be read before codex flushes the first line,
- * and a cached failure would hide that session forever.
+ * 64KB head per rollout per tick. Complete, valid non-interactive metadata
+ * is also cached against the file's stat fingerprint below. Incomplete or
+ * unrecognized headers remain retryable while Codex finishes writing them.
  */
 const rolloutIdentityCache = new Map<string, { sessionId: string; cwd: string }>();
 const ROLLOUT_IDENTITY_CACHE_MAX = 8192;
+
+type ExcludedRolloutStamp = {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  ino: number;
+  dev: number;
+};
+const excludedRolloutCache = new Map<string, ExcludedRolloutStamp>();
+
+function cacheExcludedRollout(path: string, stamp: ExcludedRolloutStamp): void {
+  // Evict one oldest entry, not the entire working set when a long-lived
+  // process reaches the cap. Active hits refresh their position below.
+  excludedRolloutCache.delete(path);
+  if (excludedRolloutCache.size >= ROLLOUT_IDENTITY_CACHE_MAX) {
+    const oldest = excludedRolloutCache.keys().next().value;
+    if (oldest !== undefined) excludedRolloutCache.delete(oldest);
+  }
+  excludedRolloutCache.set(path, {
+    size: stamp.size,
+    mtimeMs: stamp.mtimeMs,
+    ctimeMs: stamp.ctimeMs,
+    ino: stamp.ino,
+    dev: stamp.dev,
+  });
+}
 
 /**
  * Read only the first line of a rollout, parse the `session_meta`
@@ -411,6 +437,17 @@ function readRolloutMeta(path: string): RolloutMetaRaw | null {
   const cached = rolloutIdentityCache.get(path);
   if (cached) {
     return { ...cached, mtimeMs: stat.mtimeMs, size: stat.size };
+  }
+  const excluded = excludedRolloutCache.get(path);
+  if (excluded) {
+    if (excluded.size === stat.size && excluded.mtimeMs === stat.mtimeMs &&
+      excluded.ctimeMs === stat.ctimeMs && excluded.ino === stat.ino &&
+      excluded.dev === stat.dev) {
+      excludedRolloutCache.delete(path);
+      excludedRolloutCache.set(path, excluded);
+      return null;
+    }
+    excludedRolloutCache.delete(path);
   }
   // Read only enough bytes to capture the first line. Session_meta
   // lines are big (full system prompt embedded) — 32 KB is plenty.
@@ -448,6 +485,10 @@ function readRolloutMeta(path: string): RolloutMetaRaw | null {
         obj.payload?.originator !== "Codex Desktop") ||
       obj.payload?.thread_source !== "user"
     ) {
+      // A valid but unfinished first line may still be replaced. Cache only
+      // a newline-terminated identity, and invalidate it on append/rewrite,
+      // truncation, or replacement before deciding the file is still excluded.
+      if (newlineIdx >= 0) cacheExcludedRollout(path, stat);
       return null;
     }
     // Runaway backstop only — the 30-day window holds far fewer entries.

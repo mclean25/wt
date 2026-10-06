@@ -1,10 +1,11 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { Data, Effect } from "effect";
+import { Clock, Data, Effect } from "effect";
 
 import { git, gitQuiet } from "../git.ts";
 import { createLogger } from "../logger.ts";
 import { run } from "../proc.ts";
+import { formatDuration } from "../text.ts";
 import type {
   BackendCreateInput,
   BackendRemoveInput,
@@ -12,6 +13,32 @@ import type {
 } from "./types.ts";
 
 const log = createLogger("[backend:rift]");
+
+// Reclamation can touch every file in a trashed checkout. Keep it awaited, but
+// let foreground work win CPU and (on macOS) I/O scheduling while it runs.
+const collectRiftGarbage = Effect.fnUntraced(function* (
+  rift: string,
+  cwd: string,
+  onLog?: (line: string) => void,
+) {
+  const nice = Bun.which("nice");
+  const taskpolicy = process.platform === "darwin"
+    ? Bun.which("taskpolicy", { PATH: `${process.env.PATH ?? ""}:/usr/sbin` })
+    : null;
+  const argv = [rift, "gc"];
+  if (nice) argv.unshift(nice, "-n", "10");
+  if (taskpolicy) argv.unshift(taskpolicy, "-b");
+  const startedAt = yield* Clock.currentTimeMillis;
+  const context = { cwd, nice: !!nice, backgroundIo: !!taskpolicy };
+  onLog?.("rift gc (reclaiming trashed files)");
+  log.info("rift gc started", context);
+  return yield* run(argv, { cwd }).pipe(Effect.onExit((exit) => Effect.gen(function* () {
+    const elapsedMs = (yield* Clock.currentTimeMillis) - startedAt;
+    const exitCode = exit._tag === "Success" ? exit.value.exitCode : null;
+    log.info("rift gc finished", { ...context, elapsedMs, exitCode, outcome: exit._tag });
+    onLog?.(`rift gc finished in ${formatDuration(elapsedMs)}${exitCode === 0 ? "" : " (cleanup failed)"}`);
+  })));
+});
 
 export class RiftBackendError extends Data.TaggedError("RiftBackendError")<{
   readonly operation: "resolve" | "init" | "create" | "materialize" | "remove";
@@ -236,7 +263,7 @@ export const createRiftWorktree = Effect.fn("createRiftWorktree")(function* (inp
       !existsSync(path)
     ) {
       onLog?.("pruning stale rift registry entry, retrying");
-      yield* run([rift, "gc"], { cwd: mainClone });
+      yield* collectRiftGarbage(rift, mainClone, onLog);
       created = yield* run(createArgs, { cwd: mainClone });
     }
     if (created.exitCode !== 0) {
@@ -270,7 +297,7 @@ export const createRiftWorktree = Effect.fn("createRiftWorktree")(function* (inp
       if (rb1.exitCode !== 0) {
         log.warn(`rollback rift remove failed for ${path}: ${rb1.stderr.trim() || rb1.exitCode}`);
       }
-      const rb2 = yield* run([rift, "gc"], { cwd: mainClone }).pipe(Effect.orElseSucceed(() => ({ stdout: "", stderr: "rollback spawn failed", exitCode: -1 })));
+      const rb2 = yield* collectRiftGarbage(rift, mainClone, onLog).pipe(Effect.orElseSucceed(() => ({ stdout: "", stderr: "rollback spawn failed", exitCode: -1 })));
       if (rb2.exitCode !== 0) {
         log.warn(`rollback rift gc failed: ${rb2.stderr.trim() || rb2.exitCode}`);
       }
@@ -301,7 +328,7 @@ export const removeRiftWorktree = Effect.fn("removeRiftWorktree")(function* (inp
     }
     // `rift remove` only trashes the subtree; reclaim the disk now. gc is
     // best-effort — the checkout is already gone from its path either way.
-    const gc = yield* run([rift, "gc"], { cwd: mainClone });
+    const gc = yield* collectRiftGarbage(rift, mainClone, onLog);
     if (gc.exitCode !== 0) {
       onLog?.(`rift gc warning: ${(gc.stderr || gc.stdout || "").trim()}`);
     }
