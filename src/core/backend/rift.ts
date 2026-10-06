@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { Clock, Data, Effect } from "effect";
+import { Cause, Clock, Data, Effect, Exit } from "effect";
 
 import { git, gitQuiet } from "../git.ts";
 import { createLogger } from "../logger.ts";
@@ -28,15 +28,19 @@ const collectRiftGarbage = Effect.fnUntraced(function* (
   const argv = [rift, "gc"];
   if (nice) argv.unshift(nice, "-n", "10");
   if (taskpolicy) argv.unshift(taskpolicy, "-b");
-  const startedAt = yield* Clock.currentTimeMillis;
+  const requestedAt = yield* Clock.currentTimeMillis;
   const context = { cwd, nice: !!nice, backgroundIo: !!taskpolicy };
-  onLog?.("rift gc (reclaiming trashed files)");
-  log.info("rift gc started", context);
+  onLog?.("rift gc requested (reclaiming trashed files)");
+  log.info("rift gc requested", context);
   return yield* run(argv, { cwd }).pipe(Effect.onExit((exit) => Effect.gen(function* () {
-    const elapsedMs = (yield* Clock.currentTimeMillis) - startedAt;
-    const exitCode = exit._tag === "Success" ? exit.value.exitCode : null;
-    log.info("rift gc finished", { ...context, elapsedMs, exitCode, outcome: exit._tag });
-    onLog?.(`rift gc finished in ${formatDuration(elapsedMs)}${exitCode === 0 ? "" : " (cleanup failed)"}`);
+    // run may first wait for a shared process permit; this is request latency,
+    // including queueing and joined cleanup, not the child's runtime alone.
+    const requestElapsedMs = (yield* Clock.currentTimeMillis) - requestedAt;
+    const exitCode = Exit.isSuccess(exit) ? exit.value.exitCode : null;
+    const interrupted = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause);
+    const outcome = interrupted ? "interrupted" : exitCode === 0 ? "completed" : "failed";
+    log.info("rift gc finished", { ...context, requestElapsedMs, exitCode, outcome });
+    onLog?.(`rift gc ${interrupted ? "interrupted" : "finished"} in ${formatDuration(requestElapsedMs)} (queue + execution)${interrupted || exitCode === 0 ? "" : " (cleanup failed)"}`);
   })));
 });
 

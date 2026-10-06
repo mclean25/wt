@@ -14,6 +14,7 @@ async function collect(input: {
   hidden?: string[];
   gcExit?: number;
   scenario?: Scenario;
+  cancel?: boolean;
 } = {}) {
   const root = tmp("wt-rift-gc-");
   const main = join(root, "main clone");
@@ -50,6 +51,18 @@ async function collect(input: {
       argv, cwd: process.cwd(), ...await priority(),
     }) + "\\n");
     if (argv[0] === "gc") {
+      if (${!!input.cancel}) {
+        const guard = setTimeout(() => process.exit(99), 5000);
+        process.on("SIGTERM", () => {
+          clearTimeout(guard);
+          setTimeout(() => {
+            writeFileSync(${JSON.stringify(join(root, "gc-stopped"))}, "done");
+            process.exit(0);
+          }, 40);
+        });
+        writeFileSync(${JSON.stringify(join(root, "gc-pid"))}, String(process.pid));
+        await new Promise(() => {}); // The guard timer keeps this OS fixture alive.
+      }
       // Completion must be observed before the backend returns.
       await Bun.sleep(25);
       writeFileSync(${JSON.stringify(join(root, "gc-completed"))}, "done");
@@ -83,8 +96,8 @@ base = "main"
   const url = (relative: string) => JSON.stringify(pathToFileURL(join(import.meta.dir, relative)).href);
   const child = Bun.spawn(["bun", "-e", `
     ${priority}
-    import { existsSync } from "node:fs";
-    import { Effect } from ${url("../../../node_modules/effect/dist/index.js")};
+    import { existsSync, readFileSync } from "node:fs";
+    import { Cause, Effect, Exit } from ${url("../../../node_modules/effect/dist/index.js")};
     const originalWhich = Bun.which;
     const hidden = new Set(${JSON.stringify(input.hidden ?? [])});
     Bun.which = (name, options) => hidden.has(name) ? null : originalWhich(name, options);
@@ -94,10 +107,35 @@ base = "main"
     const args = ${JSON.stringify({ path, mainClone: main, force: true, branch: "test/new", slug: "copy", baseRef: null })};
     args.onLog = line => logs.push(line);
     const operation = ${JSON.stringify(scenario)} === "remove" ? removeRiftWorktree(args) : createRiftWorktree(args);
-    const result = await Effect.runPromise(operation.pipe(Effect.match({
-      onFailure: error => ({ error: error.message, operation: error.operation }),
-      onSuccess: value => value,
-    })));
+    let result;
+    if (${!!input.cancel}) {
+      const controller = new AbortController();
+      const pending = Effect.runPromiseExit(operation, { signal: controller.signal });
+      try {
+        const deadline = Date.now() + 4000;
+        while (!existsSync(${JSON.stringify(join(root, "gc-pid"))})) {
+          if (Date.now() > deadline) throw new Error("fixture GC did not start");
+          await Bun.sleep(10);
+        }
+      } finally {
+        controller.abort();
+        await pending;
+      }
+      const exit = await pending;
+      const pid = Number(readFileSync(${JSON.stringify(join(root, "gc-pid"))}, "utf8"));
+      let alive = true;
+      try { process.kill(pid, 0); } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+        alive = false;
+      }
+      result = { interrupted: Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause),
+        alive, stopped: existsSync(${JSON.stringify(join(root, "gc-stopped"))}) };
+    } else {
+      result = await Effect.runPromise(operation.pipe(Effect.match({
+        onFailure: error => ({ error: error.message, operation: error.operation }),
+        onSuccess: value => value,
+      })));
+    }
     console.log(JSON.stringify({ baseline, logs, result,
       completed: existsSync(${JSON.stringify(join(root, "gc-completed"))}),
     }));
@@ -121,7 +159,7 @@ base = "main"
   const result = JSON.parse(stdout.trim()) as {
     baseline: Pick<Observation, "nice" | "background">;
     logs: string[];
-    result: { ok?: boolean; error?: string; operation?: string };
+    result: { ok?: boolean; error?: string; operation?: string; interrupted?: boolean; alive?: boolean; stopped?: boolean };
     completed: boolean;
   };
   const calls = readFileSync(observations, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Observation);
@@ -148,8 +186,9 @@ test("Rift reclamation lowers the real child priority, preserves argv, and waits
   expect(f.calls[0]!.nice).toBe(f.baseline.nice);
   expect(f.completed).toBe(true);
   expect(f.result).toEqual({ ok: true });
-  expect(f.logs).toContain("rift gc (reclaiming trashed files)");
+  expect(f.logs).toContain("rift gc requested (reclaiming trashed files)");
   expect(f.logs.some((line) => /^rift gc finished in /.test(line))).toBe(true);
+  expect(f.logs.some((line) => line.includes("(queue + execution)"))).toBe(true);
 }, 10_000);
 
 for (const hidden of [["nice"], ["taskpolicy"], ["nice", "taskpolicy"]]) {
@@ -166,6 +205,14 @@ test("nonzero GC warns without turning a successful removal into failure", async
   expect(f.result).toEqual({ ok: true });
   expect(f.logs).toContain("rift gc warning: fixture GC failure");
   expect(f.logs.some((line) => line.endsWith(" (cleanup failed)"))).toBe(true);
+}, 10_000);
+
+test("cancelling GC stops and joins its child without reporting cleanup failure", async () => {
+  const f = await collect({ cancel: true });
+  expect(f.result).toEqual({ interrupted: true, alive: false, stopped: true });
+  expect(f.completed).toBe(false);
+  expect(f.logs.some((line) => /^rift gc interrupted in /.test(line))).toBe(true);
+  expect(f.logs.some((line) => /failed|warning/.test(line))).toBe(false);
 }, 10_000);
 
 test("stale-registry retry waits for lowered-priority GC even when it exits nonzero", async () => {

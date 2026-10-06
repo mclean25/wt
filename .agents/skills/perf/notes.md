@@ -52,7 +52,7 @@ despite roughly 900 MB RSS.
 
 Failure signatures (check these first):
 
-- **Obsolete test caps silently allow all-core parallelism.** Vitest 5
+- **Obsolete test caps silently allow all-core parallelism (dotfiles 9cb5756).** Vitest 5
   honors `VITEST_MAX_WORKERS`, not the old fork/thread env limits. Here
   it defaulted to 11 workers. set-your-status's 394.5s native typecheck
   overlapped an uncapped full suite after a review prompt demanded both.
@@ -65,7 +65,7 @@ Failure signatures (check these first):
   still need their own limits. User wt actions run checks serially and
   the review action reuses relevant completed checks instead of always
   requesting another full suite.
-- **Excluded histories still cost reads unless exclusions are cached.**
+- **Excluded histories still cost reads unless exclusions are cached (9258ae0).**
   Codex guardian/subagent rollouts failed the interactive filter and were
   reread for every slot on every scan. On 1,684 real rollouts, a warm scan
   read 1,480 excluded 64 KiB prefixes (~93 MB requested) in 270.78ms.
@@ -73,7 +73,7 @@ Failure signatures (check these first):
   reduced that to zero reads and 27.33ms. Cold scans were unchanged.
   Keep this bounded and retry changed/incomplete/unrecognized headers;
   caching a partial first line as a permanent rejection hides sessions.
-- **Removal has a separate reclamation phase.** `rift remove` moves a
+- **Removal has a separate reclamation phase (9258ae0).** `rift remove` moves a
   clone to trash; immediate `rift gc` physically deletes its files. The
   16:46Z facebook-status removal coincided with a transient Rift/FSEventsd
   CPU spike, not proof that the filesystem watcher or that deletion caused

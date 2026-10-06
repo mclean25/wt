@@ -100,8 +100,10 @@ and it drives the rest of the design:
   cleanup, uses `nice -n 10` when available and macOS `taskpolicy -b` when
   available to yield CPU and I/O scheduling to foreground work. Cleanup
   remains awaited, with the same failure handling. Missing priority tools
-  fall back independently to the remaining tools or plain GC. GC start,
-  completion, and elapsed time are logged separately from removal.
+  fall back independently to the remaining tools or plain GC. GC requests
+  and completion are logged separately from removal; request elapsed time
+  includes shared process-queue wait and execution. Cancellation is logged
+  as interruption after the child is stopped and joined, not cleanup failure.
   Branch deletion is moot — the branch vanishes with the clone. The
   fork-base reparenting of *dependents* is backend-agnostic (it edits
   wtstate) and still runs.
