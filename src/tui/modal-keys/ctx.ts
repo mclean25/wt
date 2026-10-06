@@ -47,6 +47,7 @@ export type SimpleModalContext = {
     mode: "enable" | "disable",
     target?: WorktreeTarget,
   ) => Promise<void>;
+  refreshAiSummary: (slug: string) => Promise<boolean>;
   doMarkReady: (slug: string) => Promise<void>;
   doShipPr: (slug: string) => Promise<void>;
   doCheckoutReview: (branch: string) => Promise<void>;

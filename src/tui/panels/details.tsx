@@ -406,7 +406,7 @@ const DetailsBody = memo(function DetailsBody({
   // included, so a dirty tree doesn't change what the AI would see.
   // Saved titles prevent background generation here as well
   // as in the row observers. Cached descriptions can still be displayed.
-  const aiEnabled = !!config.naming;
+  const aiEnabled = !!config.naming?.autoRename;
   const allowFetch = aiEnabled && wtState.data !== undefined &&
     !wtState.data.slugs[row.wt.slug]?.manualTitle && !isBusy;
 

@@ -235,3 +235,16 @@ test("narrow cleanup confirmation retains the candidate name and full hazard", a
     expectClosedBorder(frame);
   } finally { act(() => setup.renderer.destroy()); }
 });
+
+test("the worktree palette shows the AI rename action", async () => {
+  const setup = await render(
+    <ActionPickerModal slug="selected" surface="row" selectedIndex={0}
+      items={[{ kind: "renameWorktree", key: "t", availability: { ok: true } }, { kind: "custom" }]} />,
+    90, 18,
+  );
+  try {
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("Rename worktree with AI");
+    expect(frame).toContain("▸ t");
+  } finally { act(() => setup.renderer.destroy()); }
+});

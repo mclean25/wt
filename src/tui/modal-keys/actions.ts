@@ -81,6 +81,16 @@ export function handleActionPickerKey(
         );
         return;
       }
+      if (item.kind === "renameWorktree") {
+        const row = rows.find((r) => r.wt.slug === ap.slug);
+        if (!row) return;
+        setModal(null);
+        launchFireAndForget("rename worktree", async () => {
+          const ok = await ctx.refreshAiSummary(row.wt.slug);
+          toast(ok ? "worktree name updated" : "no committed changes to name", ok ? ctx.infoColor : warnColor, 2000);
+        }, reportActionError);
+        return;
+      }
       if (item.kind === "openEditor") {
         // Local flow like autoMerge — nothing injected. ap.slug is the
         // slot slug (the row only exists on the slot surface).

@@ -3,9 +3,11 @@ import { describe, expect, test } from "bun:test";
 import { canGenerateAutomatically } from "./ai.ts";
 
 describe("automatic title generation", () => {
-  test("preserves configured naming behavior without requiring a new config field", () => {
+  test("uses the automatic naming setting", () => {
     expect(canGenerateAutomatically({})).toBe(true);
     expect(canGenerateAutomatically(null)).toBe(false);
+    expect(canGenerateAutomatically({ autoRename: false })).toBe(false);
+    expect(canGenerateAutomatically({ autoRename: true })).toBe(true);
   });
 
   test("a manual title disables automatic generation even with naming configured", () => {

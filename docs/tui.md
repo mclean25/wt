@@ -271,3 +271,10 @@ Text inputs scroll horizontally to keep the cursor visible, and cursor movement
 and deletion preserve whole Unicode characters. Footer input uses the full row
 while editing; long prompts shorten to leave room for the value. The submit and
 cancel hint hides below 80 columns, with Enter and Esc still active.
+
+The row action palette (`!`) includes **Rename worktree with AI** (`t`).
+It uses the selected local worktree. It also works when `auto_rename = false`
+under `[naming]`. That setting stops automatic AI naming. The direct
+`T` key requests the same name update. The `t` key opens the manual title editor.
+The Git branch and directory stay
+unchanged.

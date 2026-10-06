@@ -1233,9 +1233,8 @@ export function handleNormalKey(k: KeyEvent, ctx: NormalKeysCtx): void {
         toast(`${current.wt.slug} is busy`, theme.warn, 2000);
         return;
       }
-      const slug = current.wt.slug;
       forkReported(
-        keyPromise("refresh AI summary", () => refreshAiSummary(slug)).pipe(
+        keyPromise("refresh AI summary", () => refreshAiSummary(current.wt.slug)).pipe(
           Effect.tap((ok) => Effect.sync(() => {
             if (ok) {
               rowLog.event.dim("generated worktree title");

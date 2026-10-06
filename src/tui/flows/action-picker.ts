@@ -11,6 +11,7 @@ import {
   SLOT_BUILTIN_ACTIONS,
   evaluateActionRequirements,
 } from "../../core/actions.ts";
+import { StatusKind } from "../../core/types.ts";
 import { config } from "../../core/config.ts";
 import { MANAGER_SLUG } from "../../core/manager.ts";
 import { armedFromPr } from "../badges.ts";
@@ -52,10 +53,8 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
     // Pinned builtins (dev server) lead, then the user's actions, then
     // the trailing builtins (review-bot re-run).
     const defs = [...PINNED_BUILTIN_ACTIONS, ...config.actions, ...BUILTIN_ACTIONS];
-    // `m` and `l` are reserved for the built-in auto-merge and dev-log
-    // rows below, so assignment must not hand either to a configured
-    // action (an explicit collision falls back to auto-derivation).
-    const keyById = assignActionKeys(defs, [AUTO_MERGE_KEY, DEV_LOGS_KEY]);
+    // Reserve `m`, `l`, and `t` for merge, dev logs, and naming.
+    const keyById = assignActionKeys(defs, [AUTO_MERGE_KEY, DEV_LOGS_KEY, "t"]);
     const actionItems = defs.map((def) => ({
       kind: "action" as const,
       def,
@@ -102,6 +101,18 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
           ? { ok: false, reason: "PR is not open" }
           : { ok: true },
     };
+    const row = target.location.kind === "remote" ? undefined : rows.find((r) => r.wt.slug === slug);
+    buckets.set("worktree", [...(buckets.get("worktree") ?? []), {
+      kind: "renameWorktree",
+      key: "t",
+      availability: !row
+        ? { ok: false, reason: "select a local worktree" }
+        : !config.naming
+          ? { ok: false, reason: "worktree naming not configured" }
+          : row.status.kind === StatusKind.Busy
+            ? { ok: false, reason: "worktree is busy" }
+            : { ok: true },
+    }]);
     return [
       ...actionGroupsLast(buckets, config.ui.actionGroupsLast, [autoMergeItem]),
       { kind: "custom" as const },
@@ -184,7 +195,9 @@ export function makeActionPickerFlows(ctx: ActionPickerFlowsCtx) {
           ? "auto-merge"
           : item.kind === "devLogs"
             ? "dev server logs"
-            : "open in editor";
+            : item.kind === "renameWorktree"
+              ? "rename worktree"
+              : "open in editor";
     toast(`${name}: ${item.availability.reason}`, theme.warn, 2500);
     return false;
   }

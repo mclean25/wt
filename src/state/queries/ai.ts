@@ -25,10 +25,10 @@ const aiLog = createLogger("ai");
 
 /** A saved title disables background naming without changing configuration. */
 export function canGenerateAutomatically(
-  naming: object | null,
+  naming: { autoRename?: boolean } | null,
   manualTitle?: string,
 ): boolean {
-  return !!naming && !manualTitle;
+  return !!naming && naming.autoRename !== false && !manualTitle;
 }
 
 /**
@@ -88,11 +88,11 @@ export const aiSummaryQuery = (
   ctx: { hash: string; prompt: string } | null,
 ) =>
   queryOptions({
-    // `slug` doesn't participate in the cache key — that's intentional,
-    // it's only here for the activity log line. Two worktrees with
-    // identical diffs share an entry; the log shows whichever slug
-    // triggered the fetch.
-    queryKey: qk.aiSummary(ctx?.hash ?? NO_CTX_HASH),
+    // Automatic names share a result for identical diffs.
+    // Manual names stay with one worktree when its diff changes.
+    queryKey: config.naming?.autoRename === false
+      ? qk.wt(slug).manualSummary()
+      : qk.aiSummary(ctx?.hash ?? NO_CTX_HASH),
     queryFn: ({ signal }): Promise<AiSummary> =>
       runQuery(
         Effect.gen(function* () {
@@ -139,9 +139,9 @@ export const aiSummaryQuery = (
         }),
         signal,
       ),
-    // Hash-keyed: a new diff produces a new cache entry. No staleness
-    // policy needed within an entry — the diff content can't change
-    // without producing a different hash.
+    enabled: !!config.naming?.autoRename && !!ctx,
+    // Automatic names change their key with the diff hash.
+    // Manual names change only after an explicit invalidation.
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: Number.POSITIVE_INFINITY,
   });

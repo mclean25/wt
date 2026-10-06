@@ -63,7 +63,7 @@ export const regenerateWorktreeTitle = Effect.fn("regenerateWorktreeTitle")(func
       ...diffOptions, staleTime: 0, meta: { forceFresh: true },
     })))),
     generate: (context) => io.promise("cancel previous title generation", () => qc.cancelQueries({
-      queryKey: qk.aiSummary(context.hash), exact: true,
+      queryKey: aiSummaryQuery(slug, context).queryKey, exact: true,
     })).pipe(Effect.andThen(io.promise("generate title", () => qc.fetchQuery({
       ...aiSummaryQuery(slug, context), staleTime: 0, meta: { forceFresh: true },
     })))),
